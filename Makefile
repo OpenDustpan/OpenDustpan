@@ -3,13 +3,12 @@
 #   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
 
-.PHONY: check fmt lint test test-postgres generate build web-check web-build
+.PHONY: check fmt lint test test-postgres generate build
 
-check: lint test web-check ## Everything CI checks.
+check: lint test ## Everything CI checks.
 
-fmt: ## Format Go code (gofumpt, gci, golines) and web code (Prettier).
+fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
-	cd web && npm run format
 
 lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
@@ -28,9 +27,3 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
 
 build: ## Build the server binary.
 	go build -o bin/opendustpan ./cmd/opendustpan
-
-web-check: ## Prettier, ESLint, TypeScript and tests for the console.
-	cd web && npm run check
-
-web-build: ## Build the console into web/dist.
-	cd web && npm run build

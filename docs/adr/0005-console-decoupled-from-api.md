@@ -1,6 +1,6 @@
 # 5. The web console is built and hosted separately from the API
 
-Status: accepted · 2026-10-08
+Status: accepted · 2026-10-08 · repository layout amended by ADR 8
 
 ## Context
 

@@ -17,8 +17,6 @@ A change is done only when `make check` passes with zero findings:
   specific linter and a real reason; expect it to be questioned in review.
 - `go test -race ./...` passes, including the conformance suites.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
-- `cd web && npm run check` passes: Prettier, ESLint (zero warnings), `tsc`, Vitest.
-  No `eslint-disable` without a `-- reason`.
 
 Do not report work as finished if any of these fail. Say what fails instead.
 
@@ -34,9 +32,10 @@ blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi CLI API (also used by the console)
 internal/            helpers shared across packages, not part of the SDK
-web/                 the console: React + TypeScript, built and hosted separately
 docs/adr/            architecture decision records
 ```
+
+The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
@@ -62,20 +61,15 @@ docs/adr/            architecture decision records
 - The Pulumi CLI API is not a published spec. Any endpoint change must be
   checked against real CLI behaviour (the end-to-end suite, once it exists).
 
-## Frontend rules (web/)
+## The API is a contract
 
-- Use the design system in `web/src/design-system/` for every UI element it
-  covers. Colours, spacing, radii and type come from CSS variables in
-  `tokens.css` only: never hard-code a colour or a pixel size that has a token.
-- `tokens.css` is generated from the design system's `tokens.json`; do not edit
-  it by hand.
-- Meaning never rests on colour alone: diffs carry `+ ~ -` glyphs, statuses
-  carry a shape and a word.
-- Anything machine-made (stack names, URNs, resource types, IDs, commands) is
-  monospace and shown verbatim.
-- The API base URL comes from runtime `config.json`, never from build-time env.
-- Validate every API response at runtime; types alone do not make JSON safe.
-- No `any`, no non-null assertions, no enums (use string-literal unions).
+Two clients depend on `/api`: the Pulumi CLI and the console, which ships from
+another repository on its own schedule.
+
+- Never remove or rename a field, endpoint or status code that a released
+  console or CLI version uses. Add new fields; deprecate old ones first.
+- Response shapes are camelCase JSON, errors are `{"code": <status>, "message": "..."}`.
+- An API change the console needs lands here first, released, then in the console.
 
 ## Voice (UI text, errors, docs)
 

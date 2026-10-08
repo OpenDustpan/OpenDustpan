@@ -1,10 +1,5 @@
 # Build output
 /bin/
-/web/dist/
-/web/coverage/
-
-# Dependencies
-/web/node_modules/
 
 # Local databases and data
 *.db

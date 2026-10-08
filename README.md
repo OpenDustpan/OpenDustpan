@@ -13,7 +13,7 @@ affiliated with or endorsed by Pulumi Corporation.
 
 ## Try it
 
-Requires Go 1.27.1+ and Node 22+.
+Requires Go 1.27.1+.
 
 ```sh
 go mod tidy                         # first run: fetches and verifies module checksums
@@ -24,16 +24,11 @@ export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 ./bin/opendustpan serve             # SQLite in ./dustpan.db, API on :8080
 ```
 
-Console, in another terminal (proxies `/api` to `:8080`):
-
-```sh
-cd web && npm ci && npm run dev
-```
-
-Sign in with the value of `DUSTPAN_ADMIN_TOKEN`.
-
-To serve API and console from one process: `npm run build` in `web/`, then
-`opendustpan serve --console-dir web/dist`.
+The web console is a separate repository,
+[OpenDustpan/console](https://github.com/OpenDustpan/console). Run it in
+development against this server, or build it and let the server host it in one
+process: `opendustpan serve --console-dir <console>/dist`. Sign in with the
+value of `DUSTPAN_ADMIN_TOKEN`.
 
 ## Configuration
 
@@ -48,9 +43,9 @@ To serve API and console from one process: `npm run build` in `web/`, then
 
 ## Development
 
-`make check` runs every gate CI runs: strict golangci-lint, tests (with the
-race detector), `sqlc diff`, and Prettier, ESLint, TypeScript and Vitest for the
-console. Set `DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite.
+`make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
+golangci-lint and the tests with the race detector. Set
+`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite.
 
 Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 (why things are the way they are).
