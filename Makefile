@@ -1,0 +1,36 @@
+# Local gates. CI runs the same checks (.github/workflows/ci.yml).
+# Tool versions are pinned here and in CI; install the matching binaries:
+#   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
+#   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
+
+.PHONY: check fmt lint test test-postgres generate build web-check web-build
+
+check: lint test web-check ## Everything CI checks.
+
+fmt: ## Format Go code (gofumpt, gci, golines) and web code (Prettier).
+	golangci-lint fmt ./...
+	cd web && npm run format
+
+lint: ## Strict lint, tidy and generated-code checks for Go.
+	go mod tidy -diff
+	sqlc diff
+	golangci-lint run ./...
+
+test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set.
+	go test -race -count=1 ./...
+
+test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
+	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
+	go test -race -count=1 ./store/postgres/...
+
+generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
+	sqlc generate
+
+build: ## Build the server binary.
+	go build -o bin/opendustpan ./cmd/opendustpan
+
+web-check: ## Prettier, ESLint, TypeScript and tests for the console.
+	cd web && npm run check
+
+web-build: ## Build the console into web/dist.
+	cd web && npm run build

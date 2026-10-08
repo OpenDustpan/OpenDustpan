@@ -1,0 +1,18 @@
+# Build output
+/bin/
+/web/dist/
+/web/coverage/
+
+# Dependencies
+/web/node_modules/
+
+# Local databases and data
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/

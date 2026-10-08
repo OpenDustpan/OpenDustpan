@@ -1,0 +1,356 @@
+# golangci-lint v2 configuration for OpenDustpan.
+#
+# Philosophy: everything is on by default. A linter is only disabled with a
+# written reason below. This is a gate against sloppy (including AI-generated)
+# code, so the bar is "strict but defensible": a disabled linter must be either
+# noise, a duplicate of something stricter, or irrelevant to this codebase.
+#
+# Suppressions: `//nolint:<linter> // <reason>` only. nolintlint rejects
+# blanket or unexplained directives.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: all
+  disable:
+    # --- Explicitly rejected style rules ---
+    - noinlineerr # `if err := f(); err != nil` is idiomatic Go and scopes err tightly.
+    - wsl # Deprecated; wsl_v5 replaces it.
+    - wsl_v5 # Blank-line placement is taste, not correctness; gofumpt owns layout.
+    - nlreturn # Same as wsl: whitespace taste.
+    - varnamelen # Flags idiomatic short names (i, w, r, tx) whose scope is obvious.
+    - exhaustruct # Deprecated alias; exhaustruct_v5 is enabled instead.
+    - gomodguard # Deprecated; depguard covers module bans below.
+    - gomodguard_v2 # depguard already bans modules at the import level.
+    # --- Duplicates of stricter or broader checks ---
+    - lll # golines (formatter) enforces the same 120-column limit and auto-fixes it.
+    - gocyclo # cyclop + gocognit cover complexity with better signal.
+    - goheader # No license headers in files; LICENSE at the root is enough.
+    # --- Irrelevant to this codebase (no such dependency) ---
+    - arangolint
+    - clickhouselint
+    - ginkgolinter
+    - promlinter
+    - protogetter
+    - spancheck
+    - testifylint # testify is banned outright by depguard.
+    - zerologlint
+    - loggercheck # slog only; sloglint covers it more strictly.
+    - gosmopolitan # Flags non-Latin text; not an i18n concern here.
+
+  settings:
+    cyclop:
+      max-complexity: 12
+      package-average: 0 # Disabled: penalizes small, single-function packages.
+
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          deny:
+            - pkg: github.com/stretchr/testify
+              desc: Use the standard library testing package and plain comparisons.
+            - pkg: gorm.io
+              desc: No ORMs. Hand-written SQL via sqlc, pgx and database/sql.
+            - pkg: github.com/jmoiron/sqlx
+              desc: Use sqlc-generated queries or pgx/database/sql directly.
+            - pkg: entgo.io
+              desc: No ORMs or SQL generators.
+            - pkg: github.com/labstack/echo
+              desc: Use net/http and its ServeMux.
+            - pkg: github.com/gofiber/fiber
+              desc: Use net/http and its ServeMux.
+            - pkg: github.com/pkg/errors
+              desc: Use the standard library errors package and fmt.Errorf with %w.
+            - pkg: github.com/sirupsen/logrus
+              desc: Use log/slog.
+            - pkg: go.uber.org/zap
+              desc: Use log/slog.
+            - pkg: github.com/rs/zerolog
+              desc: Use log/slog.
+            - pkg: math/rand$
+              desc: Use math/rand/v2 or crypto/rand.
+            - pkg: io/ioutil
+              desc: Deprecated; use io and os.
+        domain:
+          # Domain packages must not depend on adapters, transports or drivers.
+          files:
+            - "**/namespace/**"
+            - "**/stack/**"
+            - "**/identity/**"
+            - "**/blob/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/store
+              desc: Domain code depends on ports, never on store adapters.
+            - pkg: opendustpan.org/opendustpan/api
+              desc: Domain code must not import transport adapters.
+            - pkg: opendustpan.org/opendustpan/blob/
+              desc: Domain code depends on the blob port, never on an adapter.
+            - pkg: net/http
+              desc: HTTP belongs in api/, not in the domain.
+            - pkg: database/sql
+              desc: SQL belongs in store/, not in the domain.
+            - pkg: github.com/jackc/pgx
+              desc: SQL belongs in store/, not in the domain.
+
+    dupl:
+      threshold: 120
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    exhaustruct_v5:
+      ignore-patterns:
+        # Standard library types documented as "zero value is ready / configure what you need".
+        - ^net/http\.Server$
+        - ^net/http\.Client$
+        - ^net/http\.Transport$
+        - ^net/http\.Cookie$
+        - ^net/http\.Request$
+        - ^crypto/tls\.Config$
+        - ^log/slog\.HandlerOptions$
+        - ^database/sql\.TxOptions$
+        - ^net/url\.URL$
+        - ^encoding/json\.Decoder$
+        - ^os/exec\.Cmd$
+
+    forbidigo:
+      forbid:
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+          msg: Use log/slog, or write to an injected io.Writer.
+        - pattern: ^log\.(Print|Fatal|Panic)(|f|ln)$
+          msg: Use log/slog and return errors instead of exiting.
+        - pattern: ^os\.Exit$
+          msg: Only cmd/ may exit; return errors everywhere else.
+        - pattern: ^time\.Sleep$
+          msg: Use a timer with context cancellation.
+      analyze-types: true
+
+    funlen:
+      lines: 70
+      statements: 45
+      ignore-comments: true
+
+    gocognit:
+      min-complexity: 15
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        - whyNoLint # nolintlint covers this with stricter rules.
+        - unnamedResult # nonamedreturns forbids named results, so this conflicts.
+      settings:
+        hugeParam:
+          # Domain types are immutable values passed by value on purpose; only
+          # flag copies that are genuinely large.
+          sizeThreshold: 512
+
+    godox:
+      keywords:
+        - TODO
+        - FIXME
+        - HACK
+        - XXX
+
+    gosec:
+      excludes: []
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # Struct field order follows readability, not padding.
+      settings:
+        shadow:
+          # Strict mode bans `if err := f(); err != nil` whenever an outer err
+          # exists, which contradicts allowing inline errors. Non-strict still
+          # reports the buggy case: the outer variable used after shadowing.
+          strict: false
+
+    inamedparam:
+      skip-single-param: false
+
+    interfacebloat:
+      max: 8
+
+    ireturn:
+      allow:
+        - error
+        - empty
+        - stdlib
+        - generic
+
+    misspell:
+      locale: US
+
+    mnd:
+      ignored-functions:
+        - ^time\.Duration$
+        - ^os\.(Mkdir|MkdirAll|OpenFile|WriteFile|Chmod)$
+
+    nakedret:
+      max-func-lines: 0
+
+    nestif:
+      min-complexity: 4
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    paralleltest:
+      ignore-missing-subtests: false
+
+    revive:
+      enable-all-rules: true
+      rules:
+        # Duplicates of dedicated linters configured above.
+        - name: line-length-limit
+          disabled: true # golines
+        - name: add-constant
+          disabled: true # mnd + goconst
+        - name: cognitive-complexity
+          disabled: true # gocognit
+        - name: cyclomatic
+          disabled: true # cyclop
+        - name: function-length
+          disabled: true # funlen
+        - name: unhandled-error
+          disabled: true # errcheck
+        - name: max-public-structs
+          disabled: true # Domain packages legitimately export several value types.
+        - name: file-header
+          disabled: true # No per-file headers.
+        - name: banned-characters
+          disabled: true # Nothing to ban.
+        - name: import-alias-naming
+          disabled: true # importas owns aliases.
+        - name: comment-spacings
+          arguments: ["nolint"]
+        - name: unused-receiver
+          disabled: true # Methods satisfying ports often ignore the receiver; unparam covers real waste.
+        - name: max-control-nesting
+          disabled: true # nestif
+        - name: function-result-limit
+          arguments: [3]
+        - name: argument-limit
+          arguments: [5]
+        - name: package-directory-mismatch
+          disabled: true # Adapter packages (store/sqlite) intentionally share short names.
+
+    sloglint:
+      no-mixed-args: true
+      kv-only: false
+      attr-only: true
+      no-global: all
+      context: scope
+      static-msg: true
+      key-naming-case: snake
+      forbidden-keys:
+        - time
+        - level
+        - msg
+        - source
+
+    staticcheck:
+      checks:
+        - all
+
+    tagliatelle:
+      case:
+        rules:
+          json: goCamel
+          yaml: goCamel
+        use-field-name: false
+
+    testpackage:
+      skip-regexp: _internal_test\.go
+
+    unparam:
+      check-exported: true
+
+    usestdlibvars:
+      http-method: true
+      http-status-code: true
+      time-weekday: true
+      time-month: true
+      time-layout: true
+      crypto-hash: true
+      default-rpc-path: true
+      sql-isolation-level: true
+      tls-signature-scheme: true
+      constant-kind: true
+
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+      ignore-package-globs:
+        - opendustpan.org/opendustpan/*
+
+  exclusions:
+    generated: strict
+    warn-unused: true
+    rules:
+      # Tests may use numeric literals and longer table-driven functions.
+      - path: _test\.go
+        linters:
+          - mnd
+          - funlen
+          - dupl
+          - goconst
+      # The binary entry point is the only place allowed to exit.
+      - path: ^cmd/
+        linters:
+          - forbidigo
+        text: os\.Exit
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+    - golines
+  settings:
+    gofumpt:
+      module-path: opendustpan.org/opendustpan
+      extra:
+        group-params: true
+        clothe-returns: true
+        balance-calls: true
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+      custom-order: true
+    golines:
+      max-len: 120
+      tab-len: 4
+      shorten-comments: true
+      reformat-tags: true
+  exclusions:
+    generated: strict
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false # Report every linter's finding, not just the first per line.
+  new: false
