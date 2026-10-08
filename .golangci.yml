@@ -13,6 +13,8 @@ version: "2"
 run:
   timeout: 5m
   tests: true
+  build-tags:
+    - e2e # Lint the end-to-end package too; make test excludes it.
   modules-download-mode: readonly
 
 linters:
@@ -123,6 +125,7 @@ linters:
         - ^net/url\.URL$
         - ^encoding/json\.Decoder$
         - ^os/exec\.Cmd$
+        - ^archive/tar\.Header$
 
     forbidigo:
       forbid:
