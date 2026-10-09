@@ -1,5 +1,6 @@
 // Package stack models projects and stacks inside a namespace: their identity,
-// tags and lifecycle. Updates, checkpoints and leases will live here too.
+// tags and lifecycle (Service), and the update cycle the Pulumi CLI drives
+// against them: updates, leases, checkpoints and engine events (Updates).
 package stack
 
 import (
@@ -102,7 +103,8 @@ type Stack struct {
 	UpdatedAt time.Time
 	Tags      map[string]string
 	Ref       Ref
-	// Version counts completed updates; a new stack is at version 0.
+	// Version is the version of the stack's last finished update; a new stack
+	// is at version 0.
 	Version int64
 }
 
