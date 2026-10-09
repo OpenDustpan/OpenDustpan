@@ -32,9 +32,11 @@ Modules:
 
 Update cycle:
 
-- Kinds and statuses use the CLI's wire values. Previews never block or wait.
-  Only one mutating update runs per stack; the store enforces it atomically
-  when starting.
+- Kinds and statuses use the CLI's wire values. An update mutates unless it is
+  of kind `preview` or a dry run: the CLI runs the preview phase of `up`,
+  `refresh` and `destroy` with the real kind and `dryRun: true`. Previews
+  never block or wait, take no version and are not history. Only one mutating
+  update runs per stack; the store enforces it atomically when starting.
 - Starting allocates the update's version: one more than any earlier
   mutating update of the stack, so failed and canceled updates keep their
   number in history. The stack's version follows when the update ends.
@@ -42,12 +44,20 @@ Update cycle:
   the token so concurrent writes do not fail. An expired lease does not free
   the stack: it stays locked until `pulumi cancel`, because the server cannot
   know whether the engine is still changing resources.
-- Every transition is a compare-and-swap on `Update.Revision`.
-- Checkpoints are opaque JSON plus schema version; the server never parses
-  them. Verbatim checkpoints are idempotent by sequence number and SHA-256.
-  Delta checkpoints and journaling are not supported yet: the server will
-  not advertise those capabilities, so clients send whole checkpoints.
-- Events are opaque JSON, idempotent by sequence number.
+- Every transition is a compare-and-swap on `Update.Revision`. Completing or
+  canceling again with the same final status succeeds without a write: the
+  CLI retries these calls when a response is lost.
+- Checkpoints are opaque JSON plus schema version and the client's `isInvalid`
+  mark; the server never parses them. Without the delta capability, which the
+  server does not advertise yet, the CLI sends whole checkpoints through
+  `PATCH .../checkpoint` with no sequence number, and the last write wins.
+  Sequence-number idempotency applies only to verbatim and delta checkpoints.
+  Journaling is not supported yet either.
+- Checkpoint and event writes carry the digest of the lease that authorized
+  them, and the store accepts them only while the update still runs under it,
+  in the same transaction, so a write authorized before a cancel cannot land
+  after it.
+- Events are opaque JSON, idempotent by sequence number (the CLI counts from 0).
 - Import runs as an update of kind `import`, so it shows in history and
   respects the stack lock.
 
@@ -65,9 +75,13 @@ OpenTofu state:
 
 - State is opaque; lineage, serial and MD5 come from the client. A new state
   needs the caller to hold the workspace lock, the current lineage and a
-  higher serial, unless forced. Finalizing re-checks the serial atomically.
-- Content is uploaded through a single-use capability valid for 10 minutes,
-  checked for size and MD5 while streaming, and deleted on any mismatch.
+  higher serial, unless forced (force never skips the lock). Finalizing
+  re-checks all three atomically, so a version declared before a
+  force-unlock cannot land after the lock changed hands.
+- Content is uploaded through a capability valid for 10 minutes and checked
+  for size and MD5 while streaming. Each upload attempt writes its own blob;
+  exactly one attempt finalizes, and a failed or losing attempt deletes only
+  its own blob.
 
 ## Consequences
 

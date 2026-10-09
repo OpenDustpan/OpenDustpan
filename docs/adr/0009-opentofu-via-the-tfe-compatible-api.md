@@ -32,12 +32,16 @@ client it pins (v1.101.0), in order:
    projects list and create when a project is named.
 5. Per operation: `POST /api/v2/workspaces/{id}/actions/lock`, read
    `current-state-version` and download it, create a state version, unlock.
-   Outputs come from `state-versions/{id}/outputs`.
-6. State upload: create the state version without content, then `PUT` the
-   state to the `upload-url` (and `json-upload-url`) in the response. That PUT
-   carries no `Authorization` header. Only if the server answers create with
-   the error "param is missing or the value is empty: state" does OpenTofu
-   fall back to sending base64 state inline.
+   `tofu output` reads `GET /api/v2/workspaces/{id}/current-state-version-outputs`
+   (and `state-version-outputs/{id}`), falling back to the full state only for
+   outputs without a detailed type.
+6. State upload: create the state version without content (attributes
+   `serial`, `md5`, `lineage`, `force`, and base64 `json-state-outputs`), then
+   `PUT` the state to `hosted-state-upload-url` and, when present, the JSON
+   rendering to `hosted-json-state-upload-url`, in parallel. Those PUTs carry
+   no `Authorization` header. Only if the server answers create with the error
+   "param is missing or the value is empty: state" does OpenTofu fall back to
+   sending base64 state inline.
 
 Tokens arrive as `Authorization: Bearer <token>`, from the `cloud` block, a
 `credentials` block in the CLI configuration, `TF_TOKEN_<host>`, or `tofu
@@ -61,8 +65,12 @@ login` (the `login.v1` service, an OAuth authorization-code flow).
 - Entitlements report `operations: false`, so every client runs locally.
   Workspaces report execution mode `local`.
 - State versions are immutable blobs with metadata in SQL. A new version must
-  have the current lineage and a higher serial, checked in the same fenced
-  transaction as the lock check.
+  have the current lineage and a higher serial (unless forced), checked in the
+  same fenced transaction as the lock check when the version is finalized.
+- Outputs are served from the `json-state-outputs` the client sends with each
+  version, stored opaque; the server never derives them from state.
+- The JSON state upload URL may accept and discard its body: the server does
+  not need the plaintext rendering, which would defeat state encryption.
 - Upload URLs are capability URLs: short-lived, single-use, scoped to one
   state version, served by the API itself. A future S3 blob adapter may hand
   out presigned URLs instead. The inline fallback is not used, because it
