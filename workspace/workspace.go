@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/namespace"
 )
 
@@ -86,6 +87,10 @@ func (id ID) String() string {
 // Lock is who holds a workspace and why. The zero Lock means unlocked.
 type Lock struct {
 	LockedAt time.Time
+	// ID identifies this acquisition. The same principal locking again after a
+	// force-unlock gets a new ID, so work begun under the old lock is fenced
+	// out even when every CI job shares one token.
+	ID string
 	// Holder is the subject of the principal holding the lock.
 	Holder string
 	Reason string
@@ -119,7 +124,7 @@ func (w Workspace) lock(now time.Time, holder, reason string) (Workspace, error)
 		)
 	}
 
-	return w.withLock(now, Lock{LockedAt: now, Holder: holder, Reason: reason}), nil
+	return w.withLock(now, Lock{LockedAt: now, ID: ident.NewID("lock-"), Holder: holder, Reason: reason}), nil
 }
 
 // unlock releases holder's lock.
@@ -128,7 +133,7 @@ func (w Workspace) unlock(now time.Time, holder string) (Workspace, error) {
 		return Workspace{}, err
 	}
 
-	return w.withLock(now, Lock{LockedAt: time.Time{}, Holder: "", Reason: ""}), nil
+	return w.withLock(now, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}), nil
 }
 
 // forceUnlock releases the lock whoever holds it.
@@ -137,7 +142,7 @@ func (w Workspace) forceUnlock(now time.Time) (Workspace, error) {
 		return Workspace{}, ErrNotLocked
 	}
 
-	return w.withLock(now, Lock{LockedAt: time.Time{}, Holder: "", Reason: ""}), nil
+	return w.withLock(now, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}), nil
 }
 
 // heldBy reports whether holder holds the lock.

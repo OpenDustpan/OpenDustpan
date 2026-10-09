@@ -33,6 +33,9 @@ type memStore struct {
 	versions   map[workspace.StateVersionID]workspace.StateVersion
 	current    map[workspace.ID]workspace.StateVersionID
 	mu         sync.Mutex
+	// lostAck makes the next finalize commit and then report an error, as a
+	// dropped connection after COMMIT would.
+	lostAck bool
 }
 
 func newMemStore() *memStore {
@@ -41,6 +44,7 @@ func newMemStore() *memStore {
 		versions:   map[workspace.StateVersionID]workspace.StateVersion{},
 		current:    map[workspace.ID]workspace.StateVersionID{},
 		mu:         sync.Mutex{},
+		lostAck:    false,
 	}
 }
 
@@ -133,7 +137,7 @@ func (m *memStore) FinalizeStateVersion(_ context.Context, sv workspace.StateVer
 	switch lock := m.workspaces[sv.Workspace].Lock; {
 	case !lock.Locked():
 		return workspace.ErrNotLocked
-	case lock.Holder != sv.Holder:
+	case lock.ID != sv.LockID:
 		return workspace.ErrLockedByOther
 	}
 
@@ -149,8 +153,16 @@ func (m *memStore) FinalizeStateVersion(_ context.Context, sv workspace.StateVer
 	m.versions[sv.ID] = sv
 	m.current[sv.Workspace] = sv.ID
 
+	if m.lostAck {
+		m.lostAck = false
+
+		return errConnectionLost
+	}
+
 	return nil
 }
+
+var errConnectionLost = errors.New("connection lost after commit")
 
 func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (workspace.StateVersion, error) {
 	m.mu.Lock()
@@ -165,9 +177,10 @@ func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (work
 }
 
 type fixture struct {
-	svc *workspace.Service
-	now *time.Time
-	ws  workspace.Workspace
+	svc   *workspace.Service
+	store *memStore
+	now   *time.Time
+	ws    workspace.Workspace
 }
 
 func newFixture(t *testing.T) fixture {
@@ -214,7 +227,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, now: &now, ws: ws}
 }
 
 func sum(content string) string {
@@ -227,11 +240,11 @@ func newState(lineage string, serial int64, content string) workspace.NewState {
 	return workspace.NewState{Lineage: lineage, MD5: sum(content), Outputs: nil, Serial: serial, Force: false}
 }
 
-// push declares and uploads one state version as holder, who must hold the lock.
-func (f fixture) push(t *testing.T, holder string, in workspace.NewState, content string) error {
+// push declares and uploads one state version as alice, who must hold the lock.
+func (f fixture) push(t *testing.T, in workspace.NewState, content string) error {
 	t.Helper()
 
-	pending, err := f.svc.BeginState(t.Context(), f.ws.ID, holder, in)
+	pending, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", in)
 	if err != nil {
 		return err
 	}
@@ -278,7 +291,7 @@ func TestStateVersions(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 
-	if err := f.push(t, "alice", newState("l1", 1, "v1"), "v1"); !errors.Is(err, workspace.ErrNotLocked) {
+	if err := f.push(t, newState("l1", 1, "v1"), "v1"); !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("push without lock: %v, want ErrNotLocked", err)
 	}
 
@@ -316,7 +329,7 @@ func TestStateVersions(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if err := f.push(t, "alice", tt.in, tt.content); !errors.Is(err, tt.want) {
+		if err := f.push(t, tt.in, tt.content); !errors.Is(err, tt.want) {
 			t.Errorf("%s: %v, want %v", tt.name, err, tt.want)
 		}
 	}
@@ -387,8 +400,13 @@ func TestUploadCapability(t *testing.T) {
 		t.Fatalf("upload: %v", err)
 	}
 
-	if err = upload(pending.Version.ID, pending.Upload, "v1"); !errors.Is(err, workspace.ErrUploadDenied) {
-		t.Errorf("second upload: %v, want ErrUploadDenied", err)
+	// go-tfe retries a PUT whose response was lost: the same content succeeds.
+	if err = upload(pending.Version.ID, pending.Upload, "v1"); err != nil {
+		t.Errorf("retried upload: %v", err)
+	}
+
+	if err = upload(pending.Version.ID, pending.Upload, "other"); !errors.Is(err, workspace.ErrUploadDenied) {
+		t.Errorf("retried upload with other content: %v, want ErrUploadDenied", err)
 	}
 
 	late, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
@@ -415,7 +433,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if err := f.push(t, "alice", newState("l1", 1, "v1"), "v1"); err != nil {
+	if err := f.push(t, newState("l1", 1, "v1"), "v1"); err != nil {
 		t.Fatalf("push v1: %v", err)
 	}
 
@@ -435,6 +453,60 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("v5"))
 	if !errors.Is(err, workspace.ErrLockedByOther) {
 		t.Errorf("upload after losing the lock: %v, want ErrLockedByOther", err)
+	}
+
+	checkCurrent(t, f, "l1", "v1")
+}
+
+// The same principal locking again after a force-unlock holds a new lock;
+// work declared under the old one must not land.
+func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "ci", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	stale, err := f.svc.BeginState(ctx, f.ws.ID, "ci", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	if _, err = f.svc.Lock(ctx, f.ws.ID, "ci", "apply again"); err != nil {
+		t.Fatalf("relock: %v", err)
+	}
+
+	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("v1"))
+	if !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Errorf("upload under an older lock: %v, want ErrLockedByOther", err)
+	}
+}
+
+// When finalize's outcome is unknown, the blob may be the current state's
+// content and must survive.
+func TestUnknownFinalizeOutcomeKeepsContent(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	f.store.mu.Lock()
+	f.store.lostAck = true
+	f.store.mu.Unlock()
+
+	if err := f.push(t, newState("l1", 1, "v1"), "v1"); !errors.Is(err, errConnectionLost) {
+		t.Fatalf("push: %v, want the lost acknowledgement", err)
 	}
 
 	checkCurrent(t, f, "l1", "v1")

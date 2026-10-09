@@ -66,8 +66,10 @@ type StateVersion struct {
 	ID        StateVersionID
 	Workspace ID
 	// Holder is who held the workspace lock when the version was declared.
-	// Finalizing requires that they still do.
-	Holder  string
+	Holder string
+	// LockID is the lock acquisition the version was declared under.
+	// Finalizing requires that the workspace is still held by it.
+	LockID  string
 	Lineage string
 	Status  StateStatus
 	// Content is the blob holding the state, set when the upload finalizes.
@@ -133,6 +135,12 @@ func (n NewState) follows(current StateVersion) error {
 	default:
 		return nil
 	}
+}
+
+// retriedBy reports whether tok is the capability that already finalized sv:
+// a client retrying an upload whose response it never received.
+func (sv StateVersion) retriedBy(tok token.Token) bool {
+	return sv.Status == StatusFinalized && sv.Upload.Matches(tok)
 }
 
 // accepts reports whether tok may upload content for sv at now.

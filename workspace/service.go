@@ -24,13 +24,15 @@ const (
 // Store persists workspaces. Writes carry the namespace fence and fail with
 // namespace.ErrFenced if it is stale.
 type Store interface {
-	// CreateWorkspace persists a new w. It returns ErrAlreadyExists or namespace.ErrNotFound.
+	// CreateWorkspace persists a new w. It returns ErrAlreadyExists, or
+	// namespace.ErrNotFound if the namespace does not exist.
 	CreateWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
 	// GetWorkspace returns the workspace called ref, or ErrNotFound.
 	GetWorkspace(ctx context.Context, ref Ref) (Workspace, error)
 	// GetWorkspaceByID returns the workspace with id, or ErrNotFound.
 	GetWorkspaceByID(ctx context.Context, id ID) (Workspace, error)
-	// ListWorkspaces returns the namespace's workspaces, ordered by name.
+	// ListWorkspaces returns the namespace's workspaces, ordered by name; an
+	// empty list if it has none or does not exist.
 	ListWorkspaces(ctx context.Context, ns namespace.Name) ([]Workspace, error)
 	// SaveWorkspace persists w if the store holds w.Revision-1, else returns
 	// ErrConcurrentModification.
@@ -39,7 +41,8 @@ type Store interface {
 
 // StateStore persists state version metadata.
 type StateStore interface {
-	// CreateStateVersion persists a new, pending sv.
+	// CreateStateVersion persists a new, pending sv. It returns ErrNotFound
+	// if sv.Workspace does not exist.
 	CreateStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
@@ -47,10 +50,12 @@ type StateStore interface {
 	// makes it the workspace's current state, checking in the same
 	// transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
-	//   - the workspace is locked by sv.Holder, else ErrNotLocked or
+	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
 	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
+	// Those errors and namespace.ErrFenced mean nothing was written. Any
+	// other error leaves the outcome unknown: the version may be current.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
@@ -124,7 +129,7 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	w := Workspace{
 		CreatedAt: now,
 		UpdatedAt: now,
-		Lock:      Lock{LockedAt: time.Time{}, Holder: "", Reason: ""},
+		Lock:      Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		ID:        ID(ident.NewID("ws-")),
 		Ref:       ref,
 		Revision:  1,
@@ -233,10 +238,11 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 
 // Upload stores the content of a pending state version and makes it current.
 // The content must match the declared MD5 and fit the size limit, and the
-// declarer must still hold the lock when it finalizes; otherwise the content
-// is discarded. Concurrent or retried uploads of one version are safe: each
+// lock it was declared under must still be held when it finalizes; otherwise
+// the content is discarded. Concurrent uploads of one version are safe: each
 // writes its own blob, exactly one finalizes, and the others delete only their
-// own blob.
+// own blob. A retry after success (same capability, same content) succeeds
+// without storing anything, because go-tfe retries when a response is lost.
 func (s *Service) Upload(
 	ctx context.Context,
 	id StateVersionID,
@@ -246,6 +252,10 @@ func (s *Service) Upload(
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	if sv.retriedBy(tok) {
+		return s.confirmRetry(sv, content)
 	}
 
 	if acceptErr := sv.accepts(tok, s.clock()); acceptErr != nil {
@@ -278,7 +288,14 @@ func (s *Service) Upload(
 	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
-		return StateVersion{}, errors.Join(fmt.Errorf("finalize state %s: %w", id, err), s.blobs.Delete(ctx, key))
+		err = fmt.Errorf("finalize state %s: %w", id, err)
+		if rejected(err) {
+			// Nothing was written, so this attempt's blob is an orphan.
+			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+		}
+
+		// The outcome is unknown; the version may point at this blob. Keep it.
+		return StateVersion{}, err
 	}
 
 	return sv, nil
@@ -308,6 +325,40 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 	return r, nil
 }
 
+// confirmRetry answers a retried upload of a finalized version: the same
+// content succeeds without being stored again, other content is denied.
+func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion, error) {
+	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
+
+	n, err := io.Copy(hash, io.LimitReader(content, s.maxState+1))
+	if err != nil {
+		return StateVersion{}, fmt.Errorf("read retried upload of %s: %w", sv.ID, err)
+	}
+
+	if n != sv.Size || [md5.Size]byte(hash.Sum(nil)) != sv.MD5 {
+		return StateVersion{}, fmt.Errorf(
+			"%w: state version %s is finalized with other content",
+			ErrUploadDenied,
+			sv.ID,
+		)
+	}
+
+	return sv, nil
+}
+
+// rejected reports whether a finalize error proves nothing was written.
+func rejected(err error) bool {
+	for _, sentinel := range []error{
+		ErrUploadDenied, ErrNotLocked, ErrLockedByOther, ErrLineageMismatch, ErrStaleSerial, namespace.ErrFenced,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // createPending persists a pending state version for w with a fresh upload capability.
 func (s *Service) createPending(
 	ctx context.Context,
@@ -334,6 +385,7 @@ func (s *Service) createPending(
 		ID:              StateVersionID(ident.NewID("sv-")),
 		Workspace:       w.ID,
 		Holder:          w.Lock.Holder,
+		LockID:          w.Lock.ID,
 		Lineage:         in.Lineage,
 		Status:          StatusPending,
 		Content:         "",
