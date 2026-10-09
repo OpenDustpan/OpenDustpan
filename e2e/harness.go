@@ -105,7 +105,7 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 
 	dir := tb.TempDir()
 	token := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, mu: sync.Mutex{}}
+	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 
 	ts := httptest.NewUnstartedServer(rec.Middleware(newServer(ctx, tb, filepath.Join(dir, "dustpan.db"), token)))
 	if cli.Tool == ToolTofu {

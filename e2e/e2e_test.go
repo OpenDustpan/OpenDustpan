@@ -21,7 +21,9 @@ import (
 const (
 	stackName = "dev"
 	// installLimit plus every step's commandTimeout must stay under the
-	// go test -timeout in the Makefile, or a timeout loses every report.
+	// go test -timeout in the Makefile, or a timeout loses every report. That
+	// holds per version only while all versions run at once, so the Makefile's
+	// -parallel must cover the whole matrix (6 versions by default).
 	installLimit = 10 * time.Minute
 )
 

@@ -3,8 +3,10 @@
 package e2e
 
 import (
+	"cmp"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 )
 
@@ -37,6 +39,7 @@ type Entry struct {
 type Recorder struct {
 	step    string
 	entries []Entry
+	arrived int
 	mu      sync.Mutex
 }
 
@@ -48,17 +51,21 @@ func (r *Recorder) SetStep(step string) {
 	r.step = step
 }
 
-// Entries returns a copy of the log so far, in arrival order.
+// Entries returns a copy of the log so far, in arrival order (by Seq).
 func (r *Recorder) Entries() []Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return append([]Entry(nil), r.entries...)
+	out := append([]Entry(nil), r.entries...)
+	slices.SortFunc(out, func(a, b Entry) int { return cmp.Compare(a.Seq, b.Seq) })
+
+	return out
 }
 
 // Middleware records each request handled by next.
 func (r *Recorder) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		seq, step := r.arrive()
 		in := &capture{inner: req.Body, kept: nil, n: 0}
 		req.Body = in
 		out := &captureWriter{ResponseWriter: w, kept: nil, n: 0, status: http.StatusOK}
@@ -69,7 +76,7 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 		defer r.mu.Unlock()
 
 		r.entries = append(r.entries, Entry{
-			Step:          r.step,
+			Step:          step,
 			Method:        req.Method,
 			Path:          req.URL.Path,
 			Query:         req.URL.RawQuery,
@@ -78,12 +85,22 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 			ContentType:   req.Header.Get("Content-Type"),
 			RequestBody:   string(in.kept),
 			ResponseBody:  string(out.kept),
-			Seq:           len(r.entries) + 1,
+			Seq:           seq,
 			Status:        out.status,
 			RequestBytes:  in.n,
 			ResponseBytes: out.n,
 		})
 	})
+}
+
+// arrive numbers a request and labels it with the current step.
+func (r *Recorder) arrive() (int, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.arrived++
+
+	return r.arrived, r.step
 }
 
 // capture wraps a request body and remembers its first bytes.

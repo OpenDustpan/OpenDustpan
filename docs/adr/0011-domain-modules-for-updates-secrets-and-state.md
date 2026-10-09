@@ -44,9 +44,11 @@ Update cycle:
   the token so concurrent writes do not fail. An expired lease does not free
   the stack: it stays locked until `pulumi cancel`, because the server cannot
   know whether the engine is still changing resources.
-- Every transition is a compare-and-swap on `Update.Revision`. Completing or
-  canceling again with the same final status succeeds without a write: the
-  CLI retries these calls when a response is lost.
+- Every transition is a compare-and-swap on `Update.Revision`, re-applied to
+  a fresh read up to three times when it loses (the CLI renews its lease
+  while completion is in flight). Completing or canceling again with the same
+  final status succeeds without a write: the CLI retries these calls when a
+  response is lost.
 - Checkpoints are opaque JSON plus schema version and the client's `isInvalid`
   mark; the server never parses them. Without the delta capability, which the
   server does not advertise yet, the CLI sends whole checkpoints through
@@ -63,7 +65,8 @@ Update cycle:
 
 Secrets:
 
-- One random 256-bit data key per scope, AES-256-GCM, random nonces. Data
+- One random 256-bit data key per scope, AES-256-GCM, random nonces. Values
+  are limited to 1 MiB; ciphertexts may be 29 bytes longer. Data
   keys exist only wrapped by the `Wrapper`, which records its ID with each
   key. Ciphertexts and wrapped keys are bound to the scope as associated
   data. Every decryption failure is the same error.
@@ -75,13 +78,18 @@ OpenTofu state:
 
 - State is opaque; lineage, serial and MD5 come from the client. A new state
   needs the caller to hold the workspace lock, the current lineage and a
-  higher serial, unless forced (force never skips the lock). Finalizing
-  re-checks all three atomically, so a version declared before a
-  force-unlock cannot land after the lock changed hands.
+  higher serial, unless forced (force never skips the lock). Each lock
+  acquisition has its own ID, recorded on the version. Finalizing re-checks
+  lock ID, lineage and serial atomically, so a version declared before a
+  force-unlock cannot land afterwards, even when the same principal locks
+  again.
 - Content is uploaded through a capability valid for 10 minutes and checked
   for size and MD5 while streaming. Each upload attempt writes its own blob;
-  exactly one attempt finalizes, and a failed or losing attempt deletes only
-  its own blob.
+  exactly one attempt finalizes, and an attempt the store rejected deletes
+  only its own blob. When finalizing fails with an unknown outcome the blob is
+  kept, since the version may point at it; orphans are garbage. A retry of a
+  finalized upload with the same capability and content succeeds, because
+  go-tfe retries a PUT whose response was lost.
 
 ## Consequences
 
