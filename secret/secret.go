@@ -45,8 +45,11 @@ const (
 	// sealOverhead is what a ciphertext adds to its plaintext: the format
 	// byte, the 12-byte GCM nonce and the 16-byte tag.
 	sealOverhead = 1 + 12 + 16
-	maxBatch     = 1000
-	aadLabel     = "opendustpan/secret/v1"
+	// DefaultMaxBatchBytes bounds the total size of one Encrypt or Decrypt
+	// batch. The CLI splits config batches only by size (100 MB chunks), never
+	// by count, so a count limit would reject large configs.
+	DefaultMaxBatchBytes = 200 << 20
+	aadLabel             = "opendustpan/secret/v1"
 )
 
 // Scope names the data key values are encrypted under. ID must stay the same
@@ -117,6 +120,8 @@ type Config struct {
 	Wrapper    Wrapper
 	Namespaces *namespace.Service
 	Now        func() time.Time
+	// MaxBatchBytes bounds one batch; zero means DefaultMaxBatchBytes.
+	MaxBatchBytes int
 }
 
 // Service encrypts and decrypts values per scope.
@@ -125,6 +130,7 @@ type Service struct {
 	wrapper    Wrapper
 	namespaces *namespace.Service
 	now        func() time.Time
+	maxBatch   int
 }
 
 // NewService returns a Service. Keys, Wrapper and Namespaces are required.
@@ -143,13 +149,18 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{keys: cfg.Keys, wrapper: cfg.Wrapper, namespaces: cfg.Namespaces, now: now}, nil
+	maxBatch := cfg.MaxBatchBytes
+	if maxBatch <= 0 {
+		maxBatch = DefaultMaxBatchBytes
+	}
+
+	return &Service{keys: cfg.Keys, wrapper: cfg.Wrapper, namespaces: cfg.Namespaces, now: now, maxBatch: maxBatch}, nil
 }
 
 // Encrypt seals each plaintext under the scope's data key, creating the key on
 // first use. The result has one ciphertext per plaintext, in order.
 func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte) ([][]byte, error) {
-	if err := checkBatch(plaintexts, maxValueBytes); err != nil {
+	if err := checkBatch(plaintexts, maxValueBytes, s.maxBatch); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +187,8 @@ func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte)
 // Decrypt opens each ciphertext made by Encrypt for the same scope. Any
 // failure is ErrDecrypt; the batch fails as a whole.
 func (s *Service) Decrypt(ctx context.Context, scope Scope, ciphertexts [][]byte) ([][]byte, error) {
-	if err := checkBatch(ciphertexts, maxValueBytes+sealOverhead); err != nil {
+	limit, total := maxValueBytes+sealOverhead, s.maxBatch+len(ciphertexts)*sealOverhead
+	if err := checkBatch(ciphertexts, limit, total); err != nil {
 		return nil, err
 	}
 
@@ -284,16 +296,20 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-// checkBatch bounds a batch and each value in it to limit bytes.
-func checkBatch(values [][]byte, limit int) error {
-	if len(values) > maxBatch {
-		return fmt.Errorf("%w: %d values in one batch, limit %d", ErrTooLarge, len(values), maxBatch)
-	}
+// checkBatch bounds each value to limit bytes and the batch to total bytes.
+func checkBatch(values [][]byte, limit, total int) error {
+	sum := 0
 
 	for i, v := range values {
 		if len(v) > limit {
 			return fmt.Errorf("%w: value %d has %d bytes, limit %d", ErrTooLarge, i, len(v), limit)
 		}
+
+		sum += len(v)
+	}
+
+	if sum > total {
+		return fmt.Errorf("%w: batch of %d bytes, limit %d", ErrTooLarge, sum, total)
 	}
 
 	return nil

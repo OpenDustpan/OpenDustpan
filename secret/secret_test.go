@@ -133,7 +133,9 @@ func newFixture(t *testing.T, wrapperID string, keys *memKeys) fixture {
 
 	w := newWrapper(t, wrapperID)
 
-	svc, err := secret.NewService(secret.Config{Keys: keys, Wrapper: w, Namespaces: namespaces, Now: nil})
+	svc, err := secret.NewService(secret.Config{
+		Keys: keys, Wrapper: w, Namespaces: namespaces, Now: nil, MaxBatchBytes: 4 << 20,
+	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
@@ -258,7 +260,14 @@ func TestDecryptWithoutKeyAndLimits(t *testing.T) {
 		t.Errorf("oversized value: %v, want ErrTooLarge", err)
 	}
 
-	if _, err := f.svc.Encrypt(ctx, scope(t, "stack-1"), make([][]byte, 1001)); !errors.Is(err, secret.ErrTooLarge) {
+	// The CLI bounds batches by size only; many small values are fine.
+	if _, err = f.svc.Encrypt(ctx, scope(t, "stack-1"), make([][]byte, 5000)); err != nil {
+		t.Errorf("5000 small values: %v", err)
+	}
+
+	big := bytes.Repeat([]byte{'x'}, 1<<20)
+	_, err = f.svc.Encrypt(ctx, scope(t, "stack-1"), [][]byte{big, big, big, big, big})
+	if !errors.Is(err, secret.ErrTooLarge) {
 		t.Errorf("oversized batch: %v, want ErrTooLarge", err)
 	}
 }
