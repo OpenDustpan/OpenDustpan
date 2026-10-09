@@ -31,6 +31,7 @@ identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, Ad
 blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi CLI API (also used by the console)
+e2e/                 end-to-end suite driving real Pulumi CLI and OpenTofu binaries (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records
 ```
@@ -59,7 +60,8 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
 - The Pulumi CLI API is not a published spec. Any endpoint change must be
-  checked against real CLI behaviour (the end-to-end suite, once it exists).
+  checked against real CLI behaviour with `make e2e`; the same holds for the
+  TFE-compatible API and OpenTofu.
 
 ## The API is a contract
 
