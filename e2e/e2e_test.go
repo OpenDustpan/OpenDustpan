@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ const (
 	stackName    = "dev"
 	installLimit = 15 * time.Minute
 )
+
+var errUnexpected = errors.New("unexpected output")
 
 func cacheDir(t *testing.T) string {
 	t.Helper()
@@ -37,8 +40,9 @@ func cacheDir(t *testing.T) string {
 	return filepath.Join(base, "opendustpan-e2e")
 }
 
-// TestCLI runs the same scenario against every CLI version in the matrix.
-func TestCLI(t *testing.T) {
+// TestCLIs runs each tool's scenario against every version in its matrix.
+// Reports from both tools land in one summary.
+func TestCLIs(t *testing.T) {
 	t.Parallel()
 
 	reports := e2e.ReportDir()
@@ -53,41 +57,59 @@ func TestCLI(t *testing.T) {
 		}
 	})
 
-	fetcher := &e2e.Fetcher{
-		Client:       http.DefaultClient,
-		CacheDir:     cacheDir(t),
-		DownloadBase: e2e.DownloadBase,
-		LatestURL:    e2e.LatestVersionURL,
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	matrix := []struct {
+		scenario func(*testing.T, *e2e.Env)
+		tool     e2e.Tool
+	}{
+		{scenario: pulumiScenario, tool: e2e.Pulumi()},
+		{scenario: tofuScenario, tool: e2e.OpenTofu()},
 	}
 
-	for _, label := range e2e.Versions() {
-		t.Run(label, func(t *testing.T) {
+	for _, m := range matrix {
+		t.Run(m.tool.Name, func(t *testing.T) {
 			t.Parallel()
 
-			installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
-			defer cancel()
-
-			cli, err := fetcher.Install(installCtx, label)
-			if err != nil {
-				t.Fatalf("install pulumi %s: %v", label, err)
+			for _, label := range m.tool.Versions() {
+				t.Run(label, func(t *testing.T) {
+					t.Parallel()
+					run(t, fetcher, m.tool, label, m.scenario)
+				})
 			}
-
-			t.Logf("pulumi %s (checksum %s) in %s", cli.Version, cli.ChecksumSource, cli.Dir)
-
-			env := e2e.NewEnv(t.Context(), t, cli)
-
-			t.Cleanup(func() {
-				if err := e2e.WriteRun(reports, e2e.NewRun(env)); err != nil {
-					t.Errorf("write report: %v", err)
-				}
-			})
-
-			scenario(t, env)
 		})
 	}
 }
 
-var errUnexpected = errors.New("unexpected output")
+func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenario func(*testing.T, *e2e.Env)) {
+	t.Helper()
+
+	if tool.Name == e2e.ToolTofu && runtime.GOOS != "linux" {
+		// OpenTofu must trust the test server's certificate, and Go honors
+		// SSL_CERT_FILE only on Linux; elsewhere it uses the system store.
+		t.Skipf("the OpenTofu suite needs Linux, not %s", runtime.GOOS)
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	defer cancel()
+
+	cli, err := fetcher.Install(installCtx, tool, label)
+	if err != nil {
+		t.Fatalf("install %s %s: %v", tool.Name, label, err)
+	}
+
+	t.Logf("%s %s (checksum %s) in %s", cli.Tool, cli.Version, cli.ChecksumSource, cli.Dir)
+
+	env := e2e.NewEnv(t.Context(), t, cli)
+
+	t.Cleanup(func() {
+		if err := e2e.WriteRun(e2e.ReportDir(), e2e.NewRun(env)); err != nil {
+			t.Errorf("write report: %v", err)
+		}
+	})
+
+	scenario(t, env)
+}
 
 func contains(want string) func(e2e.Result) error {
 	return func(r e2e.Result) error {
@@ -99,63 +121,88 @@ func contains(want string) func(e2e.Result) error {
 	}
 }
 
-func scenario(t *testing.T, env *e2e.Env) {
+// step is a scenario step with no extra environment.
+func step(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil}
+}
+
+// pulumiScenario exercises login and stack management. A namespace is a
+// Pulumi organization, so every step that names or implies an organization
+// should resolve to the Namespace namespace.
+func pulumiScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	ctx := t.Context()
-	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+	org := e2e.Namespace
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, stackName)
+	stackPath := fmt.Sprintf("/api/stacks/%s/%s", org, e2e.Project)
+	scratch := fmt.Sprintf("%s/%s/scratch", org, e2e.Project)
 
-	env.Step(ctx, t, e2e.StepSpec{Name: "login", Args: []string{"login"}, Env: nil, Check: contains(env.URL)})
-	env.Step(ctx, t, e2e.StepSpec{Name: "whoami", Args: []string{"whoami"}, Env: nil, Check: func(r e2e.Result) error {
-		if got := strings.TrimSpace(r.Stdout); got != e2e.Subject {
-			return fmt.Errorf("%w: whoami printed %q, want %q", errUnexpected, got, e2e.Subject)
-		}
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("whoami", func(r e2e.Result) error {
+			if got := strings.TrimSpace(r.Stdout); got != e2e.Subject {
+				return fmt.Errorf("%w: whoami printed %q, want %q", errUnexpected, got, e2e.Subject)
+			}
 
-		return nil
-	}})
-	env.Step(ctx, t, e2e.StepSpec{Name: "stack init", Args: []string{"stack", "init", qualified}, Env: nil, Check: nil})
-	env.Step(
-		ctx,
-		t,
-		e2e.StepSpec{
-			Name: "stack ls",
-			Args: []string{"stack", "ls", "--json"},
-			Env:  nil,
-			Check: func(r e2e.Result) error {
-				var stacks []struct {
-					Name string `json:"name"`
+			return nil
+		}, "whoami"),
+		// The namespaces a principal can use are its organizations.
+		step("whoami lists organizations", contains("Organizations: "+org), "whoami", "--verbose"),
+		// With one namespace, it is the default organization.
+		step("org get-default", contains(org), "org", "get-default"),
+		step("stack init", nil, "stack", "init", qualified),
+		step("stack ls", stackListed, "stack", "ls", "--json"),
+		step("stack ls in organization", stackListed, "stack", "ls", "--json", "--organization", org),
+		step("stack ls all projects", stackListed, "stack", "ls", "--json", "--all"),
+		step("stack select", nil, "stack", "select", qualified),
+		step("stack show-name", contains(stackName), "stack", "--show-name"),
+		step("stack tag set", nil, "stack", "tag", "set", "team", "e2e"),
+		// The service backend encrypts secrets on the server, per stack.
+		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
+		step("stack export", nil, "stack", "export"),
+		step("preview", nil, "preview", "--non-interactive"),
+		step("up", nil, "up", "--yes", "--non-interactive"),
+		{
+			// An unqualified stack name takes the default organization.
+			Check: func(e2e.Result) error {
+				if !env.Requested("stack init default org", http.MethodPost, stackPath) {
+					return fmt.Errorf("%w: stack was not created in namespace %q", errUnexpected, org)
 				}
 
-				if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
-					return fmt.Errorf("%w: decode stack list: %w", errUnexpected, err)
-				}
-
-				for _, s := range stacks {
-					if strings.HasSuffix(s.Name, stackName) {
-						return nil
-					}
-				}
-
-				return fmt.Errorf("%w: stack %q not listed: %s", errUnexpected, stackName, r.Stdout)
+				return nil
 			},
+			Name: "stack init default org",
+			Args: []string{"stack", "init", "other"},
+			Env:  nil,
 		},
-	)
-	env.Step(
-		ctx,
-		t,
-		e2e.StepSpec{Name: "stack select", Args: []string{"stack", "select", qualified}, Env: nil, Check: nil},
-	)
-	env.Step(ctx, t, e2e.StepSpec{
-		Name: "stack show-name", Args: []string{"stack", "--show-name"}, Env: nil, Check: contains(stackName),
-	})
-	// Without an organization the CLI asks the backend for the user's default one.
-	env.Step(
-		ctx,
-		t,
-		e2e.StepSpec{Name: "stack init default org", Args: []string{"stack", "init", "other"}, Env: nil, Check: nil},
-	)
+		step("stack rename", nil, "stack", "rename", org+"/"+e2e.Project+"/renamed", "--stack", qualified),
+		// A stack of its own, so the result does not depend on rename.
+		step("stack init scratch", nil, "stack", "init", scratch, "--no-select"),
+		step("stack rm", nil, "stack", "rm", "--yes", "--stack", scratch),
+	} {
+		env.Step(ctx, t, s)
+	}
 
 	consoleURLSteps(t, env)
+}
+
+func stackListed(r e2e.Result) error {
+	var stacks []struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
+		return fmt.Errorf("%w: decode stack list: %w", errUnexpected, err)
+	}
+
+	for _, s := range stacks {
+		if strings.HasSuffix(s.Name, stackName) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: stack %q not listed: %s", errUnexpected, stackName, r.Stdout)
 }
 
 // consoleURLSteps records how the CLI derives console links from the backend
@@ -173,20 +220,40 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 
 	overrideURL := "http://console.example.test:3000/" + e2e.Subject
 
+	env.Step(ctx, t, step("console url from 127.0.0.1", contains("as "+e2e.Subject+" ()\n"), "login"))
 	env.Step(ctx, t, e2e.StepSpec{
-		Name: "console url from 127.0.0.1", Args: []string{"login"}, Env: nil,
-		Check: contains("as " + e2e.Subject + " ()\n"),
-	})
-	env.Step(ctx, t, e2e.StepSpec{
-		Name: "console url from api. host", Args: []string{"login"},
+		Check: contains("(" + appURL + ")"),
+		Name:  "console url from api. host",
+		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
 		// test server acting as an HTTP proxy; the server routes on the request path.
-		Env:   []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
-		Check: contains("(" + appURL + ")"),
+		Env: []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
 	})
 	env.Step(ctx, t, e2e.StepSpec{
-		Name: "console url from PULUMI_CONSOLE_DOMAIN", Args: []string{"login"},
-		Env:   []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
 		Check: contains("(" + overrideURL + ")"),
+		Name:  "console url from PULUMI_CONSOLE_DOMAIN",
+		Args:  []string{"login"},
+		Env:   []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
 	})
+}
+
+// tofuScenario drives OpenTofu's cloud block against the server: the
+// organization is the Namespace namespace and the workspace is e2e.Workspace.
+// The configuration has no resources and no providers, so only state and
+// locking are exercised.
+func tofuScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for _, s := range []e2e.StepSpec{
+		step("init", nil, "init", "-input=false", "-no-color"),
+		step("workspace show", contains(e2e.Workspace), "workspace", "show"),
+		step("plan", nil, "plan", "-input=false", "-no-color"),
+		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+		step("output", contains(`"hello"`), "output", "-json", "-no-color"),
+		step("state pull", contains(`"greeting"`), "state", "pull"),
+	} {
+		env.Step(ctx, t, s)
+	}
 }

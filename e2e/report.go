@@ -22,6 +22,7 @@ const (
 
 // Run is everything recorded for one CLI version.
 type Run struct {
+	Tool           string       `json:"tool"`
 	Label          string       `json:"label"`
 	Version        string       `json:"version"`
 	ChecksumSource string       `json:"checksumSource"`
@@ -43,6 +44,7 @@ func NewRun(env *Env) Run {
 	cli := env.Install()
 
 	return Run{
+		Tool:           cli.Tool,
 		Label:          cli.Label,
 		Version:        cli.Version,
 		ChecksumSource: cli.ChecksumSource,
@@ -51,7 +53,7 @@ func NewRun(env *Env) Run {
 	}
 }
 
-// WriteRun saves run as <dir>/<version>.json.
+// WriteRun saves run as <dir>/<tool>-v<version>.json.
 func WriteRun(dir string, run Run) error {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("create report dir: %w", err)
@@ -62,7 +64,8 @@ func WriteRun(dir string, run Run) error {
 		return fmt.Errorf("encode report: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "v"+run.Version+reportExt), append(data, '\n'), fileMode); err != nil {
+	name := filepath.Join(dir, run.Tool+"-v"+run.Version+reportExt)
+	if err := os.WriteFile(name, append(data, '\n'), fileMode); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 
@@ -120,7 +123,9 @@ func WriteSummary(dir string) error {
 		return nil
 	}
 
-	slices.SortFunc(runs, func(a, b Run) int { return cmp.Compare(b.Version, a.Version) })
+	slices.SortFunc(runs, func(a, b Run) int {
+		return cmp.Or(cmp.Compare(a.Tool, b.Tool), slices.Compare(semver(b.Version), semver(a.Version)))
+	})
 
 	if err := os.WriteFile(filepath.Join(dir, summaryFile), []byte(render(runs)), fileMode); err != nil {
 		return fmt.Errorf("write summary: %w", err)
@@ -132,21 +137,48 @@ func WriteSummary(dir string) error {
 func render(runs []Run) string {
 	var b strings.Builder
 
-	b.WriteString("# Pulumi CLI end-to-end report\n\n")
+	b.WriteString("# End-to-end report\n")
 
+	for _, tool := range []string{ToolPulumi, ToolTofu} {
+		var mine []Run
+
+		for _, r := range runs {
+			if r.Tool == tool {
+				mine = append(mine, r)
+			}
+		}
+
+		if len(mine) > 0 {
+			fmt.Fprintf(&b, "\n# %s\n\n", toolTitle(tool))
+			renderTool(&b, mine)
+		}
+	}
+
+	return b.String()
+}
+
+func toolTitle(tool string) string {
+	if tool == ToolTofu {
+		return "OpenTofu"
+	}
+
+	return "Pulumi CLI"
+}
+
+func renderTool(b *strings.Builder, runs []Run) {
 	b.WriteString("## Steps\n\n| Step |")
 
 	for _, r := range runs {
-		fmt.Fprintf(&b, " %s |", versionTitle(r))
+		fmt.Fprintf(b, " %s |", versionTitle(r))
 	}
 
 	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
 
 	for _, name := range stepNames(runs) {
-		fmt.Fprintf(&b, "| `%s` |", name)
+		fmt.Fprintf(b, "| `%s` |", name)
 
 		for _, r := range runs {
-			fmt.Fprintf(&b, " %s |", stepCell(r, name))
+			fmt.Fprintf(b, " %s |", stepCell(r, name))
 		}
 
 		b.WriteString("\n")
@@ -158,29 +190,29 @@ func render(runs []Run) string {
 	b.WriteString("| Request |")
 
 	for _, r := range runs {
-		fmt.Fprintf(&b, " %s |", versionTitle(r))
+		fmt.Fprintf(b, " %s |", versionTitle(r))
 	}
 
 	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
 
 	for _, key := range requestKeys(runs) {
-		fmt.Fprintf(&b, "| `%s` |", key)
+		fmt.Fprintf(b, "| `%s` |", key)
 
 		for _, r := range runs {
-			fmt.Fprintf(&b, " %s |", statusCell(r, key))
+			fmt.Fprintf(b, " %s |", statusCell(r, key))
 		}
 
 		b.WriteString("\n")
 	}
 
 	for _, r := range runs {
-		fmt.Fprintf(&b, "\n## Failures: %s\n\n", versionTitle(r))
+		fmt.Fprintf(b, "\n## Failures: %s\n\n", versionTitle(r))
 		b.WriteString(failures(r))
 	}
 
 	for _, r := range runs {
 		fmt.Fprintf(
-			&b,
+			b,
 			"\n## Request log: %s\n\n| # | Step | Request | Status | Accept |\n|---|---|---|---|---|\n",
 			versionTitle(r),
 		)
@@ -192,11 +224,9 @@ func render(runs []Run) string {
 				target += "?" + e.Query
 			}
 
-			fmt.Fprintf(&b, "| %d | %s | `%s %s` | %d | `%s` |\n", e.Seq, e.Step, e.Method, target, e.Status, e.Accept)
+			fmt.Fprintf(b, "| %d | %s | `%s %s` | %d | `%s` |\n", e.Seq, e.Step, e.Method, target, e.Status, e.Accept)
 		}
 	}
-
-	return b.String()
 }
 
 func versionTitle(r Run) string {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,6 +31,8 @@ const (
 	Namespace = "acme"
 	// Project is the project name written to the scratch Pulumi.yaml.
 	Project = "e2e-project"
+	// Workspace is the workspace name written to the scratch main.tf.
+	Workspace = "e2e-workspace"
 	// Subject is the principal the access token authenticates as.
 	Subject = "admin"
 
@@ -39,7 +42,24 @@ const (
 	waitDelay      = 5 * time.Second
 	maxShown       = 2000
 	baseEnvEntries = 8
-	projectFile    = "name: " + Project + "\nruntime: yaml\n"
+	pulumiProject  = "name: " + Project + "\nruntime: yaml\n"
+	// tofuConfig uses the cloud block, OpenTofu's client for the TFE-compatible
+	// remote API, and declares no providers so nothing is downloaded.
+	tofuConfig = `terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+`
+	tofuCLIConfig = "credentials %q {\n  token = %q\n}\n"
 )
 
 // Result is the outcome of one CLI invocation.
@@ -63,7 +83,7 @@ type StepResult struct {
 
 // Env is a running server plus an isolated CLI environment.
 type Env struct {
-	// URL is the backend URL given to the CLI through PULUMI_BACKEND_URL.
+	// URL is the server's base URL: the Pulumi backend URL, or https://<host> for OpenTofu.
 	URL string
 	// Recorder holds every request the CLI made to the server.
 	Recorder *Recorder
@@ -75,8 +95,10 @@ type Env struct {
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh SQLite
-// database with the Namespace namespace, and prepares an empty PULUMI_HOME and
-// a scratch project directory. Everything is removed when the test ends.
+// database with the Namespace namespace, and prepares an empty home directory
+// and a scratch project for cli. OpenTofu gets an HTTPS server, because its
+// service discovery refuses plain HTTP, and the server's certificate is the
+// only one it trusts. Everything is removed when the test ends.
 func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 	tb.Helper()
 
@@ -84,7 +106,13 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 	token := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, mu: sync.Mutex{}}
 
-	ts := httptest.NewServer(rec.Middleware(newServer(ctx, tb, filepath.Join(dir, "dustpan.db"), token)))
+	ts := httptest.NewUnstartedServer(rec.Middleware(newServer(ctx, tb, filepath.Join(dir, "dustpan.db"), token)))
+	if cli.Tool == ToolTofu {
+		ts.StartTLS()
+	} else {
+		ts.Start()
+	}
+
 	tb.Cleanup(ts.Close)
 
 	env := &Env{
@@ -92,7 +120,7 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 		Recorder: rec,
 		cli:      cli,
 		token:    token,
-		home:     filepath.Join(dir, "pulumi-home"),
+		home:     filepath.Join(dir, "home"),
 		project:  filepath.Join(dir, "project"),
 		steps:    nil,
 	}
@@ -103,11 +131,18 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(env.project, "Pulumi.yaml"), []byte(projectFile), fileMode); err != nil {
-		tb.Fatalf("write Pulumi.yaml: %v", err)
+	if cli.Tool == ToolTofu {
+		env.writeTofuFiles(tb, ts)
+	} else {
+		env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 	}
 
 	return env
+}
+
+// Host is the server's host:port, as OpenTofu names it.
+func (e *Env) Host() string {
+	return strings.TrimPrefix(strings.TrimPrefix(e.URL, "https://"), "http://")
 }
 
 func newToken(tb testing.TB) string {
@@ -174,6 +209,19 @@ func (e *Env) Install() Install {
 	return e.cli
 }
 
+// Requested reports whether the CLI sent method path during step.
+func (e *Env) Requested(step, method, path string) bool {
+	entries := e.Recorder.Entries()
+
+	for i := range entries {
+		if r := &entries[i]; r.Step == step && r.Method == method && r.Path == path {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Run executes the CLI with args and returns what it printed. extra holds
 // NAME=value pairs added to the environment. A non-zero exit is reported in the
 // Result, not as an error.
@@ -194,7 +242,7 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 	start := time.Now()
 	err := cmd.Run()
 	res := Result{
-		Command:  "pulumi " + strings.Join(args, " "),
+		Command:  e.cli.Tool + " " + strings.Join(args, " "),
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		Duration: time.Since(start),
@@ -275,21 +323,53 @@ func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 	return res
 }
 
+// writeTofuFiles writes main.tf, a CLI configuration holding the token, and
+// the server certificate.
+func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
+	tb.Helper()
+
+	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: nil, Bytes: ts.Certificate().Raw})
+	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
+	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
+	e.write(tb, filepath.Join(e.project, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
+}
+
+func (e *Env) write(tb testing.TB, name, content string) {
+	tb.Helper()
+
+	if err := os.WriteFile(name, []byte(content), fileMode); err != nil {
+		tb.Fatalf("write %s: %v", name, err)
+	}
+}
+
 // cliEnv builds the CLI environment from scratch, so nothing from the
-// developer's own Pulumi setup leaks into a run.
+// developer's own Pulumi or OpenTofu setup leaks into a run.
 func (e *Env) cliEnv(extra []string) []string {
 	env := make([]string, 0, baseEnvEntries+len(extra))
 	env = append(env,
 		"PATH="+e.cli.Dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+e.home,
-		"PULUMI_HOME="+filepath.Join(e.home, ".pulumi"),
-		"PULUMI_BACKEND_URL="+e.URL,
-		"PULUMI_ACCESS_TOKEN="+e.token,
-		// The update check is asynchronous and would make the request log vary between runs.
-		"PULUMI_SKIP_UPDATE_CHECK=true",
 		"NO_COLOR=1",
 		"NO_PROXY=127.0.0.1,localhost",
 	)
+
+	if e.cli.Tool == ToolTofu {
+		env = append(env,
+			"TF_CLI_CONFIG_FILE="+filepath.Join(e.home, "tofurc"),
+			// Go reads SSL_CERT_FILE on Linux only; see the OpenTofu test.
+			"SSL_CERT_FILE="+filepath.Join(e.home, "server.pem"),
+			"TF_IN_AUTOMATION=1",
+			"TF_INPUT=0",
+		)
+	} else {
+		env = append(env,
+			"PULUMI_HOME="+filepath.Join(e.home, ".pulumi"),
+			"PULUMI_BACKEND_URL="+e.URL,
+			"PULUMI_ACCESS_TOKEN="+e.token,
+			// The update check is asynchronous and would make the request log vary between runs.
+			"PULUMI_SKIP_UPDATE_CHECK=true",
+		)
+	}
 
 	// Later entries win, so extra can override anything above.
 	return append(env, extra...)

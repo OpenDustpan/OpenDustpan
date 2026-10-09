@@ -70,10 +70,12 @@ func validArchive(t *testing.T) []byte {
 }
 
 // release serves archive and a checksum file claiming wantSum (or the real sum if empty).
-func release(t *testing.T, archive []byte, wantSum string) (*e2e.Fetcher, *atomic.Int32) {
+func release(t *testing.T, archive []byte, wantSum string) (*e2e.Fetcher, e2e.Tool, *atomic.Int32) {
 	t.Helper()
 
-	name, err := e2e.ArchiveName(fakeVersion)
+	tool := e2e.Pulumi()
+
+	name, err := tool.ArchiveName(fakeVersion)
 	if err != nil {
 		t.Skipf("unsupported platform: %v", err)
 	}
@@ -107,21 +109,19 @@ func release(t *testing.T, archive []byte, wantSum string) (*e2e.Fetcher, *atomi
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	return &e2e.Fetcher{
-		Client:       ts.Client(),
-		CacheDir:     filepath.Join(t.TempDir(), "cache"),
-		DownloadBase: ts.URL,
-		LatestURL:    ts.URL + "/latest",
-	}, &downloads
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	return &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}, tool, &downloads
 }
 
 func TestFetchInstallsAndCaches(t *testing.T) {
 	t.Parallel()
 
-	fetcher, downloads := release(t, validArchive(t), "")
+	fetcher, tool, downloads := release(t, validArchive(t), "")
 
 	for range 2 {
-		inst, err := fetcher.Install(t.Context(), e2e.Latest)
+		inst, err := fetcher.Install(t.Context(), tool, e2e.Latest)
 		if err != nil {
 			t.Fatalf("install: %v", err)
 		}
@@ -148,9 +148,9 @@ func TestFetchInstallsAndCaches(t *testing.T) {
 func TestFetchRejectsChecksumMismatch(t *testing.T) {
 	t.Parallel()
 
-	fetcher, _ := release(t, validArchive(t), "0000000000000000000000000000000000000000000000000000000000000000")
+	fetcher, tool, _ := release(t, validArchive(t), "0000000000000000000000000000000000000000000000000000000000000000")
 
-	_, err := fetcher.Install(t.Context(), fakeVersion)
+	_, err := fetcher.Install(t.Context(), tool, fakeVersion)
 	if !errors.Is(err, e2e.ErrChecksumMismatch) {
 		t.Fatalf("got error %v, want ErrChecksumMismatch", err)
 	}
@@ -182,12 +182,67 @@ func TestFetchRejectsUnsafeArchives(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			fetcher, _ := release(t, tarball(t, entries, "x"), "")
+			fetcher, tool, _ := release(t, tarball(t, entries, "x"), "")
 
-			_, err := fetcher.Install(t.Context(), fakeVersion)
+			_, err := fetcher.Install(t.Context(), tool, fakeVersion)
 			if !errors.Is(err, e2e.ErrUnsafeArchive) {
 				t.Fatalf("got error %v, want ErrUnsafeArchive", err)
 			}
 		})
+	}
+}
+
+func TestFetchResolvesLatestOpenTofu(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.OpenTofu()
+
+	const want = "1.13.1"
+
+	name, err := tool.ArchiveName(want)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	archive := tarball(t, []tar.Header{{Name: "tofu", Typeflag: tar.TypeReg, Mode: 0o755}}, "#!/bin/sh\n")
+	sum := sha256.Sum256(archive)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api.json", func(w http.ResponseWriter, _ *http.Request) {
+		// Pre-releases and older minors listed first must not win.
+		const body = `{"versions":[{"id":"1.14.0-rc1"},{"id":"1.9.5"},{"id":"` + want + `"},{"id":"1.13.0"}]}`
+		if _, werr := fmt.Fprint(w, body); werr != nil {
+			t.Errorf("serve api.json: %v", werr)
+		}
+	})
+	mux.HandleFunc("/v"+want+"/tofu_"+want+"_SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+		if _, werr := fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), name); werr != nil {
+			t.Errorf("serve checksums: %v", werr)
+		}
+	})
+	mux.HandleFunc("/v"+want+"/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, werr := w.Write(archive); werr != nil {
+			t.Errorf("serve archive: %v", werr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/api.json"
+	tool.ReleaseURL = ts.URL + "/v%[1]s/%[2]s"
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	inst, err := fetcher.Install(t.Context(), tool, e2e.Latest)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if inst.Version != want || filepath.Base(inst.Binary()) != "tofu" {
+		t.Errorf("got version %q binary %q, want %q tofu", inst.Version, inst.Binary(), want)
+	}
+
+	if _, err := os.Stat(inst.Binary()); err != nil {
+		t.Errorf("binary missing: %v", err)
 	}
 }

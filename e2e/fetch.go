@@ -29,81 +29,108 @@ const (
 var (
 	ErrChecksumMismatch = errors.New("archive checksum mismatch")
 	ErrUnsafeArchive    = errors.New("unsafe archive entry")
-	ErrMissingBinary    = errors.New("archive has no pulumi binary")
+	ErrMissingBinary    = errors.New("archive has no CLI binary")
 )
 
-// Fetcher downloads Pulumi CLI releases into a cache directory.
+// Fetcher downloads CLI releases into a cache directory.
 type Fetcher struct {
 	// Client performs every request.
 	Client *http.Client
-	// CacheDir holds one extracted directory per version and platform.
+	// CacheDir holds one extracted directory per tool, version and platform.
 	CacheDir string
-	// DownloadBase is the URL prefix of release archives and checksum files.
-	DownloadBase string
-	// LatestURL answers with the newest released version.
-	LatestURL string
 }
 
 // Install is a CLI ready to run.
 type Install struct {
+	// Tool is ToolPulumi or ToolTofu.
+	Tool string
 	// Label is what the matrix asked for, for example "latest".
 	Label string
 	// Version is the resolved release, for example "3.268.0".
 	Version string
 	// ChecksumSource says where the verifying checksum came from: "pinned" or "published".
 	ChecksumSource string
-	// Dir is the directory holding pulumi and its language plugins.
-	Dir string
+	// Dir is the directory holding the binary (and, for Pulumi, its language plugins).
+	Dir    string
+	binary string
 }
 
-// Binary returns the path of the pulumi executable.
+// Binary returns the path of the executable.
 func (i Install) Binary() string {
-	return filepath.Join(i.Dir, "pulumi")
+	return i.binary
 }
 
-// Install resolves label, downloads and verifies the release if it is not
-// cached, and returns it. Concurrent calls for different versions are safe.
-func (f *Fetcher) Install(ctx context.Context, label string) (Install, error) {
+// Install resolves label for tool, downloads and verifies the release if it is
+// not cached, and returns it. Concurrent calls for different versions are safe.
+func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install, error) {
 	version := strings.TrimPrefix(label, "v")
 
 	if label == Latest {
-		text, err := getText(ctx, f.Client, f.LatestURL)
+		resolved, err := f.latest(ctx, tool)
 		if err != nil {
-			return Install{}, fmt.Errorf("resolve latest version: %w", err)
+			return Install{}, err
 		}
 
-		version = strings.TrimPrefix(strings.TrimSpace(text), "v")
-		if version == "" || strings.ContainsAny(version, "/\\ \n") {
-			return Install{}, fmt.Errorf("resolve latest version: %w: %q", ErrBadVersion, text)
-		}
+		version = resolved
 	}
 
-	archive, err := ArchiveName(version)
+	archive, err := tool.ArchiveName(version)
 	if err != nil {
 		return Install{}, err
 	}
 
-	want, err := f.checksum(ctx, version, archive)
+	want, err := f.checksum(ctx, tool, version, archive)
 	if err != nil {
 		return Install{}, err
 	}
 
+	dest := filepath.Join(f.CacheDir, strings.TrimSuffix(archive, ".tar.gz"))
+	binary := filepath.Join(dest, filepath.FromSlash(tool.binary))
 	inst := Install{
+		Tool:           tool.Name,
 		Label:          label,
 		Version:        version,
 		ChecksumSource: want.source,
-		Dir:            filepath.Join(f.CacheDir, strings.TrimSuffix(archive, ".tar.gz"), "pulumi"),
+		Dir:            filepath.Dir(binary),
+		binary:         binary,
 	}
 
-	if _, err := os.Stat(inst.Binary()); err == nil {
+	if _, err := os.Stat(binary); err == nil {
 		return inst, nil
 	}
 
-	if err := f.download(ctx, archive, want.sum, filepath.Dir(inst.Dir)); err != nil {
+	rel := release{
+		url:     tool.releaseFile(version, archive),
+		archive: archive,
+		sum:     want.sum,
+		dest:    dest,
+		binary:  filepath.FromSlash(tool.binary),
+	}
+
+	if err := f.download(ctx, rel); err != nil {
 		return Install{}, err
 	}
 
 	return inst, nil
+}
+
+func (f *Fetcher) latest(ctx context.Context, tool Tool) (string, error) {
+	body, err := getText(ctx, f.Client, tool.LatestURL)
+	if err != nil {
+		return "", fmt.Errorf("resolve latest %s version: %w", tool.Name, err)
+	}
+
+	version, err := tool.parseLatest(body)
+	if err != nil {
+		return "", fmt.Errorf("resolve latest %s version: %w", tool.Name, err)
+	}
+
+	version = strings.TrimPrefix(version, "v")
+	if semver(version) == nil {
+		return "", fmt.Errorf("resolve latest %s version: %w: %q", tool.Name, ErrBadVersion, version)
+	}
+
+	return version, nil
 }
 
 // expectedSum is the sha256 an archive must have, and where it came from.
@@ -112,13 +139,14 @@ type expectedSum struct {
 	source string
 }
 
-// checksum returns the expected sha256 of archive.
-func (f *Fetcher) checksum(ctx context.Context, version, archive string) (expectedSum, error) {
-	if sum, ok := pinnedChecksums()[archive]; ok {
+// checksum returns the expected sha256 of archive: pinned in this repository
+// if known, otherwise from the checksum file published with the release.
+func (f *Fetcher) checksum(ctx context.Context, tool Tool, version, archive string) (expectedSum, error) {
+	if sum, ok := tool.pinned[archive]; ok {
 		return expectedSum{sum: sum, source: "pinned"}, nil
 	}
 
-	listing, err := getText(ctx, f.Client, fmt.Sprintf("%s/pulumi-%s-checksums.txt", f.DownloadBase, version))
+	listing, err := getText(ctx, f.Client, tool.releaseFile(version, tool.checksums(version)))
 	if err != nil {
 		return expectedSum{}, fmt.Errorf("fetch published checksums: %w", err)
 	}
@@ -131,9 +159,20 @@ func (f *Fetcher) checksum(ctx context.Context, version, archive string) (expect
 	return expectedSum{sum: sum, source: "published"}, nil
 }
 
-// download fetches archive, checks it against wantSum and unpacks it into dest.
-// Nothing appears at dest unless the checksum matched and extraction finished.
-func (f *Fetcher) download(ctx context.Context, archive, wantSum, dest string) error {
+// release is one archive to download and where to put it.
+type release struct {
+	url     string
+	archive string
+	sum     string
+	dest    string
+	// binary is the executable's path inside the archive, used to check extraction.
+	binary string
+}
+
+// download fetches rel.url, checks it against rel.sum and unpacks it into
+// rel.dest. Nothing appears at rel.dest unless the checksum matched and
+// extraction finished.
+func (f *Fetcher) download(ctx context.Context, rel release) error {
 	if err := os.MkdirAll(f.CacheDir, dirMode); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
@@ -146,13 +185,13 @@ func (f *Fetcher) download(ctx context.Context, archive, wantSum, dest string) e
 	defer ignoreErr(func() error { return os.Remove(tmp.Name()) })
 	defer ignoreErr(tmp.Close)
 
-	gotSum, err := f.fetchTo(ctx, f.DownloadBase+"/"+archive, tmp)
+	gotSum, err := f.fetchTo(ctx, rel.url, tmp)
 	if err != nil {
 		return err
 	}
 
-	if gotSum != wantSum {
-		return fmt.Errorf("%w: %s: want %s, got %s", ErrChecksumMismatch, archive, wantSum, gotSum)
+	if gotSum != rel.sum {
+		return fmt.Errorf("%w: %s: want %s, got %s", ErrChecksumMismatch, rel.archive, rel.sum, gotSum)
 	}
 
 	if _, seekErr := tmp.Seek(0, io.SeekStart); seekErr != nil {
@@ -170,17 +209,17 @@ func (f *Fetcher) download(ctx context.Context, archive, wantSum, dest string) e
 		return extractErr
 	}
 
-	if _, statErr := os.Stat(filepath.Join(stage, "pulumi", "pulumi")); statErr != nil {
-		return fmt.Errorf("%w: %s", ErrMissingBinary, archive)
+	if _, statErr := os.Stat(filepath.Join(stage, rel.binary)); statErr != nil {
+		return fmt.Errorf("%w: %s", ErrMissingBinary, rel.archive)
 	}
 
-	if err := os.Rename(stage, dest); err != nil {
+	if err := os.Rename(stage, rel.dest); err != nil {
 		// Another process finished first; its copy was verified the same way.
-		if _, statErr := os.Stat(filepath.Join(dest, "pulumi", "pulumi")); statErr == nil {
+		if _, statErr := os.Stat(filepath.Join(rel.dest, rel.binary)); statErr == nil {
 			return nil
 		}
 
-		return fmt.Errorf("publish %s: %w", dest, err)
+		return fmt.Errorf("publish %s: %w", rel.dest, err)
 	}
 
 	return nil
