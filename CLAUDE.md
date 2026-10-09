@@ -26,11 +26,14 @@ Do not report work as finished if any of these fail. Say what fails instead.
 dustpan.go, web.go   package dustpan: the SDK entry point (NewServer + options)
 cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that may exit.
 namespace/           domain: namespaces, home region, failover-version fencing
-stack/               domain: projects, stacks (updates and checkpoints go here next)
+stack/               domain: projects, stacks; the update cycle (Updates: leases, checkpoints, events)
+secret/              domain: per-stack envelope encryption for the Pulumi service secrets provider
+workspace/           domain: OpenTofu workspaces, locks, state versions (ADR 9)
 identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
 blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi CLI API (also used by the console)
+e2e/                 end-to-end suite driving real Pulumi CLI and OpenTofu binaries (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records
 ```
@@ -39,7 +42,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `identity`, `blob`) never import
+- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`) never import
   `net/http`, `database/sql`, drivers, `store/...` or `api/...`. depguard enforces this.
 - Interfaces (ports) are defined in the package that consumes them, kept small,
   and documented with the errors they return.
@@ -59,7 +62,8 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
 - The Pulumi CLI API is not a published spec. Any endpoint change must be
-  checked against real CLI behaviour (the end-to-end suite, once it exists).
+  checked against real CLI behaviour with `make e2e`; the same holds for the
+  TFE-compatible API and OpenTofu.
 
 ## The API is a contract
 

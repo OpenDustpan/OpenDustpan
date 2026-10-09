@@ -36,3 +36,16 @@ func TestValid(t *testing.T) {
 		})
 	}
 }
+
+func TestNewIDIsPrefixedLowercaseAndUnique(t *testing.T) {
+	t.Parallel()
+
+	a, b := ident.NewID("ws-"), ident.NewID("ws-")
+	if a == b {
+		t.Fatal("two IDs are equal")
+	}
+
+	if !strings.HasPrefix(a, "ws-") || len(a) != len("ws-")+20 || strings.ToLower(a) != a {
+		t.Errorf("NewID(\"ws-\") = %q, want ws- and 20 lowercase characters", a)
+	}
+}

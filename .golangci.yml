@@ -13,6 +13,8 @@ version: "2"
 run:
   timeout: 5m
   tests: true
+  build-tags:
+    - e2e # Lint the end-to-end package too; make test excludes it.
   modules-download-mode: readonly
 
 linters:
@@ -83,6 +85,8 @@ linters:
             - "**/namespace/**"
             - "**/stack/**"
             - "**/identity/**"
+            - "**/secret/**"
+            - "**/workspace/**"
             - "**/blob/*.go"
             - "!**/*_test.go"
           deny:
@@ -123,6 +127,10 @@ linters:
         - ^net/url\.URL$
         - ^encoding/json\.Decoder$
         - ^os/exec\.Cmd$
+        # Not an options bag: exhaustruct demands the deprecated Xattrs field,
+        # which staticcheck (SA1019) forbids, so no literal can satisfy both.
+        # Exempting the type beats a nolint at every literal.
+        - ^archive/tar\.Header$
 
     forbidigo:
       forbid:
