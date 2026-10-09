@@ -1,5 +1,13 @@
-// Package ident validates the identifiers shared by namespaces, projects and stacks.
+// Package ident validates and generates the identifiers shared by the domain
+// packages.
 package ident
+
+import (
+	"crypto/rand"
+	"strings"
+)
+
+const idLength = 20
 
 // Valid reports whether s is 1..maxLen characters of ASCII letters, digits,
 // '-', '_' and '.', and does not start with '.' or '-'.
@@ -18,4 +26,10 @@ func Valid(s string, maxLen int) bool {
 	}
 
 	return true
+}
+
+// NewID returns prefix followed by 20 random lowercase letters and digits, for
+// opaque identifiers such as update and workspace IDs. IDs are not secrets.
+func NewID(prefix string) string {
+	return prefix + strings.ToLower(rand.Text()[:idLength])
 }
