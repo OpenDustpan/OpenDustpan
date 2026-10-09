@@ -3,6 +3,7 @@ package stack_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -36,6 +37,9 @@ type memUpdates struct {
 	checkpoints  []stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	mu           sync.Mutex
+	// cancelOnPut cancels the caller's context and fails PutCheckpoint, as a
+	// client hanging up mid-upload would.
+	cancelOnPut func()
 	// renewFirst makes the next SaveUpdate lose to a simulated lease renewal.
 	renewFirst bool
 }
@@ -47,6 +51,7 @@ func newMemUpdates() *memUpdates {
 		checkpoints:  nil,
 		events:       map[stack.UpdateID][]stack.Event{},
 		mu:           sync.Mutex{},
+		cancelOnPut:  nil,
 		renewFirst:   false,
 	}
 }
@@ -60,7 +65,11 @@ func (m *memUpdates) CreateUpdate(_ context.Context, u stack.Update, _ namespace
 	return nil
 }
 
-func (m *memUpdates) GetUpdate(_ context.Context, _ stack.Ref, id stack.UpdateID) (stack.Update, error) {
+func (m *memUpdates) GetUpdate(ctx context.Context, _ stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	if err := ctx.Err(); err != nil {
+		return stack.Update{}, fmt.Errorf("get update: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -105,7 +114,11 @@ func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, _ namespace.
 	return u, nil
 }
 
-func (m *memUpdates) SaveUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+func (m *memUpdates) SaveUpdate(ctx context.Context, u stack.Update, _ namespace.Fence) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("save update: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -166,6 +179,12 @@ func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ nam
 
 	if !m.runningUnder(cp.Update, cp.Lease) {
 		return stack.ErrWrongUpdateState
+	}
+
+	if m.cancelOnPut != nil {
+		m.cancelOnPut()
+
+		return context.Canceled
 	}
 
 	if cp.Sequence > 0 {
@@ -606,6 +625,45 @@ func TestImportRecordsAnUpdate(t *testing.T) {
 	history, err := f.svc.History(ctx, f.ref, stack.Page{Limit: 0, Offset: 0})
 	if err != nil || len(history) != 1 {
 		t.Errorf("history: %d entries, %v; want 1", len(history), err)
+	}
+}
+
+func TestImportRejectsInvalidInputWithoutAnUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+
+	_, err := f.svc.Import(t.Context(), f.ref, checkpoint(0, string(make([]byte, 2048))))
+	if !errors.Is(err, stack.ErrTooLarge) {
+		t.Fatalf("import oversized: %v, want ErrTooLarge", err)
+	}
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	if n := len(f.store.updates); n != 0 {
+		t.Errorf("%d updates recorded for rejected input, want none", n)
+	}
+}
+
+// The import update belongs to the server; a client that hangs up must not
+// leave the stack locked.
+func TestImportEndsItsUpdateWhenTheCallerGivesUp(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	f.store.mu.Lock()
+	f.store.cancelOnPut = cancel
+	f.store.mu.Unlock()
+
+	if _, err := f.svc.Import(ctx, f.ref, checkpoint(0, "{}")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("import: %v, want context.Canceled", err)
+	}
+
+	if u, err := f.svc.Active(t.Context(), f.ref); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Errorf("active update after an abandoned import: %q, %v; want none", u.Status, err)
 	}
 }
 

@@ -21,9 +21,11 @@ const (
 	// transitionAttempts bounds how often a transition is re-applied after a
 	// concurrent change, such as the CLI renewing its lease mid-completion.
 	transitionAttempts = 3
-	maxEventBytes      = 1 << 20
-	defaultPageSize    = 10
-	maxPageSize        = 100
+	// closeTimeout bounds the server's own cleanup after its caller gave up.
+	closeTimeout    = 30 * time.Second
+	maxEventBytes   = 1 << 20
+	defaultPageSize = 10
+	maxPageSize     = 100
 )
 
 // UpdateStore persists updates. Writes carry the namespace fence and fail with
@@ -234,13 +236,8 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 func (s *Updates) SaveCheckpoint(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token, in CheckpointInput,
 ) error {
-	switch {
-	case in.SchemaVersion < 1:
-		return fmt.Errorf("%w: deployment schema version %d", ErrInvalidUpdate, in.SchemaVersion)
-	case in.Sequence < 0:
-		return fmt.Errorf("%w: checkpoint sequence %d", ErrInvalidUpdate, in.Sequence)
-	case len(in.Deployment) > s.maxCheckpoints:
-		return fmt.Errorf("%w: checkpoint of %d bytes, limit %d", ErrTooLarge, len(in.Deployment), s.maxCheckpoints)
+	if err := s.validate(in); err != nil {
+		return err
 	}
 
 	u, fence, err := s.authorized(ctx, ref, id, tok)
@@ -303,15 +300,29 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 // Import replaces the stack's state with a deployment the user supplies, as
 // `pulumi stack import` does. It runs as an update of kind "import" so it
 // shows in history and respects the stack lock.
+//
+// Invalid input is rejected before any update exists. Once the import update
+// starts, only this call holds its lease, so it is always ended, even when ctx
+// is canceled: otherwise the stack would stay locked until `pulumi cancel`.
 func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Update, error) {
+	if err := s.validate(in); err != nil {
+		return Update{}, err
+	}
+
 	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false})
 	if err != nil {
 		return Update{}, err
 	}
 
+	closing, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancel()
+
 	started, err := s.Start(ctx, ref, u.ID)
 	if err != nil {
-		return Update{}, err
+		// Do not leave a not-started update behind for every conflicting attempt.
+		_, cancelErr := s.Cancel(closing, ref, u.ID)
+
+		return Update{}, errors.Join(err, cancelErr)
 	}
 
 	status := StatusSucceeded
@@ -321,7 +332,7 @@ func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Upda
 		status = StatusFailed
 	}
 
-	done, err := s.Complete(ctx, ref, u.ID, started.Token, status)
+	done, err := s.Complete(closing, ref, u.ID, started.Token, status)
 
 	return done, errors.Join(saveErr, err)
 }
@@ -385,6 +396,20 @@ func (s *Updates) Events(ctx context.Context, ref Ref, id UpdateID, after int64,
 	}
 
 	return events, nil
+}
+
+// validate checks a checkpoint's input without touching any store.
+func (s *Updates) validate(in CheckpointInput) error {
+	switch {
+	case in.SchemaVersion < 1:
+		return fmt.Errorf("%w: deployment schema version %d", ErrInvalidUpdate, in.SchemaVersion)
+	case in.Sequence < 0:
+		return fmt.Errorf("%w: checkpoint sequence %d", ErrInvalidUpdate, in.Sequence)
+	case len(in.Deployment) > s.maxCheckpoints:
+		return fmt.Errorf("%w: checkpoint of %d bytes, limit %d", ErrTooLarge, len(in.Deployment), s.maxCheckpoints)
+	default:
+		return nil
+	}
 }
 
 // transition applies change to the stored update and saves the result. The
