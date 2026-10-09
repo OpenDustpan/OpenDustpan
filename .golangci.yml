@@ -125,6 +125,9 @@ linters:
         - ^net/url\.URL$
         - ^encoding/json\.Decoder$
         - ^os/exec\.Cmd$
+        # Not an options bag: exhaustruct demands the deprecated Xattrs field,
+        # which staticcheck (SA1019) forbids, so no literal can satisfy both.
+        # Exempting the type beats a nolint at every literal.
         - ^archive/tar\.Header$
 
     forbidigo:
