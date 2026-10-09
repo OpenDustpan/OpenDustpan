@@ -53,7 +53,30 @@ func NewRun(env *Env) Run {
 	}
 }
 
-// WriteRun saves run as <dir>/<tool>-v<version>.json.
+// NotRun is the report of a version whose scenario could not run: the CLI did
+// not install, or the platform does not support it (skipped).
+func NotRun(tool, label, reason string, skipped bool) Run {
+	return Run{
+		Tool:           tool,
+		Label:          label,
+		Version:        "",
+		ChecksumSource: "",
+		Steps: []StepResult{{
+			Name:     "install",
+			Command:  tool + " " + label,
+			Failure:  reason,
+			Stderr:   "",
+			ExitCode: 0,
+			Passed:   false,
+			Skipped:  skipped,
+		}},
+		Requests: nil,
+	}
+}
+
+// WriteRun saves run as <dir>/<tool>-<label>-v<version>.json. The label is
+// part of the name so that "latest" and the same version pinned do not
+// overwrite each other.
 func WriteRun(dir string, run Run) error {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("create report dir: %w", err)
@@ -64,7 +87,7 @@ func WriteRun(dir string, run Run) error {
 		return fmt.Errorf("encode report: %w", err)
 	}
 
-	name := filepath.Join(dir, run.Tool+"-v"+run.Version+reportExt)
+	name := filepath.Join(dir, run.Tool+"-"+strings.ReplaceAll(run.Label, "/", "_")+"-v"+run.Version+reportExt)
 	if err := os.WriteFile(name, append(data, '\n'), fileMode); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
@@ -230,11 +253,14 @@ func renderTool(b *strings.Builder, runs []Run) {
 }
 
 func versionTitle(r Run) string {
-	if r.Label == Latest {
+	switch {
+	case r.Version == "":
+		return r.Label + " (not run)"
+	case r.Label == Latest:
 		return "v" + r.Version + " (latest)"
+	default:
+		return "v" + r.Version
 	}
-
-	return "v" + r.Version
 }
 
 func stepNames(runs []Run) []string {
@@ -254,11 +280,14 @@ func stepNames(runs []Run) []string {
 func stepCell(r Run, name string) string {
 	for _, s := range r.Steps {
 		if s.Name == name {
-			if s.Passed {
+			switch {
+			case s.Passed:
 				return "pass"
+			case s.Skipped:
+				return "skipped"
+			default:
+				return "**FAIL**"
 			}
-
-			return "**FAIL**"
 		}
 	}
 
@@ -310,7 +339,7 @@ func failures(r Run) string {
 	var b strings.Builder
 
 	for _, s := range r.Steps {
-		if s.Passed {
+		if s.Passed || s.Skipped {
 			continue
 		}
 

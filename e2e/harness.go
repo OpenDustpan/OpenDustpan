@@ -79,6 +79,7 @@ type StepResult struct {
 	Stderr   string `json:"stderr,omitempty"`
 	ExitCode int    `json:"exitCode"`
 	Passed   bool   `json:"passed"`
+	Skipped  bool   `json:"skipped,omitempty"`
 }
 
 // Env is a running server plus an isolated CLI environment.
@@ -241,12 +242,18 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 
 	start := time.Now()
 	err := cmd.Run()
+	timedOut := ctx.Err()
 	res := Result{
 		Command:  e.cli.Tool + " " + strings.Join(args, " "),
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		Duration: time.Since(start),
 		ExitCode: 0,
+	}
+
+	if timedOut != nil {
+		// The kill shows up as an exit error; name the real cause instead.
+		return res, fmt.Errorf("%s did not finish within %s: %w", res.Command, commandTimeout, timedOut)
 	}
 
 	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -310,6 +317,7 @@ func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 			Stderr:   clip(res.Stderr),
 			ExitCode: res.ExitCode,
 			Passed:   failure == "",
+			Skipped:  false,
 		})
 
 		t.Logf("%s (%s)\nstdout:\n%s\nstderr:\n%s", res.Command, res.Duration.Round(time.Millisecond),

@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	stackName    = "dev"
-	installLimit = 15 * time.Minute
+	stackName = "dev"
+	// installLimit plus every step's commandTimeout must stay under the
+	// go test -timeout in the Makefile, or a timeout loses every report.
+	installLimit = 10 * time.Minute
 )
 
 var errUnexpected = errors.New("unexpected output")
@@ -87,7 +89,9 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 	if tool.Name == e2e.ToolTofu && runtime.GOOS != "linux" {
 		// OpenTofu must trust the test server's certificate, and Go honors
 		// SSL_CERT_FILE only on Linux; elsewhere it uses the system store.
-		t.Skipf("the OpenTofu suite needs Linux, not %s", runtime.GOOS)
+		reason := "needs Linux, not " + runtime.GOOS
+		writeReport(t, e2e.NotRun(tool.Name, label, reason, true))
+		t.Skipf("the OpenTofu suite %s", reason)
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
@@ -95,6 +99,8 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 
 	cli, err := fetcher.Install(installCtx, tool, label)
 	if err != nil {
+		// Still report the version, so a broken download is visible in the summary.
+		writeReport(t, e2e.NotRun(tool.Name, label, err.Error(), false))
 		t.Fatalf("install %s %s: %v", tool.Name, label, err)
 	}
 
@@ -102,13 +108,17 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 
 	env := e2e.NewEnv(t.Context(), t, cli)
 
-	t.Cleanup(func() {
-		if err := e2e.WriteRun(e2e.ReportDir(), e2e.NewRun(env)); err != nil {
-			t.Errorf("write report: %v", err)
-		}
-	})
+	t.Cleanup(func() { writeReport(t, e2e.NewRun(env)) })
 
 	scenario(t, env)
+}
+
+func writeReport(t *testing.T, r e2e.Run) {
+	t.Helper()
+
+	if err := e2e.WriteRun(e2e.ReportDir(), r); err != nil {
+		t.Errorf("write report: %v", err)
+	}
 }
 
 func contains(want string) func(e2e.Result) error {
