@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/internal/token"
 )
 
@@ -30,7 +31,10 @@ var (
 	ErrTooLarge = errors.New("state too large")
 )
 
-const maxLineageLength = 100
+const (
+	maxLineageLength = 100
+	maxOutputsBytes  = 16 << 20
+)
 
 // StateVersionID identifies a state version ("sv-...").
 type StateVersionID string
@@ -61,12 +65,24 @@ type StateVersion struct {
 	Upload    token.Digest
 	ID        StateVersionID
 	Workspace ID
-	Lineage   string
-	Status    StateStatus
-	MD5       [md5.Size]byte
-	Serial    int64
-	Size      int64
-	// Force skips the lineage and serial checks, as `tofu state push -force` does.
+	// Holder is who held the workspace lock when the version was declared.
+	// Finalizing requires that they still do.
+	Holder  string
+	Lineage string
+	Status  StateStatus
+	// Content is the blob holding the state, set when the upload finalizes.
+	// Every upload attempt writes its own key, so a failed or losing attempt
+	// can never remove content another attempt made current.
+	Content blob.Key
+	// Outputs is the client's JSON rendering of the root outputs (the TFE
+	// json-state-outputs attribute), kept opaque. It is the only source of
+	// outputs the server has, because state itself may be encrypted.
+	Outputs []byte
+	MD5     [md5.Size]byte
+	Serial  int64
+	Size    int64
+	// Force skips the lineage and serial checks, as `tofu state push -force`
+	// does. It never skips the lock.
 	Force bool
 }
 
@@ -74,9 +90,11 @@ type StateVersion struct {
 type NewState struct {
 	Lineage string
 	// MD5 is the hex MD5 of the content to be uploaded.
-	MD5    string
-	Serial int64
-	Force  bool
+	MD5 string
+	// Outputs is the client's JSON rendering of the root outputs, if it sent one.
+	Outputs []byte
+	Serial  int64
+	Force   bool
 }
 
 // parse validates the declared metadata.
@@ -88,6 +106,8 @@ func (n NewState) parse() ([md5.Size]byte, error) {
 		return sum, fmt.Errorf("%w: lineage %q", ErrInvalidState, n.Lineage)
 	case n.Serial < 0:
 		return sum, fmt.Errorf("%w: serial %d", ErrInvalidState, n.Serial)
+	case len(n.Outputs) > maxOutputsBytes:
+		return sum, fmt.Errorf("%w: outputs of %d bytes, limit %d", ErrTooLarge, len(n.Outputs), maxOutputsBytes)
 	}
 
 	raw, err := hex.DecodeString(n.MD5)

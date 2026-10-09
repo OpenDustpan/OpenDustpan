@@ -130,8 +130,20 @@ func (m *memStore) FinalizeStateVersion(_ context.Context, sv workspace.StateVer
 		return workspace.ErrUploadDenied
 	}
 
-	if cur, ok := m.current[sv.Workspace]; ok && !sv.Force && m.versions[cur].Serial >= sv.Serial {
-		return workspace.ErrStaleSerial
+	switch lock := m.workspaces[sv.Workspace].Lock; {
+	case !lock.Locked():
+		return workspace.ErrNotLocked
+	case lock.Holder != sv.Holder:
+		return workspace.ErrLockedByOther
+	}
+
+	if cur, ok := m.current[sv.Workspace]; ok && !sv.Force {
+		switch current := m.versions[cur]; {
+		case current.Lineage != sv.Lineage:
+			return workspace.ErrLineageMismatch
+		case current.Serial >= sv.Serial:
+			return workspace.ErrStaleSerial
+		}
 	}
 
 	m.versions[sv.ID] = sv
@@ -212,7 +224,7 @@ func sum(content string) string {
 }
 
 func newState(lineage string, serial int64, content string) workspace.NewState {
-	return workspace.NewState{Lineage: lineage, MD5: sum(content), Serial: serial, Force: false}
+	return workspace.NewState{Lineage: lineage, MD5: sum(content), Outputs: nil, Serial: serial, Force: false}
 }
 
 // push declares and uploads one state version as holder, who must hold the lock.
@@ -289,13 +301,17 @@ func TestStateVersions(t *testing.T) {
 			want: workspace.ErrTooLarge,
 		},
 		{
-			name: "bad md5", in: workspace.NewState{Lineage: "l1", MD5: "nope", Serial: 2, Force: false}, content: "",
-			want: workspace.ErrInvalidState,
+			name:    "bad md5",
+			in:      workspace.NewState{Lineage: "l1", MD5: "nope", Outputs: nil, Serial: 2, Force: false},
+			content: "",
+			want:    workspace.ErrInvalidState,
 		},
 		{name: "next state", in: newState("l1", 2, "v2"), content: "v2", want: nil},
 		{
-			name: "forced other lineage", in: workspace.NewState{Lineage: "l9", MD5: sum("v9"), Serial: 1, Force: true},
-			content: "v9", want: nil,
+			name:    "forced other lineage",
+			in:      workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true},
+			content: "v9",
+			want:    nil,
 		},
 	}
 
@@ -385,6 +401,43 @@ func TestUploadCapability(t *testing.T) {
 	if err = upload(late.Version.ID, late.Upload, "v2"); !errors.Is(err, workspace.ErrUploadDenied) {
 		t.Errorf("expired capability: %v, want ErrUploadDenied", err)
 	}
+}
+
+// A version declared under a lock must not finalize after the lock changed
+// hands, and the failed attempt must leave the current state's content intact.
+func TestUploadNeedsTheLockStill(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, "alice", newState("l1", 1, "v1"), "v1"); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	stale, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 5, "v5"))
+	if err != nil {
+		t.Fatalf("begin v5: %v", err)
+	}
+
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	if _, err = f.svc.Lock(ctx, f.ws.ID, "bob", "apply"); err != nil {
+		t.Fatalf("bob locks: %v", err)
+	}
+
+	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("v5"))
+	if !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Errorf("upload after losing the lock: %v, want ErrLockedByOther", err)
+	}
+
+	checkCurrent(t, f, "l1", "v1")
 }
 
 func TestParseName(t *testing.T) {

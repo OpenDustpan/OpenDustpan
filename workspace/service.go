@@ -43,10 +43,14 @@ type StateStore interface {
 	CreateStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
-	// FinalizeStateVersion saves the finalized sv and makes it the workspace's
-	// current state in one transaction. It returns ErrUploadDenied unless the
-	// stored version is still pending, and ErrStaleSerial if, without
-	// sv.Force, the current state's serial is no longer lower than sv's.
+	// FinalizeStateVersion saves the finalized sv (with its Content key) and
+	// makes it the workspace's current state, checking in the same
+	// transaction that:
+	//   - the stored version is still pending, else ErrUploadDenied;
+	//   - the workspace is locked by sv.Holder, else ErrNotLocked or
+	//     ErrLockedByOther;
+	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
+	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
@@ -56,7 +60,7 @@ type StateStore interface {
 type Config struct {
 	Workspaces Store
 	States     StateStore
-	// Blobs holds state content under "tofu/<workspace id>/<state version id>".
+	// Blobs holds state content under "tofu/<workspace id>/<state version id>/<attempt>".
 	Blobs      blob.Store
 	Namespaces *namespace.Service
 	Now        func() time.Time
@@ -228,8 +232,11 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 }
 
 // Upload stores the content of a pending state version and makes it current.
-// The content must match the declared MD5 and fit the size limit; otherwise
-// it is discarded.
+// The content must match the declared MD5 and fit the size limit, and the
+// declarer must still hold the lock when it finalizes; otherwise the content
+// is discarded. Concurrent or retried uploads of one version are safe: each
+// writes its own blob, exactly one finalizes, and the others delete only their
+// own blob.
 func (s *Service) Upload(
 	ctx context.Context,
 	id StateVersionID,
@@ -255,7 +262,7 @@ func (s *Service) Upload(
 		return StateVersion{}, err
 	}
 
-	key, err := contentKey(sv)
+	key, err := attemptKey(sv)
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -268,6 +275,7 @@ func (s *Service) Upload(
 	sv.Status = StatusFinalized
 	sv.FinalizedAt = s.clock()
 	sv.Size = size
+	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		return StateVersion{}, errors.Join(fmt.Errorf("finalize state %s: %w", id, err), s.blobs.Delete(ctx, key))
@@ -292,12 +300,7 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
 	}
 
-	key, err := contentKey(sv)
-	if err != nil {
-		return nil, err
-	}
-
-	r, err := s.blobs.Get(ctx, key)
+	r, err := s.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
@@ -330,8 +333,11 @@ func (s *Service) createPending(
 		Upload:          tok.Digest(),
 		ID:              StateVersionID(ident.NewID("sv-")),
 		Workspace:       w.ID,
+		Holder:          w.Lock.Holder,
 		Lineage:         in.Lineage,
 		Status:          StatusPending,
+		Content:         "",
+		Outputs:         in.Outputs,
 		MD5:             sum,
 		Serial:          in.Serial,
 		Size:            0,
@@ -410,10 +416,10 @@ func (s *Service) clock() time.Time {
 	return s.now().UTC()
 }
 
-// contentKey is where a state version's content lives in the blob port. IDs
-// are lowercase, so the key is valid whatever the namespace is called.
-func contentKey(sv StateVersion) (blob.Key, error) {
-	key, err := blob.ParseKey("tofu/" + sv.Workspace.String() + "/" + sv.ID.String())
+// attemptKey is a fresh blob key for one upload attempt of sv. IDs are
+// lowercase, so the key is valid whatever the namespace is called.
+func attemptKey(sv StateVersion) (blob.Key, error) {
+	key, err := blob.ParseKey("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/" + ident.NewID(""))
 	if err != nil {
 		return "", fmt.Errorf("state content key: %w", err)
 	}
