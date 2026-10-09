@@ -36,6 +36,8 @@ type memUpdates struct {
 	checkpoints  []stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	mu           sync.Mutex
+	// renewFirst makes the next SaveUpdate lose to a simulated lease renewal.
+	renewFirst bool
 }
 
 func newMemUpdates() *memUpdates {
@@ -45,6 +47,7 @@ func newMemUpdates() *memUpdates {
 		checkpoints:  nil,
 		events:       map[stack.UpdateID][]stack.Event{},
 		mu:           sync.Mutex{},
+		renewFirst:   false,
 	}
 }
 
@@ -105,6 +108,14 @@ func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, _ namespace.
 func (m *memUpdates) SaveUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.renewFirst {
+		m.renewFirst = false
+		renewed := m.updates[u.ID]
+		renewed.Lease.ExpiresAt = renewed.Lease.ExpiresAt.Add(time.Minute)
+		renewed.Revision++
+		m.updates[u.ID] = renewed
+	}
 
 	if m.updates[u.ID].Revision != u.Revision-1 {
 		return stack.ErrConcurrentModification
@@ -442,6 +453,24 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 
 	if _, err := f.svc.Start(ctx, f.ref, second.ID); err != nil {
 		t.Errorf("start after cancel: %v", err)
+	}
+}
+
+// The CLI renews its lease from a background loop; a renewal that wins the
+// race must not make a valid completion fail.
+func TestCompleteSurvivesAConcurrentRenewal(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	s := f.started(t, stack.KindUpdate)
+
+	f.store.mu.Lock()
+	f.store.renewFirst = true
+	f.store.mu.Unlock()
+
+	done, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	if err != nil || done.Status != stack.StatusSucceeded {
+		t.Errorf("complete after a concurrent renewal: %q, %v; want succeeded", done.Status, err)
 	}
 }
 

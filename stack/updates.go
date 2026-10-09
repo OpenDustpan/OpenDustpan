@@ -18,9 +18,12 @@ const (
 	DefaultMaxCheckpointBytes = 256 << 20
 
 	maxEventsPerBatch = 1000
-	maxEventBytes     = 1 << 20
-	defaultPageSize   = 10
-	maxPageSize       = 100
+	// transitionAttempts bounds how often a transition is re-applied after a
+	// concurrent change, such as the CLI renewing its lease mid-completion.
+	transitionAttempts = 3
+	maxEventBytes      = 1 << 20
+	defaultPageSize    = 10
+	maxPageSize        = 100
 )
 
 // UpdateStore persists updates. Writes carry the namespace fence and fail with
@@ -44,7 +47,9 @@ type UpdateStore interface {
 	SaveUpdate(ctx context.Context, u Update, fence namespace.Fence) error
 	// ActiveUpdate returns the stack's running update that Mutates, or ErrUpdateNotFound.
 	ActiveUpdate(ctx context.Context, ref Ref) (Update, error)
-	// ListUpdates returns the stack's started updates that Mutates, newest first.
+	// ListUpdates returns the stack's started updates that Mutates, newest
+	// first. A stack without updates, or one that does not exist, yields an
+	// empty list.
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
@@ -70,7 +75,8 @@ type EventStore interface {
 	// it returns ErrWrongUpdateState. An event whose sequence is already stored
 	// for the update is skipped, so retries are harmless.
 	AppendEvents(ctx context.Context, batch EventBatch, fence namespace.Fence) error
-	// ListEvents returns up to limit events with Sequence greater than after, in order.
+	// ListEvents returns up to limit events with Sequence greater than after,
+	// in order. It returns ErrUpdateNotFound if the update does not exist.
 	ListEvents(ctx context.Context, ref Ref, id UpdateID, after int64, limit int) ([]Event, error)
 }
 
@@ -381,7 +387,11 @@ func (s *Updates) Events(ctx context.Context, ref Ref, id UpdateID, after int64,
 	return events, nil
 }
 
-// transition applies change to the stored update and saves the result.
+// transition applies change to the stored update and saves the result. The
+// CLI renews its lease from a background loop, so a renewal can win the
+// compare-and-swap while a completion is in flight. change is a pure function
+// of the stored update, so it is re-applied to a fresh read: a completion that
+// raced a cancel then fails for the right reason.
 func (s *Updates) transition(
 	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error),
 ) (Update, error) {
@@ -390,6 +400,17 @@ func (s *Updates) transition(
 		return Update{}, err
 	}
 
+	for attempt := 1; ; attempt++ {
+		u, err := s.applyOnce(ctx, ref, id, change, fence)
+		if !errors.Is(err, ErrConcurrentModification) || attempt == transitionAttempts {
+			return u, err
+		}
+	}
+}
+
+func (s *Updates) applyOnce(
+	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error), fence namespace.Fence,
+) (Update, error) {
 	u, err := s.Get(ctx, ref, id)
 	if err != nil {
 		return Update{}, err

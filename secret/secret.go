@@ -42,8 +42,11 @@ const (
 	dataKeyBytes       = 32
 	maxScopeID         = 100
 	maxValueBytes      = 1 << 20
-	maxBatch           = 1000
-	aadLabel           = "opendustpan/secret/v1"
+	// sealOverhead is what a ciphertext adds to its plaintext: the format
+	// byte, the 12-byte GCM nonce and the 16-byte tag.
+	sealOverhead = 1 + 12 + 16
+	maxBatch     = 1000
+	aadLabel     = "opendustpan/secret/v1"
 )
 
 // Scope names the data key values are encrypted under. ID must stay the same
@@ -146,7 +149,7 @@ func NewService(cfg Config) (*Service, error) {
 // Encrypt seals each plaintext under the scope's data key, creating the key on
 // first use. The result has one ciphertext per plaintext, in order.
 func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte) ([][]byte, error) {
-	if err := checkBatch(plaintexts); err != nil {
+	if err := checkBatch(plaintexts, maxValueBytes); err != nil {
 		return nil, err
 	}
 
@@ -173,7 +176,7 @@ func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte)
 // Decrypt opens each ciphertext made by Encrypt for the same scope. Any
 // failure is ErrDecrypt; the batch fails as a whole.
 func (s *Service) Decrypt(ctx context.Context, scope Scope, ciphertexts [][]byte) ([][]byte, error) {
-	if err := checkBatch(ciphertexts); err != nil {
+	if err := checkBatch(ciphertexts, maxValueBytes+sealOverhead); err != nil {
 		return nil, err
 	}
 
@@ -281,14 +284,15 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return aead, nil
 }
 
-func checkBatch(values [][]byte) error {
+// checkBatch bounds a batch and each value in it to limit bytes.
+func checkBatch(values [][]byte, limit int) error {
 	if len(values) > maxBatch {
 		return fmt.Errorf("%w: %d values in one batch, limit %d", ErrTooLarge, len(values), maxBatch)
 	}
 
 	for i, v := range values {
-		if len(v) > maxValueBytes {
-			return fmt.Errorf("%w: value %d has %d bytes, limit %d", ErrTooLarge, i, len(v), maxValueBytes)
+		if len(v) > limit {
+			return fmt.Errorf("%w: value %d has %d bytes, limit %d", ErrTooLarge, i, len(v), limit)
 		}
 	}
 

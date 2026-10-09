@@ -263,6 +263,25 @@ func TestDecryptWithoutKeyAndLimits(t *testing.T) {
 	}
 }
 
+// Every value Encrypt accepts must decrypt, including one at the size limit.
+func TestLargestValueRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "kek-1", nil)
+	ctx := t.Context()
+	largest := bytes.Repeat([]byte{'x'}, 1<<20)
+
+	sealed, err := f.svc.Encrypt(ctx, scope(t, "stack-1"), [][]byte{largest})
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	opened, err := f.svc.Decrypt(ctx, scope(t, "stack-1"), sealed)
+	if err != nil || !bytes.Equal(opened[0], largest) {
+		t.Errorf("decrypt the largest value: %v", err)
+	}
+}
+
 func TestNewScopeValidates(t *testing.T) {
 	t.Parallel()
 
