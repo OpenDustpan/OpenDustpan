@@ -31,18 +31,20 @@ func (m *memNamespaces) GetNamespace(_ context.Context, name namespace.Name) (na
 // memUpdates implements the update, checkpoint and event ports in memory,
 // following their documented contracts.
 type memUpdates struct {
-	updates     map[stack.UpdateID]stack.Update
-	checkpoints []stack.Checkpoint
-	events      map[stack.UpdateID][]stack.Event
-	mu          sync.Mutex
+	updates      map[stack.UpdateID]stack.Update
+	stackVersion map[stack.Ref]int64
+	checkpoints  []stack.Checkpoint
+	events       map[stack.UpdateID][]stack.Event
+	mu           sync.Mutex
 }
 
 func newMemUpdates() *memUpdates {
 	return &memUpdates{
-		updates:     map[stack.UpdateID]stack.Update{},
-		checkpoints: nil,
-		events:      map[stack.UpdateID][]stack.Event{},
-		mu:          sync.Mutex{},
+		updates:      map[stack.UpdateID]stack.Update{},
+		stackVersion: map[stack.Ref]int64{},
+		checkpoints:  nil,
+		events:       map[stack.UpdateID][]stack.Event{},
+		mu:           sync.Mutex{},
 	}
 }
 
@@ -79,18 +81,19 @@ func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, _ namespace.
 
 	for id := range m.updates {
 		other := m.updates[id]
-		if !other.Kind.Mutates() || other.Ref != u.Ref {
+		if !other.Mutates() || other.Ref != u.Ref {
 			continue
 		}
 
-		if other.Status == stack.StatusRunning && u.Kind.Mutates() {
+		if other.Status == stack.StatusRunning && u.Mutates() {
 			return stack.Update{}, stack.ErrUpdateConflict
 		}
 
 		highest = max(highest, other.Version)
 	}
 
-	if u.Kind.Mutates() {
+	u.Version = m.stackVersion[u.Ref]
+	if u.Mutates() {
 		u.Version = highest + 1
 	}
 
@@ -107,6 +110,10 @@ func (m *memUpdates) SaveUpdate(_ context.Context, u stack.Update, _ namespace.F
 		return stack.ErrConcurrentModification
 	}
 
+	if u.Mutates() && u.Status.Terminal() && u.Version > 0 {
+		m.stackVersion[u.Ref] = u.Version
+	}
+
 	m.updates[u.ID] = u
 
 	return nil
@@ -117,7 +124,7 @@ func (m *memUpdates) ActiveUpdate(_ context.Context, ref stack.Ref) (stack.Updat
 	defer m.mu.Unlock()
 
 	for id := range m.updates {
-		if u := m.updates[id]; u.Ref == ref && u.Kind.Mutates() && u.Status == stack.StatusRunning {
+		if u := m.updates[id]; u.Ref == ref && u.Mutates() && u.Status == stack.StatusRunning {
 			return u, nil
 		}
 	}
@@ -132,7 +139,7 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	var list []stack.Update
 
 	for id := range m.updates {
-		if u := m.updates[id]; u.Ref == ref && u.Kind.Mutates() && u.Status != stack.StatusNotStarted {
+		if u := m.updates[id]; u.Ref == ref && u.Mutates() && u.Status != stack.StatusNotStarted {
 			list = append(list, u)
 		}
 	}
@@ -145,6 +152,10 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if !m.runningUnder(cp.Update, cp.Lease) {
+		return stack.ErrWrongUpdateState
+	}
 
 	if cp.Sequence > 0 {
 		for i := range slices.Backward(m.checkpoints) {
@@ -184,13 +195,16 @@ func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.C
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
-func (m *memUpdates) AppendEvents(
-	_ context.Context, _ stack.Ref, id stack.UpdateID, events []stack.Event, _ namespace.Fence,
-) error {
+func (m *memUpdates) AppendEvents(_ context.Context, batch stack.EventBatch, _ namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, e := range events {
+	if !m.runningUnder(batch.Update, batch.Lease) {
+		return stack.ErrWrongUpdateState
+	}
+
+	id := batch.Update
+	for _, e := range batch.Events {
 		if !slices.ContainsFunc(m.events[id], func(have stack.Event) bool { return have.Sequence == e.Sequence }) {
 			m.events[id] = append(m.events[id], e)
 		}
@@ -214,6 +228,13 @@ func (m *memUpdates) ListEvents(
 	}
 
 	return out, nil
+}
+
+// runningUnder reports whether update id is running under lease; callers hold mu.
+func (m *memUpdates) runningUnder(id stack.UpdateID, lease token.Digest) bool {
+	u := m.updates[id]
+
+	return u.Status == stack.StatusRunning && u.Lease.Digest == lease
 }
 
 // clock is a settable time source.
@@ -281,7 +302,13 @@ func newUpdates(t *testing.T) updatesFixture {
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
 	t.Helper()
 
-	u, err := f.svc.Create(t.Context(), f.ref, kind)
+	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false})
+}
+
+func (f updatesFixture) startedPlan(t *testing.T, plan stack.Plan) stack.Started {
+	t.Helper()
+
+	u, err := f.svc.Create(t.Context(), f.ref, plan)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -295,7 +322,13 @@ func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Start
 }
 
 func checkpoint(seq int64, body string) stack.CheckpointInput {
-	return stack.CheckpointInput{Features: nil, Deployment: []byte(body), SchemaVersion: 3, Sequence: seq}
+	return stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(body),
+		SchemaVersion: 3,
+		Sequence:      seq,
+		Invalid:       false,
+	}
 }
 
 func TestUpdateLifecycle(t *testing.T) {
@@ -329,9 +362,30 @@ func TestUpdateLifecycle(t *testing.T) {
 
 	checkStored(t, f, s.Update.ID)
 
-	_, err = f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	checkRetries(t, f, s, done)
+}
+
+// checkRetries checks completion retries after s ended as done, and that a
+// preview then carries the version the finished update set.
+func checkRetries(t *testing.T, f updatesFixture, s stack.Started, done stack.Update) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	// The CLI retries completion when a response is lost; the same status succeeds.
+	if again, retryErr := f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); retryErr != nil ||
+		again.Revision != done.Revision {
+		t.Errorf("retried complete: revision %d, %v; want revision %d, nil", again.Revision, retryErr, done.Revision)
+	}
+
+	_, err := f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusFailed)
 	if !errors.Is(err, stack.ErrWrongUpdateState) {
-		t.Errorf("completing twice: %v, want ErrWrongUpdateState", err)
+		t.Errorf("completing with another status: %v, want ErrWrongUpdateState", err)
+	}
+
+	// A preview carries the stack's version, which the finished update set.
+	if preview := f.started(t, stack.KindPreview); preview.Update.Version != 1 {
+		t.Errorf("preview version %d, want 1", preview.Update.Version)
 	}
 
 	next := f.started(t, stack.KindUpdate)
@@ -363,7 +417,7 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	second, err := f.svc.Create(ctx, f.ref, stack.KindDestroy)
+	second, err := f.svc.Create(ctx, f.ref, stack.Plan{Kind: stack.KindDestroy, DryRun: false})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -382,8 +436,44 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 		t.Fatalf("cancel: %v", err)
 	}
 
+	if _, err := f.svc.Cancel(ctx, f.ref, running.Update.ID); err != nil {
+		t.Errorf("retried cancel: %v", err)
+	}
+
 	if _, err := f.svc.Start(ctx, f.ref, second.ID); err != nil {
 		t.Errorf("start after cancel: %v", err)
+	}
+}
+
+// The CLI runs the preview phase of `pulumi up` as kind "update" with DryRun.
+func TestDryRunsDoNotMutate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	running := f.started(t, stack.KindUpdate)
+
+	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true})
+	if dry.Update.Mutates() || dry.Update.Version != 0 {
+		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
+	}
+
+	err := f.svc.SaveCheckpoint(ctx, f.ref, dry.Update.ID, dry.Token, checkpoint(1, "{}"))
+	if !errors.Is(err, stack.ErrWrongUpdateState) {
+		t.Errorf("dry run checkpoint: %v, want ErrWrongUpdateState", err)
+	}
+
+	if _, err = f.svc.Complete(ctx, f.ref, dry.Update.ID, dry.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete dry run: %v", err)
+	}
+
+	if _, err = f.svc.Complete(ctx, f.ref, running.Update.ID, running.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete update: %v", err)
+	}
+
+	history, err := f.svc.History(ctx, f.ref, stack.Page{Limit: 0, Offset: 0})
+	if err != nil || len(history) != 1 {
+		t.Errorf("history: %d entries, %v; want 1, without the dry run", len(history), err)
 	}
 }
 
@@ -451,7 +541,7 @@ func TestCheckpointRules(t *testing.T) {
 		{name: "older sequence", in: checkpoint(1, `{}`), want: stack.ErrStaleCheckpoint},
 		{name: "too large", in: checkpoint(3, string(make([]byte, 2048))), want: stack.ErrTooLarge},
 		{name: "no schema version", in: stack.CheckpointInput{
-			Features: nil, Deployment: []byte("{}"), SchemaVersion: 0, Sequence: 3,
+			Features: nil, Deployment: []byte("{}"), SchemaVersion: 0, Sequence: 3, Invalid: false,
 		}, want: stack.ErrInvalidUpdate},
 	}
 

@@ -72,10 +72,13 @@ func ParseUpdateKind(s string) (UpdateKind, error) {
 	}
 }
 
-// Mutates reports whether the kind may change the stack's state. Only one
-// mutating update runs per stack at a time; previews never block or wait.
-func (k UpdateKind) Mutates() bool {
-	return k != KindPreview
+// Plan is what a client asks to run: a kind, and whether it is a dry run. The
+// CLI runs the preview phase of `pulumi up`, `refresh` and `destroy` with the
+// real kind and DryRun set, so the kind alone does not say whether an update
+// changes state.
+type Plan struct {
+	Kind   UpdateKind
+	DryRun bool
 }
 
 // UpdateStatus is where an update is in its lifecycle.
@@ -160,12 +163,22 @@ type Update struct {
 	Kind      UpdateKind
 	Status    UpdateStatus
 	Ref       Ref
+	// DryRun marks a preview of any kind. See Mutates.
+	DryRun bool
 	// Version is the stack version this update produces, assigned by the store
 	// when it starts. A preview carries the stack's current version.
 	Version int64
 	// Revision increases with every change. Stores accept a write only if they
 	// hold Revision-1, which makes every transition a compare-and-swap.
 	Revision int64
+}
+
+// Mutates reports whether the update may change the stack's state: neither a
+// "preview" nor a dry run of another kind. Only one mutating update runs per
+// stack at a time; previews never block or wait, take no version and are not
+// history.
+func (u Update) Mutates() bool {
+	return !u.DryRun && u.Kind != KindPreview
 }
 
 // start moves a not-started update to running under lease.
@@ -209,9 +222,15 @@ func (u Update) renew(tok token.Token, now time.Time, d time.Duration) (Update, 
 }
 
 // complete ends a running update with a final status reported by its client.
+// The CLI retries completion when a response is lost, so repeating the status
+// an update already ended with succeeds and changes nothing.
 func (u Update) complete(tok token.Token, now time.Time, status UpdateStatus) (Update, error) {
 	if !status.Terminal() {
 		return Update{}, fmt.Errorf("%w: %q is not a final status", ErrInvalidUpdate, status)
+	}
+
+	if u.Status == status {
+		return u, nil
 	}
 
 	if err := u.authorize(tok, now); err != nil {
@@ -223,7 +242,12 @@ func (u Update) complete(tok token.Token, now time.Time, status UpdateStatus) (U
 
 // cancel ends an update on a user's request, without its lease: this is how a
 // stack locked by a crashed client is released.
+// Canceling a canceled update succeeds and changes nothing, for retries.
 func (u Update) cancel(now time.Time) (Update, error) {
+	if u.Status == StatusCancelled {
+		return u, nil
+	}
+
 	if u.Status.Terminal() {
 		return Update{}, fmt.Errorf("%w: cancel %s update", ErrWrongUpdateState, u.Status)
 	}
@@ -243,19 +267,28 @@ func (u Update) end(now time.Time, status UpdateStatus) Update {
 // Checkpoint is a stack's state as the engine saved it during an update.
 // Deployment is opaque JSON in the schema named by SchemaVersion; the server
 // never interprets it, so newer CLIs can store formats this server predates.
+//
+// Without the delta capability the CLI sends whole checkpoints with no
+// sequence number, and the last write wins. Sequence numbers arrive only with
+// verbatim and delta checkpoints, which this server does not advertise yet.
 type Checkpoint struct {
 	SavedAt    time.Time
 	Features   []string
 	Deployment []byte
 	Update     UpdateID
 	Ref        Ref
+	// Lease is the digest of the lease that authorized the write. The store
+	// accepts the checkpoint only while the update still runs under it.
+	Lease token.Digest
 	// SchemaVersion is the deployment format version, 1 or higher.
 	SchemaVersion int
-	// Sequence is the client's idempotency counter for verbatim checkpoints, or
-	// 0 when the client sends none.
+	// Sequence is the client's idempotency counter, or 0 when it sends none.
 	Sequence int64
 	// Digest is the SHA-256 of Deployment, used to recognize retried writes.
 	Digest [sha256.Size]byte
+	// Invalid is the client's mark that it could not verify this snapshot.
+	// It is stored as sent.
+	Invalid bool
 }
 
 // CheckpointInput is a checkpoint as a client submits it.
@@ -264,6 +297,7 @@ type CheckpointInput struct {
 	Deployment    []byte
 	SchemaVersion int
 	Sequence      int64
+	Invalid       bool
 }
 
 // Event is one engine event of an update, kept for the console and history.
@@ -271,8 +305,18 @@ type CheckpointInput struct {
 type Event struct {
 	Timestamp time.Time
 	Payload   []byte
-	// Sequence orders events within an update; retried events repeat it.
+	// Sequence orders events within an update; retried events repeat it. The
+	// CLI numbers from 0.
 	Sequence int64
+}
+
+// EventBatch is events written to one update under its lease.
+type EventBatch struct {
+	Events []Event
+	Ref    Ref
+	Update UpdateID
+	// Lease is the digest of the lease that authorized the write.
+	Lease token.Digest
 }
 
 // Page selects a window of a newest-first list.

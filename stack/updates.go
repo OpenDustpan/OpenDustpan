@@ -32,27 +32,31 @@ type UpdateStore interface {
 	// GetUpdate returns the update, or ErrUpdateNotFound.
 	GetUpdate(ctx context.Context, ref Ref, id UpdateID) (Update, error)
 	// StartUpdate persists the started u and returns it with Version assigned:
-	// one more than the highest version of any update of the stack for a
-	// mutating kind, the stack's current version for a preview. It fails with
-	// ErrUpdateConflict while another mutating update of the stack is running,
-	// and with ErrConcurrentModification unless the store holds u.Revision-1.
+	// one more than the highest version of any update of the stack if
+	// u.Mutates(), else the stack's current version. A mutating u fails with
+	// ErrUpdateConflict while another mutating update of the stack is running.
+	// Any u fails with ErrConcurrentModification unless the store holds
+	// u.Revision-1.
 	StartUpdate(ctx context.Context, u Update, fence namespace.Fence) (Update, error)
 	// SaveUpdate persists a transition of u if the store holds u.Revision-1,
 	// else returns ErrConcurrentModification. When a started mutating update
 	// ends, the stack's Version becomes u.Version in the same transaction.
 	SaveUpdate(ctx context.Context, u Update, fence namespace.Fence) error
-	// ActiveUpdate returns the running mutating update of the stack, or ErrUpdateNotFound.
+	// ActiveUpdate returns the stack's running update that Mutates, or ErrUpdateNotFound.
 	ActiveUpdate(ctx context.Context, ref Ref) (Update, error)
-	// ListUpdates returns the stack's started mutating updates, newest first.
+	// ListUpdates returns the stack's started updates that Mutates, newest first.
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
 // CheckpointStore persists checkpoints. Adapters typically keep the metadata
 // in SQL and the deployment in the blob port.
 type CheckpointStore interface {
-	// PutCheckpoint saves cp as the stack's latest state. For cp.Sequence > 0
-	// it is idempotent: if the update's last checkpoint has the same sequence
-	// and digest it returns nil without writing, a different digest returns
+	// PutCheckpoint saves cp as the stack's latest state, in the same
+	// transaction as checking that update cp.Update is still running under
+	// lease cp.Lease; otherwise it returns ErrWrongUpdateState, so a write
+	// authorized before a cancel cannot land after it. For cp.Sequence > 0 it
+	// is idempotent: if the update's last checkpoint has the same sequence and
+	// digest it returns nil without writing, a different digest returns
 	// ErrCheckpointConflict, and a lower sequence returns ErrStaleCheckpoint.
 	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) error
 	// LatestCheckpoint returns the stack's latest state, or ErrNoState.
@@ -61,9 +65,11 @@ type CheckpointStore interface {
 
 // EventStore persists engine events.
 type EventStore interface {
-	// AppendEvents stores events for the update. An event whose sequence is
-	// already stored for the update is skipped, so retries are harmless.
-	AppendEvents(ctx context.Context, ref Ref, id UpdateID, events []Event, fence namespace.Fence) error
+	// AppendEvents stores the batch's events, in the same transaction as
+	// checking that the update is still running under batch.Lease; otherwise
+	// it returns ErrWrongUpdateState. An event whose sequence is already stored
+	// for the update is skipped, so retries are harmless.
+	AppendEvents(ctx context.Context, batch EventBatch, fence namespace.Fence) error
 	// ListEvents returns up to limit events with Sequence greater than after, in order.
 	ListEvents(ctx context.Context, ref Ref, id UpdateID, after int64, limit int) ([]Event, error)
 }
@@ -132,8 +138,8 @@ type Started struct {
 	Update Update
 }
 
-// Create records a new update of the given kind. It does not lock the stack.
-func (s *Updates) Create(ctx context.Context, ref Ref, kind UpdateKind) (Update, error) {
+// Create records a new update. It does not lock the stack.
+func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Update{}, err
@@ -145,15 +151,16 @@ func (s *Updates) Create(ctx context.Context, ref Ref, kind UpdateKind) (Update,
 		EndedAt:   time.Time{},
 		Lease:     Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}},
 		ID:        UpdateID(ident.NewID("")),
-		Kind:      kind,
+		Kind:      plan.Kind,
 		Status:    StatusNotStarted,
 		Ref:       ref,
+		DryRun:    plan.DryRun,
 		Version:   0,
 		Revision:  1,
 	}
 
 	if err := s.updates.CreateUpdate(ctx, u, fence); err != nil {
-		return Update{}, fmt.Errorf("create %s update of %s: %w", kind, ref, err)
+		return Update{}, fmt.Errorf("create %s update of %s: %w", plan.Kind, ref, err)
 	}
 
 	return u, nil
@@ -235,8 +242,8 @@ func (s *Updates) SaveCheckpoint(
 		return err
 	}
 
-	if !u.Kind.Mutates() {
-		return fmt.Errorf("%w: a %s does not save state", ErrWrongUpdateState, u.Kind)
+	if !u.Mutates() {
+		return fmt.Errorf("%w: a preview does not save state", ErrWrongUpdateState)
 	}
 
 	cp := Checkpoint{
@@ -245,9 +252,11 @@ func (s *Updates) SaveCheckpoint(
 		Deployment:    in.Deployment,
 		Update:        id,
 		Ref:           ref,
+		Lease:         u.Lease.Digest,
 		SchemaVersion: in.SchemaVersion,
 		Sequence:      in.Sequence,
 		Digest:        sha256.Sum256(in.Deployment),
+		Invalid:       in.Invalid,
 	}
 
 	if err := s.checkpoints.PutCheckpoint(ctx, cp, fence); err != nil {
@@ -272,12 +281,13 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 		}
 	}
 
-	_, fence, err := s.authorized(ctx, ref, id, tok)
+	u, fence, err := s.authorized(ctx, ref, id, tok)
 	if err != nil {
 		return err
 	}
 
-	if err := s.events.AppendEvents(ctx, ref, id, events, fence); err != nil {
+	batch := EventBatch{Events: events, Ref: ref, Update: id, Lease: u.Lease.Digest}
+	if err := s.events.AppendEvents(ctx, batch, fence); err != nil {
 		return fmt.Errorf("append events to update %s: %w", id, err)
 	}
 
@@ -288,7 +298,7 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 // `pulumi stack import` does. It runs as an update of kind "import" so it
 // shows in history and respects the stack lock.
 func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Update, error) {
-	u, err := s.Create(ctx, ref, KindImport)
+	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false})
 	if err != nil {
 		return Update{}, err
 	}
@@ -385,9 +395,16 @@ func (s *Updates) transition(
 		return Update{}, err
 	}
 
+	before := u.Revision
+
 	u, err = change(u, s.clock())
 	if err != nil {
 		return Update{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
+	}
+
+	if u.Revision == before {
+		// A retried complete or cancel: nothing changed, nothing to write.
+		return u, nil
 	}
 
 	if err := s.updates.SaveUpdate(ctx, u, fence); err != nil {
