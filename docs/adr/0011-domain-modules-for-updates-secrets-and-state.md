@@ -61,12 +61,16 @@ Update cycle:
   after it.
 - Events are opaque JSON, idempotent by sequence number (the CLI counts from 0).
 - Import runs as an update of kind `import`, so it shows in history and
-  respects the stack lock.
+  respects the stack lock. Its input is validated before the update exists,
+  and the server always ends the update it started, even if the caller hangs
+  up.
 
 Secrets:
 
 - One random 256-bit data key per scope, AES-256-GCM, random nonces. Values
-  are limited to 1 MiB; ciphertexts may be 29 bytes longer. Data
+  are limited to 1 MiB (ciphertexts may be 29 bytes longer) and batches to
+  200 MiB in total, with no count limit: the CLI splits config batches by size
+  only. Data
   keys exist only wrapped by the `Wrapper`, which records its ID with each
   key. Ciphertexts and wrapped keys are bound to the scope as associated
   data. Every decryption failure is the same error.
@@ -82,7 +86,8 @@ OpenTofu state:
   acquisition has its own ID, recorded on the version. Finalizing re-checks
   lock ID, lineage and serial atomically, so a version declared before a
   force-unlock cannot land afterwards, even when the same principal locks
-  again.
+  again. The protocol carries no lock ID, so a stale job sharing a token can
+  still declare or unlock under a newer lock; CI jobs need distinct principals.
 - Content is uploaded through a capability valid for 10 minutes and checked
   for size and MD5 while streaming. Each upload attempt writes its own blob;
   exactly one attempt finalizes, and an attempt the store rejected deletes

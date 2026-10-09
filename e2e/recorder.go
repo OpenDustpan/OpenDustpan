@@ -70,26 +70,40 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 		req.Body = in
 		out := &captureWriter{ResponseWriter: w, kept: nil, n: 0, status: http.StatusOK}
 
+		// Record in a defer, so a handler that panics still shows in the log,
+		// as the server error it is; then let net/http handle the panic.
+		defer func() {
+			if p := recover(); p != nil {
+				out.status = http.StatusInternalServerError
+				r.record(seq, step, req, in, out)
+				panic(p)
+			}
+		}()
+
 		next.ServeHTTP(out, req)
+		r.record(seq, step, req, in, out)
+	})
+}
 
-		r.mu.Lock()
-		defer r.mu.Unlock()
+// record appends one finished request to the log.
+func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, out *captureWriter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-		r.entries = append(r.entries, Entry{
-			Step:          step,
-			Method:        req.Method,
-			Path:          req.URL.Path,
-			Query:         req.URL.RawQuery,
-			UserAgent:     req.UserAgent(),
-			Accept:        req.Header.Get("Accept"),
-			ContentType:   req.Header.Get("Content-Type"),
-			RequestBody:   string(in.kept),
-			ResponseBody:  string(out.kept),
-			Seq:           seq,
-			Status:        out.status,
-			RequestBytes:  in.n,
-			ResponseBytes: out.n,
-		})
+	r.entries = append(r.entries, Entry{
+		Step:          step,
+		Method:        req.Method,
+		Path:          req.URL.Path,
+		Query:         req.URL.RawQuery,
+		UserAgent:     req.UserAgent(),
+		Accept:        req.Header.Get("Accept"),
+		ContentType:   req.Header.Get("Content-Type"),
+		RequestBody:   string(in.kept),
+		ResponseBody:  string(out.kept),
+		Seq:           seq,
+		Status:        out.status,
+		RequestBytes:  in.n,
+		ResponseBytes: out.n,
 	})
 }
 

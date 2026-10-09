@@ -88,8 +88,10 @@ func (id ID) String() string {
 type Lock struct {
 	LockedAt time.Time
 	// ID identifies this acquisition. The same principal locking again after a
-	// force-unlock gets a new ID, so work begun under the old lock is fenced
-	// out even when every CI job shares one token.
+	// force-unlock gets a new ID, so a state version declared before the
+	// force-unlock cannot finalize afterwards. The TFE protocol sends no lock
+	// ID, so with a shared token a stale job's later declare or unlock is
+	// attributed to the new lock: CI jobs should use distinct principals.
 	ID string
 	// Holder is the subject of the principal holding the lock.
 	Holder string

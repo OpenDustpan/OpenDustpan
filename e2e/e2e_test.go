@@ -108,9 +108,21 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 
 	t.Logf("%s %s (checksum %s) in %s", cli.Tool, cli.Version, cli.ChecksumSource, cli.Dir)
 
-	env := e2e.NewEnv(t.Context(), t, cli)
+	// If server setup fails, NewEnv ends the test before env exists; report
+	// the version as not run instead of dropping it from the summary.
+	var env *e2e.Env
 
-	t.Cleanup(func() { writeReport(t, e2e.NewRun(env)) })
+	t.Cleanup(func() {
+		if env == nil {
+			writeReport(t, e2e.NotRun(tool.Name, label, "server setup failed; see the test log", false))
+
+			return
+		}
+
+		writeReport(t, e2e.NewRun(env))
+	})
+
+	env = e2e.NewEnv(t.Context(), t, cli)
 
 	scenario(t, env)
 }
