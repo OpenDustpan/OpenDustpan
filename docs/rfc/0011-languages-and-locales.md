@@ -18,28 +18,51 @@ Some prefer English, even when their system is set to another language.
 
 ## Proposal
 
-### Which language a person sees
+### Three settings: language, formats, time zone
 
-1. The language in the person's account settings, when they set one.
-2. Otherwise, the first language in the browser's list (`navigator.languages`)
-   that the console has.
-3. Otherwise, English.
+A person's language and the way they write dates and numbers are often not
+the same. A typical case: someone who lives in the Netherlands and reads
+English. They want English words, but Dutch dates (`10-10-2026`), a 24-hour
+clock (`15:33`), Dutch numbers (`1.234,56`) and a week that starts on Monday.
+A colleague in the same office may want English with US formats. So there
+are three settings, each with its own default:
 
-Language and format are two settings. A person can read the console in
-English and still see dates as `10-10-2026` and 24-hour times, the way their
-region writes them. The format follows the browser unless the person sets it.
+1. **Language**: which translation the console shows, including the variant
+   of a language when the console has one (English (UK), English (US)).
+   Default: the first language in the browser's list (`navigator.languages`)
+   that the console has, else English.
+2. **Formats**: a full locale for dates, times, numbers and plural rules
+   (`nl-NL`, `en-US`, `de-CH`), passed to the browser's `Intl` APIs. It is
+   independent of the language: English words with `nl-NL` formats is a valid
+   choice. Default: the browser's own locale (`navigator.language`).
+   Advanced overrides sit on top of it: 12-hour or 24-hour clock, and the
+   first day of the week. They map to the Unicode locale extensions
+   (`nl-NL-u-hc-h23`, `-u-fw-mon`), so `Intl` applies them with no code of our
+   own.
+3. **Time zone**: the zone for every time the console shows. Default: the
+   browser's zone. UTC is one choice away, because operators often compare
+   times with logs in UTC.
 
-Until accounts exist (ADR 6, RFC 2), the console keeps the choice in the
-browser. When accounts exist, the server keeps it with the account, and the
-choice follows the person to every browser.
+The settings page shows a live example next to each choice ("Friday 10
+October 2026, 15:33 · 1.234,56"), so a person sees what they pick. Each
+language is listed in its own name (Deutsch, Français, 中文, English (UK)),
+never with a flag. A flag is a country, not a language. A short language
+switcher in the user menu also helps a person who lands in a language they
+cannot read and so cannot find the settings page.
+
+Until accounts exist (ADR 6, RFC 2), the console keeps these settings in the
+browser. When accounts exist, the server keeps them with the account, and
+they follow the person to every browser.
 
 ### What is translated, and what never is
 
 - **Translated:** every word the console writes: labels, headings, help text,
   empty states, confirmations and the console's own error messages.
-- **Formatted for the locale:** dates, times, relative times ("3 hours ago"),
-  numbers and durations, with the browser's `Intl` APIs. Plural rules come from
-  `Intl.PluralRules`, because many languages have more than two plural forms.
+- **Formatted by the formats setting:** dates, times, relative times
+  ("3 hours ago"), numbers and durations, with the browser's `Intl` APIs.
+  Plural rules for a message follow the language, because a plural is part
+  of the words. `Intl.PluralRules` gives them, because many languages have
+  more than two plural forms.
 - **Never translated:** anything that a machine made. Stack, workspace and
   resource names, URNs, resource addresses, IDs, commands, CLI output and log
   lines stay verbatim, as the design system already requires.
@@ -57,7 +80,10 @@ users.
 
 ### How translations are made and kept
 
-- English is the source language, written in ASD-STE100 (ADR 14). STE was
+- English is the source language, written in ASD-STE100 (ADR 14). The
+  ASD-STE100 skill uses US spelling, while the brand book and parts of the
+  docs use UK spelling ("colour"). The source picks one, and the other English
+  ships as a small variant catalog that only lists the words that differ. STE was
   made in part to make translation easier and more exact.
 - Each language is one catalog file in the console repository. A message uses
   named placeholders, and the product name is a placeholder too, so that
