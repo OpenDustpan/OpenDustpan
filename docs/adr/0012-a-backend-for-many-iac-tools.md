@@ -29,12 +29,12 @@ tools in general, with the Pulumi CLI as the first one supported.
 - A tool is supported, and listed as such, only when the e2e suite drives its
   real CLI across a version matrix and the server passes those steps.
 - A new tool is taken on when its users need remote state, its backend
-  protocol can be implemented from observed behaviour and public client
-  sources without copying code, and its licence lets the e2e suite run its
+  protocol can be implemented from observed behavior and public client
+  sources without copying code, and its license lets the e2e suite run its
   CLI. Each one gets an ADR covering protocol, model and scope, as ADR 9 does
   for OpenTofu.
 - Naming: "works with <tool>" and "<vendor>-compatible API". Other projects'
-  names, logos and colours are never ours, and the README disclaims
+  names, logos and colors are never ours, and the README disclaims
   affiliation with every vendor whose tool is listed.
 
 ## Consequences

@@ -9,7 +9,7 @@ Cloud-compatible API, OpenTofu through a TFE-compatible API (RFC 1), more later
 
 OpenDustpan is not affiliated with any tool's vendor. Say "works with the
 Pulumi CLI", "works with OpenTofu" and "TFE-compatible API". Never use another
-project's name, logo or colours as ours.
+project's name, logo or colors as ours.
 
 Read `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
 decision. An RFC is an open question (ADR 15). For an open question, write an
@@ -121,6 +121,10 @@ skill (ADR 14):
   instructions for agents that we write (`CLAUDE.md`, our own skills, prompts).
 - STE-flavored mode: README, ADRs, `GLOSSARY.md`, pull request descriptions,
   commit messages and code comments.
+- Spell English in US spelling (ADR 16): "color", "license", "behavior",
+  "organization", "canceled", "catalog". golangci-lint's `misspell` checks Go
+  comments with the US locale. Wire values and other projects' names keep
+  their own spelling, for example the Pulumi CLI's `"cancelled"`.
 - Keep every hedge. "May", "might" and "could" carry the author's confidence.
   Never turn a hedge into a fact to make a sentence shorter.
 - `make docs-lint` checks README, `CLAUDE.md`, `GLOSSARY.md` and ADRs from 14

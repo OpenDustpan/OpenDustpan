@@ -230,7 +230,7 @@ func DecodeDigest(b []byte) (token.Digest, error) {
 
 func parseStatus(s string) (stack.UpdateStatus, error) {
 	switch st := stack.UpdateStatus(s); st {
-	case stack.StatusNotStarted, stack.StatusRunning, stack.StatusSucceeded, stack.StatusFailed, stack.StatusCancelled:
+	case stack.StatusNotStarted, stack.StatusRunning, stack.StatusSucceeded, stack.StatusFailed, stack.StatusCanceled:
 		return st, nil
 	default:
 		return "", fmt.Errorf("%w: unknown status %q", ErrCorruptRow, s)

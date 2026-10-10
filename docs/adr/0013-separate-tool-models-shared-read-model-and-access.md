@@ -15,7 +15,7 @@ TFE-compatible API):
 | Project | Project | No. A Pulumi project is a program; stack names are unique within it. A TFE project only groups workspaces, whose names are unique per organization. |
 | Stack | Workspace | Close, not equal. Both are one deployable instance with its own state. A stack carries config, secrets and an update history with events; a workspace carries an explicit lock and state versions with lineage and serial. |
 | Update | Run | No. The Pulumi CLI reports every update with a lease and events. OpenTofu with local execution creates no run: it locks, uploads a state version and unlocks. |
-| Update lease (expires) | Workspace lock (explicit) | No. Different behaviour on crashes and forced unlocks. |
+| Update lease (expires) | Workspace lock (explicit) | No. Different behavior on crashes and forced unlocks. |
 | Checkpoint | State file | Only as storage. Both are opaque to the server and can share the blob port, never a format. |
 | Component | Module | Not a backend concept. Both are groupings inside the program; the server sees them only as parent links (Pulumi) or address prefixes (OpenTofu) inside opaque state. |
 

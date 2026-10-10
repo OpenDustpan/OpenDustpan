@@ -331,7 +331,7 @@ func testStartVersions(t *testing.T, f fixture) {
 	}
 
 	// A canceled update keeps its number; the next one does not reuse it.
-	f.end(t, second, stack.StatusCancelled)
+	f.end(t, second, stack.StatusCanceled)
 
 	third := f.run(t, f.ref, "u3", mutating())
 	if third.Version != 3 {
@@ -467,8 +467,8 @@ func testConcurrentSaves(t *testing.T, f fixture) {
 
 	running := f.run(t, f.ref, "u1", mutating())
 	statuses := []stack.UpdateStatus{
-		stack.StatusSucceeded, stack.StatusFailed, stack.StatusCancelled,
-		stack.StatusSucceeded, stack.StatusFailed, stack.StatusCancelled,
+		stack.StatusSucceeded, stack.StatusFailed, stack.StatusCanceled,
+		stack.StatusSucceeded, stack.StatusFailed, stack.StatusCanceled,
 	}
 	errs := make([]error, len(statuses))
 
@@ -552,7 +552,7 @@ func testListUpdates(t *testing.T, f fixture) {
 	f.end(t, f.run(t, f.ref, "p1", preview()), stack.StatusSucceeded)
 	f.end(t, f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false}), stack.StatusFailed)
 	f.end(t, f.run(t, f.ref, "p2", dryRun()), stack.StatusSucceeded)
-	f.end(t, f.run(t, f.ref, "u3", mutating()), stack.StatusCancelled)
+	f.end(t, f.run(t, f.ref, "u3", mutating()), stack.StatusCanceled)
 	f.create(t, f.ref, "waiting", mutating())
 	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false})
 	f.end(t, f.run(t, f.other(t), "other", mutating()), stack.StatusSucceeded)
@@ -652,7 +652,7 @@ func testCheckpointLease(t *testing.T, f fixture) {
 
 	// Authorized while running, written after a cancel: rejected.
 	late := newCheckpoint(u, 0, `{}`)
-	f.end(t, u, stack.StatusCancelled)
+	f.end(t, u, stack.StatusCanceled)
 
 	if err := f.s.PutCheckpoint(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Fatalf("checkpoint after cancel: err = %v, want ErrWrongUpdateState", err)
@@ -830,7 +830,7 @@ func testEventsLease(t *testing.T, f fixture) {
 	}
 
 	late := newEvents(u, 1, 0)
-	f.end(t, u, stack.StatusCancelled)
+	f.end(t, u, stack.StatusCanceled)
 
 	if err := f.s.AppendEvents(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Fatalf("events after cancel: err = %v, want ErrWrongUpdateState", err)
