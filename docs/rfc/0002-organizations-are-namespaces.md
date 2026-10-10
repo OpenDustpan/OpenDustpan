@@ -1,14 +1,15 @@
 ---
 rfc: 2
 title: Organizations are namespaces, in every client
-status: discussing
+status: accepted
+adr: 18
 created: 2026-10-09
 was: proposed ADR 10
 ---
 
 # RFC 2. Organizations are namespaces, in every client
 
-Status: under discussion. It was proposed ADR 10 until ADR 15 moved every
+Status: accepted as ADR 18. It was proposed ADR 10 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
 ## Context
@@ -68,3 +69,7 @@ OpenTofu's `cloud` block names an organization as well (RFC 1).
 - Multi-region: a namespace homed elsewhere is still an organization the user
   belongs to. Listing its stacks from a standby region reads replicated data
   (ADR 4), which may lag.
+
+## Outcome
+
+Accepted as ADR 18 on 2026-10-10.

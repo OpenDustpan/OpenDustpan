@@ -32,8 +32,8 @@ HCP Terraform cannot undo a workspace delete.
 
 ## Open questions
 
-- Does a rename keep the unit's stable ID, so that its scope (secrets) and its
-  references (RFC 15) survive?
+- Answered by ADR 19 for stacks: a rename keeps the stable ID, so the scope
+  (secrets) and the references (RFC 15) survive.
 - How long does soft delete keep state, and who can restore?
 - Is moving a unit between namespaces allowed, given home regions (ADR 4)?
 

@@ -11,6 +11,8 @@ was: proposed ADR 11
 Status: under discussion. It was proposed ADR 11 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
+Part 1, the Pulumi update cycle, is accepted as ADR 20.
+
 ## Context
 
 The e2e suite shows what the Pulumi CLI needs after stack management: the
