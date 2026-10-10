@@ -23,6 +23,7 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 )
 
@@ -89,25 +90,35 @@ type Env struct {
 	// Recorder holds every request the CLI made to the server.
 	Recorder *Recorder
 	cli      Install
+	store    Store
 	token    string
 	home     string
 	project  string
 	steps    []StepResult
 }
 
-// NewEnv starts a server on a random local port, backed by a fresh SQLite
-// database with the Namespace namespace, and prepares an empty home directory
-// and a scratch project for cli. OpenTofu gets an HTTPS server, because its
-// service discovery refuses plain HTTP, and the server's certificate is the
-// only one it trusts. Everything is removed when the test ends.
-func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
+// serverStore is every persistence port the server needs.
+type serverStore interface {
+	namespace.Store
+	stack.Store
+}
+
+// NewEnv starts a server on a random local port, backed by a fresh database
+// with the Namespace namespace, and prepares an empty home directory and a
+// scratch project for cli. SQLite uses a temporary file; PostgreSQL uses an
+// isolated schema that is dropped when the test ends. OpenTofu gets an HTTPS
+// server, because its service discovery refuses plain HTTP, and the server's
+// certificate is the only one it trusts. Everything is removed when the test ends.
+func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
 	dir := tb.TempDir()
 	token := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(newServer(ctx, tb, filepath.Join(dir, "dustpan.db"), token)))
+	ts := httptest.NewUnstartedServer(
+		rec.Middleware(newServer(ctx, tb, store, filepath.Join(dir, "dustpan.db"), token)),
+	)
 	if cli.Tool == ToolTofu {
 		ts.StartTLS()
 	} else {
@@ -120,6 +131,7 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install) *Env {
 		URL:      ts.URL,
 		Recorder: rec,
 		cli:      cli,
+		store:    store,
 		token:    token,
 		home:     filepath.Join(dir, "home"),
 		project:  filepath.Join(dir, "project"),
@@ -157,21 +169,33 @@ func newToken(tb testing.TB) string {
 	return hex.EncodeToString(raw)
 }
 
-// newServer opens a SQLite database at dbPath, creates the Namespace namespace
-// and returns the server's handler. The store is closed when the test ends.
-func newServer(ctx context.Context, tb testing.TB, dbPath, token string) http.Handler {
+// newServer opens store (a fresh SQLite file at dbPath, or an isolated
+// PostgreSQL schema), creates the Namespace namespace and returns the server's
+// handler. The store and its schema are closed and removed when the test ends.
+func newServer(ctx context.Context, tb testing.TB, store Store, dbPath, token string) http.Handler {
 	tb.Helper()
 
-	st, err := sqlite.Open(ctx, dbPath)
-	if err != nil {
-		tb.Fatalf("open sqlite store: %v", err)
-	}
+	var st serverStore
 
-	tb.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			tb.Errorf("close sqlite store: %v", closeErr)
+	switch store {
+	case StoreSQLite:
+		sqliteStore, err := sqlite.Open(ctx, dbPath)
+		if err != nil {
+			tb.Fatalf("open sqlite store: %v", err)
 		}
-	})
+
+		tb.Cleanup(func() {
+			if closeErr := sqliteStore.Close(); closeErr != nil {
+				tb.Errorf("close sqlite store: %v", closeErr)
+			}
+		})
+
+		st = sqliteStore
+	case StorePostgres:
+		st = openPostgresStore(ctx, tb, PostgresURL())
+	default:
+		tb.Fatalf("unknown store: %s", store)
+	}
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
 	if err != nil {
@@ -208,6 +232,11 @@ func (e *Env) Steps() []StepResult {
 // Install returns the CLI under test.
 func (e *Env) Install() Install {
 	return e.cli
+}
+
+// Store returns the database backend this environment runs against.
+func (e *Env) Store() Store {
+	return e.store
 }
 
 // Requested reports whether the CLI sent method path during step.
