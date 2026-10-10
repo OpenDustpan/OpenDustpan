@@ -80,19 +80,11 @@ users.
 
 ### How translations are made and kept
 
-- English is the source language, written in ASD-STE100 (ADR 14), with
-  Oxford spelling: British spelling with `-ize` endings ("organization",
-  "colour", "licence", "behaviour", "centre"). The docs already write it this
-  way, and it is the spelling of many international bodies (the UN, ISO, the
-  Oxford University Press). Its `-ize` endings also match the tools' own
-  words ("organization" in both the Pulumi and the TFE APIs).
-- Identifiers keep their own spelling: CSS `color`, API fields, flags and
-  commands are machine-made and stay verbatim. The spelling rule applies to
-  prose only.
-- English (US) ships as a small variant catalog that lists only the words that
-  differ ("color", "license", "behavior", "center"). English (UK) is the
-  source itself. STE was
-  made in part to make translation easier and more exact.
+- English is the source language, written in ASD-STE100 (ADR 14) with US
+  spelling (ADR 16). STE was made in part to make translation easier and more
+  exact.
+- English (UK) ships as a small variant catalog that lists only the words
+  that differ ("colour", "licence", "behaviour", "centre", "cancelled").
 - Each language is one catalog file in the console repository. A message uses
   named placeholders, and the product name is a placeholder too, so that
   themes (RFC 9) work in every language.
@@ -109,7 +101,7 @@ users.
 - **Fonts.** The console ships IBM Plex Sans with a Latin subset only. Chinese,
   Japanese and Korean need their own font files, which are large. They load
   only for those languages, split by `unicode-range` so a page downloads only
-  the characters it shows. IBM Plex has CJK families. Their licence and their
+  the characters it shows. IBM Plex has CJK families. Their license and their
   size need a check. Machine-made text stays in IBM Plex Mono, because it is
   almost always ASCII.
 - **Right-to-left.** Arabic and Hebrew need the layout mirrored. The CSS moves

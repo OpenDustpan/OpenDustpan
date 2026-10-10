@@ -12,21 +12,21 @@ Status: draft.
 ## Problem
 
 Teams want the console to look like their own internal platform: their name
-for it, their logo, their fonts and their colours. Today the product name,
+for it, their logo, their fonts and their colors. Today the product name,
 the lockup and the design tokens are fixed at build time.
 
 ## Proposal
 
 - **A theme is runtime config.** The console already reads `/config.json`
   when it starts (ADR 5). A theme adds to it: a product name, logo files
-  (light and dark), font files, and values for the colour tokens. The same
+  (light and dark), font files, and values for the color tokens. The same
   build serves every theme. An operator never rebuilds the console.
 - **Tokens first.** A theme sets values for the existing tokens (`pan`,
   `surface`, `ink` and the others). This is the supported way, and the one the
   docs show.
 - **Custom CSS as an escape hatch.** A theme can also add its own stylesheet.
   The docs say clearly that the design system's guarantees (contrast, focus,
-  meaning that never rests on colour alone) end where custom CSS starts.
+  meaning that never rests on color alone) end where custom CSS starts.
 - **Contrast is checked, and the operator decides.** The console checks each
   themed text token against its surfaces when it loads the theme. A theme
   that breaks 4.5:1 still loads. The console warns the operator, with the
@@ -34,7 +34,7 @@ the lockup and the design tokens are fixed at build time.
   server log at startup. People who are not operators never see the warning.
 - **The product name is everywhere.** The console, server error messages,
   log lines and CLI output use the configured name. Text that names
-  OpenDustpan for legal reasons (the licence, the source link) stays.
+  OpenDustpan for legal reasons (the license, the source link) stays.
 - **Fonts stay self-hosted.** A theme ships its own font files. The console
   never loads fonts from a third party, as the brand book already requires.
 
@@ -48,8 +48,8 @@ key (RFC 8).
 
 - The "not affiliated" rule applies to themes that we ship. What an operator
   calls the product in its own network is its business.
-- The diff colours (`diff-create`, `diff-update`, `diff-delete`) are themable
-  too. The glyphs stay, so a plan still reads correctly when the colours do
+- The diff colors (`diff-create`, `diff-update`, `diff-delete`) are themable
+  too. The glyphs stay, so a plan still reads correctly when the colors do
   not.
 
 ## Options
