@@ -24,8 +24,9 @@ everyday work, on one node, with SQLite or PostgreSQL.
 
 **Exit test.** The e2e suite passes `up`, `preview`, `refresh`, `destroy`,
 `cancel`, `stack export` and `stack import`, and config secrets, on the three
-Pulumi CLI versions in the suite, on SQLite and on PostgreSQL. Delta
-checkpoints and journaling are not part of it.
+Pulumi CLI versions in the suite, on SQLite and on PostgreSQL. The stack
+steps that the scenario already runs (`stack rename`, `stack rm`, `stack tag
+set`) pass too. Delta checkpoints and journaling are not part of it.
 
 | Where | Item | Part | State |
 | --- | --- | --- | --- |
@@ -34,6 +35,7 @@ checkpoints and journaling are not part of it.
 | server | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules | 2: secrets | accepted (ADR 23) |
 | server | Stable identity of a stack (no RFC) | all | accepted (ADR 19) |
 | server | Where checkpoints live (no RFC) | all | accepted (ADR 24) |
+| server | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle | Pulumi stack rename, hard delete, tags as the CLI sends them (rules in ADR 19, ADR 23) | draft |
 | console | Keep the Console working through the API changes above | n/a | n/a |
 
 ## Milestone 2. OpenTofu runs on one node
@@ -51,7 +53,7 @@ it.
 | server | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all | discussing |
 | server | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules | 3: OpenTofu state | discussing |
 | server | [RFC 35](rfc/0035-packaging.md) Packaging and installation | TLS, binary, container image | draft |
-| server | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle | delete, rename, tags for both tools | draft |
+| server | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle | the rest: soft delete, move, workspace lifecycle, tags as labels (RFC 4) | draft |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views | unit list across both tools, "connect your CLI" snippet | draft |
 
 **First tagged release: `v0.1.0`** ([ADR 21](adr/0021-the-first-tagged-release.md)).
