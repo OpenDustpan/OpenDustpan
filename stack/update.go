@@ -90,7 +90,7 @@ const (
 	StatusRunning    UpdateStatus = "running"
 	StatusSucceeded  UpdateStatus = "succeeded"
 	StatusFailed     UpdateStatus = "failed"
-	StatusCancelled  UpdateStatus = "cancelled" //nolint:misspell // The CLI's wire value; it must not change.
+	StatusCancelled  UpdateStatus = "cancelled" // The CLI's wire value. It must not change.
 )
 
 // ParseCompletion validates s as the status a client may complete an update with.
@@ -150,7 +150,7 @@ func (l Lease) check(tok token.Token, now time.Time) error {
 // Update is one run of the Pulumi engine against a stack.
 //
 // An update is created "not started", becomes "running" when its client starts
-// it and receives a lease, and ends succeeded, failed or canceled. A
+// it and receives a lease, and ends succeeded, failed or cancelled. A
 // running update whose lease expired stays running, and keeps the stack
 // locked, until someone cancels it: the server cannot know whether the engine
 // is still changing resources.
@@ -242,7 +242,7 @@ func (u Update) complete(tok token.Token, now time.Time, status UpdateStatus) (U
 
 // cancel ends an update on a user's request, without its lease: this is how a
 // stack locked by a crashed client is released.
-// Canceling a canceled update succeeds and changes nothing, for retries.
+// Cancelling a cancelled update succeeds and changes nothing, for retries.
 func (u Update) cancel(now time.Time) (Update, error) {
 	if u.Status == StatusCancelled {
 		return u, nil

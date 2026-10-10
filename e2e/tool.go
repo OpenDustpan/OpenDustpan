@@ -61,7 +61,7 @@ type Tool struct {
 //
 // The matrix is the newest release plus two older minors. Pulumi ships a minor
 // roughly weekly, so the older entries are spaced out (about four months and
-// one year back) to cover genuinely different CLI behavior rather than three
+// one year back) to cover genuinely different CLI behaviour rather than three
 // near-identical builds.
 func Pulumi() Tool {
 	return Tool{

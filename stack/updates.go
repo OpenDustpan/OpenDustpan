@@ -303,7 +303,7 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 //
 // Invalid input is rejected before any update exists. Once the import update
 // starts, only this call holds its lease, so it is always ended, even when ctx
-// is canceled: otherwise the stack would stay locked until `pulumi cancel`.
+// is cancelled: otherwise the stack would stay locked until `pulumi cancel`.
 func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Update, error) {
 	if err := s.validate(in); err != nil {
 		return Update{}, err

@@ -32,7 +32,7 @@ linters:
     # --- Duplicates of stricter or broader checks ---
     - lll # golines (formatter) enforces the same 120-column limit and auto-fixes it.
     - gocyclo # cyclop + gocognit cover complexity with better signal.
-    - goheader # No license headers in files; LICENSE at the root is enough.
+    - goheader # No licence headers in files; LICENSE at the root is enough.
     # --- Irrelevant to this codebase (no such dependency) ---
     - arangolint
     - clickhouselint
@@ -202,7 +202,10 @@ linters:
         - generic
 
     misspell:
-      locale: US
+      # No locale: misspell catches typos in any variety of English. A locale
+      # would enforce one spelling. ADR 16 asks for Oxford spelling, which
+      # neither the US nor the UK word list of misspell matches (UK flags -ize).
+      # Reviews check the spelling variety.
 
     mnd:
       ignored-functions:

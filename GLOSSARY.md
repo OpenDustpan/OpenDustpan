@@ -30,7 +30,7 @@ _Avoid_: State file (except for OpenTofu), snapshot
 
 **Inventory**:
 The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
-_Avoid_: Catalog, registry, index
+_Avoid_: Catalogue, registry, index
 
 ### Regions
 

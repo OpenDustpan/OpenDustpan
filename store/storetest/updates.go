@@ -330,7 +330,7 @@ func testStartVersions(t *testing.T, f fixture) {
 		t.Fatalf("second update version = %d, want 2", second.Version)
 	}
 
-	// A canceled update keeps its number; the next one does not reuse it.
+	// A cancelled update keeps its number; the next one does not reuse it.
 	f.end(t, second, stack.StatusCancelled)
 
 	third := f.run(t, f.ref, "u3", mutating())

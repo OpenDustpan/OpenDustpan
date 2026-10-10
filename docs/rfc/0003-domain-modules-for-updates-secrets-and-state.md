@@ -47,7 +47,7 @@ Update cycle:
   never block or wait, take no version and are not history. Only one mutating
   update runs per stack; the store enforces it atomically when starting.
 - Starting allocates the update's version: one more than any earlier
-  mutating update of the stack, so failed and canceled updates keep their
+  mutating update of the stack, so failed and cancelled updates keep their
   number in history. The stack's version follows when the update ends.
 - A lease lasts 5 minutes and renews for 1 second to 5 minutes. Renewal keeps
   the token so concurrent writes do not fail. An expired lease does not free
@@ -55,7 +55,7 @@ Update cycle:
   know whether the engine is still changing resources.
 - Every transition is a compare-and-swap on `Update.Revision`, re-applied to
   a fresh read up to three times when it loses (the CLI renews its lease
-  while completion is in flight). Completing or canceling again with the same
+  while completion is in flight). Completing or cancelling again with the same
   final status succeeds without a write: the CLI retries these calls when a
   response is lost.
 - Checkpoints are opaque JSON plus schema version and the client's `isInvalid`

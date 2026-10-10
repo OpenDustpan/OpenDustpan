@@ -87,6 +87,6 @@ describes.
 Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 (why things are the way they are).
 
-## License
+## Licence
 
 Not yet chosen.

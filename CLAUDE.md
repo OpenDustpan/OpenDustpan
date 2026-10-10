@@ -121,6 +121,10 @@ skill (ADR 14):
   instructions for agents that we write (`CLAUDE.md`, our own skills, prompts).
 - STE-flavored mode: README, ADRs, `GLOSSARY.md`, pull request descriptions,
   commit messages and code comments.
+- Spell English in Oxford spelling (ADR 16): British spelling with `-ize`
+  endings. Write "organization", "colour", "licence", "behaviour", "centre",
+  "cancelled" and "catalogue". Identifiers, flags, API fields, commands and
+  quoted names keep their own spelling: Go's `context.Canceled`, CSS `color`.
 - Keep every hedge. "May", "might" and "could" carry the author's confidence.
   Never turn a hedge into a fact to make a sentence shorter.
 - `make docs-lint` checks README, `CLAUDE.md`, `GLOSSARY.md` and ADRs from 14
