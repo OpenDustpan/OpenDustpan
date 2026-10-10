@@ -27,6 +27,14 @@ Two things follow:
   job (a Pulumi program, a provider, an `external` data source, a job step)
   can read it, print it, or send it anywhere, and use it after the job ends.
 
+A third case is transport security that the job cannot carry well. A
+self-hosted service that accepts only mTLS clients, for example clients that
+prove a SPIFFE identity with an X.509 certificate, needs a client certificate
+and key in the job. On a shared CI runner that is hard to
+set up and unsafe: the key gives access to the admin endpoints, and many
+providers cannot verify a server certificate that carries a SPIFFE ID instead
+of a DNS name.
+
 Clouds with a strong access model (AWS IAM, Google Cloud IAM, Azure RBAC) do
 not need this RFC. Teams use narrow roles there, and a role per phase for
 read-only previews (RFC 5). This RFC does not try to rebuild their access
@@ -92,6 +100,67 @@ egress:
   namespace setting can require rules for every unit, or for units with a
   label. Following RFC 9, the default is not to block.
 
+### Two ways to reach the proxy
+
+- **Forward proxy.** The tool uses `HTTPS_PROXY` as usual, and the proxy ends
+  the tool's TLS with a CA that the job trusts. This works for any host
+  without changes to the tool's configuration.
+- **Endpoint.** The provider is configured with the proxy as its endpoint
+  (for example `localhost:9443`), and the proxy
+  forwards to the real service. The tool needs no CA trust when the hop to
+  the proxy stays on the local network namespace, and needs no proxy support
+  at all. This suits gRPC and other clients that handle `HTTPS_PROXY` poorly.
+
+### gRPC
+
+The proxy speaks HTTP/2, so gRPC works in both ways above. A gRPC call is a
+`POST` to `/<package>.<Service>/<Method>`, so a path rule allows single
+methods: for example `/example.v1.ReadService/*` is allowed, while
+`/example.v1.AdminService/*` stays denied. The arguments are in the protobuf
+body. By default the proxy does not read bodies, so a rule cannot limit a call
+by its arguments (see "Request bodies"). The service's own authorization can,
+using the identity below.
+
+### TLS identities and SPIFFE
+
+Towards the endpoint, the proxy can present a client identity and check the
+server's identity:
+
+- **A client certificate from a profile** (RFC 5), released to the proxy only.
+- **A SPIFFE identity.** The proxy gets an X.509 SVID from the SPIFFE Workload
+  API (for example a SPIRE agent on the runner) and rotates it. Workload
+  attestation can give the SVID to the proxy's container and not to the
+  tool's. Each unit can get its own SPIFFE ID (for example
+  `spiffe://example.org/opendustpan/opentofu/acme/network`), so the
+  service's own authorizer can tell units apart.
+- **Server checks by SPIFFE ID or a private CA**, not only by DNS name, for
+  services whose providers cannot do this.
+
+The tool never holds the key. The egress rules still limit which calls the
+identity can make through this job.
+
+### A generic rule engine, no assumptions about providers
+
+The proxy is a rule engine over requests. It knows HTTP, HTTP/2, gRPC framing
+and TLS. It knows nothing about any provider, product or cloud API, and
+OpenDustpan ships no built-in rules for one. Everything specific to a
+product is in the rules that a team writes.
+
+### Request bodies
+
+Bodies are opaque by default. A rule can opt in to match on the body, with
+great care and only in generic ways:
+
+- **Generic formats only:** fields of a JSON body (by path), form fields, and
+  protobuf fields only when the team supplies the message descriptors. Never
+  logic for one product.
+- **Limits:** a maximum body size that the proxy buffers; a request over it,
+  or a body that does not parse, is denied, never passed unchecked.
+  Streaming calls are not matched by body.
+- **The same safety rules as paths:** values are normalized before matching,
+  and a template value matches one field value exactly.
+- **Audit** records which body fields a rule matched, never their values.
+
 ### How people write rules (to be decided)
 
 The interface for rules is open. It must say what the example above says,
@@ -131,9 +200,10 @@ A path rule is an access control, so it must not be easy to get around:
   the pattern.
 - **No redirects to other hosts.** The proxy does not follow a redirect. The
   tool follows it, as a new request, and the rules check it again.
-- **Bodies are opaque.** The proxy does not read bodies by default. A request
-  that changes things through its body (a bulk endpoint, GraphQL) is allowed
-  or denied as a whole by its method and path.
+- **Bodies are opaque by default.** A request that changes things through its
+  body (a bulk endpoint, GraphQL) is allowed or denied as a whole by its
+  method and path, unless a rule opts in to body matching (see "Request
+  bodies").
 
 ### Credentials that never reach the runner
 
@@ -236,6 +306,10 @@ _Avoid_: Exposure, visibility
   OpenDustpan?
 - Who can read the CA key for TLS interception, and is it per job, per runner
   or per namespace?
+- Are client certificates and SPIFFE new credential sources in RFC 5, and who
+  decides the SPIFFE ID of a unit: OpenDustpan, or the SPIRE registration?
+- Which body formats come first for body matching, and what is the maximum
+  body size?
 
 ## Outcome
 
