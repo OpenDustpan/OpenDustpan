@@ -1,5 +1,5 @@
 // Package workspace models OpenTofu workspaces inside a namespace: their
-// identity, their lock and their state versions (ADR 9). The namespace is the
+// identity, their lock and their state versions (RFC 1). The namespace is the
 // organization that OpenTofu's cloud block names.
 //
 // The server never reads state. With OpenTofu's state encryption it may be

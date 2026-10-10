@@ -13,8 +13,8 @@ speaks, so the CLI needs no plugin.
 
 | Tool | Protocol | Status |
 | --- | --- | --- |
-| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Login and creating, selecting and listing stacks work. Organizations (ADR 10), updates (`pulumi up`), secrets and state export are in progress (ADR 11). |
-| OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (ADR 9), not built yet. |
+| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Login and creating, selecting and listing stacks work. Organizations (RFC 2), updates (`pulumi up`), secrets and state export are in progress (RFC 3). |
+| OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (RFC 1), not built yet. |
 
 More tools follow the same pattern (ADR 12). Every supported version of every
 tool is checked by an end-to-end suite that drives the real CLI.
@@ -57,7 +57,7 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 ## Concepts
 
 - **Namespace**: the unit of tenancy, what each tool calls an organization.
-  Every namespace is authoritative in one region (ADR 4, ADR 10).
+  Every namespace is authoritative in one region (ADR 4, RFC 2).
 - **Stacks and workspaces**: each tool keeps its own model of deployable units
   and their state (Pulumi stacks, OpenTofu workspaces). They share
   namespaces, identity, storage and locking rules, not data models.

@@ -1,6 +1,15 @@
-# 10. Organizations are namespaces, in every client
+---
+rfc: 2
+title: Organizations are namespaces, in every client
+status: discussing
+created: 2026-10-09
+was: proposed ADR 10
+---
 
-Status: proposed · 2026-10-09
+# RFC 2. Organizations are namespaces, in every client
+
+Status: under discussion. It was proposed ADR 10 until ADR 15 moved every
+undecided proposal to `docs/rfc/`.
 
 ## Context
 
@@ -25,7 +34,7 @@ namespaces were organizations:
    `organization`, meaning "every stack I can see". The server requires
    `organization` and answers 400. With `--organization` it works.
 
-OpenTofu's `cloud` block names an organization as well (ADR 9).
+OpenTofu's `cloud` block names an organization as well (RFC 1).
 
 ## Decision
 
