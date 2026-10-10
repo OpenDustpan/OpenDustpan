@@ -76,7 +76,9 @@ Remote runs (RFC 6) need git integration anyway, with or without write-back:
 
 So a **forge connection** is part of the core: an app installation (a GitHub
 App, a GitLab application, a Forgejo token) that the backend holds, one per
-namespace or more. The backend uses it to read files and post results.
+namespace or more. The backend uses it to read files and post results. It can also give a runner a
+short-lived, read-only token for one repository, so that a runner needs no git
+credentials of its own.
 
 **Every forge is an adapter behind a `Forge` port** (ADR 2). OpenDustpan
 ships adapters for the most-used forges. For any other forge, a team writes an
@@ -86,9 +88,7 @@ every adapter runs it.
 
 **Writes go only through the forge's API.** OpenDustpan never pushes with a
 git client, over SSH or HTTPS. A forge without an API for commits and review
-requests gets no write-back. It can also give a runner a
-short-lived, read-only token for one repository, so that a runner needs no git
-credentials of its own.
+requests gets no write-back.
 
 **Push access is optional.** A forge connection without write access to
 repository contents gives remote runs and nothing more. Write-back is off for
