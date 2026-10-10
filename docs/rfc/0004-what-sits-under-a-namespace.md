@@ -119,6 +119,32 @@ output sharing has explicit members:
 - Labels stay useful for views. A saved view (an inventory filter) can look
   like a group, but it never grants anything.
 
+### Groups and the tools' projects
+
+Both tools have a "project", but they are different things:
+
+- An **OpenTofu project** (in the TFE protocol) is an organizational
+  container of workspaces, with team access and variable sets. The `cloud`
+  block can name it. That is almost exactly a group.
+- A **Pulumi project** is a program. Its name is in `Pulumi.yaml`, it is part
+  of every stack name (`<org>/<project>/<stack>`), and only the code can
+  change it. One Pulumi project often holds `dev` and `prod` stacks, which
+  need different access. So a Pulumi project cannot be the group.
+
+A possible mapping, like namespace and organization (each tool calls the
+namespace an organization):
+
+- The TFE-compatible API shows each group as a project, so `tofu` and the
+  TFE protocol see their own word, and a workspace that names a project in
+  its `cloud` block lands in that group.
+- A Pulumi stack has a group as OpenDustpan metadata, beside its Pulumi
+  project. A new stack could get the group named like its Pulumi project
+  when that group exists, and a person can move it later.
+- The console keeps each tool's words: "project" on OpenTofu pages, "Pulumi
+  project" on Pulumi pages, and our own word for the group in shared views.
+
+Open: whether nested groups fit the TFE protocol, which has flat projects.
+
 ### Open questions for groups
 
 - The word. Not "project" (both tools use it). Candidates: group, space,
