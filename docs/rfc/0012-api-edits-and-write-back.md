@@ -76,8 +76,17 @@ Remote runs (RFC 6) need git integration anyway, with or without write-back:
 
 So a **forge connection** is part of the core: an app installation (a GitHub
 App, a GitLab application, a Forgejo token) that the backend holds, one per
-namespace or more. Each forge is an adapter behind a port (ADR 2). The backend
-uses it to read files and post results. It can also give a runner a
+namespace or more. The backend uses it to read files and post results.
+
+**Every forge is an adapter behind a `Forge` port** (ADR 2). OpenDustpan
+ships adapters for the most-used forges. For any other forge, a team writes an
+adapter and builds its own `main` with the SDK, as for any other port. The
+port gets a conformance suite (`forgetest`) before the first adapter, and
+every adapter runs it.
+
+**Writes go only through the forge's API.** OpenDustpan never pushes with a
+git client, over SSH or HTTPS. A forge without an API for commits and review
+requests gets no write-back. It can also give a runner a
 short-lived, read-only token for one repository, so that a runner needs no git
 credentials of its own.
 
@@ -91,9 +100,9 @@ it.
   a directory. RFC 6 already uses the word for what a runner checks out.
 - A **write-back** is an API edit whose home is git. The backend turns it into
   a commit on the unit's source.
-- **The backend commits through the forge's API.** Writing a data file is not
-  running an infrastructure-as-code tool, so RFC 6's principle does not apply.
-  The forge APIs create a commit without a clone (GitHub's contents and Git
+- **The backend commits through the `Forge` port, never through a runner.**
+  Writing a data file is not running an infrastructure-as-code tool, so RFC
+  6's principle does not apply. The forge APIs create a commit without a clone (GitHub's contents and Git
   data APIs, GitLab's commits API with actions, Forgejo's contents API). So
   the backend needs no git binary, no working copy and no runner. The edit
   lands in seconds, even when no runner is online.
@@ -192,11 +201,14 @@ The two tools differ in one place that matters:
 3. **Profiles only.** API edits go to profiles, never to git. This is the
    Pulumi Cloud model. It is simple, and it moves the record out of git for
    every value the console edits.
-4. **Write-back by a runner.** A runner with its own git credentials clones,
+4. **Write-back with a git client.** The backend clones and pushes over SSH
+   or HTTPS. It works with any git server, but it needs a git client and a
+   working copy in the backend, and a plain git server has no review requests.
+5. **Write-back by a runner.** A runner with its own git credentials clones,
    edits and pushes. The backend then needs no push access. But an edit waits
    for a runner, the runner needs a git client and a working copy, and the
    backend still needs a forge connection for remote runs.
-5. **Two-way sync.** The server keeps a copy of the config and syncs it with
+6. **Two-way sync.** The server keeps a copy of the config and syncs it with
    git in both directions. This breaks the principle above. It is listed to
    record that it was considered and rejected.
 
@@ -236,8 +248,12 @@ _Avoid_: Lock (for Pulumi stacks), reservation
 
 - Which forges come first: GitHub, GitLab, Forgejo? Each one is an adapter
   behind a port (ADR 2).
-- Is a plain git server with no API (SSH only) in scope? It would need a git
-  client in the backend, and it has no review requests.
+- Which methods does the `Forge` port need first? A small port is easier to
+  implement: read a file at a ref, commit file changes on a base, open a
+  review request, post a status, merge, check a webhook's signature.
+- Does a team ever need a forge adapter without building its own binary? That
+  needs a runtime plugin mechanism (for example a separate process over
+  RPC), which ADR 2 does not have. It would be a new RFC.
 - How does the backend edit `Pulumi.<stack>.yaml` and keep comments and key
   order? This may need a YAML library with a node API, which is a new
   dependency.
