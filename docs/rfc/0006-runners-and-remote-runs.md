@@ -58,9 +58,13 @@ This principle is the first thing an accepted ADR must record.
   Cloud-compatible API. The job only links to the update. For OpenTofu, the
   runner runs `tofu` with the `cloud` block, and state versions arrive through
   the TFE-compatible API.
-- **Source.** The runner gets the source itself (a git URL and a commit), with
-  credentials that the runner holds. The backend stores neither the code nor
-  the git credentials.
+- **Source.** The runner checks out the source itself (a git URL and a
+  commit). The backend never stores the code. Remote runs need a forge
+  connection anyway (RFC 12): webhooks start jobs, and the backend posts
+  statuses and plan results on review requests. So the backend holds the
+  forge app's credentials. It can give a runner a short-lived, read-only
+  token for one repository. A runner can also use git credentials of its
+  own.
 - **Values.** The runner opens the job's profile (RFC 5) and passes the
   values to the tool. Secrets and short-lived credentials go only to the
   runner that claimed the job.
