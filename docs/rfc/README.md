@@ -55,3 +55,7 @@ both together.
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | draft |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
+| [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft |
+| [8](0008-backups-and-restore.md) | Backups and restore, built in | draft |
+| [9](0009-themes-and-white-labelling.md) | Themes and white-labelling | draft |
+| [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
