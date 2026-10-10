@@ -1,0 +1,219 @@
+---
+rfc: 12
+title: API edits, and write-back to git
+status: draft
+created: 2026-10-10
+---
+
+# RFC 12. API edits, and write-back to git
+
+Status: draft. The names, the scope and the principle are proposals.
+
+## Problem
+
+Today a team changes a unit in one way: edit files in git, then run the tool.
+Some changes do not need a person in an editor: a new instance size, one more
+replica, a feature flag, a new region in a list. Teams want to make these
+changes from the console, the API or a chat bot ("API ops"). They also want
+git to stay the record of what they deploy ("GitOps").
+
+These two wants conflict. If the console writes a value somewhere that git
+does not know about, git stops being the record. If git is the only place, the
+console cannot change anything.
+
+Other products give part of an answer:
+
+- Pulumi Cloud can keep a stack's config in the service. The stack points to
+  an ESC environment (`PUT /api/stacks/{org}/{project}/{stack}/config` with an
+  `environment` reference), and the CLI uses that config instead of
+  `Pulumi.<stack>.yaml`. `pulumi config env init` moves existing config into
+  an environment. Pulumi Deployments and the Automation API can then change
+  config and run updates with no edit in git.
+- HCP Terraform and Terraform Enterprise keep workspace variables and
+  variable sets in the service. They apply only to remote runs.
+- Atlantis plans each pull request, applies on a comment, and merges after the
+  apply succeeds.
+
+None of them writes a change back to git. So a team chooses: config in the
+service and git is not the record, or config in git and no API edits.
+
+## Principle
+
+**Each value has one home.** A value lives in git or in a profile (RFC 5),
+never in both. OpenDustpan never keeps two copies and syncs them.
+
+An API edit goes to the value's home:
+
+- If the home is a profile, the edit is a new version of the profile.
+- If the home is git, the edit is a commit. OpenDustpan keeps no copy of the
+  value. Git stays the record, and the API becomes one more author of
+  commits.
+
+This is what makes write-back sane. Two-way sync between a database and a
+repository has no correct answer when both sides change. One home and one
+writer path has one.
+
+## Proposal
+
+### 1. Unit config in a profile
+
+- Serve the Pulumi CLI's stack config endpoints in the Pulumi
+  Cloud-compatible API. The `environment` reference names a profile. A stack
+  that uses it needs no config values in `Pulumi.<stack>.yaml`.
+- For OpenTofu, serve workspace variables and variable sets in the
+  TFE-compatible API, backed by profiles. As RFC 5 says, OpenTofu reads them
+  only in a run that a runner does (RFC 6). A workstation run does not.
+- Every edit makes a new profile version. A Pulumi update or an OpenTofu run
+  records which version it read.
+
+### 2. Write-back to git
+
+- A **source** links a unit to a git repository, a ref and a directory. RFC 6
+  already uses the word for what a runner checks out.
+- A **write-back** is an API edit whose home is git. OpenDustpan turns it into
+  a commit on the unit's source.
+- **A runner does the commit.** RFC 6 says the backend stores neither the
+  code nor the git credentials. Write-back keeps that rule: the backend queues
+  a write-back job, and a runner with write access clones, edits, commits and
+  pushes. A server that can push to the infrastructure repository can run
+  code in every pipeline that reads it. That is a bigger attack surface than
+  the state itself.
+- **Delivery.** A write-back goes as a **review request** by default: a new
+  branch, and a pull request or merge request through the forge's API. A
+  direct push to the source's ref is an option per source. Branch protection
+  in the forge stays in charge, and OpenDustpan does not go around it.
+- **Only structured files.** Write-back edits data files, never program code:
+  - Pulumi: `Pulumi.<stack>.yaml` config keys. Secret values are written as
+    ciphertext from the `secret` package, which is how the Pulumi CLI keeps
+    them in git today.
+  - OpenTofu: one variables file per workspace, in JSON
+    (`*.tfvars.json`), named by the source. JSON needs no formatter and loses
+    no comments. Editing hand-written HCL `.tfvars` is a later option.
+  - OpenTofu has no encrypted form for a variable in a file. So a secret
+    OpenTofu variable can never have git as its home. Its home is a profile.
+- **Conflicts.** A write-back records the commit and the file content it was
+  based on. If the file changed since then, the runner applies the edit only
+  when the edited keys did not change. Otherwise the job fails with a conflict,
+  and the console shows both values. A silent overwrite loses data, and the
+  project blocks only on data loss or corruption (RFC 9).
+- **Authorship.** The commit author is the principal who made the edit. The
+  committer is the runner's identity, which can sign the commit. A trailer
+  links the commit to the write-back in OpenDustpan, and the console links
+  back to the commit.
+
+### 3. What a run applied
+
+Each Pulumi update and OpenTofu run records the commit it ran on, when that is
+known:
+
+- A job on a runner always knows its commit.
+- The Pulumi CLI sends git details with an update when it runs in a git
+  checkout. The server can read the commit from them.
+- An OpenTofu run from a workstation sends no git details through the
+  TFE-compatible API. In TFE, `ingress-attributes` are filled only for
+  VCS-driven configuration versions.
+
+With this, the console can show "main is 3 commits ahead of what is applied"
+for each unit.
+
+### 4. Existing projects
+
+Write-back must work on a repository that OpenDustpan did not create. An
+operator links each unit to a source. For Pulumi stacks, the git details of
+past updates can suggest the repository. They may not give the directory.
+For OpenTofu workspaces, the operator gives everything, or links many
+workspaces at once by a naming rule.
+
+## Apply after merge, or apply before merge
+
+When a review request exists, two orders are possible:
+
+1. **Apply after merge** (default). A runner plans on the review request and
+   applies after the merge. Git's main branch is the record of what the team
+   asked for. If the apply fails, main is ahead of the infrastructure until
+   someone fixes it.
+2. **Apply before merge** (Atlantis-style, an option). A runner plans on the
+   review request, applies on approval, and OpenDustpan merges through the
+   forge's API after the apply succeeds. Main only gets changes that applied.
+   The costs:
+   - Code that is not on main reaches production.
+   - Two review requests on one unit must not apply in turn on stale plans. So
+     the first one to plan holds the unit until it merges or closes.
+   - A revert is a new apply, not a `git revert` alone.
+
+This RFC does not judge which order is right. Teams that use Atlantis chose
+option 2 for real reasons. Following RFC 9's posture, OpenDustpan gives the
+choice per source and makes option 1 the default.
+
+The two tools differ in one place that matters:
+
+- **OpenTofu** has a workspace lock that lasts until someone releases it. A
+  review request can hold it, and a CLI on a workstation gets "locked by"
+  until the merge. `tofu apply` on a saved plan refuses a stale plan.
+- **Pulumi** has only a lease, which lasts one update. Nothing in the protocol
+  holds a stack between two updates. OpenDustpan would need a hold of its own,
+  and would refuse to start other updates on the stack while the hold exists.
+  The Pulumi CLI's update plans (`--save-plan`, `--plan`) might give a check
+  like OpenTofu's saved plans, but they are experimental in the CLI.
+
+## Options
+
+1. **Profiles, write-back by runners, review requests by default** (the
+   proposal).
+2. **Do nothing.** Edits happen in git only. The console only reads. This
+   stays valid, and every part of the proposal is a feature that a team can
+   turn off (RFC 7).
+3. **Profiles only.** API edits go to profiles, never to git. This is the
+   Pulumi Cloud model. It is simple, and it moves the record out of git for
+   every value the console edits.
+4. **Write-back from the server.** The server holds a forge app key and
+   commits itself. Edits are faster and need no runner. It breaks RFC 6's rule
+   on git credentials, and it makes the server a way into every pipeline.
+5. **Two-way sync.** The server keeps a copy of the config and syncs it with
+   git in both directions. This breaks the principle above. It is listed to
+   record that it was considered and rejected.
+
+## Proposed glossary entries
+
+**Source**:
+The git repository, ref and directory that hold the program and config of a
+unit.
+_Avoid_: Repo (in docs), VCS connection, origin
+
+**Write-back**:
+An edit made through the API to a value whose home is git. A runner delivers
+it as a commit.
+_Avoid_: Sync, push, commit-back
+
+**Review request**:
+A proposed change in a forge that people review before a merge: a GitHub pull
+request or a GitLab merge request.
+_Avoid_: Pull request, merge request (except when naming one forge's feature),
+PR, MR
+
+**Hold**:
+A claim on a unit that stops other updates or runs from starting until the
+holder releases it. It lasts longer than a lease.
+_Avoid_: Lock (for Pulumi stacks), reservation
+
+## Open questions
+
+- Which forges come first for review requests: GitHub, GitLab, Forgejo?
+  Each one is an adapter behind a port (ADR 2).
+- Does a write-back job need a runner label of its own, so that only runners
+  with write access to git claim it?
+- How does the runner edit `Pulumi.<stack>.yaml` and keep comments and key
+  order? This may need a YAML library with a node API, which is a new
+  dependency.
+- Can a write-back touch more than config? Pulumi YAML programs and OpenTofu
+  `import`, `moved` and `removed` blocks are structured. Each is a later RFC.
+- Is a hold its own concept in the core, or a feature of each tool package?
+  OpenTofu already has workspace locks, and Pulumi has nothing like it.
+- When one edit changes many units (a value in a shared file), is that one
+  write-back or many?
+- Does the console show a value's home next to the value, so that people know
+  whether an edit makes a commit?
+
+## Outcome
+
+None yet.
