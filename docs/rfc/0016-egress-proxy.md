@@ -10,6 +10,13 @@ created: 2026-10-10
 Status: draft. The names and where the proxy runs are proposals. How people
 write rules, and how policies (RFC 13) apply to them, is to be decided.
 
+**This is an escape hatch, not a default.** When a product has native RBAC or
+ABAC and short-lived credentials (OIDC, dynamic credentials), use those first:
+they are safer than any proxy. The egress proxy is for the products that do
+not have them. Teams will configure those products with IaC anyway, even if
+it means pasting a root token somewhere. The proxy makes that safer. It does
+not make it safe.
+
 ## Problem
 
 Many products that teams manage with OpenTofu or Pulumi have a weak access
@@ -35,14 +42,24 @@ set up and unsafe: the key gives access to the admin endpoints, and many
 providers cannot verify a server certificate that carries a SPIFFE ID instead
 of a DNS name.
 
-Clouds with a strong access model (AWS IAM, Google Cloud IAM, Azure RBAC) do
-not need this RFC. Teams use narrow roles there, and a role per phase for
-read-only previews (RFC 5). This RFC does not try to rebuild their access
-models.
+Clouds and products with a strong access model (AWS IAM, Google Cloud IAM,
+Azure RBAC, any product with scoped tokens through OIDC) do not need this RFC.
+Teams use narrow roles there, and a role per phase for read-only previews
+(RFC 5). This RFC does not try to rebuild their access models, and the docs
+and the console should say so where a team turns the proxy on.
+
+## When to use it
+
+1. The product has native RBAC or ABAC with short-lived credentials: use that.
+   Do not use the proxy.
+2. The product has scoped, long-lived tokens: use the narrowest token, in a
+   profile (RFC 5). The proxy is optional.
+3. The product has one admin key or root token, or needs mTLS that the
+   provider cannot do: use the proxy for the units that touch it.
 
 ## Proposal
 
-An **egress proxy** sits between a job and the network. The job can reach only
+An **egress proxy** is an opt-in feature for a unit. It sits between a job and the network. The job can reach only
 the proxy, and trusts the proxy's CA for that job. The proxy:
 
 1. allows a request only when an **egress rule** for this unit and this
@@ -52,6 +69,21 @@ the proxy, and trusts the proxy's CA for that job. The proxy:
 
 In effect, the proxy puts an access model in front of a product that has none,
 for the requests that a job makes.
+
+### The smallest useful version
+
+To keep this from growing into a product of its own, the first version is
+only:
+
+- a proxy next to each job, on units that have egress rules,
+- rules on host, method and path, with templates, deny by default,
+- header credentials released to the proxy only,
+- a client certificate towards the endpoint,
+- an audit record per request.
+
+Everything else in this RFC (body matching, SPIFFE, the endpoint mode, a
+shared gateway, learn mode and the rule tester) is a later step, each only
+when someone needs it.
 
 ### Egress rules
 
@@ -96,9 +128,8 @@ egress:
   a write. It does not work for APIs that read with `POST` (GraphQL, search
   endpoints): those need a rule on the path or the body, and the console says
   so.
-- **No rules, no change.** A unit without egress rules works as today. A
-  namespace setting can require rules for every unit, or for units with a
-  label. Following RFC 9, the default is not to block.
+- **No rules, no change.** A unit without egress rules works as today, with no
+  proxy. The feature is off unless a team turns it on for a unit.
 
 ### Two ways to reach the proxy
 
