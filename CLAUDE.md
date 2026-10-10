@@ -112,7 +112,7 @@ Write English in ASD-STE100 Simplified Technical English with the `asd-ste100`
 skill (ADR 14):
 
 - Strict mode: error messages, log messages, API error text, CLI output, and
-  instructions for agents (`CLAUDE.md`, skills, prompts).
+  instructions for agents that we write (`CLAUDE.md`, our own skills, prompts).
 - STE-flavored mode: README, ADRs, `GLOSSARY.md`, pull request descriptions,
   commit messages and code comments.
 - Keep every hedge. "May", "might" and "could" carry the author's confidence.
