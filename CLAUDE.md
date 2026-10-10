@@ -12,7 +12,9 @@ Pulumi CLI", "works with OpenTofu" and "TFE-compatible API". Never use another
 project's name, logo or colours as ours.
 
 Read `docs/adr/` before changing architecture. If a change contradicts an ADR,
-write a new ADR first.
+write a new ADR first. Use the terms in `GLOSSARY.md` in code, docs and
+messages, and avoid the words it lists under _Avoid_. Add a term there when a
+new domain concept gets a name.
 
 ## Definition of done
 
@@ -43,6 +45,7 @@ api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used
 e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records
+GLOSSARY.md          the project's domain language: one word per concept
 ```
 
 The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
