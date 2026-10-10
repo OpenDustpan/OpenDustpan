@@ -670,7 +670,7 @@ func TestImportEndsItsUpdateWhenTheCallerGivesUp(t *testing.T) {
 func TestParseCompletion(t *testing.T) {
 	t.Parallel()
 
-	for _, s := range []stack.UpdateStatus{stack.StatusSucceeded, stack.StatusFailed, stack.StatusCancelled} {
+	for _, s := range []stack.UpdateStatus{stack.StatusSucceeded, stack.StatusFailed, stack.StatusCanceled} {
 		if _, err := stack.ParseCompletion(string(s)); err != nil {
 			t.Errorf("ParseCompletion(%q): %v", s, err)
 		}

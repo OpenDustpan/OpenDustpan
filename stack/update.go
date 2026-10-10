@@ -90,13 +90,13 @@ const (
 	StatusRunning    UpdateStatus = "running"
 	StatusSucceeded  UpdateStatus = "succeeded"
 	StatusFailed     UpdateStatus = "failed"
-	StatusCancelled  UpdateStatus = "cancelled" //nolint:misspell // The CLI's wire value; it must not change.
+	StatusCanceled   UpdateStatus = "cancelled" //nolint:misspell // The CLI's wire value; it must not change.
 )
 
 // ParseCompletion validates s as the status a client may complete an update with.
 func ParseCompletion(s string) (UpdateStatus, error) {
 	switch st := UpdateStatus(s); st {
-	case StatusSucceeded, StatusFailed, StatusCancelled:
+	case StatusSucceeded, StatusFailed, StatusCanceled:
 		return st, nil
 	case StatusNotStarted, StatusRunning:
 		return "", fmt.Errorf("%w: %q is not a final status", ErrInvalidUpdate, s)
@@ -107,7 +107,7 @@ func ParseCompletion(s string) (UpdateStatus, error) {
 
 // Terminal reports whether the status is final.
 func (s UpdateStatus) Terminal() bool {
-	return s == StatusSucceeded || s == StatusFailed || s == StatusCancelled
+	return s == StatusSucceeded || s == StatusFailed || s == StatusCanceled
 }
 
 // UpdateID identifies an update. It is opaque to clients.
@@ -244,7 +244,7 @@ func (u Update) complete(tok token.Token, now time.Time, status UpdateStatus) (U
 // stack locked by a crashed client is released.
 // Canceling a canceled update succeeds and changes nothing, for retries.
 func (u Update) cancel(now time.Time) (Update, error) {
-	if u.Status == StatusCancelled {
+	if u.Status == StatusCanceled {
 		return u, nil
 	}
 
@@ -252,7 +252,7 @@ func (u Update) cancel(now time.Time) (Update, error) {
 		return Update{}, fmt.Errorf("%w: cancel %s update", ErrWrongUpdateState, u.Status)
 	}
 
-	return u.end(now, StatusCancelled), nil
+	return u.end(now, StatusCanceled), nil
 }
 
 func (u Update) end(now time.Time, status UpdateStatus) Update {

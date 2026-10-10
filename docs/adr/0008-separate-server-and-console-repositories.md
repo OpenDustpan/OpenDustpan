@@ -23,7 +23,7 @@ even shipped Go files that `go build ./...` picked up.
 ## Consequences
 
 - A feature spanning both is two pull requests, in order.
-- The console cannot rely on unreleased server behaviour; the console's
+- The console cannot rely on unreleased server behavior; the console's
   end-to-end tests run against a released (or pinned) server build.
 - A version handshake (for example the console reading `/api/capabilities`)
   will be needed once the API grows features the console depends on.
