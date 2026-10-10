@@ -60,3 +60,4 @@ both together.
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
+| [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft |
