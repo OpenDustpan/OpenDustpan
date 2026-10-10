@@ -4,6 +4,21 @@
 
 package db
 
+type Checkpoint struct {
+	Namespace     string
+	Project       string
+	Stack         string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	Features      []byte
+	Deployment    []byte
+	SavedAtMs     int64
+}
+
 type Namespace struct {
 	Name            string
 	HomeRegion      string
@@ -19,4 +34,31 @@ type Stack struct {
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
+}
+
+type Update struct {
+	Namespace        string
+	Project          string
+	Stack            string
+	ID               string
+	Kind             string
+	DryRun           bool
+	Status           string
+	Version          int64
+	Revision         int64
+	LeaseDigest      []byte
+	LeaseExpiresAtMs int64
+	CreatedAtMs      int64
+	StartedAtMs      int64
+	EndedAtMs        int64
+}
+
+type UpdateEvent struct {
+	Namespace   string
+	Project     string
+	Stack       string
+	UpdateID    string
+	Sequence    int64
+	TimestampMs int64
+	Payload     []byte
 }
