@@ -318,8 +318,9 @@ linters:
     generated: strict
     warn-unused: true
     rules:
-      # Tests may use numeric literals and longer table-driven functions.
-      - path: _test\.go
+      # Tests may use numeric literals and longer table-driven functions. The
+      # conformance suites are tests that adapters import, so the same applies.
+      - path: (_test\.go$|^store/storetest/|^blob/blobtest/)
         linters:
           - mnd
           - funlen
