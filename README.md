@@ -1,22 +1,36 @@
 # OpenDustpan
 
-Self-hosted state for every stack. OpenDustpan is an open-source backend for
-the Pulumi CLI: point `pulumi login` at your own server and keep your stacks,
-state and update history on infrastructure you control.
+Self-hosted state for your infrastructure as code. OpenDustpan is an
+open-source backend for infrastructure-as-code tools: point your CLI at your
+own server and keep state, history, locks and secrets on infrastructure you
+control, with one set of organizations, access rules and storage for every
+tool your teams use.
 
-OpenDustpan is an independent project. It works with the Pulumi CLI and is not
-affiliated with or endorsed by Pulumi Corporation.
+## Supported tools
+
+Each tool talks to OpenDustpan through the remote-backend protocol it already
+speaks, so the CLI needs no plugin.
+
+| Tool | Protocol | Status |
+| --- | --- | --- |
+| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Login and creating, selecting and listing stacks work. Organizations (ADR 10), updates (`pulumi up`), secrets and state export are in progress (ADR 11). |
+| OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (ADR 9), not built yet. |
+
+More tools follow the same pattern (ADR 12). Every supported version of every
+tool is checked by an end-to-end suite that drives the real CLI.
+
+OpenDustpan is an independent project, built to work with the tools above. It
+is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
+or HashiCorp.
 
 > **Status: pre-alpha.** The architecture, storage adapters and the first API
-> endpoints exist. `pulumi up` does not work yet: updates, checkpoints and
-> leases are next.
+> endpoints exist. No tool can run a full deployment against it yet.
 
 ## Try it
 
 Requires Go 1.27.1+.
 
 ```sh
-go mod tidy                         # first run: fetches and verifies module checksums
 go build -o bin/opendustpan ./cmd/opendustpan
 
 ./bin/opendustpan namespace create acme
@@ -24,11 +38,31 @@ export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 ./bin/opendustpan serve             # SQLite in ./dustpan.db, API on :8080
 ```
 
+Then, with the Pulumi CLI:
+
+```sh
+export PULUMI_ACCESS_TOKEN=$DUSTPAN_ADMIN_TOKEN
+pulumi login http://localhost:8080
+pulumi whoami
+```
+
+Inside a Pulumi project, `pulumi stack init acme/<project>/dev` creates a stack.
+
 The web console is a separate repository,
 [OpenDustpan/console](https://github.com/OpenDustpan/console). Run it in
 development against this server, or build it and let the server host it in one
 process: `opendustpan serve --console-dir <console>/dist`. Sign in with the
 value of `DUSTPAN_ADMIN_TOKEN`.
+
+## Concepts
+
+- **Namespace**: the unit of tenancy, what each tool calls an organization.
+  Every namespace is authoritative in one region (ADR 4, ADR 10).
+- **Stacks and workspaces**: each tool keeps its own model of deployable units
+  and their state (Pulumi stacks, OpenTofu workspaces). They share
+  namespaces, identity, storage and locking rules, not data models.
+- **Storage**: SQLite and local disk for a single node; PostgreSQL and object
+  storage as you grow. Everything is a swappable adapter (ADR 2).
 
 ## Configuration
 
@@ -45,7 +79,8 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
 golangci-lint and the tests with the race detector. Set
-`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite.
+`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
+real CLI versions against the server (it downloads them; see `e2e/doc.go`).
 
 Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 (why things are the way they are).

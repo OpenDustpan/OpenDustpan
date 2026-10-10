@@ -1,9 +1,15 @@
 # OpenDustpan: instructions for AI coding agents and contributors
 
-OpenDustpan is an open-source, self-hostable backend for the Pulumi CLI: a
-drop-in replacement for the managed service. It is not affiliated with Pulumi
-Corporation. Say "works with the Pulumi CLI"; never use Pulumi's name, logo or
-colours as ours.
+OpenDustpan is an open-source, self-hostable backend for infrastructure-as-code
+tools: state, history, locks and secrets for every tool a team uses, behind one
+set of namespaces, identities and storage. Each tool connects through the
+remote-backend protocol it already speaks: the Pulumi CLI through a Pulumi
+Cloud-compatible API, OpenTofu through a TFE-compatible API (ADR 9), more later
+(ADR 12).
+
+OpenDustpan is not affiliated with any tool's vendor. Say "works with the
+Pulumi CLI", "works with OpenTofu", "TFE-compatible API"; never use another
+project's name, logo or colours as ours.
 
 Read `docs/adr/` before changing architecture. If a change contradicts an ADR,
 write a new ADR first.
@@ -26,19 +32,38 @@ Do not report work as finished if any of these fail. Say what fails instead.
 dustpan.go, web.go   package dustpan: the SDK entry point (NewServer + options)
 cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that may exit.
 namespace/           domain: namespaces, home region, failover-version fencing
-stack/               domain: projects, stacks; the update cycle (Updates: leases, checkpoints, events)
-secret/              domain: per-stack envelope encryption for the Pulumi service secrets provider
-workspace/           domain: OpenTofu workspaces, locks, state versions (ADR 9)
+stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
+secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
+workspace/           domain (OpenTofu): workspaces, locks, state versions (ADR 9)
 identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
 blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
-api/pulumi/          HTTP adapter for the Pulumi CLI API (also used by the console)
-e2e/                 end-to-end suite driving real Pulumi CLI and OpenTofu binaries (make e2e)
+api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
+e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records
 ```
 
 The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
+
+## A shared core, one adapter per tool (ADR 12)
+
+- Shared packages (`namespace`, `identity`, `blob`, `secret`, the fence) stay
+  tool-neutral: no field, method or error in them may exist only because one
+  tool needs it.
+- Each tool's model of deployable units and state lives in its own domain
+  package (`stack` for the Pulumi CLI, `workspace` for OpenTofu). Do not merge
+  them or share types between them; share concepts through the core instead.
+- Each tool's wire protocol lives in its own HTTP adapter under `api/<tool>/`,
+  with its own route prefix. Adapters never call each other.
+- A tool is supported only once the e2e suite drives its real CLI. Every
+  endpoint lands with its e2e step first.
+- Cross-tool features never merge tool models (ADR 13). Shared code calls a
+  stack or workspace a "unit", referenced as tool + namespace + the tool's own
+  name; authorization uses tool-neutral actions on those references; the
+  console's cross-tool views read the inventory projection that each tool
+  package publishes to in the same transaction as its own writes. User-facing
+  text keeps each tool's own words.
 
 ## Backend rules (Go)
 
@@ -61,18 +86,20 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
   table-driven where it helps. Use `t.Context()`.
-- The Pulumi CLI API is not a published spec. Any endpoint change must be
-  checked against real CLI behaviour with `make e2e`; the same holds for the
-  TFE-compatible API and OpenTofu.
+- The backend protocols implemented so far are not published, versioned specs
+  we can implement from. Any endpoint change must be checked against the real
+  CLI with `make e2e`.
 
-## The API is a contract
+## The APIs are contracts
 
-Two clients depend on `/api`: the Pulumi CLI and the console, which ships from
-another repository on its own schedule.
+Every tool's CLI depends on its API, and the console, which ships from another
+repository on its own schedule, depends on them too.
 
 - Never remove or rename a field, endpoint or status code that a released
-  console or CLI version uses. Add new fields; deprecate old ones first.
-- Response shapes are camelCase JSON, errors are `{"code": <status>, "message": "..."}`.
+  console or a supported CLI version uses. Add new fields; deprecate old ones first.
+- Each API keeps the shapes its tool expects. The Pulumi Cloud-compatible API:
+  camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
+  TFE-compatible API: JSON:API documents and errors.
 - An API change the console needs lands here first, released, then in the console.
 
 ## Voice (UI text, errors, docs)
