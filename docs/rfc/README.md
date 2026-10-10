@@ -64,4 +64,4 @@ both together.
 | [13](0013-policy-and-approvals.md) | Policy and approvals | draft |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | draft |
 | [15](0015-output-sharing.md) | Output sharing between units | draft |
-| [16](0016-egress-proxy.md) | Egress proxy for jobs, with credential injection | draft |
+| [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
