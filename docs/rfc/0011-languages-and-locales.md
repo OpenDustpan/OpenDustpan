@@ -80,10 +80,18 @@ users.
 
 ### How translations are made and kept
 
-- English is the source language, written in ASD-STE100 (ADR 14). The
-  ASD-STE100 skill uses US spelling, while the brand book and parts of the
-  docs use UK spelling ("colour"). The source picks one, and the other English
-  ships as a small variant catalog that only lists the words that differ. STE was
+- English is the source language, written in ASD-STE100 (ADR 14), with
+  Oxford spelling: British spelling with `-ize` endings ("organization",
+  "colour", "licence", "behaviour", "centre"). The docs already write it this
+  way, and it is the spelling of many international bodies (the UN, ISO, the
+  Oxford University Press). Its `-ize` endings also match the tools' own
+  words ("organization" in both the Pulumi and the TFE APIs).
+- Identifiers keep their own spelling: CSS `color`, API fields, flags and
+  commands are machine-made and stay verbatim. The spelling rule applies to
+  prose only.
+- English (US) ships as a small variant catalog that lists only the words that
+  differ ("color", "license", "behavior", "center"). English (UK) is the
+  source itself. STE was
   made in part to make translation easier and more exact.
 - Each language is one catalog file in the console repository. A message uses
   named placeholders, and the product name is a placeholder too, so that
