@@ -105,3 +105,4 @@ both together.
 | [54](0054-sources-beyond-git.md) | Sources other than git | draft |
 | [55](0055-environment-promotion.md) | Environment promotion and comparison | draft |
 | [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | draft |
+| [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft |
