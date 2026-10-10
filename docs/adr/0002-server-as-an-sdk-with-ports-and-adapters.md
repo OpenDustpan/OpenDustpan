@@ -15,7 +15,7 @@ single backend choice fits all of them, and forks per backend would rot.
   Temporal's server SDK. `cmd/opendustpan` is a thin main that wires the
   built-in adapters from flags and environment variables. Anyone needing a
   different adapter writes their own main.
-- Code is organised by domain (bounded context) as deep modules: `namespace`,
+- Code is organized by domain (bounded context) as deep modules: `namespace`,
   `stack`, `identity`, `blob`, each with a small public service and the
   interfaces (ports) it consumes. Adapters live elsewhere (`store/`, `blob/fs`,
   `api/`) and depend on the domain, never the reverse; depguard enforces it.
