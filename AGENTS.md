@@ -9,7 +9,9 @@ Cloud-compatible API, OpenTofu through a TFE-compatible API (RFC 1), more later
 
 OpenDustpan is not affiliated with any tool's vendor. Say "works with the
 Pulumi CLI", "works with OpenTofu" and "TFE-compatible API". Never use another
-project's name, logo or colors as ours.
+project's name, logo or colors as ours. As a label for a tool, in the console
+and in API values, write "Pulumi" or "OpenTofu" (see "Tool name" in
+`GLOSSARY.md`).
 
 Read `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
 decision. An RFC is an open question (ADR 15). For an open question, write an
