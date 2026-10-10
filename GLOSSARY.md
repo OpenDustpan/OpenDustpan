@@ -12,6 +12,10 @@ namespaces, identities and storage.
 An infrastructure-as-code CLI that keeps its state in OpenDustpan through the remote-backend protocol it already speaks, for example the Pulumi CLI or OpenTofu.
 _Avoid_: Client, integration, provider
 
+**Tool name**:
+The short name of a tool, as a label in the console, the API and the docs: "Pulumi" or "OpenTofu". In a claim of compatibility, or where the text means the program, write "the Pulumi CLI". Never write "Pulumi" alone where a reader can think of Pulumi Cloud or of the company.
+_Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform" for OpenTofu
+
 **Namespace**:
 The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
@@ -68,7 +72,7 @@ _Avoid_: API key, password
 A tool-neutral operation that a principal asks to do, such as read state or write state. Access rules allow or deny actions on namespaces and units.
 _Avoid_: Permission, verb, scope
 
-### Pulumi CLI
+### Pulumi
 
 **Stack**:
 The unit of the Pulumi CLI, named `<namespace>/<Pulumi project>/<stack>`.
