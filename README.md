@@ -89,4 +89,4 @@ Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 
 ## License
 
-Not yet chosen.
+OpenDustpan is under the [Apache License 2.0](LICENSE).
