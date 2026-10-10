@@ -29,6 +29,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 ## Layout
 
 ```
+.agents/skills/      agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 dustpan.go, web.go   package dustpan: the SDK entry point (NewServer + options)
 cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that may exit.
 namespace/           domain: namespaces, home region, failover-version fencing
@@ -42,7 +43,6 @@ api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used
 e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records
-.agents/skills/      agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
 ```
 
 The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
