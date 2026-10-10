@@ -66,22 +66,43 @@ writer path has one.
 - Every edit makes a new profile version. A Pulumi update or an OpenTofu run
   records which version it read.
 
-### 2. Write-back to git
+### 2. Forge connections
 
-- A **source** links a unit to a git repository, a ref and a directory. RFC 6
-  already uses the word for what a runner checks out.
-- A **write-back** is an API edit whose home is git. OpenDustpan turns it into
+Remote runs (RFC 6) need git integration anyway, with or without write-back:
+
+- A webhook from the forge starts a job on a push or a review request.
+- The backend posts a status and the plan result on the review request.
+- In apply before merge, the backend merges the review request.
+
+So a **forge connection** is part of the core: an app installation (a GitHub
+App, a GitLab application, a Forgejo token) that the backend holds, one per
+namespace or more. Each forge is an adapter behind a port (ADR 2). The backend
+uses it to read files and post results. It can also give a runner a
+short-lived, read-only token for one repository, so that a runner needs no git
+credentials of its own.
+
+**Push access is optional.** A forge connection without write access to
+repository contents gives remote runs and nothing more. Write-back is off for
+it.
+
+### 3. Write-back to git
+
+- A **source** links a unit to a repository on a forge connection, a ref and
+  a directory. RFC 6 already uses the word for what a runner checks out.
+- A **write-back** is an API edit whose home is git. The backend turns it into
   a commit on the unit's source.
-- **A runner does the commit.** RFC 6 says the backend stores neither the
-  code nor the git credentials. Write-back keeps that rule: the backend queues
-  a write-back job, and a runner with write access clones, edits, commits and
-  pushes. A server that can push to the infrastructure repository can run
-  code in every pipeline that reads it. That is a bigger attack surface than
-  the state itself.
+- **The backend commits through the forge's API.** Writing a data file is not
+  running an infrastructure-as-code tool, so RFC 6's principle does not apply.
+  The forge APIs create a commit without a clone (GitHub's contents and Git
+  data APIs, GitLab's commits API with actions, Forgejo's contents API). So
+  the backend needs no git binary, no working copy and no runner. The edit
+  lands in seconds, even when no runner is online.
 - **Delivery.** A write-back goes as a **review request** by default: a new
-  branch, and a pull request or merge request through the forge's API. A
-  direct push to the source's ref is an option per source. Branch protection
-  in the forge stays in charge, and OpenDustpan does not go around it.
+  branch, and a pull request or merge request. A direct push to the source's
+  ref is an option per source. The forge's branch protection decides what the
+  connection can push to. OpenDustpan does not go around it. On GitHub, write
+  access to contents covers every branch, so only branch protection or
+  rulesets keep the connection off `main`.
 - **Only structured files.** Write-back edits data files, never program code:
   - Pulumi: `Pulumi.<stack>.yaml` config keys. Secret values are written as
     ciphertext from the `secret` package, which is how the Pulumi CLI keeps
@@ -91,17 +112,22 @@ writer path has one.
     no comments. Editing hand-written HCL `.tfvars` is a later option.
   - OpenTofu has no encrypted form for a variable in a file. So a secret
     OpenTofu variable can never have git as its home. Its home is a profile.
-- **Conflicts.** A write-back records the commit and the file content it was
-  based on. If the file changed since then, the runner applies the edit only
-  when the edited keys did not change. Otherwise the job fails with a conflict,
-  and the console shows both values. A silent overwrite loses data, and the
-  project blocks only on data loss or corruption (RFC 9).
+- **Conflicts.** The forge APIs check the base for us: GitHub's contents API
+  takes the blob SHA of the file it replaces, and GitLab's commit actions take
+  the last commit ID of the file. If the file changed since the edit started,
+  the backend reads it again and applies the edit only when the edited keys
+  did not change. Otherwise the edit fails with a conflict, and the console
+  shows both values. A silent overwrite loses data, and the project blocks
+  only on data loss or corruption (RFC 9).
 - **Authorship.** The commit author is the principal who made the edit. The
-  committer is the runner's identity, which can sign the commit. A trailer
-  links the commit to the write-back in OpenDustpan, and the console links
-  back to the commit.
+  committer is the forge connection. A trailer links the commit to the
+  write-back in OpenDustpan, and the console links back to the commit.
+- **Risk.** With push access, the backend can change code that every pipeline
+  on that repository runs. The access tokens and the forge app's key then
+  guard more than the state. Review requests by default, branch protection,
+  and an audit entry for every write-back limit this. They do not remove it.
 
-### 3. What a run applied
+### 4. What a run applied
 
 Each Pulumi update and OpenTofu run records the commit it ran on, when that is
 known:
@@ -116,7 +142,7 @@ known:
 With this, the console can show "main is 3 commits ahead of what is applied"
 for each unit.
 
-### 4. Existing projects
+### 5. Existing projects
 
 Write-back must work on a repository that OpenDustpan did not create. An
 operator links each unit to a source. For Pulumi stacks, the git details of
@@ -158,31 +184,41 @@ The two tools differ in one place that matters:
 
 ## Options
 
-1. **Profiles, write-back by runners, review requests by default** (the
-   proposal).
+1. **Profiles, and write-back by the backend through a forge connection,
+   with review requests by default** (the proposal).
 2. **Do nothing.** Edits happen in git only. The console only reads. This
    stays valid, and every part of the proposal is a feature that a team can
    turn off (RFC 7).
 3. **Profiles only.** API edits go to profiles, never to git. This is the
    Pulumi Cloud model. It is simple, and it moves the record out of git for
    every value the console edits.
-4. **Write-back from the server.** The server holds a forge app key and
-   commits itself. Edits are faster and need no runner. It breaks RFC 6's rule
-   on git credentials, and it makes the server a way into every pipeline.
+4. **Write-back by a runner.** A runner with its own git credentials clones,
+   edits and pushes. The backend then needs no push access. But an edit waits
+   for a runner, the runner needs a git client and a working copy, and the
+   backend still needs a forge connection for remote runs.
 5. **Two-way sync.** The server keeps a copy of the config and syncs it with
    git in both directions. This breaks the principle above. It is listed to
    record that it was considered and rejected.
 
 ## Proposed glossary entries
 
+**Forge**:
+A git hosting service with an API, such as GitHub, GitLab or Forgejo.
+_Avoid_: VCS provider, SCM, git host
+
+**Forge connection**:
+The credentials that let the backend use one forge for a namespace: read
+files, take webhooks, post results and, if allowed, push.
+_Avoid_: VCS integration, app (alone)
+
 **Source**:
-The git repository, ref and directory that hold the program and config of a
-unit.
+The repository on a forge connection, the ref and the directory that hold the
+program and config of a unit.
 _Avoid_: Repo (in docs), VCS connection, origin
 
 **Write-back**:
-An edit made through the API to a value whose home is git. A runner delivers
-it as a commit.
+An edit made through the API to a value whose home is git. The backend
+delivers it as a commit through a forge connection.
 _Avoid_: Sync, push, commit-back
 
 **Review request**:
@@ -198,13 +234,17 @@ _Avoid_: Lock (for Pulumi stacks), reservation
 
 ## Open questions
 
-- Which forges come first for review requests: GitHub, GitLab, Forgejo?
-  Each one is an adapter behind a port (ADR 2).
-- Does a write-back job need a runner label of its own, so that only runners
-  with write access to git claim it?
-- How does the runner edit `Pulumi.<stack>.yaml` and keep comments and key
+- Which forges come first: GitHub, GitLab, Forgejo? Each one is an adapter
+  behind a port (ADR 2).
+- Is a plain git server with no API (SSH only) in scope? It would need a git
+  client in the backend, and it has no review requests.
+- How does the backend edit `Pulumi.<stack>.yaml` and keep comments and key
   order? This may need a YAML library with a node API, which is a new
   dependency.
+- Does a namespace have one forge connection, or many (one per forge, or one
+  per group of repositories)?
+- Where does the forge app's private key live: in the database, encrypted by
+  the key-encryption key, or outside it like the key-encryption key itself?
 - Can a write-back touch more than config? Pulumi YAML programs and OpenTofu
   `import`, `moved` and `removed` blocks are structured. Each is a later RFC.
 - Is a hold its own concept in the core, or a feature of each tool package?
