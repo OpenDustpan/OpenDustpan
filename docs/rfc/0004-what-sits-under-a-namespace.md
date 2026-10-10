@@ -66,6 +66,18 @@ navigation go away or become secondary.
   such a view touches data residency.
 - Which tags does the inventory index: all of them, or a fixed set?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- An owning team per unit, so that approvals and alerts go to the owner
+  (Resourcely, Terramate).
+- Attach profiles, policies and runner labels to units by label (Spacelift
+  `autoattach:`), and bulk tagging (env zero).
+- Folders as prefixed labels, so that one unit sits in many groups
+  (Spacelift).
+
 ## Outcome
 
 None yet.

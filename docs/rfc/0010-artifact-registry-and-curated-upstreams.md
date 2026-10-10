@@ -90,6 +90,17 @@ No tool needs a plugin (ADR 12).
   the server?
 - Which scanners beyond govulncheck are built in, and which are adapters?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- Publish modules and providers from git tags, with tests that gate a version
+  (HCP Terraform, Spacelift, Harness, OTF).
+- Version lifecycle: supported, update required, deprecated, revoked (HCP
+  Terraform, Harness).
+- Which units use which version, for upgrades (RFC 56).
+
 ## Outcome
 
 None yet.

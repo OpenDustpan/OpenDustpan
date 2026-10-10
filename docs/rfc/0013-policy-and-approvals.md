@@ -209,6 +209,22 @@ _Avoid_: Review (which happens in the forge), sign-off
   enable) for the Pulumi CLI, or only `requiredPolicies` with packs from
   bundles?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- Enforcement levels (advisory, soft and hard mandatory), exemptions and owner
+  overrides (HCP Terraform, Terrakube, Stategraph).
+- Policy stages beyond edits and plans: sign-in, push and trigger,
+  notification, workspace save, state before and after apply (Spacelift,
+  Harness).
+- The Pulumi CLI's `pulumi policy publish` and `enable` endpoints, and
+  versioned policy packs.
+- Approval details: auto-approve when nothing changes, timeout, named
+  approvers by email, the strictest result wins (env zero, Scalr, Harness).
+- Authoring and testing tools are RFC 50; plan-bound approvals are RFC 28.
+
 ## Outcome
 
 None yet.

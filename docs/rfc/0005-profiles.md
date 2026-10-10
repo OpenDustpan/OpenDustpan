@@ -103,6 +103,23 @@ The person's own settings page is then "Account", never "Profile".
 - Is option 4 worth a new ADR, so that OpenTofu on a workstation can read a
   profile?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- Compatibility with the Pulumi CLI's `pulumi env` commands and the ESC API,
+  beyond stack config references.
+- Secret rotation and rotation webhooks (Pulumi ESC).
+- Precedence shown in the console: which value wins and why (HCP Terraform's
+  OVERWRITTEN flag).
+- Typed values with required, read-only, regex and dropdowns, and descriptions
+  that pass down (env zero).
+- A separate credential per operation: read-only for plan and preview,
+  read-write for apply (HCP Terraform's plan and apply roles).
+- OIDC audiences per cloud (Spacelift, env zero), and external stores such as
+  Vault at run time (env zero, Harness).
+
 ## Outcome
 
 None yet.
