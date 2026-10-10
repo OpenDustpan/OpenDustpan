@@ -59,3 +59,4 @@ both together.
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | draft |
 | [9](0009-themes-and-white-labelling.md) | Themes and white-labelling | draft |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
+| [11](0011-languages-and-locales.md) | Languages and locales | draft |
