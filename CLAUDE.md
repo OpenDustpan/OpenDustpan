@@ -58,6 +58,12 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   with its own route prefix. Adapters never call each other.
 - A tool is supported only once the e2e suite drives its real CLI. Every
   endpoint lands with its e2e step first.
+- Cross-tool features never merge tool models (ADR 13). Shared code calls a
+  stack or workspace a "unit", referenced as tool + namespace + the tool's own
+  name; authorization uses tool-neutral actions on those references; the
+  console's cross-tool views read the inventory projection that each tool
+  package publishes to in the same transaction as its own writes. User-facing
+  text keeps each tool's own words.
 
 ## Backend rules (Go)
 
