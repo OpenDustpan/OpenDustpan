@@ -78,6 +78,10 @@ _Avoid_: Permission, verb, scope
 The unit of the Pulumi CLI, named `<namespace>/<Pulumi project>/<stack>`.
 _Avoid_: Environment, workspace
 
+**Stack ID**:
+The stable, opaque identifier of a stack, with the prefix `stk-` (ADR 19). A rename keeps it. A new stack with the name of a deleted stack gets a new Stack ID.
+_Avoid_: Unit ID, stack key, UUID
+
 **Pulumi project**:
 A Pulumi program. Stack names are unique within one Pulumi project.
 _Avoid_: Project (without a qualifier), application
