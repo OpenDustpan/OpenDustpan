@@ -32,7 +32,7 @@ a namespace, without it looking like a decision.
 - An agent writes an RFC for an open question and an ADR only after the
   project owner accepts a decision. `CLAUDE.md` says so.
 - ADR 12 asks for an ADR for each new tool. Under this ADR, a new tool starts
-  as an RFC, and its ADR comes when the RFC is accepted.
+  as an RFC, and its ADR comes when the project owner accepts the RFC.
 - Code can still run ahead of a decision, as the `workspace` package does for
   RFC 1. Such code cites the RFC, not an ADR, so readers see that it is not
   decided.

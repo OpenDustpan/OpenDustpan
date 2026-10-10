@@ -16,8 +16,8 @@ speaks, so the CLI needs no plugin.
 | Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Login and creating, selecting and listing stacks work. Organizations (RFC 2), updates (`pulumi up`), secrets and state export are in progress (RFC 3). |
 | OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (RFC 1), not built yet. |
 
-More tools follow the same pattern (ADR 12). Every supported version of every
-tool is checked by an end-to-end suite that drives the real CLI.
+More tools follow the same pattern (ADR 12). An end-to-end suite that drives
+the real CLI checks every supported version of every tool.
 
 OpenDustpan is an independent project, built to work with the tools above. It
 is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
