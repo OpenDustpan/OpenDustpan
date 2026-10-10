@@ -55,8 +55,8 @@ type UpdateStore interface {
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
-// CheckpointStore persists checkpoints. Adapters typically keep the metadata
-// in SQL and the deployment in the blob port.
+// CheckpointStore persists checkpoints. Only the latest checkpoint of a stack
+// is read back; an adapter may keep deployments in the blob port.
 type CheckpointStore interface {
 	// PutCheckpoint saves cp as the stack's latest state, in the same
 	// transaction as checking that update cp.Update is still running under

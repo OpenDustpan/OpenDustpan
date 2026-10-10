@@ -27,7 +27,8 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// Store implements namespace.Store and stack.Store on SQLite.
+// Store implements namespace.Store, stack.Store and the update-cycle ports
+// (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on SQLite.
 type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
@@ -122,20 +123,7 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
-		if errors.Is(err, sql.ErrNoRows) {
-			return namespace.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("read failover version: %w", err)
-		}
-
-		if version != fence.FailoverVersion {
-			return namespace.ErrFenced
-		}
-
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		n, err := q.CreateStack(ctx, db.CreateStackParams{
 			Namespace:   row.Namespace,
 			Project:     row.Project,
@@ -218,6 +206,27 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	}
 
 	return nil
+}
+
+// inFencedTx runs fn in a transaction that first checks fence. The write lock
+// is held from the start, so the failover version cannot change before commit.
+func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
+		if errors.Is(err, sql.ErrNoRows) {
+			return namespace.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("read failover version: %w", err)
+		}
+
+		if version != fence.FailoverVersion {
+			return namespace.ErrFenced
+		}
+
+		return fn(q)
+	})
 }
 
 func (s *Store) migrate(ctx context.Context) error {

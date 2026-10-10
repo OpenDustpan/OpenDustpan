@@ -6,6 +6,9 @@
 //		t.Parallel()
 //		storetest.Run(t, func(t *testing.T) storetest.Store { return newMyStore(t) })
 //	}
+//
+// RunUpdates covers the update-cycle ports (stack.UpdateStore,
+// stack.CheckpointStore, stack.EventStore) the same way.
 package storetest
 
 import (
