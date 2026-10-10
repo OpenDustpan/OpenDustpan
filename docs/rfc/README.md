@@ -53,3 +53,5 @@ both together.
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | discussing |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | discussing |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | draft |
+| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
+| [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
