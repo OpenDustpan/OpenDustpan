@@ -270,6 +270,17 @@ _Avoid_: Lock (for Pulumi stacks), reservation
 - Does the console show a value's home next to the value, so that people know
   whether an edit makes a commit?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- More forges behind the Forge port: Bitbucket Cloud and Server, Azure DevOps,
+  GitHub Enterprise (Atlantis, Terrakube, Terramate).
+- Unit settings kept in the repository per branch, such as
+  `.spacelift/config.yml` (Spacelift, env zero), within the one-home rule.
+- Pull request details are RFC 27; stored plans are RFC 28.
+
 ## Outcome
 
 None yet.
