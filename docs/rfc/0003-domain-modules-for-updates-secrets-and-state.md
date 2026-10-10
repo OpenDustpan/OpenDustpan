@@ -12,6 +12,7 @@ Status: under discussion. It was proposed ADR 11 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
 Part 1, the Pulumi update cycle, is accepted as ADR 20.
+Part 2, secrets, is accepted as ADR 23.
 
 ## Context
 
