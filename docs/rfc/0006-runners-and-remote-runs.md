@@ -74,6 +74,38 @@ This principle is the first thing an accepted ADR must record.
 What starts a job comes later, one trigger at a time: a request from the
 console or the API, a git webhook, a schedule.
 
+## Job steps
+
+Teams run more than the tool: `terragrunt`, `terramate`, `atmos`, a version
+manager such as `tenv`, a script that makes files, a check against an
+internal API. A job is a list of steps, not one command.
+
+- **Hooks.** Commands that run at fixed points: before init, after init,
+  before the plan or preview, after it, before the apply or update, after it.
+  A hook that fails stops the job, unless the hook is marked as allowed to
+  fail.
+- **A wrapper in place of the tool.** The job can run a wrapper command in
+  place of `tofu` or `pulumi`, for example `terragrunt plan`. The wrapper must
+  still use OpenDustpan as the backend: for Terragrunt, a `generate` block
+  writes a `cloud` block for the TFE-compatible API.
+- **One job, one unit.** A job produces one Pulumi update or one OpenTofu run.
+  `terragrunt run-all` changes many workspaces in one command, so it does not
+  fit one job. It needs one job for each Terragrunt unit, or a job kind that
+  produces many runs.
+- **Tools on the runner.** The runner does not download tools. The customer
+  puts them on the runner, or in the container image that the runner starts
+  for each job.
+- **Where steps are defined.** In a file in the source, like a CI file, or in
+  the job settings in OpenDustpan, or in a blueprint (RFC 14). A file in the
+  source lets anyone who can open a review request change the steps.
+- **Logs and secrets.** Step output goes to the job log like the tool's
+  output. The runner masks values that it got as secrets from a profile.
+
+A plan already runs code: a Pulumi preview runs the program, and an OpenTofu
+plan runs providers and `external` data sources. So hooks add little new
+risk. The rule that matters is older than hooks: never run a job for a review
+request from an untrusted fork with credentials that can change production.
+
 ## Options
 
 1. **Runners as above.**
@@ -111,6 +143,10 @@ _Avoid_: Deployment, hosted run
 
 ## Open questions
 
+- Does a runner run each job in a fresh container (like GitLab's Docker
+  executor), or directly on its host? A container gives each job a clean
+  set of tools and files.
+- Does `terragrunt run-all` get a job kind that produces many runs?
 - Is a job a domain package of its own (`job`), next to `stack` and
   `workspace`? It refers to units of both tools through unit references.
 - Which first trigger: the console, the API or a git webhook?
