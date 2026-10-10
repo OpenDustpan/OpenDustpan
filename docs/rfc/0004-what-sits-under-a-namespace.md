@@ -99,9 +99,11 @@ finding and filtering.
 - A group is soft (see Constraints): no home region, no fence, cheap to
   rename. A unit keeps its own name and URL in its tool. A group is never a
   prefix of a unit name.
-- Groups can nest (`payments`, `payments/ledger`), so that a rule on
-  `payments` covers `payments/ledger`. Whether nesting is worth its cost is
-  open.
+- Groups do not nest (owner input, 2026-10-11). TFE projects are flat, and a
+  group name follows the TFE project name rules from the start: letters,
+  digits, inner spaces, `-` and `_`, 3 to 40 characters, unique in the
+  namespace without regard to case. So every group maps to a TFE project with
+  no translation.
 - Access rules, profile attachments and output sharing can name a group as
   their object, beside a single unit or the whole namespace (ADR 17 actions
   stay the same: the group only widens the object).
@@ -143,7 +145,31 @@ namespace an organization):
 - The console keeps each tool's words: "project" on OpenTofu pages, "Pulumi
   project" on Pulumi pages, and our own word for the group in shared views.
 
-Open: whether nested groups fit the TFE protocol, which has flat projects.
+### How a Pulumi stack gets a group
+
+The Pulumi CLI has no field for a group. `pulumi stack init` sends only
+`<org>/<project>/<stack>`. So the server places the stack:
+
+1. **Placement rules** in the namespace match the Pulumi project and the
+   stack name, first match wins. For example: project `payments`, stack
+   `prod*`, to group `payments-prod`; project `payments`, any stack, to group
+   `payments`. Rules by stack name are what split `dev` from `prod` inside
+   one Pulumi project.
+2. The server then checks that the caller may create units in that group. The
+   CLI gets an ordinary error if not, which names the group and the rule.
+3. No rule matches: the namespace's default group, or a refusal, as the
+   namespace chooses.
+4. A stack made by a blueprint, the console or the API names its group
+   directly.
+5. A person with rights on both groups can move a stack later. The move shows
+   what changes first: access, profiles, and which output reads stop.
+
+After that, the CLI sees no difference. `pulumi up`, `pulumi stack ls` and
+stack references work as before, and the group only decides who may do what,
+which profiles attach and who may read outputs.
+
+Open: can a stack tag (if the CLI sends one at creation) name the group, as a
+request that the server still checks? Needs a check with `make e2e`.
 
 ### Open questions for groups
 
@@ -151,8 +177,8 @@ Open: whether nested groups fit the TFE protocol, which has flat projects.
   folder, system, collection. "Space" is Spacelift's word for a similar,
   harder construct.
 - Can a unit be in more than one group? One group is simple to reason about
-  for access. Many groups match how teams think (a unit can be "payments"
-  and "pci").
+  for access and maps to one TFE project. Labels can cover the rest (a unit
+  can be in group `payments` with label `pci`).
 - How do rules from two groups combine: union of allows, with any deny
   winning (RFC 19)?
 - Does a blueprint (RFC 14) choose the group of the unit it makes, and can
