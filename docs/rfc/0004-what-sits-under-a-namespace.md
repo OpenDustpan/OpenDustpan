@@ -78,6 +78,62 @@ worked into the proposal above.
 - Folders as prefixed labels, so that one unit sits in many groups
   (Spacelift).
 
+## Owner input, 2026-10-11
+
+The project owner asks for a grouping of units that teams manage
+themselves. The namespace is an operator construct. Teams still want to group
+their stacks and workspaces in a way that matches their work, and to use
+that group for three things:
+
+- access rules (who may read, plan, apply or approve),
+- attaching profiles (RFC 5),
+- output sharing (RFC 15): "every unit in this group may read my outputs".
+
+This moves the leaning from option 4 towards option 3. Facets stay, for
+finding and filtering.
+
+### A sketch of option 3: groups
+
+- A **group** is a named set of units inside one namespace, from any tool.
+  Team leads make and change groups. Operators do not have to.
+- A group is soft (see Constraints): no home region, no fence, cheap to
+  rename. A unit keeps its own name and URL in its tool. A group is never a
+  prefix of a unit name.
+- Groups can nest (`payments`, `payments/ledger`), so that a rule on
+  `payments` covers `payments/ledger`. Whether nesting is worth its cost is
+  open.
+- Access rules, profile attachments and output sharing can name a group as
+  their object, beside a single unit or the whole namespace (ADR 17 actions
+  stay the same: the group only widens the object).
+
+### Membership: explicit, not by label
+
+If a group used labels as its membership rule, anyone who can edit a unit's
+labels could move the unit into a group with wider rights or into a group
+that reads secret outputs. So a group that carries access rules, profiles or
+output sharing has explicit members:
+
+- Adding a unit to a group needs a right on the unit and a right on the
+  group. Removing it needs the right on the group.
+- Each change is audited and passes the policy check, like any write.
+- Labels stay useful for views. A saved view (an inventory filter) can look
+  like a group, but it never grants anything.
+
+### Open questions for groups
+
+- The word. Not "project" (both tools use it). Candidates: group, space,
+  folder, system, collection. "Space" is Spacelift's word for a similar,
+  harder construct.
+- Can a unit be in more than one group? One group is simple to reason about
+  for access. Many groups match how teams think (a unit can be "payments"
+  and "pci").
+- How do rules from two groups combine: union of allows, with any deny
+  winning (RFC 19)?
+- Does a blueprint (RFC 14) choose the group of the unit it makes, and can
+  the person who makes the unit change it?
+- Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
+  group?
+
 ## Outcome
 
 None yet.
