@@ -166,6 +166,19 @@ _Avoid_: Parameter, variable (which is OpenTofu's word), field
 - Does a blueprint live in a namespace, and can units in other namespaces use
   it?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- A share link to the form only, with no editor (Spacelift).
+- Attach a blueprint to units that already exist; locked fields that reject a
+  conflicting edit with a list of conflicts (Harness).
+- Make a blueprint from an existing module by selecting attributes
+  (Resourcely); questionnaires before provisioning; account vending
+  (Gruntwork).
+- A time to live as a blueprint field (RFC 43).
+
 ## Outcome
 
 None yet.

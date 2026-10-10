@@ -65,3 +65,43 @@ both together.
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | draft |
 | [15](0015-output-sharing.md) | Output sharing between units | draft |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
+| [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
+| [18](0018-state-operations.md) | State operations: history, restore, locks and leases | draft |
+| [19](0019-users-teams-roles.md) | Users, teams and roles | draft |
+| [20](0020-access-tokens.md) | Access tokens and machine identity | draft |
+| [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | draft |
+| [22](0022-audit-log.md) | Audit log | draft |
+| [23](0023-events-and-notifications.md) | Events, notifications and webhooks | draft |
+| [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
+| [25](0025-drift-detection.md) | Drift detection and remediation | draft |
+| [26](0026-unit-status.md) | Unit status in the inventory | draft |
+| [27](0027-pull-request-automation.md) | Pull request automation | draft |
+| [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | draft |
+| [29](0029-existing-ci.md) | Using an existing CI as the executor | draft |
+| [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft |
+| [31](0031-kubernetes.md) | Kubernetes runner and operator integrations | draft |
+| [32](0032-object-storage.md) | Object storage adapters | draft |
+| [33](0033-customer-managed-keys.md) | Customer-managed keys | draft |
+| [34](0034-server-observability.md) | Observing the OpenDustpan server | draft |
+| [35](0035-packaging.md) | Packaging and installation | draft |
+| [36](0036-high-availability.md) | High availability and scale-out | draft |
+| [37](0037-federation.md) | One view over many OpenDustpan installs | draft |
+| [38](0038-upgrade-checks.md) | Upgrade checks | draft |
+| [39](0039-reading-state.md) | Reading state contents | draft |
+| [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
+| [41](0041-agent-interface.md) | An interface for AI agents | draft |
+| [42](0042-migration-import.md) | Migration from other backends | draft |
+| [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
+| [44](0044-bulk-operations.md) | Bulk operations | draft |
+| [45](0045-cost-estimation.md) | Cost estimation | draft |
+| [46](0046-insights.md) | Insights: dashboards and reports | draft |
+| [47](0047-discovery-and-codification.md) | Discovery and codification of unmanaged resources | draft |
+| [48](0048-management-as-code.md) | Managing OpenDustpan as code | draft |
+| [49](0049-run-tasks.md) | Run tasks: external checks with callbacks | draft |
+| [50](0050-policy-authoring.md) | Policy authoring, testing and compliance packs | draft |
+| [51](0051-change-management-integrations.md) | Change management and portal integrations | draft |
+| [52](0052-console-core.md) | Console core views and navigation | draft |
+| [53](0053-terraform-cli.md) | Terraform CLI support | draft |
+| [54](0054-sources-beyond-git.md) | Sources other than git | draft |
+| [55](0055-environment-promotion.md) | Environment promotion and comparison | draft |
+| [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | draft |

@@ -138,6 +138,16 @@ stack's outputs. Both need a check before any promise.
 - Is the job token's unit binding the same identity that RFC 13's policy input
   calls the principal for a job?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- Typed output contracts: versioned schemas for outputs, with version ranges
+  on the consumer (Massdriver).
+- A blast-radius view over the dependency edges (Harness, Atmos Pro).
+- Downstream runs when an output changes are RFC 24.
+
 ## Outcome
 
 None yet.

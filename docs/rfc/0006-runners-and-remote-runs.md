@@ -158,6 +158,30 @@ _Avoid_: Deployment, hosted run
 - Does the Pulumi CLI's own "deployments" API matter, or do runners only use
   the update API?
 
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- Log secret masking, such as `::add-mask` (Spacelift).
+- Run timeouts, a kill after no log output, expiry of queued jobs (Spacelift,
+  Pulumi).
+- Retry with the same parameters, run-scoped variables, a debug-log toggle
+  (Scalr).
+- Run priority, serialization by a key, pause per unit or namespace
+  (Spacelift, Harness, Pulumi).
+- Run options: refresh-only, replace or target resources, allow empty apply
+  (HCP Terraform, Spacelift).
+- Jobs for import, `state rm` and `state mv` (Atlantis).
+- Hooks on success and on failure, and a step that asks for approval (env
+  zero).
+- Scanner results (Checkov, TFLint) shown with the run, not only in the log
+  (Scalr, Harness).
+- A tool version pin per unit, and standard run variables such as run ID and
+  commit (Burrito, HCP Terraform).
+- Ephemeral runners: one Kubernetes job per run (Terrakube); see RFC 31.
+- A global switch that stops applies (Atlantis); see RFC 27.
+
 ## Outcome
 
 None yet.

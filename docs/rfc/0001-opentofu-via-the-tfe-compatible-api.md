@@ -104,3 +104,22 @@ login` (the `login.v1` service, an OAuth authorization-code flow).
 - Each step lands with its e2e step first, as for Pulumi: discovery and ping,
   entitlements, workspace read and create, lock and unlock, state read, state
   create and upload, outputs.
+
+## Gaps from the competitor review
+
+Added 2026-10-10 from the research doc "IaC and TACOS landscape". Not yet
+worked into the proposal above.
+
+- `tofu login` and `terraform login`: the `login.v1` service in
+  `/.well-known/terraform.json` (OTF, OpenTaco). Depends on browser sign-in
+  (ADR 6).
+- TLS: OpenTofu refuses plain HTTP; where TLS ends is not decided (RFC 35).
+- Workspace selection by tags in the `cloud` block, and the tag filter on the
+  workspace list (OTF, Terrakube).
+- `tofu show` on a saved plan, import-only plans: compatibility bugs that OTF
+  still has; add e2e steps.
+- Publish the list of supported endpoints and every difference from TFE, as
+  OTF's `tfe_api.md` does; stub what clients probe (`entitlement-set`,
+  `/admin/feature-sets`).
+- Remote execution is RFC 30; TFE `run-triggers` is RFC 24;
+  `notification-configurations` is RFC 23.
