@@ -108,6 +108,13 @@ repository on its own schedule, depends on them too.
   camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
   TFE-compatible API: JSON:API documents and errors.
 - An API change the console needs lands here first, released, then in the console.
+- Give every feature a REST API (ADR 17). The console, the CLI and all other
+  clients use only that API. Do not add a feature that only the console, a CLI
+  or a configuration file can use.
+- Make every endpoint declare its authorization actions and the object of
+  each action. Make every change pass the policy check. A route without an
+  action fails the route test. Put routes that need no sign-in on the explicit
+  public list in that test.
 
 ## Voice (UI text, errors, docs)
 
