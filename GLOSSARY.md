@@ -1,0 +1,146 @@
+# OpenDustpan
+
+OpenDustpan is a self-hosted backend for infrastructure-as-code tools. It keeps
+the state, history, locks and secrets of every tool behind one set of
+namespaces, identities and storage.
+
+## Language
+
+### Shared across tools
+
+**Tool**:
+An infrastructure-as-code CLI that keeps its state in OpenDustpan through the remote-backend protocol it already speaks, for example the Pulumi CLI or OpenTofu.
+_Avoid_: Client, integration, provider
+
+**Namespace**:
+The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
+_Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
+
+**Unit**:
+One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
+_Avoid_: Environment, deployment, target
+
+**Unit reference**:
+The tool, the namespace and the tool's own name for a unit, written as `<tool>:<namespace>/<name>`, for example `pulumi:acme/web/prod`.
+_Avoid_: Unit ID, path, address
+
+**State**:
+The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state but never reads its contents.
+_Avoid_: State file (except for OpenTofu), snapshot
+
+**Inventory**:
+The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
+_Avoid_: Catalog, registry, index
+
+### Regions
+
+**Home region**:
+The one region where a namespace accepts writes.
+_Avoid_: Primary region, active region
+
+**Standby region**:
+A region that holds a replicated copy of a namespace and accepts no writes to it.
+_Avoid_: Secondary region, replica region
+
+**Promotion**:
+The administrator action that makes a standby region the home region of a namespace.
+_Avoid_: Failover (as the name of the action), switchover
+
+**Failover version**:
+A number that increases by one at each promotion of a namespace.
+_Avoid_: Epoch, generation
+
+**Fence**:
+The namespace and failover version that a write carries. A store rejects the write when the failover version is no longer current.
+_Avoid_: Token, guard
+
+### Identity
+
+**Principal**:
+A caller whose identity OpenDustpan checked: a person or the owner of an access token.
+_Avoid_: User (when the caller can be a machine), actor
+
+**Access token**:
+The secret that a tool or the console sends to prove which principal it acts for.
+_Avoid_: API key, password
+
+**Action**:
+A tool-neutral operation that a principal asks to do, such as read state or write state. Access rules allow or deny actions on namespaces and units.
+_Avoid_: Permission, verb, scope
+
+### Pulumi CLI
+
+**Stack**:
+The unit of the Pulumi CLI, named `<namespace>/<Pulumi project>/<stack>`.
+_Avoid_: Environment, workspace
+
+**Pulumi project**:
+A Pulumi program. Stack names are unique within one Pulumi project.
+_Avoid_: Project (without a qualifier), application
+
+**Update**:
+One operation of the Pulumi CLI on a stack that OpenDustpan records, such as `up`, `preview`, `refresh`, `destroy` or `import`.
+_Avoid_: Run, deployment, job
+
+**Preview**:
+An update that changes no resources. It takes no number in the history of the stack.
+_Avoid_: Plan, dry run (except when naming the CLI flag)
+
+**Lease**:
+The time-limited right of one Pulumi CLI process to write to the update that it runs.
+_Avoid_: Lock
+
+**Checkpoint**:
+The state of a stack that the Pulumi CLI saves during and after an update.
+_Avoid_: Snapshot, state file
+
+**Event**:
+One entry in the progress record of an update.
+_Avoid_: Log line, message
+
+### OpenTofu
+
+**Workspace**:
+The unit of OpenTofu. Workspace names are unique within one namespace.
+_Avoid_: Environment, stack
+
+**TFE project**:
+A group of workspaces in the TFE-compatible API. It has no effect on names or state.
+_Avoid_: Project (without a qualifier), folder
+
+**Workspace lock**:
+The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
+_Avoid_: Lease
+
+**State version**:
+One immutable copy of the state of a workspace, with a lineage and a serial.
+_Avoid_: Snapshot, revision, checkpoint
+
+**Lineage**:
+The identifier that all state versions of one state history share.
+_Avoid_: History ID
+
+**Serial**:
+A number that increases with each state version in one lineage.
+_Avoid_: Version number, revision
+
+### Secrets
+
+**Scope**:
+The namespace and the stable identity of a unit that one data key protects.
+_Avoid_: Context, key ID
+
+**Data key**:
+The random key that encrypts all secret values of one scope. OpenDustpan stores it only in encrypted form.
+_Avoid_: DEK, secret key
+
+**Key-encryption key**:
+The key, kept outside the OpenDustpan database, that encrypts data keys.
+_Avoid_: Master key, root key, KEK
+
+## Flagged ambiguities
+
+- **Project** has two meanings. Always write "Pulumi project" or "TFE project".
+- **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
+- **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
