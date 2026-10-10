@@ -8,7 +8,8 @@ created: 2026-10-10
 # RFC 13. Policy and approvals
 
 Status: draft. The names, the scope and the split into three kinds of policy
-are proposals.
+are proposals. Which policy engines OpenDustpan supports, and how, is to be
+decided.
 
 ## Problem
 
@@ -22,10 +23,10 @@ a job. Both raise the same questions:
 - Does the plan that follows break a rule (a public bucket, a missing tag, a
   machine size that is too large)?
 
-Teams want to answer these with code that they already know. Open Policy Agent
-(OPA) and its language, Rego, are the common choice: Kubernetes admission
-(Gatekeeper), `conftest`, HCP Terraform policy sets and Pulumi policy packs
-all accept Rego.
+Teams want to answer these with policy code in an engine that they already
+use, for example Open Policy Agent (OPA) with Rego, Cedar, or Semgrep. Which
+engines OpenDustpan supports, and how, is to be decided (see "Policy
+engines").
 
 Teams also want to skip the review request for safe, repeated work, for
 example "add a Kubernetes namespace for a new team". And they want to approve
@@ -46,7 +47,7 @@ RFC.
 ### Access policy
 
 The `identity.Authorizer` port already answers this with tool-neutral actions
-(ADR 13). An OPA adapter for that port is one more adapter. This RFC adds no
+(ADR 13). An adapter for that port can call a policy engine. This RFC adds no
 new concept for it.
 
 ### Edit policy
@@ -92,24 +93,24 @@ values, so the backend does not take plans to check them.
 - **Pulumi CLI.** The Pulumi Cloud-compatible API can name required policy
   packs at the start of every update (`requiredPolicies` in the response that
   begins an update, with a download location for each pack). The CLI
-  downloads and runs them. Policy packs can be written in Rego
-  (`runtime: opa`). So OpenDustpan can require Rego policies on every update,
+  downloads and runs them. Policy packs can be written in TypeScript, Python
+  or Rego (`runtime: opa`). So OpenDustpan can require policies on every update,
   from a runner or from a workstation. The CLI enforces them, so a modified
   CLI can skip them. That is also true for Pulumi Cloud. It is a guardrail,
   not a security boundary.
 - **OpenTofu.** The CLI has no hook that asks its backend for policies when
   it runs on a workstation. TFE policy checks apply only to remote runs. So
   OpenTofu resource policy runs only in jobs: the runner evaluates the policy
-  with OPA on the output of `tofu show -json` for the saved plan, reports the
-  result, and does not apply when the result is deny.
+  on the output of `tofu show -json` for the saved plan, reports the result,
+  and does not apply when the result is deny.
 - **Never on state.** The backend must not reject a state write because of a
   resource policy. The resources already changed when the state arrives. A
   rejected state write loses the record of real resources, and the project
   blocks only on data loss or corruption (RFC 9).
 
-A Pulumi preview and an OpenTofu plan are different documents. One Rego
-policy cannot check resources of both tools without two inputs. "Works with
-OPA" means one language and one engine, not one policy for every tool.
+A Pulumi preview and an OpenTofu plan are different documents. One policy
+cannot check resources of both tools without two inputs. Support for an
+engine means one language and one engine, not one policy for every tool.
 
 ## Approvals through the API
 
@@ -129,32 +130,41 @@ and the change only adds an item. The portal calls the API. The backend
 commits to `main` and starts an `up` job. No review request, no wait. An edit
 that removes a tenant gets "approve first" from the same policy.
 
-## OPA compatibility
+## Policy engines
 
-- A **`Policy` port** takes an input document and returns a decision (ADR 2).
-  It gets a conformance suite before its first adapter.
-- **Adapter 1: an OPA server.** The backend calls the team's own OPA through
-  OPA's REST data API. This needs only `net/http` and no new dependency.
-- **Adapter 2: OPA embedded.** OPA's Go module evaluates Rego inside the
-  backend. No extra process, but a large new dependency that needs a decision
-  first.
-- **Other engines** (Cedar, a team's own service) are adapters too.
-- **Policies as bundles.** OpenDustpan can serve policies in OPA's bundle
-  format (a gzipped tarball over HTTP, with ETag and optional signatures). The
-  team's OPA servers and the OPA on each runner then pull the same policies
-  from one place. The policies come from a repository on a forge connection
-  (RFC 12) or an upload through the API, and each version is kept.
-- **Decision records.** Every decision is in the audit log with the policy
-  version, the input (without secrets) and the result.
+To be decided. This RFC only proposes that edit policy goes through a
+**`Policy` port** (ADR 2): it takes an input document and returns a decision.
+The port gets a conformance suite before its first adapter. Every decision is
+in the audit log with the policy version, the input (without secrets) and the
+result.
+
+The candidate engines do different jobs, so "support" can mean different
+things for each:
+
+- **OPA (Rego)** evaluates JSON input to a decision. It fits edit policy and
+  access policy, and Pulumi policy packs and `conftest` already use it for
+  resource policy. Possible forms: call the team's own OPA server through its
+  REST API (no new dependency), embed OPA's Go module (a large dependency), and
+  serve policies in OPA's bundle format to OPA servers and runners.
+- **Cedar** is a language for access decisions about principals, actions and
+  resources. It fits access policy and maybe edit policy. It is not made to
+  read plans.
+- **Semgrep** finds patterns in source code. It makes no decision about an
+  edit and does not read plans. It is a fourth kind of check: on the program
+  code in a review request, or in a job before the plan. If OpenDustpan
+  supports it, it is most likely a step that a runner runs, with the result
+  reported like a plan's.
+
+A team's own service can also be an adapter, as for any port.
 
 ## Options
 
-1. **The three kinds above, with a `Policy` port and OPA adapters** (the
-   proposal).
+1. **The three kinds above, with a `Policy` port** (the proposal). The
+   engines come later.
 2. **Do nothing.** Access rules only. Teams run `conftest` in their own CI.
    Edits through the API then have no workflow, which makes RFC 12 risky.
-3. **A policy language of our own.** Rejected. Teams already know Rego, and a
-   new language is a large cost for us and for them.
+3. **A policy language of our own.** Rejected. Teams already know existing
+   engines, and a new language is a large cost for us and for them.
 4. **Resource policy in the backend.** The backend takes each plan and checks
    it. This breaks RFC 6 for OpenTofu (the plan comes from a run), puts secret
    values in the backend, and does nothing for Pulumi that required policy
@@ -183,7 +193,10 @@ _Avoid_: Review (which happens in the forge), sign-off
 
 ## Open questions
 
-- Which adapter comes first: an OPA server (no dependency) or embedded OPA?
+- Which engines does OpenDustpan support, for which kind of policy, and in
+  which form (an external server, embedded, or a step on a runner)?
+- Is a check on source code (Semgrep) a fourth kind of policy, or a job step
+  outside this RFC?
 - What does the edit input schema look like, and how is it versioned?
 - Are policies kept per namespace, per unit label, or both?
 - Is there a break-glass path that skips edit policy, and who holds it? It
