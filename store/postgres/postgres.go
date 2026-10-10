@@ -28,7 +28,8 @@ var migrations embed.FS
 // migrationLockID is the advisory lock key held while migrating ("odpn" in ASCII).
 const migrationLockID int64 = 0x6f64706e
 
-// Store implements namespace.Store and stack.Store on PostgreSQL.
+// Store implements namespace.Store, stack.Store and the update-cycle ports
+// (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) on PostgreSQL.
 type Store struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
@@ -109,20 +110,7 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		version, err := q.GetFailoverVersionForShare(ctx, fence.Namespace.String())
-		if errors.Is(err, pgx.ErrNoRows) {
-			return namespace.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("read failover version: %w", err)
-		}
-
-		if version != fence.FailoverVersion {
-			return namespace.ErrFenced
-		}
-
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		n, err := q.CreateStack(ctx, db.CreateStackParams(row))
 		if err != nil {
 			return fmt.Errorf("insert stack: %w", err)
@@ -191,6 +179,27 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	}
 
 	return nil
+}
+
+// inFencedTx runs fn in a transaction that first checks fence, holding the
+// namespace row FOR SHARE so a promotion waits until the transaction ends.
+func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		version, err := q.GetFailoverVersionForShare(ctx, fence.Namespace.String())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return namespace.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("read failover version: %w", err)
+		}
+
+		if version != fence.FailoverVersion {
+			return namespace.ErrFenced
+		}
+
+		return fn(q)
+	})
 }
 
 func (s *Store) migrate(ctx context.Context) error {

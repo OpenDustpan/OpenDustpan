@@ -98,9 +98,14 @@ OpenTofu state:
 
 ## Consequences
 
-- No adapter implements the new ports yet. The next step for each port is a
-  conformance suite in `store/storetest` (and the blob layout decision), then
-  the SQLite and PostgreSQL adapters, then wiring in `dustpan.NewServer`.
+- The update-cycle ports have a conformance suite (`storetest.RunUpdates`)
+  and SQLite and PostgreSQL adapters. Those adapters keep only each stack's
+  latest checkpoint, with the deployment in the row; per-version history for
+  `pulumi stack export --version` and moving deployments to the blob port
+  wait for the blob layout decision. `Updates` is not wired into
+  `dustpan.NewServer` yet.
+- The `secret` and `workspace` ports have no suite or adapter yet; each needs
+  its suite first, then the SQL adapters, then wiring.
 - HTTP handlers come after adapters, each with its e2e step first.
 - Stacks need a stable ID (new column and migration) before `secret` ships.
 - A key-encryption key needs a built-in `Wrapper` adapter (a local key from

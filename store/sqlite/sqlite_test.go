@@ -14,17 +14,34 @@ func TestConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) storetest.Store {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
+}
+
+func TestUpdatesConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// open returns a fresh store in a temporary directory.
+func open(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	return s
 }

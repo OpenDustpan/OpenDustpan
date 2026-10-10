@@ -28,15 +28,37 @@ func TestConformance(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) storetest.Store {
 		t.Helper()
 
-		s, err := postgres.Open(t.Context(), isolatedURL(t, base))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(s.Close)
-
-		return s
+		return open(t, base)
 	})
+}
+
+func TestUpdatesConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// open returns a store in a fresh schema of the database at base.
+func open(t *testing.T, base string) *postgres.Store {
+	t.Helper()
+
+	s, err := postgres.Open(t.Context(), isolatedURL(t, base))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return s
 }
 
 // isolatedURL creates a fresh schema and returns base with search_path set to it.
