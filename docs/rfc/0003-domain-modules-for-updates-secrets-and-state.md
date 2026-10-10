@@ -1,13 +1,22 @@
-# 11. Domain modules for updates, secrets and OpenTofu state
+---
+rfc: 3
+title: Domain modules for updates, secrets and OpenTofu state
+status: discussing
+created: 2026-10-09
+was: proposed ADR 11
+---
 
-Status: proposed · 2026-10-09
+# RFC 3. Domain modules for updates, secrets and OpenTofu state
+
+Status: under discussion. It was proposed ADR 11 until ADR 15 moved every
+undecided proposal to `docs/rfc/`.
 
 ## Context
 
 The e2e suite shows what the Pulumi CLI needs after stack management: the
 update cycle (create, start, lease, checkpoint, events, complete, cancel),
 export and import, and server-side encryption (`preview` and `up` call
-`encrypt` before anything else). ADR 9 adds OpenTofu workspaces, locks and
+`encrypt` before anything else). RFC 1 adds OpenTofu workspaces, locks and
 state versions. The rules below were checked against the Pulumi CLI and
 OpenTofu sources (`sdk/go/common/apitype`, `pkg/backend/httpstate`,
 `internal/cloud`) and the go-tfe client; no code was taken from them.

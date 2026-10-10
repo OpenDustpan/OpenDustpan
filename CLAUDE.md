@@ -4,15 +4,17 @@ OpenDustpan is an open-source, self-hostable backend for infrastructure-as-code
 tools: state, history, locks and secrets for every tool a team uses, behind one
 set of namespaces, identities and storage. Each tool connects through the
 remote-backend protocol it already speaks: the Pulumi CLI through a Pulumi
-Cloud-compatible API, OpenTofu through a TFE-compatible API (ADR 9), more later
+Cloud-compatible API, OpenTofu through a TFE-compatible API (RFC 1), more later
 (ADR 12).
 
 OpenDustpan is not affiliated with any tool's vendor. Say "works with the
 Pulumi CLI", "works with OpenTofu" and "TFE-compatible API". Never use another
 project's name, logo or colours as ours.
 
-Read `docs/adr/` before changing architecture. If a change contradicts an ADR,
-write a new ADR first. Use the terms in `GLOSSARY.md` in code, docs and
+Read `docs/adr/` and `docs/rfc/` before changing architecture. An ADR is a
+decision. An RFC is an open question (ADR 15). For an open question, write an
+RFC. Write an ADR only after the project owner accepts a decision. If a change
+contradicts an ADR, write an RFC first. Use the terms in `GLOSSARY.md` in code, docs and
 messages, and avoid the words it lists under _Avoid_. Add a term there when a
 new domain concept gets a name.
 
@@ -37,14 +39,15 @@ cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that 
 namespace/           domain: namespaces, home region, failover-version fencing
 stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
 secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
-workspace/           domain (OpenTofu): workspaces, locks, state versions (ADR 9)
+workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
 identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
 blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
 e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 internal/            helpers shared across packages, not part of the SDK
-docs/adr/            architecture decision records
+docs/adr/            architecture decision records: accepted decisions only
+docs/rfc/            RFCs: open questions, options and proposals (ADR 15)
 GLOSSARY.md          the project's domain language: one word per concept
 ```
 

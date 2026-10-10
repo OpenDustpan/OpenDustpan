@@ -1,6 +1,15 @@
-# 9. OpenTofu support through the TFE-compatible remote API
+---
+rfc: 1
+title: OpenTofu support through the TFE-compatible remote API
+status: discussing
+created: 2026-10-09
+was: proposed ADR 9
+---
 
-Status: proposed · 2026-10-09
+# RFC 1. OpenTofu support through the TFE-compatible remote API
+
+Status: under discussion. It was proposed ADR 9 until ADR 15 moved every
+undecided proposal to `docs/rfc/`.
 
 ## Context
 
@@ -55,7 +64,7 @@ login` (the `login.v1` service, an OAuth authorization-code flow).
   `remote` backend use for local execution (steps 1 to 6). Remote runs,
   agents, policy, variables and VCS-driven workspaces are out of scope.
 - An organization is a namespace, exactly as for the Pulumi CLI (ADR 4,
-  ADR 10). Namespace fencing, home regions and authorization apply unchanged.
+  RFC 2). Namespace fencing, home regions and authorization apply unchanged.
 - Workspaces are their own domain package, `workspace`, not stacks. Pulumi
   stacks are unique per project; TFE workspaces are unique per organization
   and only grouped by projects. State formats (Pulumi checkpoints versus
