@@ -2,10 +2,11 @@
 # Tool versions are pinned here and in CI; install the matching binaries:
 #   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
+#   python3       any 3.x, standard library only (for docs-lint)
 
-.PHONY: check fmt lint test test-postgres e2e generate build
+.PHONY: check fmt lint docs-lint test test-postgres e2e generate build
 
-check: lint test ## Everything CI checks.
+check: lint docs-lint test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -14,6 +15,15 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
 	golangci-lint run ./...
+
+# Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
+# ADR 1 forbids editing them.
+STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
+DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md)
+DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
+
+docs-lint: ## ASD-STE100 structural rules for README, CLAUDE.md, GLOSSARY.md and ADRs from 14 on.
+	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set.
 	go test -race -count=1 ./...

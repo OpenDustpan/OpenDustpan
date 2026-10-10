@@ -61,8 +61,9 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 - **Stacks and workspaces**: each tool keeps its own model of deployable units
   and their state (Pulumi stacks, OpenTofu workspaces). They share
   namespaces, identity, storage and locking rules, not data models.
-- **Storage**: SQLite and local disk for a single node; PostgreSQL and object
-  storage as you grow. Everything is a swappable adapter (ADR 2).
+- **Storage**: A single node uses SQLite and local disk. Larger installs use
+  PostgreSQL and object storage. Every storage backend is a swappable adapter
+  (ADR 2).
 
 ## Configuration
 
@@ -80,7 +81,8 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
 golangci-lint and the tests with the race detector. Set
 `DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
-real CLI versions against the server (it downloads them; see `e2e/doc.go`).
+real CLI versions against the server. It downloads them first, as `e2e/doc.go`
+describes.
 
 Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 (why things are the way they are).
