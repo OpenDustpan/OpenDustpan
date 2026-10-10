@@ -1,11 +1,11 @@
 ---
 rfc: 9
-title: Themes and white-labelling
+title: Themes and white-labeling
 status: draft
 created: 2026-10-10
 ---
 
-# RFC 9. Themes and white-labelling
+# RFC 9. Themes and white-labeling
 
 Status: draft.
 
