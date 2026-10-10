@@ -79,7 +79,7 @@ both together.
 | [28](0028-stored-plans.md) | Stored plans and plan-bound approvals | draft |
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | draft |
 | [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft |
-| [31](0031-kubernetes.md) | Kubernetes runner and operator integrations | draft |
+| [31](0031-kubernetes.md) | Kubernetes: runner, operator, and blueprints as resources | draft |
 | [32](0032-object-storage.md) | Object storage adapters | draft |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | draft |
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | draft |
@@ -90,7 +90,7 @@ both together.
 | [39](0039-reading-state.md) | Reading state contents | draft |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
-| [42](0042-migration-import.md) | Migration from other backends | draft |
+| [42](0042-migration-import.md) | Migration from other backends and operators | draft |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
 | [44](0044-bulk-operations.md) | Bulk operations | draft |
 | [45](0045-cost-estimation.md) | Cost estimation | draft |
