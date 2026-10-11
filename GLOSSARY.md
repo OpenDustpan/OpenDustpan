@@ -45,8 +45,12 @@ The backend or product that holds the state of a unit before an import. Examples
 _Avoid_: Origin, legacy backend
 
 **Backup**:
-The copy of the SQL data of a whole installation with the blob references that the data names. A backup loads only into an empty store of the same dialect and schema version.
+The copy of the SQL data of a whole installation with the blob references that the data names. A backup in the native format loads only into the same dialect and schema version. A backup in the portable format loads into either dialect (ADR 42).
 _Avoid_: Dump, snapshot
+
+**Portable format**:
+The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). The other format is the native format of the dialect (ADR 30).
+_Avoid_: Export format, dump format
 
 **Maintenance mode**:
 The state of an installation that answers tool calls with 503 while an operator prepares a restore. The installation API and the probes stay available.
