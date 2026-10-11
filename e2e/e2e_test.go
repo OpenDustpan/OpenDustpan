@@ -458,6 +458,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("cancel running update", contains("has been canceled"), "cancel", "--yes"))
 	env.Step(ctx, t, step("up after concurrent cancel", nil, "up", "--yes", "--non-interactive"))
 
+	pulumiRestoreScenario(t, env, org)
+
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
 		env.Step(ctx, t, s)
 	}
@@ -836,6 +838,134 @@ func checkRunningHistoryFields(ctx context.Context, t *testing.T, env *e2e.Env, 
 	}
 
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+}
+
+// pulumiRestoreScenario proves the restore route (ADR 28 decision 5) on the
+// renamed stack. There is no CLI command for restore, so the restore steps
+// call the route with the admin token: two ups, a restore of version 1,
+// export equality with version 1, up after the restore, 404 for a version
+// with no checkpoint, 409 during a running update freed by cancel, and the
+// restore marker in history.
+func pulumiRestoreScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	env.Step(ctx, t, step("up before restore 1", nil, "up", "--yes", "--non-interactive"))
+	env.Step(ctx, t, step("up before restore 2", nil, "up", "--yes", "--non-interactive"))
+
+	restoreStackVersion(t, env, org, 1, http.StatusOK)
+
+	exported := env.Step(ctx, t, step("stack export after restore", nil, "stack", "export"))
+	pinned := env.Step(
+		ctx,
+		t,
+		step("stack export version 1 after restore", nil, "stack", "export", "--version", "1"),
+	)
+
+	if strings.TrimSpace(exported.Stdout) != strings.TrimSpace(pinned.Stdout) {
+		t.Error("stack export after restoring version 1 differs from stack export --version 1")
+	}
+
+	env.Step(ctx, t, step("up after restore", nil, "up", "--yes", "--non-interactive"))
+
+	// The CLI parses the new kind on every version in the matrix.
+	env.Step(
+		ctx,
+		t,
+		step("stack history after restore", historyShowsKinds("restore"), "stack", "history", "--json"),
+	)
+
+	// A version with no checkpoint has no state to copy.
+	restoreStackVersion(t, env, org, 999999, http.StatusNotFound)
+
+	// The version is a positive integer.
+	restoreStackVersion(t, env, org, 0, http.StatusBadRequest)
+
+	// A restore waits for the stack lock: hold the stack through the API,
+	// prove the restore conflicts, cancel through the CLI in a second
+	// process, then the restore works.
+	env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	restoreStackVersion(t, env, org, 1, http.StatusConflict)
+	env.Step(ctx, t, step("cancel frees the restore", contains("has been canceled"), "cancel", "--yes"))
+	restoreStackVersion(t, env, org, 1, http.StatusOK)
+
+	checkRestoreHistory(ctx, t, env, org)
+}
+
+// restoreStackVersion restores version of the renamed stack through the API
+// with the admin token and proves the status. A success answers the ID of
+// the restore update; an error answers the Pulumi shape
+// {"code": <status>, "message": "..."}.
+func restoreStackVersion(t *testing.T, env *e2e.Env, org string, version, want int) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	path := fmt.Sprintf("/api/stacks/%s/%s/renamed/restore/%d", org, e2e.Project, version)
+
+	status, body, err := env.APIStatus(ctx, http.MethodPost, path, "")
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+
+	if status != want {
+		t.Fatalf("POST %s status %d, want %d (body %s)", path, status, want, body)
+	}
+
+	if want == http.StatusOK {
+		var decoded struct {
+			UpdateID string `json:"updateId"` //nolint:tagliatelle // The Pulumi CLI's wire name; it must not change.
+		}
+
+		if err := json.Unmarshal([]byte(body), &decoded); err != nil || decoded.UpdateID == "" {
+			t.Fatalf("POST %s answers %q, want an update id: %v", path, body, err)
+		}
+
+		return
+	}
+
+	var decoded struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode error of POST %s: %v (%s)", path, err, body)
+	}
+
+	if decoded.Code != want || decoded.Message == "" {
+		t.Fatalf("POST %s error = %+v, want code %d with a message", path, decoded, want)
+	}
+}
+
+// checkRestoreHistory proves the history shows the restore: one entry of
+// kind restore records version 1 as its source and the caller as its
+// requester.
+func checkRestoreHistory(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	for _, u := range readHistory(ctx, t, env, org) {
+		if u.Kind != "restore" {
+			continue
+		}
+
+		if u.RestoredFrom != 1 {
+			t.Fatalf("restore entry %+v restoredFrom = %d, want 1", u, u.RestoredFrom)
+		}
+
+		if u.RequestedBy != e2e.Subject {
+			t.Fatalf("restore entry %+v requestedBy = %q, want %q", u, u.RequestedBy, e2e.Subject)
+		}
+
+		if u.UpdateID == "" {
+			t.Fatalf("restore entry %+v holds no update ID", u)
+		}
+
+		return
+	}
+
+	t.Fatal("history holds no restore entry")
 }
 
 // writeImportFile saves an exported deployment for a later stack import

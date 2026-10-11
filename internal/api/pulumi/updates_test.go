@@ -31,6 +31,7 @@ func updatePatterns() []string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/refresh",
 		"POST /api/stacks/{namespace}/{project}/{stack}/destroy",
 		"POST /api/stacks/{namespace}/{project}/{stack}/import",
+		"POST /api/stacks/{namespace}/{project}/{stack}/restore/{version}",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
@@ -834,30 +835,41 @@ type accessTarget struct {
 	Body   string
 }
 
+// seedAccessCheckpoint imports an empty deployment as version 1 of the
+// fixture stack, so routes that need a checkpoint to copy or export have one.
+func seedAccessCheckpoint(t *testing.T, f updateFixture) {
+	t.Helper()
+
+	input := stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(`{}`),
+		SchemaVersion: 3,
+		Sequence:      0,
+		Invalid:       false,
+	}
+
+	if _, err := f.updates.Import(t.Context(), f.ref, "", input); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+}
+
 // accessRouteTarget builds the target and body for an access-authed update
 // route, minting the update state the route needs in f: a created update
 // for start and get, a started update for cancel, a finished update with a
-// checkpoint for versioned export, none for create, history and export, and a
-// deployment body for import.
+// checkpoint for versioned export and restore, none for create, history and
+// export, and a deployment body for import.
 func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarget {
 	t.Helper()
 
 	switch {
 	case strings.HasSuffix(pattern, "/export/{version}"):
-		input := stack.CheckpointInput{
-			Features:      nil,
-			Deployment:    []byte(`{}`),
-			SchemaVersion: 3,
-			Sequence:      0,
-			Invalid:       false,
-		}
-
-		_, importErr := f.updates.Import(t.Context(), f.ref, "", input)
-		if importErr != nil {
-			t.Fatalf("import: %v", importErr)
-		}
+		seedAccessCheckpoint(t, f)
 
 		return accessTarget{Target: "/api/stacks/acme/web/prod/export/1", Body: ""}
+	case strings.HasSuffix(pattern, "/restore/{version}"):
+		seedAccessCheckpoint(t, f)
+
+		return accessTarget{Target: "/api/stacks/acme/web/prod/restore/1", Body: ""}
 	case strings.HasSuffix(pattern, "/updates"), strings.HasSuffix(pattern, "/export"):
 		return accessTarget{
 			Target: "/api/stacks/acme/web/prod" + strings.TrimPrefix(
@@ -2066,5 +2078,160 @@ func TestCreateUpdateRecordsCaller(t *testing.T) {
 
 	if u.CreatedBy != "tester" {
 		t.Fatalf("CreatedBy = %q, want %q", u.CreatedBy, "tester")
+	}
+}
+
+// seedRestoreVersion imports version 1 of the fixture stack, so restore
+// tests have a checkpoint to copy.
+func seedRestoreVersion(t *testing.T, f updateFixture) {
+	t.Helper()
+
+	input := stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(`{"v":1}`),
+		SchemaVersion: 3,
+		Sequence:      0,
+		Invalid:       false,
+	}
+
+	if _, err := f.updates.Import(t.Context(), f.ref, "tester", input); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+}
+
+// decodeRestoreID decodes a restore answer into its update ID.
+func decodeRestoreID(t *testing.T, body string) stack.UpdateID {
+	t.Helper()
+
+	var decoded struct {
+		UpdateID string `json:"updateId"` //nolint:tagliatelle // The Pulumi CLI's wire name; it must not change.
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil || decoded.UpdateID == "" {
+		t.Fatalf("restore answers %q, want an update id: %v", body, err)
+	}
+
+	id, err := stack.ParseUpdateID(decoded.UpdateID)
+	if err != nil {
+		t.Fatalf("parse update ID %q: %v", decoded.UpdateID, err)
+	}
+
+	return id
+}
+
+// checkErrorShape proves a route error carries the Pulumi shape: the code
+// matches the status and the message is not empty.
+func checkErrorShape(t *testing.T, status int, body string) {
+	t.Helper()
+
+	var decoded struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode error: %v (%s)", err, body)
+	}
+
+	if decoded.Code != status || decoded.Message == "" {
+		t.Fatalf("error = %+v, want code %d with a message", decoded, status)
+	}
+}
+
+// TestRestoreStackCycle restores version 1 through HTTP: the restore answers
+// the ID of its update, shows in history as kind restore with RestoredFrom
+// set, records the caller, and becomes the latest export.
+func TestRestoreStackCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedRestoreVersion(t, f)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/restore/1", ""))
+	if status != http.StatusOK {
+		t.Fatalf("restore answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	id := decodeRestoreID(t, body)
+
+	u, err := f.updates.Get(t.Context(), f.ref, id)
+	if err != nil {
+		t.Fatalf("get restore update: %v", err)
+	}
+
+	if u.Kind != stack.KindRestore || u.RestoredFrom != 1 || u.CreatedBy != "tester" {
+		t.Fatalf("restore update = %+v, want kind restore restoredFrom 1 createdBy tester", u)
+	}
+
+	if u.Status != stack.StatusSucceeded || u.Version != 2 {
+		t.Fatalf("restore update = %+v, want status succeeded version 2", u)
+	}
+
+	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK || !strings.Contains(body, `"v":1`) {
+		t.Fatalf("export answers %d %q, want 200 with the restored deployment", status, body)
+	}
+}
+
+// TestRestoreStackVersionRejected proves a restore with no positive integer
+// version answers 400 in the Pulumi shape and records no update.
+func TestRestoreStackVersionRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range []string{"0", "-1", "abc"} {
+		t.Run("version "+version, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+			seedRestoreVersion(t, f)
+
+			target := "/api/stacks/acme/web/prod/restore/" + version
+
+			status, body := f.doUpdate(t, accessRequest(http.MethodPost, target, ""))
+			if status != http.StatusBadRequest {
+				t.Fatalf("restore answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+			}
+
+			checkErrorShape(t, http.StatusBadRequest, body)
+		})
+	}
+}
+
+// TestRestoreStackMissingVersion proves a restore of a version with no
+// checkpoint answers 404 in the Pulumi shape and records no update.
+func TestRestoreStackMissingVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedRestoreVersion(t, f)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/restore/99", ""))
+	if status != http.StatusNotFound {
+		t.Fatalf("restore answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	checkErrorShape(t, http.StatusNotFound, body)
+}
+
+// TestRestoreStackConflict proves a restore while another update runs answers
+// 409 in the Pulumi shape, and the running update keeps the stack lock.
+func TestRestoreStackConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedRestoreVersion(t, f)
+
+	id, _ := f.mintStartedMutating(t)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/restore/1", ""))
+	if status != http.StatusConflict {
+		t.Fatalf("restore during a running update answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	checkErrorShape(t, http.StatusConflict, body)
+
+	active, err := f.updates.Active(t.Context(), f.ref)
+	if err != nil || active.ID != id {
+		t.Fatalf("active update = %q, %v; want the running one %q", active.ID, err, id)
 	}
 }
