@@ -179,7 +179,7 @@ type Env struct {
 	// backendCmd is the running binary server process, or nil while stopped.
 	backendCmd *exec.Cmd
 	// backendLogs holds the combined output of backendCmd.
-	backendLogs *bytes.Buffer
+	backendLogs *lockedBuffer
 	// certBundle holds a PEM bundle with the certificates of both servers
 	// of a pair. Empty for a single server, which trusts server.pem.
 	certBundle string

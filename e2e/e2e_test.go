@@ -8726,7 +8726,7 @@ func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.
 			t.Fatalf("open destination store: %v", err)
 		}
 
-		defer st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
+		defer st.Close()
 
 		sum, err := st.Export(ctx, io.Discard)
 		if err != nil {
