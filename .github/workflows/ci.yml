@@ -49,8 +49,13 @@ jobs:
         run: make nilaway
       - name: Known vulnerabilities
         run: make vuln
+      # Put the pipx directory first on PATH: a self-hosted machine can have
+      # another semgrep (for example a snap, which cannot read the workspace).
+      # --force makes the pin apply on a machine that keeps an older install.
       - name: Install Semgrep
-        run: pipx install semgrep==1.178.0
+        run: |
+          pipx install --force semgrep==1.178.0
+          echo "${PIPX_BIN_DIR:-$HOME/.local/bin}" >> "$GITHUB_PATH"
       - name: Semgrep rules
         run: make semgrep
       - name: Each linked module has a license file to ship
