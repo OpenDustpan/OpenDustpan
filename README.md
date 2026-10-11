@@ -214,8 +214,8 @@ Kubernetes ignores `HEALTHCHECK` and uses its own probes.
 - **Storage**: A single node uses SQLite and local disk. Larger installs use
   PostgreSQL and object storage. Every storage backend is a swappable adapter
   (ADR 2).
-- **Import**: move state from a Pulumi service backend or file backend with
-  `docs/guides/import.md`.
+- **Import**: move state from a Pulumi service backend, a file backend, or an
+  OpenTofu backend with `docs/guides/import.md`.
 
 ## Guides
 
