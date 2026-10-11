@@ -64,6 +64,9 @@ type Config struct {
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
+	// MaxBodyBytesInFlight bounds concurrent large bodies by bytes held at
+	// once. Zero means DefaultMaxBodyBytesInFlight.
+	MaxBodyBytesInFlight int64
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -76,6 +79,7 @@ type Handler struct {
 	authz      identity.Authorizer
 	logger     *slog.Logger
 	baseURL    baseurl.Resolver
+	gate       *bodyGate
 	mux        *patternMux
 	routes     []Route
 }
@@ -108,6 +112,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:      cfg.Authorizer,
 		logger:     cfg.Logger,
 		baseURL:    cfg.BaseURL,
+		gate:       newBodyGate(cfg.MaxBodyBytesInFlight),
 		mux:        newPatternMux(),
 		routes:     nil,
 	}

@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"strings"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -27,13 +28,14 @@ func secretBodyLimit(secrets *secret.Service) int64 {
 }
 
 // serveSecrets serves one encrypt or decrypt route: it resolves the scope of
-// the stack in the path, reads the body, decodes it into values, crypts them,
-// and answers.
+// the stack in the path, streams the body into values, crypts them, and
+// answers. The gate bounds concurrent large bodies; the decoder streams gzip
+// into values so only one copy is held.
 func (h *Handler) serveSecrets(
 	w http.ResponseWriter,
 	r *http.Request,
 	crypt func(context.Context, secret.Scope, [][]byte) ([][]byte, error),
-	decode func([]byte) ([][]byte, error),
+	decode func(*json.Decoder) ([][]byte, error),
 	answer func(in, out [][]byte) any,
 ) {
 	ctx := r.Context()
@@ -43,15 +45,16 @@ func (h *Handler) serveSecrets(
 		return
 	}
 
-	body, ok := h.secretBody(w, r)
+	limit := secretBodyLimit(h.secrets)
+	releaseHold, ok := h.hold(w, r, limit)
 	if !ok {
 		return
 	}
 
-	values, err := decode(body)
-	if err != nil {
-		h.writeInvalidBody(ctx, w)
+	defer releaseHold()
 
+	values, ok := h.decodeSecrets(w, r, limit, decode)
+	if !ok {
 		return
 	}
 
@@ -65,12 +68,66 @@ func (h *Handler) serveSecrets(
 	h.writeJSON(ctx, w, http.StatusOK, answer(values, out))
 }
 
+// decodeSecrets streams one secrets body into values. An oversized body
+// answers 413, invalid JSON or a missing field answers 400.
+func (h *Handler) decodeSecrets(
+	w http.ResponseWriter, r *http.Request, limit int64, decode func(*json.Decoder) ([][]byte, error),
+) ([][]byte, bool) {
+	ctx := r.Context()
+
+	counted, release, ok := h.largeReader(w, r, limit)
+	if !ok {
+		return nil, false
+	}
+
+	defer release()
+
+	dec := json.NewDecoder(counted)
+
+	values, err := decode(dec)
+	if err != nil {
+		switch {
+		case counted.n > limit:
+			h.writeTooLarge(w, r, limit)
+		case isMaxBytes(err):
+			h.writeTooLarge(w, r, limit)
+		default:
+			h.writeInvalidBody(ctx, w)
+		}
+
+		return nil, false
+	}
+
+	if counted.n > limit {
+		h.writeTooLarge(w, r, limit)
+
+		return nil, false
+	}
+
+	// The whole body must be one JSON value, as Unmarshal requires.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		h.writeInvalidBody(ctx, w)
+
+		return nil, false
+	}
+
+	return values, true
+}
+
+// isMaxBytes reports whether err wraps http.MaxBytesError.
+func isMaxBytes(err error) bool {
+	tooLarge, ok := errors.AsType[*http.MaxBytesError](err)
+
+	return ok && tooLarge != nil
+}
+
 // decodeSingles returns a decoder for a body with one base64 value in field.
 // A body without the field answers 400 through writeInvalidBody.
-func decodeSingles(field string) func([]byte) ([][]byte, error) {
-	return func(body []byte) ([][]byte, error) {
+func decodeSingles(field string) func(*json.Decoder) ([][]byte, error) {
+	return func(dec *json.Decoder) ([][]byte, error) {
 		var doc map[string][]byte
-		if err := json.Unmarshal(body, &doc); err != nil {
+		if err := dec.Decode(&doc); err != nil {
 			return nil, fmt.Errorf("decode secrets body: %w", err)
 		}
 
@@ -85,10 +142,10 @@ func decodeSingles(field string) func([]byte) ([][]byte, error) {
 
 // decodeBatch returns a decoder for a body with base64 values in field. A
 // body without the field answers 400 through writeInvalidBody.
-func decodeBatch(field string) func([]byte) ([][]byte, error) {
-	return func(body []byte) ([][]byte, error) {
+func decodeBatch(field string) func(*json.Decoder) ([][]byte, error) {
+	return func(dec *json.Decoder) ([][]byte, error) {
 		var doc map[string][][]byte
-		if err := json.Unmarshal(body, &doc); err != nil {
+		if err := dec.Decode(&doc); err != nil {
 			return nil, fmt.Errorf("decode secrets body: %w", err)
 		}
 
@@ -212,22 +269,4 @@ func (h *Handler) secretScope(w http.ResponseWriter, r *http.Request) (secret.Sc
 	}
 
 	return scope, true
-}
-
-// secretBody reads one secrets request body, gunzipping it when the CLI sent
-// it compressed. A body over the wire limit answers 413, and a body that
-// decompresses over it answers 413 too, so a gzip bomb cannot exhaust memory.
-func (h *Handler) secretBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	limit := secretBodyLimit(h.secrets)
-
-	body, ok := h.readBody(w, r, limit)
-	if !ok {
-		return nil, false
-	}
-
-	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-		return h.gunzipBody(w, r, body, limit)
-	}
-
-	return body, true
 }

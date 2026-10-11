@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -62,6 +63,10 @@ var (
 	// errLogFormat reports an unknown --log-format value.
 	errLogFormat = errors.New(
 		"log format must be json or text: set --log-format (DUSTPAN_LOG_FORMAT)",
+	)
+	// errSizeLimit reports a negative size limit.
+	errSizeLimit = errors.New(
+		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
 )
 
@@ -153,6 +158,17 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
+	sizeLimits := []int64{
+		f.maxCheckpointBytes,
+		f.maxSecretBatchBytes,
+		f.maxStateBytes,
+		f.maxBodyBytesInFlight,
+	}
+
+	if err := checkSizeFlags(sizeLimits); err != nil {
+		return err
+	}
+
 	return f.run(ctx, stderr)
 }
 
@@ -160,19 +176,29 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 type serveFlags struct {
 	common
 
-	listen     string
-	consoleDir string
-	origins    string
-	tlsCert    string
-	tlsKey     string
-	publicURL  string
-	blobDir    string
-	logLevel   string
-	logFormat  string
+	listen               string
+	consoleDir           string
+	origins              string
+	tlsCert              string
+	tlsKey               string
+	publicURL            string
+	blobDir              string
+	logLevel             string
+	logFormat            string
+	maxCheckpointBytes   int64
+	maxSecretBatchBytes  int64
+	maxStateBytes        int64
+	maxBodyBytesInFlight int64
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
 	f.common.register(fs)
+	f.registerNet(fs)
+	f.registerLimits(fs)
+}
+
+// registerNet registers the network and console flags.
+func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	fs.StringVar(&f.listen, "listen", env("DUSTPAN_LISTEN", ":8080"), "listen address (DUSTPAN_LISTEN)")
 	fs.StringVar(
 		&f.consoleDir,
@@ -224,6 +250,34 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	)
 }
 
+// registerLimits registers the large-body size flags.
+func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
+	fs.Int64Var(
+		&f.maxCheckpointBytes,
+		"max-checkpoint-bytes",
+		envBytes("DUSTPAN_MAX_CHECKPOINT_BYTES"),
+		"largest checkpoint in bytes, 0 means the default (DUSTPAN_MAX_CHECKPOINT_BYTES)",
+	)
+	fs.Int64Var(
+		&f.maxSecretBatchBytes,
+		"max-secret-batch-bytes",
+		envBytes("DUSTPAN_MAX_SECRET_BATCH_BYTES"),
+		"largest secrets batch in bytes, 0 means the default (DUSTPAN_MAX_SECRET_BATCH_BYTES)",
+	)
+	fs.Int64Var(
+		&f.maxStateBytes,
+		"max-state-bytes",
+		envBytes("DUSTPAN_MAX_STATE_BYTES"),
+		"largest OpenTofu state in bytes, 0 means the default (DUSTPAN_MAX_STATE_BYTES)",
+	)
+	fs.Int64Var(
+		&f.maxBodyBytesInFlight,
+		"max-body-bytes-in-flight",
+		envBytes("DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT"),
+		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
+	)
+}
+
 // run opens the store, runs the start-up checks and serves until ctx is done.
 func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	logger, err := f.loggerFor(stderr)
@@ -258,7 +312,30 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		}
 	}()
 
-	srv, err := dustpan.NewServer(
+	srv, err := dustpan.NewServer(f.serverOptions(st, blobs, authn, wrapper, logger)...)
+	if err != nil {
+		return fmt.Errorf("configure server: %w", err)
+	}
+
+	// Run runs the start-up checks, including the key-encryption key check
+	// (ADR 23), before it serves.
+	if err := srv.Run(ctx); err != nil {
+		return fmt.Errorf("run server: %w", err)
+	}
+
+	return nil
+}
+
+// serverOptions returns the NewServer options for the opened store, blob
+// store, authenticator, key wrapper and logger.
+func (f *serveFlags) serverOptions(
+	st store,
+	blobs *blobfs.Store,
+	authn *identity.StaticTokens,
+	wrapper secret.Wrapper,
+	logger *slog.Logger,
+) []dustpan.Option {
+	return []dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -279,18 +356,11 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
 		dustpan.WithVersion(version),
-	)
-	if err != nil {
-		return fmt.Errorf("configure server: %w", err)
+		dustpan.WithMaxCheckpointBytes(int(f.maxCheckpointBytes)),
+		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
+		dustpan.WithMaxStateBytes(f.maxStateBytes),
+		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 	}
-
-	// Run runs the start-up checks, including the key-encryption key check
-	// (ADR 23), before it serves.
-	if err := srv.Run(ctx); err != nil {
-		return fmt.Errorf("run server: %w", err)
-	}
-
-	return nil
 }
 
 // openBlobs creates the state content directory and opens it.
@@ -616,6 +686,34 @@ func env(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+// envBytes returns the byte size in key, or 0 when unset. An invalid value
+// returns -1, so checkSizeFlags rejects it with the flag names.
+func envBytes(key string) int64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+
+	return n
+}
+
+// checkSizeFlags rejects a negative large-body limit. Zero means the default,
+// so only negative values fail.
+func checkSizeFlags(limits []int64) error {
+	for _, n := range limits {
+		if n < 0 {
+			return errSizeLimit
+		}
+	}
+
+	return nil
 }
 
 // defaultBlobDir returns the state content directory: the --blob-dir flag

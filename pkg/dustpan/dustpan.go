@@ -65,29 +65,33 @@ const (
 
 // settings collects every option before NewServer validates them.
 type settings struct {
-	namespaceStore  namespace.Store
-	stackStore      stack.Store
-	updateStore     stack.UpdateStore
-	checkpointStore stack.CheckpointStore
-	eventStore      stack.EventStore
-	secretKeys      secret.KeyStore
-	secretWrapper   secret.Wrapper
-	workspaceStore  workspace.Store
-	stateStore      workspace.StateStore
-	blobStore       blob.Store
-	inventoryReader inventory.Reader
-	authenticator   identity.Authenticator
-	authorizer      identity.Authorizer
-	logger          *slog.Logger
-	now             func() time.Time
-	region          namespace.Region
-	listenAddr      string
-	consoleDir      string
-	allowedOrigins  []string
-	tlsCertFile     string
-	tlsKeyFile      string
-	publicURL       string
-	version         string
+	namespaceStore       namespace.Store
+	stackStore           stack.Store
+	updateStore          stack.UpdateStore
+	checkpointStore      stack.CheckpointStore
+	eventStore           stack.EventStore
+	secretKeys           secret.KeyStore
+	secretWrapper        secret.Wrapper
+	workspaceStore       workspace.Store
+	stateStore           workspace.StateStore
+	blobStore            blob.Store
+	inventoryReader      inventory.Reader
+	authenticator        identity.Authenticator
+	authorizer           identity.Authorizer
+	logger               *slog.Logger
+	now                  func() time.Time
+	region               namespace.Region
+	listenAddr           string
+	consoleDir           string
+	allowedOrigins       []string
+	tlsCertFile          string
+	tlsKeyFile           string
+	publicURL            string
+	version              string
+	maxCheckpointBytes   int
+	maxSecretBatchBytes  int
+	maxStateBytes        int64
+	maxBodyBytesInFlight int64
 }
 
 // Option configures a Server.
@@ -214,6 +218,27 @@ func WithVersion(v string) Option {
 	return func(o *settings) { o.version = v }
 }
 
+// WithMaxCheckpointBytes bounds one checkpoint. Zero means the domain default.
+func WithMaxCheckpointBytes(n int) Option {
+	return func(o *settings) { o.maxCheckpointBytes = n }
+}
+
+// WithMaxSecretBatchBytes bounds one secrets batch. Zero means the domain default.
+func WithMaxSecretBatchBytes(n int) Option {
+	return func(o *settings) { o.maxSecretBatchBytes = n }
+}
+
+// WithMaxStateBytes bounds one OpenTofu state version. Zero means the domain default.
+func WithMaxStateBytes(n int64) Option {
+	return func(o *settings) { o.maxStateBytes = n }
+}
+
+// WithMaxBodyBytesInFlight bounds concurrent large request bodies by bytes
+// held at once. Zero means the adapter default.
+func WithMaxBodyBytesInFlight(n int64) Option {
+	return func(o *settings) { o.maxBodyBytesInFlight = n }
+}
+
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler       http.Handler
@@ -241,29 +266,33 @@ type services struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore:  nil,
-		stackStore:      nil,
-		updateStore:     nil,
-		checkpointStore: nil,
-		eventStore:      nil,
-		secretKeys:      nil,
-		secretWrapper:   nil,
-		workspaceStore:  nil,
-		stateStore:      nil,
-		blobStore:       nil,
-		inventoryReader: nil,
-		authenticator:   nil,
-		authorizer:      identity.AdminOnly{},
-		logger:          slog.New(slog.DiscardHandler),
-		now:             time.Now,
-		region:          "",
-		listenAddr:      defaultListenAddr,
-		consoleDir:      "",
-		allowedOrigins:  nil,
-		tlsCertFile:     "",
-		tlsKeyFile:      "",
-		publicURL:       "",
-		version:         "",
+		namespaceStore:       nil,
+		stackStore:           nil,
+		updateStore:          nil,
+		checkpointStore:      nil,
+		eventStore:           nil,
+		secretKeys:           nil,
+		secretWrapper:        nil,
+		workspaceStore:       nil,
+		stateStore:           nil,
+		blobStore:            nil,
+		inventoryReader:      nil,
+		authenticator:        nil,
+		authorizer:           identity.AdminOnly{},
+		logger:               slog.New(slog.DiscardHandler),
+		now:                  time.Now,
+		region:               "",
+		listenAddr:           defaultListenAddr,
+		consoleDir:           "",
+		allowedOrigins:       nil,
+		tlsCertFile:          "",
+		tlsKeyFile:           "",
+		publicURL:            "",
+		version:              "",
+		maxCheckpointBytes:   0,
+		maxSecretBatchBytes:  0,
+		maxStateBytes:        0,
+		maxBodyBytesInFlight: 0,
 	}
 
 	for _, opt := range opts {
@@ -436,7 +465,7 @@ func newServices(cfg settings) (services, error) {
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,
 		Now:                cfg.now,
-		MaxCheckpointBytes: 0,
+		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("update service: %w", err)
@@ -447,7 +476,7 @@ func newServices(cfg settings) (services, error) {
 		Wrapper:       cfg.secretWrapper,
 		Namespaces:    namespaces,
 		Now:           cfg.now,
-		MaxBatchBytes: 0,
+		MaxBatchBytes: cfg.maxSecretBatchBytes,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("secret service: %w", err)
@@ -459,7 +488,7 @@ func newServices(cfg settings) (services, error) {
 		Blobs:         cfg.blobStore,
 		Namespaces:    namespaces,
 		Now:           cfg.now,
-		MaxStateBytes: 0,
+		MaxStateBytes: cfg.maxStateBytes,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("workspace service: %w", err)
@@ -580,14 +609,15 @@ func isLoopbackListenAddr(addr string) bool {
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
 func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:        svc.stacks,
-		Updates:       svc.updates,
-		Secrets:       svc.secrets,
-		Namespaces:    svc.namespaces,
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		BaseURL:       base,
+		Stacks:               svc.stacks,
+		Updates:              svc.updates,
+		Secrets:              svc.secrets,
+		Namespaces:           svc.namespaces,
+		Authenticator:        cfg.authenticator,
+		Authorizer:           cfg.authorizer,
+		Logger:               cfg.logger,
+		BaseURL:              base,
+		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
