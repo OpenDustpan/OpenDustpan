@@ -6,6 +6,7 @@
 //	opendustpan upgrade check [flags]
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
+//	opendustpan restore [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
@@ -47,7 +48,7 @@ import (
 var (
 	errUsage = errors.New(
 		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name> | " +
-			"opendustpan upgrade check | opendustpan backup check | opendustpan backup",
+			"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore",
 	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
@@ -72,13 +73,38 @@ var (
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
 	// errBackupTarget reports a backup target with an unknown form. It shows
-	// the allowed forms, so the operator knows what to set.
+	// the allowed forms, so the operator knows what to set. Only the serve
+	// flag --backup-target takes it.
 	errBackupTarget = errors.New(
 		"backup target must be dir:/path: set --backup-target (DUSTPAN_BACKUP_TARGET)",
 	)
 	// errBackupID reports a backup check without a backup ID. It names the
 	// flag, so the operator knows what to set.
 	errBackupID = errors.New("backup id is missing: set --backup <id>")
+	// errRestoreSource reports a restore source with an unknown form. It
+	// shows the allowed forms, so the operator knows what to set. Only the
+	// restore flag --from takes it.
+	errRestoreSource = errors.New(
+		"backup source must be dir:/path: set --from (DUSTPAN_BACKUP_TARGET)",
+	)
+	// errRestoreSourceMissing reports a restore source that does not exist.
+	// It names the flag, so the operator knows what to set.
+	errRestoreSourceMissing = errors.New(
+		"backup source does not exist: set --from to an existing directory (DUSTPAN_BACKUP_TARGET)",
+	)
+	// errRestoreSourceNotDir reports a restore source that is not a
+	// directory. It names the flag, so the operator knows what to set.
+	errRestoreSourceNotDir = errors.New(
+		"backup source is not a directory: set --from to an existing directory (DUSTPAN_BACKUP_TARGET)",
+	)
+	// errRestoreFrom reports a restore without a backup source. It names the
+	// flag, so the operator knows what to set.
+	errRestoreFrom = errors.New(
+		"backup source is missing: set --from to dir:/path (DUSTPAN_BACKUP_TARGET)",
+	)
+	// errRestoreBackup reports a restore without a backup ID. It names the
+	// flag, so the operator knows what to set.
+	errRestoreBackup = errors.New("backup id is missing: set --backup <id>")
 )
 
 // version is the server version. The build stamps it with
@@ -133,6 +159,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runUpgradeCommand(ctx, args[1:], stdout, stderr)
 	case "backup":
 		return runBackup(ctx, args[1:], stdout, stderr)
+	case "restore":
+		return runRestore(ctx, args[1:], stdout, stderr)
 	default:
 		return errUsage
 	}
@@ -470,6 +498,49 @@ func openBackupTarget(raw string) (*blobfs.Store, error) {
 	return target, nil
 }
 
+// openRestoreSource opens the restore source in raw as a blob store. It
+// never creates the directory: a restore source must already hold a backup,
+// so a missing source is a refusal naming --from. An s3:// source stays
+// reserved for a later change (issue #158). Anything else is an error that
+// shows the allowed forms.
+func openRestoreSource(raw string) (*blobfs.Store, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, errRestoreFrom
+	}
+
+	if strings.HasPrefix(trimmed, "s3://") {
+		return nil, fmt.Errorf("backup source %q: s3 sources are not supported yet: %w", trimmed, errRestoreSource)
+	}
+
+	dir, ok := strings.CutPrefix(trimmed, "dir:")
+	if !ok || strings.TrimSpace(dir) == "" {
+		return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSource)
+	}
+
+	dir = strings.TrimSpace(dir)
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSourceMissing)
+		}
+
+		return nil, fmt.Errorf("backup source %q: %w", trimmed, err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSourceNotDir)
+	}
+
+	target, err := blobfs.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return target, nil
+}
+
 // backupOptions returns the NewServer backup option for the opened target, or
 // none when no backup target is configured. WithBackupTarget is the only way
 // the target gets in: no request field, header or query value sets it.
@@ -709,6 +780,271 @@ func writeUpgradeReport(stdout io.Writer, inspection schema.Inspection) error {
 	}
 
 	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
+
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(stdout, line); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// runRestore runs `opendustpan restore --from <target> --backup <id>`: it
+// loads a backup from the target into an empty installation. It opens the
+// destination store in a way that does not start the server, runs
+// backup.Restore, and prints the steps with the row counts. It is the one
+// exception to ADR 17 in ADR 30: an offline command with no REST endpoint,
+// because restore needs an empty installation with no running server. It
+// needs an empty destination and no running server. The key comes from
+// DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
+// DUSTPAN_KEY_ENCRYPTION_KEY_FILE as serve reads it. The newer-schema guard
+// still applies to the destination. It exits 0 on success and 1 on any
+// refusal, with the one command that helps.
+func runRestore(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	plan, err := parseRestoreFlags(args, stderr)
+	if err != nil {
+		return err
+	}
+
+	wrapper, err := keyWrapper()
+	if err != nil {
+		return err
+	}
+
+	logger := slog.New(slog.NewTextHandler(stderr, nil))
+
+	return executeRestore(ctx, plan, wrapper, logger, stdout)
+}
+
+// restorePlan holds the validated settings of one restore run: the flags
+// with the trimmed backup id and source.
+type restorePlan struct {
+	flags restoreFlags
+	id    string
+	from  string
+}
+
+// parseRestoreFlags parses the restore flags and validates the backup id
+// and the source. It names the missing flag, so the operator knows what to
+// set.
+func parseRestoreFlags(args []string, stderr io.Writer) (restorePlan, error) {
+	var f restoreFlags
+
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	f.register(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return restorePlan{}, fmt.Errorf("parse flags: %w", err)
+	}
+
+	if fs.NArg() != 0 {
+		return restorePlan{}, errUsage
+	}
+
+	id := strings.TrimSpace(f.backup)
+	if id == "" {
+		return restorePlan{}, errRestoreBackup
+	}
+
+	from := strings.TrimSpace(f.from)
+	if from == "" {
+		return restorePlan{}, errRestoreFrom
+	}
+
+	return restorePlan{flags: f, id: id, from: from}, nil
+}
+
+// executeRestore opens the destination store first, so the newer-schema
+// guard reports before the source check, then the blob directory and the
+// read-only source, runs backup.Restore and prints the report. It opens
+// nothing when the destination refuses: a refused restore writes nothing.
+func executeRestore(
+	ctx context.Context,
+	plan restorePlan,
+	wrapper secret.Wrapper,
+	logger *slog.Logger,
+	stdout io.Writer,
+) error {
+	st, err := openStore(ctx, plan.flags.database)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: %w", plan.id, err)
+	}
+
+	defer st.close()
+
+	dest, err := restoreStoreOf(st)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: %w", plan.id, err)
+	}
+
+	blobs, err := openBlobs(plan.flags.database, plan.flags.blobDir)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: %w", plan.id, err)
+	}
+
+	defer closeRestoreBlobs(ctx, logger, blobs)
+
+	target, err := openRestoreSource(plan.from)
+	if err != nil {
+		return fmt.Errorf("restore backup %s from %q: %w", plan.id, plan.from, err)
+	}
+
+	defer closeRestoreTarget(ctx, logger, target)
+
+	warning, err := backup.Restore(ctx, target, backup.ID(plan.id), backup.RestoreDest{
+		Blobs:  blobs,
+		Store:  dest,
+		Region: strings.TrimSpace(plan.flags.region),
+	}, wrapper)
+	if err != nil {
+		return restoreRefusal(plan.id, err)
+	}
+
+	if writeErr := printRestoreHeader(stdout, plan.id, plan.from); writeErr != nil {
+		return writeErr
+	}
+
+	if reportErr := writeRestoreReport(ctx, stdout, dest, plan.id); reportErr != nil {
+		return reportErr
+	}
+
+	if reportErr := writeRestoreWarning(stdout, warning); reportErr != nil {
+		return reportErr
+	}
+
+	if _, writeErr := fmt.Fprintf(stdout, "restored backup %s\n", plan.id); writeErr != nil {
+		return fmt.Errorf("write output: %w", writeErr)
+	}
+
+	return nil
+}
+
+// closeRestoreBlobs closes the destination blob store and logs the error
+// with context instead of discarding it, as serve does for its stores.
+func closeRestoreBlobs(ctx context.Context, logger *slog.Logger, blobs *blobfs.Store) {
+	if err := blobs.Close(); err != nil {
+		logger.WarnContext(ctx, "close blob store", slog.String("error", err.Error()))
+	}
+}
+
+// closeRestoreTarget closes the backup source and logs the error with
+// context instead of discarding it, as serve does for its stores.
+func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target *blobfs.Store) {
+	if err := target.Close(); err != nil {
+		logger.WarnContext(ctx, "close backup source", slog.String("error", err.Error()))
+	}
+}
+
+// printRestoreHeader prints the restore start line. executeRestore calls it
+// only after backup.Restore succeeds, so a refused restore never emits a
+// line that reads like the start of a restore.
+func printRestoreHeader(stdout io.Writer, id, from string) error {
+	if _, err := fmt.Fprintf(stdout, "restore backup %s from %s\n", id, from); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+
+	return nil
+}
+
+// writeRestoreWarning prints the region warning of the restore, or nothing
+// when the regions match.
+func writeRestoreWarning(stdout io.Writer, warning string) error {
+	if warning == "" {
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(stdout, "warning: %s\n", warning); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+
+	return nil
+}
+
+// restoreFlags holds the settings of the restore subcommand.
+type restoreFlags struct {
+	common
+
+	from    string
+	backup  string
+	blobDir string
+}
+
+func (f *restoreFlags) register(fs *flag.FlagSet) {
+	f.common.register(fs)
+	fs.StringVar(
+		&f.from,
+		"from",
+		env("DUSTPAN_BACKUP_TARGET", ""),
+		"backup source dir:/path (DUSTPAN_BACKUP_TARGET)",
+	)
+	fs.StringVar(&f.backup, "backup", "", "backup ID to restore, for example bkp-aaa")
+	fs.StringVar(
+		&f.blobDir,
+		"blob-dir",
+		env("DUSTPAN_BLOB_DIR", ""),
+		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
+	)
+	fs.StringVar(
+		&f.blobDir,
+		"blob-store",
+		env("DUSTPAN_BLOB_DIR", ""),
+		"same as --blob-dir (DUSTPAN_BLOB_DIR)",
+	)
+}
+
+// restoreStoreOf returns the backup restore port of the opened destination
+// store. Both store adapters implement it.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func restoreStoreOf(st store) (backup.RestoreStore, error) {
+	switch s := st.(type) {
+	case sqliteStore:
+		return s.Store, nil
+	case postgresStore:
+		return s.Store, nil
+	default:
+		return nil, errUnknownBackend
+	}
+}
+
+// restoreRefusal wraps a restore failure with the one command that helps. A
+// destination that is not empty needs an empty one: a new --database with a
+// new --blob-dir. Every other error already names its fix: the key errors
+// name DUSTPAN_KEY_ENCRYPTION_KEY, the dialect and schema errors name the
+// versions, and the newer-schema guard names the binary.
+func restoreRefusal(id string, err error) error {
+	if errors.Is(err, backup.ErrNotEmpty) {
+		return fmt.Errorf(
+			"restore backup %s: %w: restore into an empty destination: use a new --database with a new --blob-dir",
+			id,
+			err,
+		)
+	}
+
+	return fmt.Errorf("restore backup %s: %w", id, err)
+}
+
+// writeRestoreReport prints the steps the restore ran with the row count of
+// each table, in the order of backup.Tables. It reads the counts back from
+// the destination, so the report shows what the restore loaded.
+func writeRestoreReport(ctx context.Context, stdout io.Writer, dest backup.RestoreStore, id string) error {
+	summary, err := dest.Export(ctx, io.Discard)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: read restored data: %w", id, err)
+	}
+
+	lines := []string{
+		"read manifest",
+		"checked key",
+		"copied blobs",
+		"loaded SQL data",
+	}
+
+	for _, table := range backup.Tables {
+		lines = append(lines, fmt.Sprintf("table %s: %d rows", table, summary.RowCounts[table]))
+	}
 
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(stdout, line); err != nil {
