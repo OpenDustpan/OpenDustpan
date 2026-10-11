@@ -300,7 +300,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("stack tag ls after rm", tagAbsent("team"), "stack", "tag", "ls"))
 
 	env.Step(ctx, t, step("up", checkCheckpointSaved(env, "up"), "up", "--yes", "--non-interactive"))
-	env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
+	exported := env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
 	env.Step(ctx, t, step("stack history after up", historyShowsKinds("update"), "stack", "history", "--json"))
 	env.Step(
 		ctx,
@@ -330,6 +330,38 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		"up", "--yes", "--non-interactive",
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+
+	// A crashed CLI leaves its update running: hold the stack through the
+	// API as the orphaned update, save the up's checkpoint with the crash
+	// marker as the engine left it, prove the next up is blocked, cancel
+	// through the CLI in a second process, prove the checkpoint survived
+	// cancel, then up works.
+	held = env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	env.SaveHeldCheckpoint(ctx, t, held, exported.Stdout)
+	env.Step(ctx, t, failStep(
+		"up blocked after crash",
+		outputContains("another update of this stack is in progress"),
+		"up", "--yes", "--non-interactive",
+	))
+	env.Step(ctx, t, step("cancel after crash", contains("has been canceled"), "cancel", "--yes"))
+	env.Step(
+		ctx,
+		t,
+		step("stack export preserves checkpoint", contains("crash-marker"), "stack", "export"),
+	)
+	env.Step(
+		ctx,
+		t,
+		step("up after cancel", checkCheckpointSaved(env, "up after cancel"), "up", "--yes", "--non-interactive"),
+	)
+	env.Step(ctx, t, step("stack export after cancel", exportHoldsReference, "stack", "export"))
+
+	// Cancel frees a running update from a second process: hold the stack
+	// through the API while an update runs, cancel through the CLI, then
+	// up works at once.
+	env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	env.Step(ctx, t, step("cancel running update", contains("has been canceled"), "cancel", "--yes"))
+	env.Step(ctx, t, step("up after concurrent cancel", nil, "up", "--yes", "--non-interactive"))
 
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
 		env.Step(ctx, t, s)

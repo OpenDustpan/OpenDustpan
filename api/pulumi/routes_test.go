@@ -1385,12 +1385,18 @@ func TestResolveUpdateStackTags(t *testing.T) {
 	}
 }
 
-// unusedUpdateStores satisfies the update ports for routes that never touch
-// updates. Any call panics, which a test would report.
+// unusedUpdateStores satisfies the update ports for routes that never write
+// updates. GetStack reads the active update, so ActiveUpdate answers none.
+// Any other call panics, which a test would report.
 type unusedUpdateStores struct {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+}
+
+// ActiveUpdate reports no running update.
+func (unusedUpdateStores) ActiveUpdate(_ context.Context, _ stack.Ref) (stack.Update, error) {
+	return stack.Update{}, stack.ErrUpdateNotFound
 }
 
 // newUnusedUpdates returns an Updates service for handlers whose tested routes
@@ -1415,12 +1421,18 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	return updates
 }
 
-// emptyCheckpointStore reports no state for every stack, so the final delete
-// of a stack without resources proceeds. Any other call panics, which a test
+// emptyCheckpointStore reports no state and no running update for every
+// stack, so the final delete of a stack without resources proceeds and stack
+// reads answer an empty active update. Any other call panics, which a test
 // would report.
 type emptyCheckpointStore struct {
 	stack.UpdateStore
 	stack.EventStore
+}
+
+// ActiveUpdate reports no running update.
+func (emptyCheckpointStore) ActiveUpdate(_ context.Context, _ stack.Ref) (stack.Update, error) {
+	return stack.Update{}, stack.ErrUpdateNotFound
 }
 
 func (emptyCheckpointStore) PutCheckpoint(
