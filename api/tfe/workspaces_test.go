@@ -35,7 +35,10 @@ type workspaceTestAttributes struct {
 	Name          string                   `json:"name"`
 	ExecutionMode string                   `json:"execution-mode"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	Locked        bool                     `json:"locked"`
-	AutoApply     bool                     `json:"auto-apply"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockHolder    string                   `json:"lock-holder"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockedAt      string                   `json:"locked-at"`   //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockReason    string                   `json:"lock-reason"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	AutoApply     bool                     `json:"auto-apply"`  //nolint:tagliatelle // The TFE wire name; it must not change.
 	Permissions   workspaceTestPermissions `json:"permissions"`
 }
 
@@ -316,8 +319,9 @@ func checkWorkspaceRoute(t *testing.T, handler *tfe.Handler, tc workspaceRouteCa
 
 // checkWorkspaceDoc proves one workspace document holds the want ID and
 // name, type workspaces, execution-mode local, auto-apply false, every
-// permission flag set and the current-state-version relationship of want
-// state: the sv-test123 version, or null when the workspace has no state.
+// permission flag set, no lock view and the current-state-version
+// relationship of want state: the sv-test123 version, or null when the
+// workspace has no state.
 func checkWorkspaceDoc(
 	t *testing.T, doc workspaceTestDoc, wantID, wantName string, wantState *string,
 ) {
@@ -332,6 +336,10 @@ func checkWorkspaceDoc(
 	attrs := got.Attributes
 	if attrs.Name != wantName || attrs.ExecutionMode != "local" || attrs.Locked || attrs.AutoApply {
 		t.Fatalf("attributes = %+v, want name %s, execution-mode local, unlocked, auto-apply false", attrs, wantName)
+	}
+
+	if attrs.LockHolder != "" || attrs.LockedAt != "" || attrs.LockReason != "" {
+		t.Fatalf("lock view = %q %q %q, want empty", attrs.LockHolder, attrs.LockedAt, attrs.LockReason)
 	}
 
 	checkAllPermissions(t, attrs.Permissions)
@@ -755,8 +763,8 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 func listNames(doc workspaceTestListDoc) []string {
 	names := make([]string, 0, len(doc.Data))
 
-	for _, item := range doc.Data {
-		names = append(names, item.Attributes.Name)
+	for i := range doc.Data {
+		names = append(names, doc.Data[i].Attributes.Name)
 	}
 
 	return names
@@ -918,12 +926,102 @@ func checkLockedFlags(t *testing.T, handler *tfe.Handler) {
 	doc := getListPage(t, handler, "/api/v2/organizations/acme/workspaces")
 
 	locked := map[string]bool{}
-	for _, item := range doc.Data {
-		locked[item.Attributes.Name] = item.Attributes.Locked
+	for i := range doc.Data {
+		locked[doc.Data[i].Attributes.Name] = doc.Data[i].Attributes.Locked
 	}
 
 	if !locked["beta"] || locked["acme"] || locked["zeta"] {
 		t.Fatalf("locked flags = %v, want only beta locked", locked)
+	}
+}
+
+// checkLockedWorkspace proves one locked workspace shows the lock view: the
+// holder, the time as RFC 3339 and the reason. Every other attribute stays.
+func checkLockedWorkspace(t *testing.T, got workspaceTestResource) {
+	t.Helper()
+
+	attrs := got.Attributes
+
+	if !attrs.Locked {
+		t.Fatal("beta locked = false, want true")
+	}
+
+	if attrs.LockHolder != "alice" {
+		t.Fatalf("beta lock-holder = %q, want %q", attrs.LockHolder, "alice")
+	}
+
+	if attrs.LockReason != "apply" {
+		t.Fatalf("beta lock-reason = %q, want %q", attrs.LockReason, "apply")
+	}
+
+	wantAt := stubWorkspaceTime().UTC().Format(time.RFC3339)
+	if attrs.LockedAt != wantAt {
+		t.Fatalf("beta locked-at = %q, want %q", attrs.LockedAt, wantAt)
+	}
+
+	if _, err := time.Parse(time.RFC3339, attrs.LockedAt); err != nil {
+		t.Fatalf("beta locked-at %q is not RFC 3339: %v", attrs.LockedAt, err)
+	}
+
+	if attrs.Name != "beta" || attrs.ExecutionMode != "local" || attrs.AutoApply {
+		t.Fatalf(
+			"beta attributes = %+v, want name beta, execution-mode local, auto-apply false",
+			attrs,
+		)
+	}
+}
+
+// checkUnlockedWorkspace proves one unlocked workspace shows an empty lock
+// view.
+func checkUnlockedWorkspace(t *testing.T, name string, got workspaceTestResource) {
+	t.Helper()
+
+	attrs := got.Attributes
+
+	if attrs.Locked {
+		t.Fatalf("%s locked = true, want false", name)
+	}
+
+	if attrs.LockHolder != "" || attrs.LockedAt != "" || attrs.LockReason != "" {
+		t.Fatalf(
+			"%s lock view = %q %q %q, want empty",
+			name,
+			attrs.LockHolder,
+			attrs.LockedAt,
+			attrs.LockReason,
+		)
+	}
+}
+
+// TestWorkspaceLockAttributes proves the resource writer shows the lock view:
+// a locked workspace shows the holder, the time as RFC 3339 and the reason,
+// while an unlocked workspace shows empty values. Every other attribute stays.
+func TestWorkspaceLockAttributes(t *testing.T) {
+	t.Parallel()
+
+	handler := newPagingHandler(t, allowAll())
+
+	doc := getListPage(t, handler, "/api/v2/organizations/acme/workspaces")
+
+	byName := map[string]workspaceTestResource{}
+	for i := range doc.Data {
+		byName[doc.Data[i].Attributes.Name] = doc.Data[i]
+	}
+
+	beta, ok := byName["beta"]
+	if !ok {
+		t.Fatal("list holds no workspace beta")
+	}
+
+	checkLockedWorkspace(t, beta)
+
+	for _, name := range []string{"acme", "zeta"} {
+		item, ok := byName[name]
+		if !ok {
+			t.Fatalf("list holds no workspace %s", name)
+		}
+
+		checkUnlockedWorkspace(t, name, item)
 	}
 }
 

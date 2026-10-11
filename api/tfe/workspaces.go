@@ -54,7 +54,10 @@ type workspaceAttributes struct {
 	Name          string               `json:"name"`
 	ExecutionMode string               `json:"execution-mode"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	Locked        bool                 `json:"locked"`
-	AutoApply     bool                 `json:"auto-apply"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockHolder    string               `json:"lock-holder"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockedAt      string               `json:"locked-at"`   //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockReason    string               `json:"lock-reason"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	AutoApply     bool                 `json:"auto-apply"`  //nolint:tagliatelle // The TFE wire name; it must not change.
 	Permissions   workspacePermissions `json:"permissions"`
 	CreatedAt     time.Time            `json:"created-at"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	UpdatedAt     time.Time            `json:"updated-at"` //nolint:tagliatelle // The TFE wire name; it must not change.
@@ -430,9 +433,10 @@ func paginate(page workspacePage, total, pages int) workspacePagination {
 }
 
 // workspaceDocument renders ws as a JSON:API resource: type workspaces,
-// execution-mode local, auto-apply false, the lock state, the permission
-// flags for the caller and the current-state-version relationship (null data
-// when the workspace has no state yet).
+// execution-mode local, auto-apply false, the lock state with its holder,
+// time and reason, the permission flags for the caller and the
+// current-state-version relationship (null data when the workspace has no
+// state yet).
 func (h *Handler) workspaceDocument(
 	ctx context.Context, p identity.Principal, ws workspace.Workspace,
 ) (workspaceResource, error) {
@@ -449,6 +453,13 @@ func (h *Handler) workspaceDocument(
 		return workspaceResource{}, err
 	}
 
+	// The lock time travels as RFC 3339, empty when the workspace is
+	// unlocked.
+	lockedAt := ""
+	if ws.Lock.Locked() {
+		lockedAt = ws.Lock.LockedAt.UTC().Format(time.RFC3339)
+	}
+
 	return workspaceResource{
 		ID:   ws.ID.String(),
 		Type: workspaceType,
@@ -456,6 +467,9 @@ func (h *Handler) workspaceDocument(
 			Name:          name,
 			ExecutionMode: localExecutionMode,
 			Locked:        ws.Lock.Locked(),
+			LockHolder:    ws.Lock.Holder,
+			LockedAt:      lockedAt,
+			LockReason:    ws.Lock.Reason,
 			AutoApply:     false,
 			Permissions:   h.workspacePermissions(ctx, p, ws),
 			CreatedAt:     ws.CreatedAt,
