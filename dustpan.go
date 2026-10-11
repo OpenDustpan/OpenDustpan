@@ -38,6 +38,7 @@ import (
 
 	inventoryapi "opendustpan.org/opendustpan/api/inventory"
 	"opendustpan.org/opendustpan/api/pulumi"
+	"opendustpan.org/opendustpan/api/tfe"
 	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -273,7 +274,12 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	handler, err := routes(api, units, cfg)
+	tfeAPI, err := newTFEHandler(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
+	handler, err := routes(api, units, tfeAPI, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +293,24 @@ func NewServer(opts ...Option) (*Server, error) {
 		tlsCertFile: cfg.tlsCertFile,
 		tlsKeyFile:  cfg.tlsKeyFile,
 	}, nil
+}
+
+// newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
+// to. Workspace ID routes are not served yet, so it carries no workspace
+// lookup.
+func newTFEHandler(cfg settings, svc services) (*tfe.Handler, error) {
+	handler, err := tfe.NewHandler(tfe.Config{
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		Namespaces:    svc.namespaces,
+		Workspaces:    nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tfe api: %w", err)
+	}
+
+	return handler, nil
 }
 
 // checkSettings validates the required options and the TLS and public URL
@@ -518,12 +542,17 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
-func routes(api, units http.Handler, cfg settings) (http.Handler, error) {
+func routes(api, units, tfeAPI http.Handler, cfg settings) (http.Handler, error) {
 	mux := http.NewServeMux()
-	// /api/inventory/ is more specific than /api/, so the inventory units
-	// route wins over the Pulumi CLI handler for its own prefix.
+	// /api/inventory/ and /api/v2/ are more specific than /api/, so the
+	// inventory units route and the OpenTofu routes reach their own adapters
+	// while every other /api/ route reaches Pulumi.
 	mux.Handle("/api/inventory/", withCORS(units, cfg.allowedOrigins))
+	mux.Handle("/api/v2/", withCORS(tfeAPI, cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(api, cfg.allowedOrigins))
+	// Service discovery lives outside /api/v2/, so the root mux serves it
+	// through the TFE adapter.
+	mux.Handle("GET /.well-known/terraform.json", tfeAPI)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
