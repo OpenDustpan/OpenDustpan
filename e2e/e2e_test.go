@@ -511,6 +511,102 @@ func checkStoppedBody(status int, body string) error {
 	return nil
 }
 
+// checkNamespaceCreateThroughAPI proves the namespace create route on a new
+// installation that already holds org through POST /api/server/namespaces:
+// a duplicate answers 409, a bad name answers 400, and a call without a
+// token answers 401. The harness created org through the same route on the
+// empty installation with the bootstrap admin token, so the duplicate proves
+// that creation, and the login steps that follow prove each CLI can log in
+// after it.
+func checkNamespaceCreateThroughAPI(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	status, body, err := env.ServerAPIStatus(
+		ctx,
+		http.MethodPost,
+		"/api/server/namespaces",
+		`{"name":`+strconv.Quote(org)+`}`,
+	)
+	if err != nil {
+		t.Fatalf("POST duplicate namespace %q: %v", org, err)
+	}
+
+	if status != http.StatusConflict {
+		t.Fatalf("POST duplicate namespace %q answers %d, want %d (%s)", org, status, http.StatusConflict, body)
+	}
+
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces", `{"name":"../x"}`)
+	if err != nil {
+		t.Fatalf("POST invalid namespace: %v", err)
+	}
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("POST invalid namespace answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	status, body, err = env.ServerAPIStatusBare(ctx, http.MethodPost, "/api/server/namespaces")
+	if err != nil {
+		t.Fatalf("POST namespaces without a token: %v", err)
+	}
+
+	if status != http.StatusUnauthorized {
+		t.Fatalf("POST namespaces without a token answers %d, want %d (%s)", status, http.StatusUnauthorized, body)
+	}
+}
+
+// createSecondNamespaceThroughAPI creates name through POST
+// /api/server/namespaces and proves it answers 201 with the namespace homed
+// in the test region, then that a duplicate answers 409.
+func createSecondNamespaceThroughAPI(t *testing.T, env *e2e.Env, name string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	status, body, err := env.ServerAPIStatus(
+		ctx,
+		http.MethodPost,
+		"/api/server/namespaces",
+		`{"name":`+strconv.Quote(name)+`}`,
+	)
+	if err != nil {
+		t.Fatalf("POST namespace %q: %v", name, err)
+	}
+
+	if status != http.StatusCreated {
+		t.Fatalf("POST namespace %q answers %d, want %d (%s)", name, status, http.StatusCreated, body)
+	}
+
+	var doc struct {
+		Name            string `json:"name"`
+		HomeRegion      string `json:"homeRegion"`
+		FailoverVersion int64  `json:"failoverVersion"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
+		t.Fatalf("decode namespace %q %q: %v", name, body, decodeErr)
+	}
+
+	if doc.Name != name || doc.FailoverVersion != 1 || doc.HomeRegion == "" {
+		t.Fatalf("namespace answers %+v, want %q at version 1 with a region", doc, name)
+	}
+
+	status, body, err = env.ServerAPIStatus(
+		ctx,
+		http.MethodPost,
+		"/api/server/namespaces",
+		`{"name":`+strconv.Quote(name)+`}`,
+	)
+	if err != nil {
+		t.Fatalf("POST duplicate namespace %q: %v", name, err)
+	}
+
+	if status != http.StatusConflict {
+		t.Fatalf("POST duplicate namespace %q answers %d, want %d (%s)", name, status, http.StatusConflict, body)
+	}
+}
+
 // pulumiScenario exercises login and stack management. A namespace is a
 // Pulumi organization, so every step that names or implies an organization
 // should resolve to the Namespace namespace.
@@ -519,6 +615,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	ctx := t.Context()
 	checkReady(ctx, t, env)
+	checkNamespaceCreateThroughAPI(t, env, e2e.Namespace)
 	org := e2e.Namespace
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, stackName)
 	renamedQualified := fmt.Sprintf("%s/%s/renamed", org, e2e.Project)
@@ -706,9 +803,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	// A second namespace, so the list-all step proves stacks from every
-	// readable namespace. It is created late so the default-organization
-	// step above still sees one namespace.
-	env.CreateNamespace(ctx, t, e2e.Namespace2)
+	// readable namespace. It is created late through the installation API so
+	// the default-organization step above still sees one namespace.
+	createSecondNamespaceThroughAPI(t, env, e2e.Namespace2)
 
 	second := fmt.Sprintf("%s/%s/%s", e2e.Namespace2, e2e.Project, stackName)
 	for _, s := range []e2e.StepSpec{
@@ -1385,6 +1482,7 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	ctx := t.Context()
 	checkReady(ctx, t, env)
+	checkNamespaceCreateThroughAPI(t, env, e2e.Namespace)
 
 	for _, s := range []e2e.StepSpec{
 		// Init reads the workspace by name and creates it when missing, so
@@ -4282,13 +4380,20 @@ func runBinaryRestartOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	readRestartStack(ctx, t, env)
 }
 
-// checkRunBinary proves RunBinary against the database of the environment: a
+// checkRunBinary proves RunBinary through the API of the environment: a
 // namespace create gives exit code 0 and an unknown subcommand gives a
 // non-zero exit with text on stderr.
 func checkRunBinary(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	created := env.RunBinary(ctx, t, "namespace", "create", "--database", env.DatabaseURL(t), e2e.Namespace2)
+	created := env.RunBinary(
+		ctx,
+		t,
+		"namespace", "create",
+		"--server", env.BackendURL(t),
+		"--ca-file", env.BackendCertFile(t),
+		e2e.Namespace2,
+	)
 	if created.ExitCode != 0 {
 		t.Fatalf("namespace create exits with status %d: %s%s", created.ExitCode, created.Stdout, created.Stderr)
 	}
@@ -6561,21 +6666,13 @@ func seedOldSQLite(ctx context.Context, t *testing.T, path string) {
 	}
 }
 
-// migrateSQLiteViaBinary migrates the SQLite file at path by creating a
-// namespace through the binary, so upgrade check later sees an up-to-date
-// database.
+// migrateSQLiteViaBinary migrates the SQLite file at path by serving it with
+// the environment binary and creating a namespace through the API, so upgrade
+// check later sees an up-to-date database.
 func migrateSQLiteViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, path string) {
 	t.Helper()
 
-	created := env.RunBinary(ctx, t, "namespace", "create", "--database", "sqlite:"+path, e2e.Namespace)
-	if created.ExitCode != 0 {
-		t.Fatalf(
-			"namespace create exits with status %d:\n%s%s",
-			created.ExitCode,
-			created.Stdout,
-			created.Stderr,
-		)
-	}
+	env.MigrateDatabase(ctx, t, "sqlite:"+path)
 }
 
 // insertFutureSQLite records one version above the newest in path, so upgrade
@@ -6944,21 +7041,13 @@ func seedOldPostgres(ctx context.Context, t *testing.T, schemaURL string) {
 	}
 }
 
-// migratePostgresViaBinary migrates the schema at schemaURL by creating a
-// namespace through the binary, so upgrade check later sees an up-to-date
-// database.
+// migratePostgresViaBinary migrates the schema at schemaURL by serving it
+// with the environment binary and creating a namespace through the API, so
+// upgrade check later sees an up-to-date database.
 func migratePostgresViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, schemaURL string) {
 	t.Helper()
 
-	created := env.RunBinary(ctx, t, "namespace", "create", "--database", schemaURL, e2e.Namespace)
-	if created.ExitCode != 0 {
-		t.Fatalf(
-			"namespace create exits with status %d:\n%s%s",
-			created.ExitCode,
-			created.Stdout,
-			created.Stderr,
-		)
-	}
+	env.MigrateDatabase(ctx, t, schemaURL)
 }
 
 // TestBackupCheck proves `opendustpan backup check` with RunBinary: it takes

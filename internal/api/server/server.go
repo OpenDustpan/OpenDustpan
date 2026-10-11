@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -31,6 +32,8 @@ type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
+	// Namespaces creates namespaces homed in the region of the server.
+	Namespaces *namespace.Service
 	// Backups runs installation backups against the configured target. Nil
 	// means no backup target is configured. The target comes only from this
 	// service: no request field, header or query value sets it.
@@ -41,17 +44,19 @@ type Config struct {
 
 // Handler serves the installation API under /api/server/.
 type Handler struct {
-	authn   identity.Authenticator
-	authz   identity.Authorizer
-	logger  *slog.Logger
-	backups *backup.Service
-	metrics MetricsWriter
-	mux     *patternMux
-	routes  []Route
+	authn      identity.Authenticator
+	authz      identity.Authorizer
+	logger     *slog.Logger
+	namespaces *namespace.Service
+	backups    *backup.Service
+	metrics    MetricsWriter
+	mux        *patternMux
+	routes     []Route
 }
 
-// NewHandler returns a Handler. Authenticator, Authorizer and Logger are
-// required. Backups is optional: nil means no backup target is configured.
+// NewHandler returns a Handler. Authenticator, Authorizer, Logger,
+// Namespaces and Metrics are required. Backups is optional: nil means no
+// backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Authenticator == nil:
@@ -60,18 +65,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Metrics == nil:
 		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
 	}
 
 	h := &Handler{
-		authn:   cfg.Authenticator,
-		authz:   cfg.Authorizer,
-		logger:  cfg.Logger,
-		backups: cfg.Backups,
-		metrics: cfg.Metrics,
-		mux:     newPatternMux(),
-		routes:  nil,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		logger:     cfg.Logger,
+		namespaces: cfg.Namespaces,
+		backups:    cfg.Backups,
+		metrics:    cfg.Metrics,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -175,7 +183,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // callers. Backup errors carry fixed messages: registry and target failures
 // may hold driver text, so only the sentinel decides the status and the
 // message. A missing backup answers 404, a second start 409, and a server
-// with no backup target 500 that names the setting.
+// with no backup target 500 that names the setting. A duplicate namespace
+// answers 409, a bad namespace name or body answers 400.
 func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -184,6 +193,12 @@ func classify(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrAlreadyExists):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, namespace.ErrNotFound):
+		return http.StatusNotFound, err.Error()
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return http.StatusConflict, "a backup is already running"
 	case errors.Is(err, backup.ErrAlreadyExists):

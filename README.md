@@ -46,12 +46,13 @@ A lost key-encryption key means lost secrets. The server encrypts secret
 values with this key. Without the key, the server refuses to start once
 the database holds secret values. The server keeps no other copy of the key.
 
-Create a namespace. Then start the server. A new installation has no
-namespace. Create one before the first login (ADR 18).
+Create a namespace through the API. Then log in. A new installation has no
+namespace. Start the server first, then create one before the first login
+(ADR 18, ADR 39).
 
 ```sh
-./bin/opendustpan namespace create acme
 ./bin/opendustpan serve             # SQLite in ./dustpan.db, API on :8080
+./bin/opendustpan namespace create --server http://localhost:8080 acme
 ```
 
 Point the Pulumi CLI at the server. The commands below create an empty
@@ -88,12 +89,12 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 OpenDustpan works with OpenTofu through the TFE-compatible API. The steps
 below store the state of one workspace on the server.
 
-Create a namespace. Then start the server with TLS. OpenTofu refuses plain
+Create a namespace through the API. Then log in. OpenTofu refuses plain
 HTTP for service discovery.
 
 ```sh
-./bin/opendustpan namespace create acme
 ./bin/opendustpan serve --tls-cert cert.pem --tls-key key.pem
+./bin/opendustpan namespace create --server https://localhost:8080 --ca-file cert.pem acme
 ```
 
 Point OpenTofu at the server. The `cloud` block names the host and the
@@ -167,8 +168,8 @@ docker build -t opendustpan:dev \
 ```
 
 Run it. Mount a data directory and pass the two secrets. The data directory
-must be writable by the container user. Create a namespace before the first
-login, as above.
+must be writable by the container user. Start the server first, then create a
+namespace through the API before the first login, as above.
 
 ```sh
 mkdir -p data
@@ -176,7 +177,7 @@ export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
   -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY opendustpan:dev
-docker exec dustpan /opendustpan namespace create --database sqlite:/data/dustpan.db acme
+docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --server http://localhost:8080 acme
 ```
 
 `make image-smoke` builds the image and runs the local smoke test. The test

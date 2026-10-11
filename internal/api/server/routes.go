@@ -63,6 +63,14 @@ type Route struct {
 func (h *Handler) buildRoutes() []Route {
 	return []Route{
 		{
+			Method:  http.MethodPost,
+			Path:    "/api/server/namespaces",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceAdmin},
+			Resolve: resolveCreateNamespace,
+			Serve:   h.createNamespace,
+		},
+		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/metrics",
 			Scope:   ScopeAuthorized,

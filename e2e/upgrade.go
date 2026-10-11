@@ -196,7 +196,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	dbURL := reserveDatabase(ctx, tb, in.store, in.dir)
 
 	runBinary(ctx, tb, binPath, []string{
-		"namespace", "create",
+		namespaceSubcommand, createSubcommand,
 		databaseFlag, dbURL,
 		regionFlag, region,
 		Namespace,

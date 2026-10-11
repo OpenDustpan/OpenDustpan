@@ -425,7 +425,8 @@ func (coverageMetrics) Write(_ io.Writer) error {
 }
 
 // coverageServerRoutes returns the installation adapter's route table: the
-// backup routes (ADR 30) and the metrics route (ADR 32).
+// namespace route (ADR 39), the backup routes (ADR 30) and the metrics route
+// (ADR 32).
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -433,6 +434,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    coverageNamespaces(tb),
 		Backups:       nil,
 		Metrics:       coverageMetrics{},
 	})
@@ -577,7 +579,27 @@ func CoverageAllowlist() []AllowEntry {
 		},
 	}
 
-	return slices.Concat(allowed, backupAllowEntries())
+	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries())
+}
+
+// namespaceCoveringTest names the test that proves the namespace create route
+// instead of a CLI: no CLI version in the matrix calls it.
+const namespaceCoveringTest = "TestCLIs (checkNamespaceCreateThroughAPI)"
+
+// namespaceAllowEntries returns the operator namespace route that no CLI
+// calls. The harness creates the first namespace through it on an empty
+// installation, and the scenario steps prove the duplicate, invalid and
+// unauthenticated cases.
+func namespaceAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/server/namespaces",
+			CoveringTest: namespaceCoveringTest,
+			Reason: "Operator route: no CLI creates a namespace. The harness " +
+				"creates the first one on an empty installation and the scenario " +
+				"checks the duplicate, invalid and unauthenticated cases.",
+		},
+	}
 }
 
 // backupCoveringTest names the test that proves the backup routes instead of
