@@ -63,7 +63,7 @@ with its fixed list of fields, is not part of this decision.
 2. **A read masks secret values.** A state read answers the structure and the
    values of a state. It replaces each secret value with a marker. The marker
    holds the value path of the value and never the value. The response also
-   lists the value path of each marker. This list decides what is masked: a
+   lists the value path of each marker. This list names each masked value: a
    real value with the same shape as a marker is not a marker.
 3. **Value path.** A value path is a JSON Pointer (RFC 6901) into the state
    document as the tool stores it. For the Pulumi CLI this is the deployment
