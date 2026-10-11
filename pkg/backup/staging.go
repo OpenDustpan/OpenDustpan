@@ -1,0 +1,324 @@
+package backup
+
+import (
+	"bytes"
+	"context"
+	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/secret"
+)
+
+// CheckStore is the live store ports that a server-side restore check needs
+// (ADR 38 decision 3): it reads the live dialect and version through Export,
+// proves the key-encryption key through PeekKey, and stages the SQL part
+// through StageRestore. It never loads into the live data.
+type CheckStore interface {
+	Exporter
+	KeyPeeker
+	Stager
+}
+
+// CheckInput holds one server-side restore check: the backup target to read
+// from, the live store to stage in, the key-encryption key, the backup ID, and
+// the region of this installation for the region warning. A blank Region
+// disables the warning.
+type CheckInput struct {
+	Target blob.Store
+	Live   CheckStore
+	Key    secret.Wrapper
+	ID     ID
+	Region string
+}
+
+// CheckRestore runs every restore check of ADR 38 decision 3 in check-only
+// mode: the manifest, the key-encryption key, every blob the manifest names
+// with size and checksum, the SQL part with size and checksum, and the staged
+// data with row counts, foreign keys, blob references and schema version. It
+// loads the SQL part into the staging area only, then removes the staging
+// area and applies nothing. The live data stays unchanged, also after a
+// failed check. When the final discard fails, the staging area may remain:
+// discard it again. It returns the Summary of the staged data with the region
+// warning, which is empty when the region is blank or among the home regions
+// of the manifest.
+func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
+	var none Summary
+
+	if err := ctx.Err(); err != nil {
+		return none, "", fmt.Errorf("check restore of backup %s: %w", in.ID, err)
+	}
+
+	if in.Target == nil || in.Live == nil {
+		return none, "", fmt.Errorf("check restore of backup %s: %w", in.ID, ErrMissingDependency)
+	}
+
+	plan, err := loadCheckPlan(ctx, in.Target, in.ID, in.Live)
+	if err != nil {
+		return none, "", err
+	}
+
+	if sqlErr := verifySQLPart(ctx, in.Target, in.ID, plan.manifest.SQLSize, plan.wantSHA); sqlErr != nil {
+		return none, "", sqlErr
+	}
+
+	check := backupKeyCheck{
+		target:   in.Target,
+		peeker:   in.Live,
+		id:       in.ID,
+		manifest: plan.manifest,
+		key:      in.Key,
+	}
+
+	if keyErr := check.run(ctx); keyErr != nil {
+		return none, "", keyErr
+	}
+
+	if blobErr := verifyTargetBlobs(ctx, in.Target, plan.manifest.Blobs); blobErr != nil {
+		return none, "", blobErr
+	}
+
+	staged, err := stageBackup(ctx, in.Target, in.Live, in.ID, restoreWant(plan.manifest, plan.wantBlobs))
+	if err != nil {
+		return none, "", err
+	}
+
+	if discardErr := in.Live.DiscardStaging(context.WithoutCancel(ctx)); discardErr != nil {
+		return none, "", fmt.Errorf(
+			"check restore of backup %s: discard staging area: %w (staging area may remain, discard it again)",
+			in.ID,
+			discardErr,
+		)
+	}
+
+	return staged, restoreWarning(plan.manifest, in.Region), nil
+}
+
+// checkPlan carries the checked manifest of one restore check with the decoded
+// SQL checksum, the blob references and the live summary.
+type checkPlan struct {
+	manifest  Manifest
+	wantSHA   []byte
+	wantBlobs []BlobRef
+	live      Summary
+}
+
+// loadCheckPlan reads the manifest, decodes its checksums, reads the live
+// summary, and checks the dialect and the schema version.
+func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStore) (checkPlan, error) {
+	manifest, err := readManifest(ctx, target, id)
+	if err != nil {
+		return checkPlan{}, err
+	}
+
+	wantSHA, err := parseSQLSHA(manifest, id)
+	if err != nil {
+		return checkPlan{}, err
+	}
+
+	wantBlobs, err := parseManifestBlobs(manifest, id)
+	if err != nil {
+		return checkPlan{}, err
+	}
+
+	liveSum, err := live.Export(ctx, io.Discard)
+	if err != nil {
+		return checkPlan{}, fmt.Errorf("check restore of backup %s: read live data: %w", id, err)
+	}
+
+	if dialectErr := checkRestoreDialect(manifest, liveSum, id); dialectErr != nil {
+		return checkPlan{}, dialectErr
+	}
+
+	if schemaErr := checkRestoreSchema(manifest, liveSum, id); schemaErr != nil {
+		return checkPlan{}, schemaErr
+	}
+
+	return checkPlan{manifest: manifest, wantSHA: wantSHA, wantBlobs: wantBlobs, live: liveSum}, nil
+}
+
+// stageBackup Gets the SQL part of backup id from the target and stages it in
+// the live store. A failed stage removes the staging area before the error
+// returns, so the live data stays unchanged.
+func stageBackup(
+	ctx context.Context, target blob.Store, live CheckStore, id ID, want Summary,
+) (Summary, error) {
+	var none Summary
+
+	dbKey, err := blob.ParseKey("backups/" + id.String() + "/db")
+	if err != nil {
+		return none, fmt.Errorf("check restore of backup %s: %w", id, err)
+	}
+
+	reader, err := target.Get(ctx, dbKey)
+	if err != nil {
+		if isNotFound(err) {
+			return none, fmt.Errorf("backup is incomplete: object %q is missing: %w", dbKey, ErrCorrupt)
+		}
+
+		return none, fmt.Errorf("read backup object %q: %w", dbKey, err)
+	}
+
+	staged, stageErr := live.StageRestore(ctx, reader, want)
+	closeErr := reader.Close()
+
+	if stageErr != nil {
+		// Best-effort cleanup after a failed stage: the staging area must go,
+		// and the error below already names the cause.
+		_ = live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
+
+		return none, fmt.Errorf("check restore of backup %s: %w", id, errors.Join(stageErr, closeErr))
+	}
+
+	if closeErr != nil {
+		_ = live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
+
+		return none, fmt.Errorf("close backup object %q: %w", dbKey, closeErr)
+	}
+
+	return staged, nil
+}
+
+// verifyTargetBlobs checks that the target holds every blob the manifest names,
+// with the recorded size and MD5. It writes nothing.
+func verifyTargetBlobs(ctx context.Context, target blob.Store, refs []ManifestBlob) error {
+	for _, ref := range refs {
+		if err := verifyTargetBlob(ctx, target, ref); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// verifyTargetBlob Gets one blob from the target and compares its bytes with
+// the size and MD5 of the manifest. It writes nothing.
+func verifyTargetBlob(ctx context.Context, target blob.Store, ref ManifestBlob) error {
+	wantMD5, err := hex.DecodeString(ref.MD5)
+	if err != nil || len(wantMD5) != md5.Size {
+		return fmt.Errorf("%w: blob %q MD5 %q", ErrCorrupt, ref.Key, ref.MD5)
+	}
+
+	source, err := blob.ParseKey("blobs/" + ref.Key)
+	if err != nil {
+		return fmt.Errorf("restore blob key %q: %w", ref.Key, err)
+	}
+
+	reader, err := target.Get(ctx, source)
+	if err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("backup is incomplete: object %q is missing: %w", source, ErrCorrupt)
+		}
+
+		return fmt.Errorf("read backup object %q: %w", source, err)
+	}
+
+	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+
+	_, copyErr := io.Copy(io.Discard, io.TeeReader(reader, counter))
+	closeErr := reader.Close()
+
+	if copyErr != nil {
+		return fmt.Errorf("read backup object %q: %w", source, copyErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("close backup object %q: %w", source, closeErr)
+	}
+
+	if counter.size != ref.Size || !bytes.Equal(counter.hash.Sum(nil), wantMD5) {
+		return fmt.Errorf("%w: blob %q holds %d bytes, the manifest names %d",
+			ErrCorrupt, ref.Key, counter.size, ref.Size)
+	}
+
+	return nil
+}
+
+// backupKeyCheck carries one key-encryption key check: the backup target to
+// read the SQL part from, the peeker that knows the stream format, the backup
+// ID, the manifest, and the key-encryption key.
+type backupKeyCheck struct {
+	target   blob.Store
+	peeker   KeyPeeker
+	id       ID
+	manifest Manifest
+	key      secret.Wrapper
+}
+
+// run proves that the key-encryption key opens the backup before any write.
+// With no wrapper IDs in the manifest no key is needed. Otherwise the wrapper
+// must name one of them and open one data key of the SQL part. Every error
+// names DUSTPAN_KEY_ENCRYPTION_KEY.
+func (c backupKeyCheck) run(ctx context.Context) error {
+	if len(c.manifest.WrapperIDs) == 0 {
+		return nil
+	}
+
+	if c.key == nil {
+		return fmt.Errorf("restore backup %s needs a key for wrappers %q: "+
+			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
+			c.id, c.manifest.WrapperIDs, secret.ErrKeyNotConfigured)
+	}
+
+	if !slices.Contains(c.manifest.WrapperIDs, c.key.ID()) {
+		return fmt.Errorf("restore backup %s: key %q does not match wrappers %q: "+
+			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
+			c.id, c.key.ID(), c.manifest.WrapperIDs, secret.ErrWrapperMismatch)
+	}
+
+	wrapped, err := peekBackupKey(ctx, c.target, c.peeker, c.id, c.key.ID())
+	if err != nil {
+		return err
+	}
+
+	opened, err := secret.OpenKey(ctx, c.key, wrapped)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: key %q does not open the backup: "+
+			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
+			c.id, c.key.ID(), err)
+	}
+
+	clear(opened)
+
+	return nil
+}
+
+// peekBackupKey Gets the SQL part and reads one data key of wrapperID from it
+// without loading any store.
+func peekBackupKey(
+	ctx context.Context, target blob.Store, peeker KeyPeeker, id ID, wrapperID string,
+) (secret.WrappedKey, error) {
+	var none secret.WrappedKey
+
+	key, err := blob.ParseKey("backups/" + id.String() + "/db")
+	if err != nil {
+		return none, fmt.Errorf("restore backup %s: %w", id, err)
+	}
+
+	reader, err := target.Get(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return none, fmt.Errorf("backup is incomplete: object %q is missing: %w",
+				key, ErrCorrupt)
+		}
+
+		return none, fmt.Errorf("read backup object %q: %w", key, err)
+	}
+
+	wrapped, peekErr := peeker.PeekKey(ctx, reader, wrapperID)
+	closeErr := reader.Close()
+
+	if peekErr != nil {
+		return none, fmt.Errorf("read backup key of %q: %w", key, peekErr)
+	}
+
+	if closeErr != nil {
+		return none, fmt.Errorf("close backup object %q: %w", key, closeErr)
+	}
+
+	return wrapped, nil
+}

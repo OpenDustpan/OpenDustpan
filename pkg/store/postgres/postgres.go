@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,9 @@ const migrationLockID int64 = 0x6f64706e
 type Store struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
+	// stagingMu guards stagingSchema: one staged restore at a time.
+	stagingMu     sync.Mutex
+	stagingSchema string
 }
 
 var (
@@ -60,7 +64,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{pool: pool, queries: db.New(pool)}
+	s := &Store{pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: ""}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
 
@@ -70,8 +74,20 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	return s, nil
 }
 
-// Close closes every connection in the pool.
+// Close drops a live staging schema (best effort) and closes every connection
+// in the pool, so no scratch schema survives the handle.
 func (s *Store) Close() {
+	s.stagingMu.Lock()
+	staging := s.stagingSchema
+	s.stagingSchema = ""
+	s.stagingMu.Unlock()
+
+	if staging != "" {
+		// Best-effort cleanup of the scratch schema after Close.
+		cleanup := context.WithoutCancel(context.Background())
+		_ = s.dropStagingSchema(cleanup, staging) //nolint:errcheck // Best-effort cleanup.
+	}
+
 	s.pool.Close()
 }
 

@@ -153,8 +153,10 @@ func (j restoreJob) verifyPre(ctx context.Context, plan restorePlan, key secret.
 		return err
 	}
 
-	if err := j.checkKey(ctx, plan.manifest, key); err != nil {
-		return err
+	check := backupKeyCheck{target: j.target, peeker: j.store, id: j.id, manifest: plan.manifest, key: key}
+
+	if keyErr := check.run(ctx); keyErr != nil {
+		return keyErr
 	}
 
 	for _, table := range Tables {
@@ -262,78 +264,6 @@ func verifySQLPart(ctx context.Context, target blob.Store, id ID, wantSize int64
 	}
 
 	return nil
-}
-
-// checkKey proves that the key-encryption key opens the backup before any
-// write. With no wrapper IDs in the manifest no key is needed. Otherwise the
-// wrapper must name one of them and open one data key of the SQL part. Every
-// error names DUSTPAN_KEY_ENCRYPTION_KEY.
-func (j restoreJob) checkKey(ctx context.Context, manifest Manifest, key secret.Wrapper) error {
-	if len(manifest.WrapperIDs) == 0 {
-		return nil
-	}
-
-	if key == nil {
-		return fmt.Errorf("restore backup %s needs a key for wrappers %q: "+
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
-			j.id, manifest.WrapperIDs, secret.ErrKeyNotConfigured)
-	}
-
-	if !slices.Contains(manifest.WrapperIDs, key.ID()) {
-		return fmt.Errorf("restore backup %s: key %q does not match wrappers %q: "+
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
-			j.id, key.ID(), manifest.WrapperIDs, secret.ErrWrapperMismatch)
-	}
-
-	wrapped, err := j.peekKey(ctx, key.ID())
-	if err != nil {
-		return err
-	}
-
-	opened, err := secret.OpenKey(ctx, key, wrapped)
-	if err != nil {
-		return fmt.Errorf("restore backup %s: key %q does not open the backup: "+
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
-			j.id, key.ID(), err)
-	}
-
-	clear(opened)
-
-	return nil
-}
-
-// peekKey Gets the SQL part a second time and reads one data key of wrapperID
-// from it without loading the destination.
-func (j restoreJob) peekKey(ctx context.Context, wrapperID string) (secret.WrappedKey, error) {
-	var none secret.WrappedKey
-
-	key, err := blob.ParseKey("backups/" + j.id.String() + "/db")
-	if err != nil {
-		return none, fmt.Errorf("restore backup %s: %w", j.id, err)
-	}
-
-	reader, err := j.target.Get(ctx, key)
-	if err != nil {
-		if isNotFound(err) {
-			return none, fmt.Errorf("backup is incomplete: object %q is missing: %w",
-				key, ErrCorrupt)
-		}
-
-		return none, fmt.Errorf("read backup object %q: %w", key, err)
-	}
-
-	wrapped, peekErr := j.store.PeekKey(ctx, reader, wrapperID)
-	closeErr := reader.Close()
-
-	if peekErr != nil {
-		return none, fmt.Errorf("read backup key of %q: %w", key, peekErr)
-	}
-
-	if closeErr != nil {
-		return none, fmt.Errorf("close backup object %q: %w", key, closeErr)
-	}
-
-	return wrapped, nil
 }
 
 // copyBlobs streams each blob of the manifest from the target into the
