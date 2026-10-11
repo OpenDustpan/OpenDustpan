@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 )
@@ -27,6 +28,7 @@ import (
 type Store interface {
 	namespace.Store
 	stack.Store
+	inventory.Reader
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -65,6 +67,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename of a missing stack is ErrNotFound", test: testRenameMissing},
 		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
 		{name: "rename keeps tags", test: testRenameKeepsTags},
+		{name: "inventory lists the created stack", test: testInventoryAfterCreate},
+		{name: "inventory follows a rename", test: testInventoryAfterRename},
+		{name: "inventory drops a deleted stack", test: testInventoryAfterDelete},
+		{name: "inventory follows a tag change", test: testInventoryAfterTagChange},
+		{name: "inventory orders by tool then name", test: testInventoryOrders},
+		{name: "failed stack write leaves inventory unchanged", test: testInventoryFailedWrite},
 	}
 
 	for _, tc := range cases {
@@ -745,4 +753,185 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 	if !maps.Equal(got.Tags, second.Tags) {
 		t.Fatalf("recreated stack tags = %v, want %v", got.Tags, second.Tags)
 	}
+}
+
+// listInventory returns the inventory entries of ns, failing the test on error.
+func listInventory(t *testing.T, s Store, ns namespace.Name) []inventory.Entry {
+	t.Helper()
+
+	entries, err := s.ListUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list inventory of %q: %v", ns, err)
+	}
+
+	return entries
+}
+
+// assertInventoryEntry checks one entry against its stack and change time.
+func assertInventoryEntry(t *testing.T, got inventory.Entry, st stack.Stack, changed time.Time) {
+	t.Helper()
+
+	wantName := st.Ref.Project.String() + "/" + st.Ref.Stack.String()
+
+	if got.Tool != "pulumi" || got.Namespace != st.Ref.Namespace || got.Name != wantName ||
+		got.UnitID != st.ID.String() || got.DisplayName != wantName ||
+		!got.LastChanged.Equal(changed) || got.Status != "" || got.ResourceCount != nil {
+		t.Fatalf("inventory entry = %+v, want tool pulumi name %q unit %q changed %v", got, wantName, st.ID, changed)
+	}
+}
+
+// testInventoryAfterCreate creates a stack and checks its entry exists.
+func testInventoryAfterCreate(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	entries := listInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	assertInventoryEntry(t, entries[0], st, st.UpdatedAt)
+}
+
+// testInventoryAfterRename renames a stack and checks one entry stays, under
+// the new name and with the same stack ID.
+func testInventoryAfterRename(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	if err := s.RenameStack(t.Context(), st.Ref, "renamed", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	entries := listInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	renamed := st
+	renamed.Ref.Stack = "renamed"
+
+	assertInventoryEntry(t, entries[0], renamed, st.UpdatedAt)
+}
+
+// testInventoryAfterDelete deletes a stack and checks no entry stays.
+func testInventoryAfterDelete(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	if entries := listInventory(t, s, ns.Name); len(entries) != 0 {
+		t.Fatalf("inventory entries = %+v, want none", entries)
+	}
+}
+
+// testInventoryAfterTagChange changes tags and checks the entry follows the
+// new change time.
+func testInventoryAfterTagChange(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	updated := now().Add(time.Hour)
+	next := map[string]string{"team": "e2e"}
+
+	if err := s.UpdateStackTags(t.Context(), st.Ref, next, updated, ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	entries := listInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	assertInventoryEntry(t, entries[0], st, updated)
+}
+
+// testInventoryOrders checks entries order by tool, then name.
+func testInventoryOrders(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+
+	for _, nn := range [][2]string{{"web", "prod"}, {"api", "prod"}, {"web", "dev"}} {
+		st := newStack(ns.Name, nn[0], nn[1])
+		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+			t.Fatalf("create stack %s: %v", st.Ref, err)
+		}
+	}
+
+	entries := listInventory(t, s, ns.Name)
+	if len(entries) != 3 {
+		t.Fatalf("inventory entries = %+v, want three", entries)
+	}
+
+	want := []string{"api/prod", "web/dev", "web/prod"}
+
+	for i := range want {
+		if entries[i].Tool != "pulumi" || entries[i].Name != want[i] {
+			t.Fatalf("inventory entry %d = %s:%s, want pulumi:%s", i, entries[i].Tool, entries[i].Name, want[i])
+		}
+	}
+}
+
+// testInventoryFailedWrite checks a write that fails leaves the table
+// unchanged: a duplicate and a stale fence add or remove nothing.
+func testInventoryFailedWrite(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	duplicate := newStack(ns.Name, "web", "prod")
+	if err := s.CreateStack(t.Context(), duplicate, ns.Fence()); !errors.Is(err, stack.ErrAlreadyExists) {
+		t.Fatalf("create duplicate stack: err = %v, want ErrAlreadyExists", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	ghost := newStack(ns.Name, "web", "dev")
+
+	if err := s.CreateStack(t.Context(), ghost, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("create stack with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if err := s.RenameStack(t.Context(), st.Ref, "renamed", stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("rename with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	entries := listInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	assertInventoryEntry(t, entries[0], st, st.UpdatedAt)
 }

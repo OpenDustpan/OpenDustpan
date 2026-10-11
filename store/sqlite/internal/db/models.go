@@ -4,6 +4,10 @@
 
 package db
 
+import (
+	"database/sql"
+)
+
 type Checkpoint struct {
 	StackID       string
 	UpdateID      string
@@ -15,6 +19,17 @@ type Checkpoint struct {
 	FeaturesJson  string
 	Deployment    []byte
 	SavedAtMs     int64
+}
+
+type Inventory struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
 }
 
 type Namespace struct {
