@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -4296,6 +4297,445 @@ func checkPairReport(t *testing.T, pair *e2e.Pair) {
 
 	if len(run.Requests) == 0 {
 		t.Fatal("pair report holds no requests")
+	}
+}
+
+// TestPulumiFileImport drives P2 of ADR 29 on every Pulumi CLI version in
+// the matrix: a file backend stack with the passphrase secrets provider moves
+// to D with its current state only, and the passphrase provider keeps working.
+// The source directory is byte-identical after the import. It writes a -file
+// report per version and store, so it never overwrites a matrix report.
+func TestPulumiFileImport(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	tool := e2e.Pulumi()
+
+	for _, label := range tool.Versions() {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+
+			installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+			defer cancel()
+
+			cli, err := fetcher.Install(installCtx, tool, label)
+			if err != nil {
+				// Still report the version, so a broken download is visible in the summary.
+				for _, db := range databases {
+					writeReport(t, e2e.NotRun(tool.Name, label+fileImportSuffix, db, err.Error(), false))
+				}
+
+				t.Fatalf("install %s %s: %v", tool.Name, label, err)
+			}
+
+			t.Logf("%s %s (checksum %s) in %s", cli.Tool, cli.Version, cli.ChecksumSource, cli.Dir)
+
+			for _, db := range databases {
+				t.Run(string(db), func(t *testing.T) {
+					t.Parallel()
+					runPulumiFileImportOnStore(t, cli, db)
+				})
+			}
+		})
+	}
+}
+
+// runPulumiFileImportOnStore runs the file backend import on one store. If
+// server setup fails, NewEnv ends the test before env exists; the report then
+// holds the version as not run instead of dropping it from the summary.
+func runPulumiFileImportOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		reason := "set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite"
+		writeReport(t, e2e.NotRun(cli.Tool, cli.Label+fileImportSuffix, store, reason, true))
+		t.Skip(reason)
+	}
+
+	var env *e2e.Env
+
+	t.Cleanup(func() {
+		if env == nil {
+			writeReport(
+				t,
+				e2e.NotRun(cli.Tool, cli.Label+fileImportSuffix, store, "server setup failed; see the test log", false),
+			)
+
+			return
+		}
+
+		run := e2e.NewRun(env)
+		run.Label += fileImportSuffix
+		writeReport(t, run)
+	})
+
+	env = e2e.NewEnv(t.Context(), t, cli, store)
+
+	pulumiFileImportScenario(t, env)
+}
+
+// The P2 scenario uses its own Pulumi project and stack, so it never
+// touches the stacks of the main scenario. Reports carry the suffix, so they
+// never overwrite a matrix report.
+const (
+	fileImportProject = "e2e-import"
+	fileImportStack   = "dev"
+	fileImportSuffix  = "-file"
+)
+
+// fileImportProgram is the scratch YAML program for the file backend import.
+// It holds no resources, so no provider plugin is downloaded and an up after
+// the import has nothing to change.
+const fileImportProgram = "name: " + fileImportProject + "\nruntime: yaml\nresources: {}\n"
+
+// pulumiFileImportScenario drives P2: a file backend stack with the passphrase
+// secrets provider moves to D. The file backend exports the current state
+// only, so the destination history holds one import update. The passphrase
+// provider survives the move, and changing it to the service provider changes
+// nothing either. The source directory is byte-identical after the import.
+func pulumiFileImportScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	checkReady(ctx, t, env)
+
+	backendDir := t.TempDir()
+	fileProject := writeFileImportProject(t)
+	destProject := writeFileImportProject(t)
+	passphrase := fileImportPassphrase(t)
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, fileImportProject, fileImportStack)
+
+	env.StepIn(
+		ctx,
+		t,
+		fileProject,
+		fileStep(backendDir, passphrase, "file login", contains("file://"), "login", "file://"+backendDir),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		fileProject,
+		fileStep(
+			backendDir,
+			passphrase,
+			"file stack init",
+			nil,
+			"stack",
+			"init",
+			fileImportStack,
+			"--secrets-provider",
+			"passphrase",
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		fileProject,
+		fileStep(
+			backendDir,
+			passphrase,
+			"file up",
+			nil,
+			"up",
+			"--yes",
+			"--non-interactive",
+			"--stack",
+			fileImportStack,
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		fileProject,
+		fileStep(
+			backendDir,
+			passphrase,
+			"file stack history",
+			historyShowsKinds("update"),
+			"stack",
+			"history",
+			"--json",
+			"--stack",
+			fileImportStack,
+		),
+	)
+
+	before := digestSourceDir(t, backendDir)
+
+	env.StepIn(ctx, t, destProject, destStep(passphrase, "login to destination", contains(env.URL), "login"))
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"destination stack init",
+			nil,
+			"stack",
+			"init",
+			qualified,
+			"--secrets-provider",
+			"passphrase",
+		),
+	)
+	exported := env.StepIn(
+		ctx,
+		t,
+		fileProject,
+		fileStep(
+			backendDir,
+			passphrase,
+			"file stack export",
+			fileImportHoldsState,
+			"stack",
+			"export",
+			"--stack",
+			fileImportStack,
+		),
+	)
+
+	// The pipe from the source into the destination: the export of the file
+	// stack goes to the import on standard input, so no file holds it, and
+	// becomes the first state of the stack on D.
+	importSpec := destStep(passphrase, "file stack import", nil, "stack", "import", "--stack", qualified)
+	importSpec.Stdin = exported.Stdout
+	env.StepIn(ctx, t, destProject, importSpec)
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"destination export after import",
+			fileImportHoldsState,
+			"stack",
+			"export",
+			"--stack",
+			qualified,
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"destination history after import",
+			fileImportHistoryShowsImportOnly,
+			"stack",
+			"history",
+			"--json",
+			"--stack",
+			qualified,
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"up after file import",
+			upHasNoChanges,
+			"up",
+			"--yes",
+			"--non-interactive",
+			"--stack",
+			qualified,
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"change secrets provider to service",
+			nil,
+			"stack",
+			"change-secrets-provider",
+			"default",
+			"--stack",
+			qualified,
+		),
+	)
+	env.StepIn(
+		ctx,
+		t,
+		destProject,
+		destStep(
+			passphrase,
+			"up after provider change",
+			upHasNoChanges,
+			"up",
+			"--yes",
+			"--non-interactive",
+			"--stack",
+			qualified,
+		),
+	)
+
+	checkSourceDirUnchanged(t, backendDir, before)
+}
+
+// fileImportPassphrase returns a fresh passphrase for the P2 file backend
+// stack. It is random per run, so it never lands in the report: the CLI logs
+// only that the variable is set.
+func fileImportPassphrase(t *testing.T) string {
+	t.Helper()
+
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("generate passphrase: %v", err)
+	}
+
+	return hex.EncodeToString(raw)
+}
+
+// fileStep returns a scenario step against the file backend source at
+// backendDir: the backend URL points at the source, no access token is sent,
+// and the passphrase unlocks the passphrase secrets provider.
+func fileStep(
+	backendDir, passphrase, name string,
+	check func(e2e.Result) error,
+	args ...string,
+) e2e.StepSpec {
+	return e2e.StepSpec{
+		Check: check,
+		Name:  name,
+		Args:  args,
+		Env: []string{
+			"PULUMI_BACKEND_URL=file://" + backendDir,
+			"PULUMI_ACCESS_TOKEN=",
+			"PULUMI_CONFIG_PASSPHRASE=" + passphrase,
+		},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	}
+}
+
+// destStep returns a scenario step against the destination with the passphrase
+// set, so the imported stack still unlocks before the provider change.
+func destStep(passphrase, name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
+	return e2e.StepSpec{
+		Check:  check,
+		Name:   name,
+		Args:   args,
+		Env:    []string{"PULUMI_CONFIG_PASSPHRASE=" + passphrase},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	}
+}
+
+// writeFileImportProject writes the P2 scratch project into a fresh directory
+// and returns its path. The file backend and the destination each get their
+// own copy, so their stack config files never clash.
+func writeFileImportProject(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fileImportProgram), 0o600); err != nil {
+		t.Fatalf("write P2 Pulumi.yaml: %v", err)
+	}
+
+	return dir
+}
+
+// fileImportHoldsState proves that a stack export holds the moved state: the
+// stack resource of the file stack with the passphrase secrets provider.
+func fileImportHoldsState(r e2e.Result) error {
+	if !strings.Contains(r.Stdout, fileImportProject+"-"+fileImportStack) {
+		return fmt.Errorf("%w: export lacks the stack resource: %s", errUnexpected, r.Stdout)
+	}
+
+	if !strings.Contains(r.Stdout, `"type": "passphrase"`) {
+		return fmt.Errorf("%w: export lacks the passphrase secrets provider: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
+}
+
+// fileImportHistoryShowsImportOnly proves that the import moved the current
+// state only: the destination history holds one import update and no replayed
+// history from the source.
+func fileImportHistoryShowsImportOnly(r e2e.Result) error {
+	var updates []struct {
+		Kind string `json:"kind"`
+	}
+
+	if err := json.Unmarshal([]byte(r.Stdout), &updates); err != nil {
+		return fmt.Errorf("%w: decode stack history: %w", errUnexpected, err)
+	}
+
+	if len(updates) != 1 || updates[0].Kind != "import" {
+		return fmt.Errorf(
+			"%w: destination history holds %d updates, want one import: %s",
+			errUnexpected,
+			len(updates),
+			r.Stdout,
+		)
+	}
+
+	return nil
+}
+
+// digestSourceDir returns the SHA-256 digest of every file under dir: relative
+// paths and contents, so the test proves the file backend source stayed
+// byte-identical.
+func digestSourceDir(t *testing.T, dir string) string {
+	t.Helper()
+
+	hash := sha256.New()
+
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Errorf("relativize %s: %w", path, err)
+		}
+
+		hash.Write([]byte(rel))
+
+		data, err := os.ReadFile(path) //nolint:gosec // The test digests the file backend directory it created.
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+
+		hash.Write(data)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("digest %s: %v", dir, err)
+	}
+
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// checkSourceDirUnchanged proves that the file backend source is byte-identical
+// to before: the import never deletes in the source.
+func checkSourceDirUnchanged(t *testing.T, dir, before string) {
+	t.Helper()
+
+	if after := digestSourceDir(t, dir); after != before {
+		t.Error("file backend source changed during the import")
+	} else {
+		t.Logf("file backend source unchanged: %s", after)
 	}
 }
 
