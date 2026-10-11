@@ -3,6 +3,7 @@
 //	opendustpan --version
 //	opendustpan serve [flags]
 //	opendustpan namespace create [flags] <name>
+//	opendustpan upgrade check [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
@@ -41,7 +42,8 @@ import (
 
 var (
 	errUsage = errors.New(
-		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name>",
+		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name> | " +
+			"opendustpan upgrade check",
 	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
@@ -111,6 +113,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return serve(ctx, args[1:], stderr)
 	case len(args) >= 2 && args[0] == "namespace" && args[1] == "create":
 		return createNamespace(ctx, args[2:], stdout, stderr)
+	case len(args) >= 2 && args[0] == "upgrade" && args[1] == "check":
+		return upgradeCheck(ctx, args[2:], stdout, stderr)
 	default:
 		return errUsage
 	}
@@ -411,6 +415,133 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 
 	if _, err := fmt.Fprintf(stdout, "created namespace %s in region %s\n", ns.Name, ns.HomeRegion); err != nil {
 		return fmt.Errorf("write output: %w", err)
+	}
+
+	return nil
+}
+
+// Upgrade verdicts of the upgrade check subcommand.
+const (
+	// verdictUpToDate reports a database with no pending and no unknown migrations.
+	verdictUpToDate = "up to date"
+	// verdictUpgradePossible reports a database with pending migrations and no unknown versions.
+	verdictUpgradePossible = "upgrade possible"
+	// verdictCannotStart reports a database with a version the binary does not embed.
+	verdictCannotStart = "cannot start"
+)
+
+// upgradeCheck runs `opendustpan upgrade check`: it reads the schema state of
+// the database and writes nothing. It prints the version of the binary, the
+// schema version of the database, the schema version the binary needs, the
+// names of the pending migrations and one verdict. The exit code is 0 for
+// `up to date` and `upgrade possible` and 1 for `cannot start` and for
+// errors. The command has no REST endpoint and no console view: it is a
+// process-level tool (ADR 33 decision 3, ADR 17 process settings).
+func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var c common
+
+	fs := flag.NewFlagSet("upgrade check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	// The check accepts --region for flag parity with serve and does not use it.
+	c.register(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if fs.NArg() != 0 {
+		return errUsage
+	}
+
+	inspection, err := inspectDatabase(ctx, c.database)
+	if err != nil {
+		return err
+	}
+
+	if err := writeUpgradeReport(stdout, inspection); err != nil {
+		return err
+	}
+
+	if len(inspection.Unknown) > 0 {
+		return withBinaryVersion(&schema.NewerError{
+			DatabaseVersion: inspection.DatabaseVersion,
+			BinaryVersion:   inspection.BinaryVersion,
+		})
+	}
+
+	return nil
+}
+
+// inspectDatabase reports the schema state of database without changing it.
+// It takes --database as serve does.
+func inspectDatabase(
+	ctx context.Context, database string,
+) (schema.Inspection, error) {
+	switch {
+	case strings.HasPrefix(database, "sqlite:"):
+		inspection, err := sqlite.Inspect(ctx, strings.TrimPrefix(database, "sqlite:"))
+		if err != nil {
+			return schema.Inspection{}, fmt.Errorf("inspect sqlite database: %w", err)
+		}
+
+		return inspection, nil
+	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
+		inspection, err := postgres.Inspect(ctx, database)
+		if err != nil {
+			return schema.Inspection{}, fmt.Errorf("inspect postgres database: %w", err)
+		}
+
+		return inspection, nil
+	default:
+		return schema.Inspection{}, errUnknownBackend
+	}
+}
+
+// upgradeVerdict returns the one verdict for inspection: `cannot start` when
+// the database records a version the binary does not embed, `upgrade
+// possible` when migrations are pending, else `up to date`.
+func upgradeVerdict(inspection schema.Inspection) string {
+	switch {
+	case len(inspection.Unknown) > 0:
+		return verdictCannotStart
+	case len(inspection.Pending) > 0:
+		return verdictUpgradePossible
+	default:
+		return verdictUpToDate
+	}
+}
+
+// writeUpgradeReport writes the binary version, the schema version of the
+// database, the schema version the binary needs, the pending migration names
+// and the verdict. When migrations are pending it tells the operator to back
+// up the database first and that no downgrade path exists.
+func writeUpgradeReport(stdout io.Writer, inspection schema.Inspection) error {
+	lines := []string{
+		"binary version: " + version,
+		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
+		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),
+	}
+
+	if len(inspection.Pending) == 0 {
+		lines = append(lines, "pending migrations: none")
+	} else {
+		lines = append(lines, "pending migrations:")
+		for _, name := range inspection.Pending {
+			lines = append(lines, "  "+name)
+		}
+
+		lines = append(
+			lines,
+			"Back up the database before the upgrade. No downgrade path exists.",
+		)
+	}
+
+	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
+
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(stdout, line); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
 
 	return nil

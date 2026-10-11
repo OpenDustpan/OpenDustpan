@@ -3,18 +3,28 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	// Registers the "sqlite3" database/sql driver for the upgrade check fixtures.
+	_ "github.com/ncruces/go-sqlite3/driver"
 
 	"opendustpan.org/opendustpan/e2e"
 )
@@ -2564,5 +2574,757 @@ func checkTofuPairReport(ctx context.Context, t *testing.T, pair *e2e.Pair) {
 
 	if len(run.Requests) == 0 {
 		t.Fatal("pair report holds no requests")
+	}
+}
+
+// TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary: on a
+// fresh, an old, an up-to-date and a newer database, on SQLite and on
+// PostgreSQL, the verdict and the exit code match and the command writes
+// nothing. It runs only with E2E_SERVER=binary, on every store under test.
+func TestUpgradeCheck(t *testing.T) {
+	t.Parallel()
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary")
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runUpgradeCheckOnStore(t, cli, db)
+		})
+	}
+}
+
+// runUpgradeCheckOnStore runs the upgrade check cases on one store: a fresh,
+// an old, an up-to-date and a newer database through RunBinary.
+func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	switch store {
+	case e2e.StoreSQLite:
+		checkUpgradeSQLite(ctx, t, env)
+	case e2e.StorePostgres:
+		checkUpgradePostgres(ctx, t, env)
+	default:
+		t.Fatalf("unknown store: %s", store)
+	}
+}
+
+// wantUpgradeResult holds the expected outcome of one upgrade check run:
+// the verdict, the exit code and whether pending migrations are listed.
+type wantUpgradeResult struct {
+	verdict  string
+	exitCode int
+	pending  bool
+}
+
+// checkUpgradeResult proves res exits with the expected code, holds the
+// expected verdict and names the binary version, both schema versions and
+// the pending state.
+func checkUpgradeResult(t *testing.T, res e2e.BinaryResult, want wantUpgradeResult) {
+	t.Helper()
+
+	if res.ExitCode != want.exitCode {
+		t.Fatalf(
+			"upgrade check exits with status %d, want %d:\n%s%s",
+			res.ExitCode,
+			want.exitCode,
+			res.Stdout,
+			res.Stderr,
+		)
+	}
+
+	for _, line := range []string{
+		"binary version: ",
+		"database schema version: ",
+		"binary schema version: ",
+		"verdict: " + want.verdict,
+	} {
+		if !strings.Contains(res.Stdout, line) {
+			t.Fatalf("upgrade check output lacks %q:\n%s%s", line, res.Stdout, res.Stderr)
+		}
+	}
+
+	if want.pending {
+		checkUpgradePending(t, res)
+	} else {
+		checkUpgradeNoPending(t, res)
+	}
+}
+
+// checkUpgradePending proves res lists pending migrations with the backup
+// advice.
+func checkUpgradePending(t *testing.T, res e2e.BinaryResult) {
+	t.Helper()
+
+	for _, line := range []string{
+		"pending migrations:",
+		".sql",
+		"Back up the database before the upgrade.",
+		"No downgrade path exists.",
+	} {
+		if !strings.Contains(res.Stdout, line) {
+			t.Fatalf("upgrade check output lacks %q:\n%s%s", line, res.Stdout, res.Stderr)
+		}
+	}
+}
+
+// checkUpgradeNoPending proves res holds `pending migrations: none`.
+func checkUpgradeNoPending(t *testing.T, res e2e.BinaryResult) {
+	t.Helper()
+
+	if !strings.Contains(res.Stdout, "pending migrations: none") {
+		t.Fatalf("upgrade check output lacks `pending migrations: none`:\n%s%s", res.Stdout, res.Stderr)
+	}
+}
+
+// parseUpgradeVersions reads the database and binary schema versions from
+// upgrade check output.
+//
+//nolint:nonamedreturns // The names keep the database and binary versions in order at callers.
+func parseUpgradeVersions(t *testing.T, out string) (database, binary int64) {
+	t.Helper()
+
+	for line := range strings.Lines(out) {
+		if rest, ok := strings.CutPrefix(line, "database schema version: "); ok {
+			v, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if err != nil {
+				t.Fatalf("parse database schema version %q: %v", rest, err)
+			}
+
+			database = v
+		}
+
+		if rest, ok := strings.CutPrefix(line, "binary schema version: "); ok {
+			v, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if err != nil {
+				t.Fatalf("parse binary schema version %q: %v", rest, err)
+			}
+
+			binary = v
+		}
+	}
+
+	if database < 0 || binary <= 0 {
+		t.Fatalf("schema versions are missing:\n%s", out)
+	}
+
+	return database, binary
+}
+
+// oldFixtureMaxVersion is the newest version in the fixed old-database
+// fixture. The fixture stays below the binary version, so the check reports
+// pending migrations. Bump it only with the fixture name and assertions.
+const oldFixtureMaxVersion = 8
+
+// checkUpgradeSQLite runs the four upgrade check cases on SQLite files: a
+// fresh file, a file with versions 1 through oldFixtureMaxVersion, a file the
+// binary migrated and a migrated file with one extra version row.
+func checkUpgradeSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	t.Run("fresh", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeFreshSQLite(ctx, t, env)
+	})
+
+	t.Run("old", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeOldSQLite(ctx, t, env)
+	})
+
+	t.Run("up to date", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeCurrentSQLite(ctx, t, env)
+	})
+
+	t.Run("newer", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeNewerSQLite(ctx, t, env)
+	})
+}
+
+// checkUpgradeFreshSQLite proves upgrade check on an empty file: it exits 0
+// with `upgrade possible` and leaves the file unchanged.
+func checkUpgradeFreshSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty database: %v", err)
+	}
+
+	before := readSQLiteFile(t, path)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+	}
+
+	checkSQLiteUnchanged(t, path, before)
+}
+
+// checkUpgradeOldSQLite proves upgrade check on versions 1 through
+// oldFixtureMaxVersion: it exits 0 with `upgrade possible` and leaves the
+// file unchanged.
+func checkUpgradeOldSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	seedOldSQLite(ctx, t, path)
+
+	before := readSQLiteFile(t, path)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+	) {
+		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+	}
+
+	checkSQLiteUnchanged(t, path, before)
+}
+
+// checkUpgradeCurrentSQLite proves upgrade check on a migrated file: it exits
+// 0 with `up to date` and leaves the file unchanged.
+func checkUpgradeCurrentSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	migrateSQLiteViaBinary(ctx, t, env, path)
+
+	before := readSQLiteFile(t, path)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database != binary {
+		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkSQLiteUnchanged(t, path, before)
+}
+
+// checkUpgradeNewerSQLite proves upgrade check on a migrated file with one
+// extra version row: it exits 1 with `cannot start` and leaves the file
+// unchanged.
+func checkUpgradeNewerSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	migrateSQLiteViaBinary(ctx, t, env, path)
+	insertFutureSQLite(ctx, t, path)
+
+	before := readSQLiteFile(t, path)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database <= binary {
+		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkSQLiteUnchanged(t, path, before)
+}
+
+// seedOldSQLite creates a SQLite database at path with schema versions 1
+// through oldFixtureMaxVersion recorded, so upgrade check sees an old database.
+func seedOldSQLite(ctx context.Context, t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty database: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	const createTable = `CREATE TABLE schema_migrations (
+		version INTEGER NOT NULL PRIMARY KEY,
+		name    TEXT    NOT NULL
+	) STRICT`
+
+	if _, err := conn.ExecContext(ctx, createTable); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	for v := int64(1); v <= oldFixtureMaxVersion; v++ {
+		if _, err := conn.ExecContext(ctx, record, v, fmt.Sprintf("%04d_old.sql", v)); err != nil {
+			t.Fatalf("record version %d: %v", v, err)
+		}
+	}
+}
+
+// migrateSQLiteViaBinary migrates the SQLite file at path by creating a
+// namespace through the binary, so upgrade check later sees an up-to-date
+// database.
+func migrateSQLiteViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, path string) {
+	t.Helper()
+
+	created := env.RunBinary(ctx, t, "namespace", "create", "--database", "sqlite:"+path, e2e.Namespace)
+	if created.ExitCode != 0 {
+		t.Fatalf(
+			"namespace create exits with status %d:\n%s%s",
+			created.ExitCode,
+			created.Stdout,
+			created.Stderr,
+		)
+	}
+}
+
+// insertFutureSQLite records one version above the newest in path, so upgrade
+// check sees a newer database.
+func insertFutureSQLite(ctx context.Context, t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	var newest int64
+
+	row := conn.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`)
+	if scanErr := row.Scan(&newest); scanErr != nil {
+		t.Fatalf("read newest version: %v", scanErr)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	future := newest + 1
+
+	if _, execErr := conn.ExecContext(ctx, record, future, fmt.Sprintf("%04d_future.sql", future)); execErr != nil {
+		t.Fatalf("record future version: %v", execErr)
+	}
+}
+
+// readSQLiteFile returns the raw bytes of the database file at path.
+func readSQLiteFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file: %v", err)
+	}
+
+	return data
+}
+
+// checkSQLiteUnchanged proves upgrade check wrote nothing: the database file
+// at path is byte-identical to before.
+func checkSQLiteUnchanged(t *testing.T, path string, before []byte) {
+	t.Helper()
+
+	if after := readSQLiteFile(t, path); !bytes.Equal(after, before) {
+		t.Fatal("upgrade check changed the database file, want it unchanged")
+	}
+}
+
+// checkUpgradePostgres runs the four upgrade check cases on PostgreSQL
+// schemas: an empty schema, versions 1 through oldFixtureMaxVersion, a schema
+// the binary migrated and a migrated schema with one extra version row.
+func checkUpgradePostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	t.Run("fresh", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeFreshPostgres(ctx, t, env)
+	})
+
+	t.Run("old", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeOldPostgres(ctx, t, env)
+	})
+
+	t.Run("up to date", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeCurrentPostgres(ctx, t, env)
+	})
+
+	t.Run("newer", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeNewerPostgres(ctx, t, env)
+	})
+}
+
+// checkUpgradeFreshPostgres proves upgrade check on an empty schema: it exits
+// 0 with `upgrade possible` and creates no table.
+func checkUpgradeFreshPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	schemaURL := upgradePostgresSchema(ctx, t)
+	before := snapshotPostgres(ctx, t, schemaURL)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+	}
+
+	after := snapshotPostgres(ctx, t, schemaURL)
+	checkPostgresUnchanged(t, before, after)
+
+	if slices.Contains(after.tables, "schema_migrations") {
+		t.Fatal("upgrade check created schema_migrations, want no such table")
+	}
+}
+
+// checkUpgradeOldPostgres proves upgrade check on versions 1 through
+// oldFixtureMaxVersion: it exits 0 with `upgrade possible` and changes no
+// table or version row.
+func checkUpgradeOldPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	schemaURL := upgradePostgresSchema(ctx, t)
+	seedOldPostgres(ctx, t, schemaURL)
+
+	before := snapshotPostgres(ctx, t, schemaURL)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+	) {
+		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+	}
+
+	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
+}
+
+// checkUpgradeCurrentPostgres proves upgrade check on a migrated schema: it
+// exits 0 with `up to date` and changes no table or version row.
+func checkUpgradeCurrentPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	schemaURL := upgradePostgresSchema(ctx, t)
+	migratePostgresViaBinary(ctx, t, env, schemaURL)
+
+	before := snapshotPostgres(ctx, t, schemaURL)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database != binary {
+		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
+}
+
+// checkUpgradeNewerPostgres proves upgrade check on a migrated schema with
+// one extra version row: it exits 1 with `cannot start` and changes no table
+// or version row.
+func checkUpgradeNewerPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	schemaURL := upgradePostgresSchema(ctx, t)
+	migratePostgresViaBinary(ctx, t, env, schemaURL)
+	insertFuturePostgres(ctx, t, schemaURL)
+
+	before := snapshotPostgres(ctx, t, schemaURL)
+	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database <= binary {
+		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
+}
+
+// upgradePostgresSchema creates a fresh schema and returns the base URL with
+// the search path set to it. The schema is dropped when the test ends.
+func upgradePostgresSchema(ctx context.Context, t *testing.T) string {
+	t.Helper()
+
+	base := e2e.PostgresURL()
+	if base == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("generate schema name: %v", err)
+	}
+
+	schema := "e2e_" + hex.EncodeToString(raw)
+
+	conn, err := pgx.Connect(ctx, base)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); execErr != nil {
+		t.Fatalf("create schema: %v", execErr)
+	}
+
+	t.Cleanup(func() {
+		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+
+		dropConn, dropErr := pgx.Connect(dropCtx, base)
+		if dropErr != nil {
+			t.Errorf("connect to postgres: %v", dropErr)
+
+			return
+		}
+
+		defer func() {
+			if closeErr := dropConn.Close(dropCtx); closeErr != nil {
+				t.Errorf("close postgres connection: %v", closeErr)
+			}
+		}()
+
+		dropStmt := "DROP SCHEMA " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
+		if _, dropExecErr := dropConn.Exec(dropCtx, dropStmt); dropExecErr != nil {
+			t.Errorf("drop schema: %v", dropExecErr)
+		}
+	})
+
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse postgres URL: %v", err)
+	}
+
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+
+	return u.String()
+}
+
+// postgresSnapshot holds the table list and schema_migrations rows of one
+// PostgreSQL schema, so the test proves upgrade check wrote nothing.
+type postgresSnapshot struct {
+	tables   []string
+	versions []string
+}
+
+// snapshotPostgres reads the table names and the schema_migrations rows of
+// schemaURL. versions is nil when the table is absent.
+func snapshotPostgres(ctx context.Context, t *testing.T, schemaURL string) postgresSnapshot {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	rows, err := conn.Query(ctx, `SELECT table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() ORDER BY table_name`)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+
+	var tables []string
+
+	for rows.Next() {
+		var name string
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			rows.Close()
+			t.Fatalf("read table name: %v", scanErr)
+		}
+
+		tables = append(tables, name)
+	}
+
+	rows.Close()
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("read tables: %v", rowsErr)
+	}
+
+	if !slices.Contains(tables, "schema_migrations") {
+		return postgresSnapshot{tables: tables, versions: nil}
+	}
+
+	versionRows, err := conn.Query(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("read schema versions: %v", err)
+	}
+
+	var versions []string
+
+	for versionRows.Next() {
+		var version int64
+
+		var name string
+
+		if scanErr := versionRows.Scan(&version, &name); scanErr != nil {
+			versionRows.Close()
+			t.Fatalf("read schema version: %v", scanErr)
+		}
+
+		versions = append(versions, strconv.FormatInt(version, 10)+":"+name)
+	}
+
+	versionRows.Close()
+
+	if rowsErr := versionRows.Err(); rowsErr != nil {
+		t.Fatalf("read schema versions: %v", rowsErr)
+	}
+
+	return postgresSnapshot{tables: tables, versions: versions}
+}
+
+// checkPostgresUnchanged proves upgrade check wrote nothing: the table list
+// and the schema_migrations rows match the snapshot taken before the call.
+func checkPostgresUnchanged(t *testing.T, before, after postgresSnapshot) {
+	t.Helper()
+
+	if !slices.Equal(after.tables, before.tables) {
+		t.Fatalf("tables after check = %v, want %v", after.tables, before.tables)
+	}
+
+	if !slices.Equal(after.versions, before.versions) {
+		t.Fatalf("versions after check = %v, want %v", after.versions, before.versions)
+	}
+}
+
+// seedOldPostgres records schema versions 1 through oldFixtureMaxVersion in
+// schemaURL, so upgrade check sees an old database.
+func seedOldPostgres(ctx context.Context, t *testing.T, schemaURL string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	const createTable = `CREATE TABLE schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	if _, err := conn.Exec(ctx, createTable); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const recordOld = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	for v := int64(1); v <= oldFixtureMaxVersion; v++ {
+		name := fmt.Sprintf("%04d_old.sql", v)
+
+		_, execErr := conn.Exec(ctx, recordOld, v, name)
+		if execErr != nil {
+			t.Fatalf("record version %d: %v", v, execErr)
+		}
+	}
+}
+
+// migratePostgresViaBinary migrates the schema at schemaURL by creating a
+// namespace through the binary, so upgrade check later sees an up-to-date
+// database.
+func migratePostgresViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, schemaURL string) {
+	t.Helper()
+
+	created := env.RunBinary(ctx, t, "namespace", "create", "--database", schemaURL, e2e.Namespace)
+	if created.ExitCode != 0 {
+		t.Fatalf(
+			"namespace create exits with status %d:\n%s%s",
+			created.ExitCode,
+			created.Stdout,
+			created.Stderr,
+		)
+	}
+}
+
+// insertFuturePostgres records one version above the newest in schemaURL, so
+// upgrade check sees a newer database.
+func insertFuturePostgres(ctx context.Context, t *testing.T, schemaURL string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	var newest int64
+	if err := conn.QueryRow(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+		t.Fatalf("read newest version: %v", err)
+	}
+
+	future := newest + 1
+	name := fmt.Sprintf("%04d_future.sql", future)
+
+	const recordFuture = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	_, execErr := conn.Exec(ctx, recordFuture, future, name)
+	if execErr != nil {
+		t.Fatalf("record future version: %v", execErr)
 	}
 }
