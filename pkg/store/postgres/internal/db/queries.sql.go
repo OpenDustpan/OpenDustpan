@@ -88,6 +88,91 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const backupBlobs = `-- name: BackupBlobs :many
+SELECT content_key, size, md5
+FROM state_versions
+WHERE content_key <> ''
+ORDER BY content_key
+`
+
+type BackupBlobsRow struct {
+	ContentKey string
+	Size       int64
+	Md5        []byte
+}
+
+func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
+	rows, err := q.db.Query(ctx, backupBlobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BackupBlobsRow
+	for rows.Next() {
+		var i BackupBlobsRow
+		if err := rows.Scan(&i.ContentKey, &i.Size, &i.Md5); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const backupHomeRegions = `-- name: BackupHomeRegions :many
+SELECT DISTINCT home_region
+FROM namespaces
+ORDER BY home_region
+`
+
+func (q *Queries) BackupHomeRegions(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, backupHomeRegions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var home_region string
+		if err := rows.Scan(&home_region); err != nil {
+			return nil, err
+		}
+		items = append(items, home_region)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const backupWrapperIDs = `-- name: BackupWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM secret_keys
+ORDER BY wrapper_id
+`
+
+func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, backupWrapperIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var wrapper_id string
+		if err := rows.Scan(&wrapper_id); err != nil {
+			return nil, err
+		}
+		items = append(items, wrapper_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -99,6 +184,36 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createBackup = `-- name: CreateBackup :execrows
+INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING
+`
+
+type CreateBackupParams struct {
+	ID          string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Target      string
+	Error       string
+}
+
+func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createBackup,
+		arg.ID,
+		arg.State,
+		arg.StartedAtMs,
+		arg.EndedAtMs,
+		arg.Target,
+		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const createNamespace = `-- name: CreateNamespace :execrows
@@ -398,6 +513,22 @@ func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	return err
 }
 
+const failRunningBackups = `-- name: FailRunningBackups :exec
+UPDATE backups
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state = 'running'
+`
+
+type FailRunningBackupsParams struct {
+	Error     string
+	EndedAtMs pgtype.Int8
+}
+
+func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
+	_, err := q.db.Exec(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
+	return err
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET status = 'finalized', finalized_at_ms = $1,
@@ -425,6 +556,52 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const finishBackup = `-- name: FinishBackup :execrows
+UPDATE backups
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state = 'running'
+`
+
+type FinishBackupParams struct {
+	State     string
+	Error     string
+	EndedAtMs pgtype.Int8
+	ID        string
+}
+
+func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishBackup,
+		arg.State,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getBackup = `-- name: GetBackup :one
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+WHERE id = $1
+`
+
+func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
+	row := q.db.QueryRow(ctx, getBackup, id)
+	var i Backup
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.Target,
+		&i.Error,
+	)
+	return i, err
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
@@ -944,6 +1121,39 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const listBackups = `-- name: ListBackups :many
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+ORDER BY started_at_ms DESC, id ASC
+`
+
+func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
+	rows, err := q.db.Query(ctx, listBackups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Backup
+	for rows.Next() {
+		var i Backup
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+			&i.Target,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEvents = `-- name: ListEvents :many
