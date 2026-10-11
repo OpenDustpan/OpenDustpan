@@ -76,7 +76,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
 	routes = append(routes, h.updateImportExportRoutes()...)
-	routes = append(routes, h.updateCancelRoute())
+	routes = append(routes, h.updateCancelRoute(), h.updateRestoreRoute())
 
 	return routes
 }
@@ -382,6 +382,20 @@ func (h *Handler) updateCancelRoute() Route {
 		Actions: []identity.Action{identity.ActionUnitWrite},
 		Resolve: resolveGetStack,
 		Serve:   h.cancelUpdate,
+	}
+}
+
+// updateRestoreRoute returns the restore route: it copies the checkpoint
+// of one stack version into a new update, so it writes state and needs
+// unit:write.
+func (h *Handler) updateRestoreRoute() Route {
+	return Route{
+		Method:  http.MethodPost,
+		Path:    "/api/stacks/{namespace}/{project}/{stack}/restore/{version}",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitWrite},
+		Resolve: resolveGetStack,
+		Serve:   h.restoreStack,
 	}
 }
 
