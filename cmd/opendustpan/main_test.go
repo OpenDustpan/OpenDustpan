@@ -23,10 +23,12 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // testKeyString is a fixed 32-byte key-encryption key for these tests.
@@ -1573,6 +1575,576 @@ func TestBackupCheckUsage(t *testing.T) {
 
 			if err := run(t.Context(), tc.args, &stdout, &stderr); !errors.Is(err, tc.want) {
 				t.Fatalf("run %v: err = %v, want %v", tc.args, err, tc.want)
+			}
+		})
+	}
+}
+
+// restoreBackupID is the backup ID the restore tests take and load.
+const restoreBackupID = backup.ID("bkp-restore-test")
+
+// setRestoreEnv sets the key-encryption key for one restore run and clears
+// the key file setting, so loadKeyEncryptionKey reads keyBase64. Callers set
+// it before every run: the load clears the variable after the read.
+func setRestoreEnv(t *testing.T, keyBase64 string) {
+	t.Helper()
+
+	if err := os.Unsetenv(keyFileEnvVar); err != nil {
+		t.Fatalf("unset %s: %v", keyFileEnvVar, err)
+	}
+
+	t.Setenv(keyEnvVar, keyBase64)
+}
+
+// runRestoreCommand runs `restore` with args and returns its stdout and
+// error. A nil error means exit code 0, a non-nil error means exit code 1.
+func runRestoreCommand(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+
+	err := run(t.Context(), append([]string{"restore"}, args...), &stdout, &stderr)
+
+	return stdout.String(), err
+}
+
+// restoreArgs returns the restore flags for id from target into database
+// with blobDir and region.
+func restoreArgs(target, id, database, blobDir, region string) []string {
+	return []string{
+		"--from", target,
+		"--backup", id,
+		"--database", database,
+		"--blob-dir", blobDir,
+		"--region", region,
+	}
+}
+
+// seedRestoreState writes one finalized OpenTofu state version with a
+// greeting output to the source store, so the backup holds one blob.
+func seedRestoreState(
+	ctx context.Context,
+	t *testing.T,
+	st *sqlite.Store,
+	blobs *blobfs.Store,
+	namespaces *namespace.Service,
+) {
+	t.Helper()
+
+	nsName, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	wsName, err := workspace.ParseName("ws1")
+	if err != nil {
+		t.Fatalf("parse workspace: %v", err)
+	}
+
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         st,
+		States:             st,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Logger:             nil,
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("workspace service: %v", err)
+	}
+
+	ws, err := workspaces.Create(ctx, workspace.Ref{Namespace: nsName, Name: wsName})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	if _, err = workspaces.Lock(ctx, ws.ID, "seed", "seed"); err != nil {
+		t.Fatalf("lock workspace: %v", err)
+	}
+
+	content := []byte(`{"version":4,"terraform_version":"1.11.0","serial":1,` +
+		`"lineage":"seed-lineage","outputs":{"greeting":{"value":"hello","type":"string"}},"resources":[]}`)
+	sum := md5.Sum(content) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+
+	pending, err := workspaces.BeginState(ctx, ws.ID, "seed", workspace.NewState{
+		Lineage: "seed-lineage",
+		MD5:     hex.EncodeToString(sum[:]),
+		Outputs: []byte(`{"greeting":{"sensitive":false,"value":"hello","type":"string"}}`),
+		Serial:  1,
+		Force:   false,
+	})
+	if err != nil {
+		t.Fatalf("begin state: %v", err)
+	}
+
+	if _, err = workspaces.Upload(ctx, pending.Version.ID, pending.Upload, bytes.NewReader(content)); err != nil {
+		t.Fatalf("upload state: %v", err)
+	}
+
+	if _, err = workspaces.Unlock(ctx, ws.ID, "seed"); err != nil {
+		t.Fatalf("unlock workspace: %v", err)
+	}
+}
+
+// seedRestoreSource creates a SQLite source installation in dir with one
+// namespace, one wrapped key and one finalized state version, then takes
+// backup id into a target directory with key. It returns the target
+// directory in dir:/path form without the scheme.
+func seedRestoreSource(t *testing.T, dir string, id backup.ID, key []byte) string {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create source directory: %v", err)
+	}
+
+	dbPath := filepath.Join(dir, "dustpan.db")
+	seedMainKey(t, dbPath, key)
+
+	st, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close source store: %v", closeErr)
+		}
+	}()
+
+	srcBlobs, err := blobfs.Open(filepath.Join(dir, "blobs"))
+	if err != nil {
+		t.Fatalf("open source blobs: %v", err)
+	}
+
+	defer func() {
+		if closeErr := srcBlobs.Close(); closeErr != nil {
+			t.Errorf("close source blobs: %v", closeErr)
+		}
+	}()
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	seedRestoreState(ctx, t, st, srcBlobs, namespaces)
+
+	targetDir := filepath.Join(dir, "target")
+
+	target, err := blobfs.Open(targetDir)
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	defer func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}()
+
+	svc, err := backup.NewService(backup.Config{
+		Exporter:    st,
+		Registry:    st,
+		Blobs:       srcBlobs,
+		Target:      target,
+		TargetName:  "dir:" + targetDir,
+		Now:         nil,
+		Version:     "",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("backup service: %v", err)
+	}
+
+	if _, err := svc.Run(ctx, id); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	return targetDir
+}
+
+// countRestoreRows returns the row count of each table in the SQLite
+// database at path.
+func countRestoreRows(t *testing.T, path string) map[string]int64 {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	}()
+
+	summary, err := st.Export(t.Context(), io.Discard)
+	if err != nil {
+		t.Fatalf("export store: %v", err)
+	}
+
+	return summary.RowCounts
+}
+
+// listRestoreFiles returns the paths of every file under dir, relative to
+// dir, so a test proves a refused restore wrote nothing.
+func listRestoreFiles(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var out []string
+
+	var walk func(path string)
+
+	walk = func(path string) {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			t.Fatalf("read directory %s: %v", path, err)
+		}
+
+		for _, entry := range entries {
+			full := filepath.Join(path, entry.Name())
+			if entry.IsDir() {
+				walk(full)
+				continue
+			}
+
+			rel, err := filepath.Rel(dir, full)
+			if err != nil {
+				t.Fatalf("relative path of %s: %v", full, err)
+			}
+
+			out = append(out, rel)
+		}
+	}
+
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		t.Fatalf("stat directory %s: %v", dir, err)
+	}
+
+	walk(dir)
+
+	return out
+}
+
+// checkRestoreCounts proves that out holds the row count line of each pair:
+// one line per table in backup.Tables order.
+func checkRestoreCounts(t *testing.T, out string, counts map[string]int64) {
+	t.Helper()
+
+	for _, table := range backup.Tables {
+		want := fmt.Sprintf("table %s: %d rows", table, counts[table])
+		if !strings.Contains(out, want) {
+			t.Fatalf("restore output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test sets it and runs its cases in order.
+func TestRestore(t *testing.T) {
+	setRestoreEnv(t, testKeyBase64())
+
+	dir := t.TempDir()
+	targetDir := seedRestoreSource(t, filepath.Join(dir, "src"), restoreBackupID, []byte(testKeyString))
+
+	destDir := filepath.Join(dir, "dest")
+
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		t.Fatalf("create destination directory: %v", err)
+	}
+
+	destDB := "sqlite:" + filepath.Join(destDir, "dustpan.db")
+	destBlobs := filepath.Join(destDir, "blobs")
+
+	setRestoreEnv(t, testKeyBase64())
+
+	out, err := runRestoreCommand(
+		t,
+		restoreArgs("dir:"+targetDir, restoreBackupID.String(), destDB, destBlobs, "local")...,
+	)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	checkRestoreSuccess(t, out)
+
+	counts := countRestoreRows(t, filepath.Join(destDir, "dustpan.db"))
+	checkRestoreCounts(t, out, counts)
+	checkRestoredTables(t, counts)
+
+	if files := listRestoreFiles(t, destBlobs); len(files) == 0 {
+		t.Fatal("restored blob directory holds no blob, want the state content")
+	}
+
+	checkRestoreRefusal(t, targetDir, destDB, destBlobs, destDir)
+}
+
+// checkRestoreSuccess proves that out holds every step line with the success
+// line and no warning: the regions match.
+func checkRestoreSuccess(t *testing.T, out string) {
+	t.Helper()
+
+	for _, want := range []string{
+		"restore backup " + restoreBackupID.String(),
+		"read manifest",
+		"checked key",
+		"copied blobs",
+		"loaded SQL data",
+		"restored backup " + restoreBackupID.String(),
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("restore output lacks %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("restore output holds a warning in the backup region:\n%s", out)
+	}
+}
+
+// checkRestoredTables proves the restored database holds the seeded rows:
+// one namespace, one wrapped key, one workspace, one state version and the
+// backup row the take recorded.
+func checkRestoredTables(t *testing.T, counts map[string]int64) {
+	t.Helper()
+
+	for table, want := range map[string]int64{
+		"namespaces":     1,
+		"secret_keys":    1,
+		"workspaces":     1,
+		"state_versions": 1,
+		"backups":        1,
+	} {
+		if counts[table] != want {
+			t.Fatalf("restored table %s holds %d rows, want %d", table, counts[table], want)
+		}
+	}
+}
+
+// checkRestoreRefusal proves a second restore into the same destination
+// exits 1 with ErrNotEmpty, names the flags that fix it, and writes nothing:
+// the row counts and the blob files stay as they were.
+func checkRestoreRefusal(t *testing.T, targetDir, destDB, destBlobs, destDir string) {
+	t.Helper()
+
+	dbPath := filepath.Join(destDir, "dustpan.db")
+	before := countRestoreRows(t, dbPath)
+	beforeFiles := listRestoreFiles(t, destBlobs)
+
+	setRestoreEnv(t, testKeyBase64())
+
+	_, err := runRestoreCommand(
+		t,
+		restoreArgs("dir:"+targetDir, restoreBackupID.String(), destDB, destBlobs, "local")...,
+	)
+	if err == nil || !errors.Is(err, backup.ErrNotEmpty) {
+		t.Fatalf("restore into a non-empty destination: err = %v, want ErrNotEmpty", err)
+	}
+
+	for _, want := range []string{"--database", "--blob-dir"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("restore refusal %q does not name %s", err, want)
+		}
+	}
+
+	after := countRestoreRows(t, dbPath)
+
+	for _, table := range backup.Tables {
+		if after[table] != before[table] {
+			t.Fatalf("refused restore changed table %s from %d to %d rows",
+				table, before[table], after[table])
+		}
+	}
+
+	afterFiles := listRestoreFiles(t, destBlobs)
+	if strings.Join(afterFiles, "\n") != strings.Join(beforeFiles, "\n") {
+		t.Fatalf("refused restore changed the blob directory from %q to %q", beforeFiles, afterFiles)
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test sets it and runs its cases in order.
+func TestRestoreRegionWarning(t *testing.T) {
+	setRestoreEnv(t, testKeyBase64())
+
+	dir := t.TempDir()
+	targetDir := seedRestoreSource(t, filepath.Join(dir, "src"), restoreBackupID, []byte(testKeyString))
+
+	destDB := "sqlite:" + filepath.Join(dir, "dest", "dustpan.db")
+	destBlobs := filepath.Join(dir, "dest", "blobs")
+
+	if err := os.MkdirAll(filepath.Join(dir, "dest"), 0o700); err != nil {
+		t.Fatalf("create destination directory: %v", err)
+	}
+
+	setRestoreEnv(t, testKeyBase64())
+
+	out, err := runRestoreCommand(
+		t,
+		restoreArgs("dir:"+targetDir, restoreBackupID.String(), destDB, destBlobs, "other")...,
+	)
+	if err != nil {
+		t.Fatalf("restore with another region: %v", err)
+	}
+
+	if !strings.Contains(out, `warning: region "other"`) {
+		t.Fatalf("restore output lacks the region warning:\n%s", out)
+	}
+
+	if !strings.Contains(out, "restored backup "+restoreBackupID.String()) {
+		t.Fatalf("restore output lacks the success line:\n%s", out)
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test sets it and runs its cases in order.
+func TestRestoreKeyRefusals(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := seedRestoreSource(t, filepath.Join(dir, "src"), restoreBackupID, []byte(testKeyString))
+
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{name: "no key", key: ""},
+		{name: "another key", key: base64.StdEncoding.EncodeToString([]byte(otherKeyString))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkRestoreKeyCase(t, dir, targetDir, tc.name, tc.key)
+		})
+	}
+}
+
+// checkRestoreKeyCase proves a restore with key into a fresh destination
+// refuses with an error naming the key setting.
+func checkRestoreKeyCase(t *testing.T, dir, targetDir, name, key string) {
+	t.Helper()
+
+	setRestoreKeyCase(t, key)
+
+	destDB := "sqlite:" + filepath.Join(dir, "dest-"+name, "dustpan.db")
+	destBlobs := filepath.Join(dir, "dest-"+name, "blobs")
+
+	if err := os.MkdirAll(filepath.Join(dir, "dest-"+name), 0o700); err != nil {
+		t.Fatalf("create destination directory: %v", err)
+	}
+
+	_, err := runRestoreCommand(
+		t,
+		restoreArgs("dir:"+targetDir, restoreBackupID.String(), destDB, destBlobs, "local")...,
+	)
+	if err == nil || !strings.Contains(err.Error(), keyEnvVar) {
+		t.Fatalf("restore with %s: err = %v, want it to name %s", name, err, keyEnvVar)
+	}
+}
+
+// setRestoreKeyCase sets key for one key-refusal case, or clears both key
+// settings for the missing-key case.
+func setRestoreKeyCase(t *testing.T, key string) {
+	t.Helper()
+
+	if key != "" {
+		setRestoreEnv(t, key)
+
+		return
+	}
+
+	if err := os.Unsetenv(keyEnvVar); err != nil {
+		t.Fatalf("unset %s: %v", keyEnvVar, err)
+	}
+
+	if err := os.Unsetenv(keyFileEnvVar); err != nil {
+		t.Fatalf("unset %s: %v", keyFileEnvVar, err)
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test sets it.
+func TestRestoreNewerSchema(t *testing.T) {
+	setRestoreEnv(t, testKeyBase64())
+
+	path, dbVersion, binVersion := newerSchemaDatabase(t)
+
+	_, err := runRestoreCommand(
+		t,
+		restoreArgs(
+			"dir:"+filepath.Join(t.TempDir(), "target"),
+			restoreBackupID.String(),
+			"sqlite:"+path,
+			filepath.Join(t.TempDir(), "blobs"),
+			"local",
+		)...,
+	)
+	if !isNewerSchemaError(t, err, dbVersion, binVersion) {
+		t.Fatalf("restore on newer database: err = %v, want it to name %d, %d and %q",
+			err, dbVersion, binVersion, version)
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test clears it and runs its cases in order.
+func TestRestoreUsage(t *testing.T) {
+	if err := os.Unsetenv(keyEnvVar); err != nil {
+		t.Fatalf("unset %s: %v", keyEnvVar, err)
+	}
+
+	if err := os.Unsetenv(keyFileEnvVar); err != nil {
+		t.Fatalf("unset %s: %v", keyFileEnvVar, err)
+	}
+
+	if !strings.Contains(errUsage.Error(), "restore") {
+		t.Fatalf("usage = %q, want it to name restore", errUsage.Error())
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing backup",
+			args: []string{"--from", "dir:/tmp/backups"},
+			want: "--backup",
+		},
+		{
+			name: "missing source",
+			args: []string{"--backup", "bkp-aaa"},
+			want: "--from",
+		},
+		{
+			name: "unknown backend",
+			args: []string{"--from", "dir:/tmp/backups", "--backup", "bkp-aaa", "--database", "mysql://db"},
+			want: "sqlite:",
+		},
+		{
+			name: "unknown source form",
+			args: []string{
+				"--from", "file:/tmp/backups",
+				"--backup", "bkp-aaa",
+				"--database", "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db"),
+			},
+			want: "dir:/path",
+		},
+		{
+			name: "extra argument",
+			args: []string{"--from", "dir:/tmp/backups", "--backup", "bkp-aaa", "extra"},
+			want: "usage:",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+
+			err := run(t.Context(), append([]string{"restore"}, tc.args...), &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("restore %s: err = %v, want it to name %s", tc.name, err, tc.want)
 			}
 		})
 	}

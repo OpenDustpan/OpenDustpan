@@ -34,6 +34,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -6135,5 +6137,407 @@ func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, f
 	if again := pollBackupState(ctx, t, env, firstID, "succeeded"); again.Manifest.SQLSize <= backupPadBytes {
 		t.Fatalf("backup %s after the restart holds SQL size %d, want above the pad bytes",
 			firstID, again.Manifest.SQLSize)
+	}
+}
+
+// restoreBackupID is the backup the restore test takes and loads.
+const restoreBackupID = "bkp-e2e-restore"
+
+// restoreRegion is the region the restore test passes. It matches the region
+// of the harness environment, so no region warning appears.
+const restoreRegion = "e2e"
+
+// restoreSecret is the Pulumi config secret the test writes before the
+// backup and reads back after the restore.
+const restoreSecret = "s3cr3t"
+
+// TestBackupRestore proves `opendustpan restore` with RunBinary: while the
+// server runs, the test writes a Pulumi secret and OpenTofu state, takes a
+// backup, stops the server, restores the backup into an empty destination
+// with the same key, starts the server on the restored data, and checks that
+// the Pulumi secret decrypts and the OpenTofu state reads. A second restore
+// into the loaded destination exits 1. It runs only with E2E_SERVER=binary,
+// on SQLite and on PostgreSQL with an empty schema.
+func TestBackupRestore(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		// OpenTofu must trust the test server's certificate, and Go honors
+		// SSL_CERT_FILE only on Linux; elsewhere it uses the system store.
+		t.Skipf("the restore test needs Linux, not %s", runtime.GOOS)
+	}
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary")
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	pulumiVersions := e2e.Pulumi().Versions()
+	tofuVersions := e2e.OpenTofu().Versions()
+
+	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+		t.Fatal("each tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	if err != nil {
+		t.Fatalf("install pulumi %s: %v", pulumiVersions[0], err)
+	}
+
+	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	if err != nil {
+		t.Fatalf("install tofu %s: %v", tofuVersions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runBackupRestoreOnStore(t, pulumiCLI, tofuCLI, db)
+		})
+	}
+}
+
+// runBackupRestoreOnStore writes state with both CLIs, backs it up, stops
+// the server, restores into an empty destination, restarts on the restored
+// data and checks both tools read the same state back.
+func runBackupRestoreOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, pulumiCLI, store)
+
+	writeRestoreState(ctx, t, env, tofuCLI)
+	targetDir := takeRestoreBackup(ctx, t, env)
+
+	env.StopServer(ctx, t)
+	wipeRestoreDestination(ctx, t, env, store)
+	runRestoreBinary(ctx, t, env, targetDir)
+	env.StartServer(ctx, t)
+
+	checkRestoredState(ctx, t, env, pulumiCLI, tofuCLI)
+	checkRestoreRefusesLoaded(ctx, t, env, targetDir)
+}
+
+// writeRestoreState writes a Pulumi secret with an up and OpenTofu state
+// with an apply: a small part of the backup scenario, enough to prove that
+// secrets decrypt and state reads after the restore.
+func writeRestoreState(ctx context.Context, t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
+	t.Helper()
+
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+
+	env.Step(ctx, t, step("login", contains(env.URL), "login"))
+	env.Step(ctx, t, step("stack init", nil, "stack", "init", qualified))
+	// The scratch program reads stack other, so up needs it to exist.
+	env.Step(ctx, t, step("stack init other", nil, "stack", "init", "other"))
+	env.Step(ctx, t, step("config set secret", nil, "config", "set", "--secret", "apiKey", restoreSecret))
+	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
+	env.Step(ctx, t, step("config get", contains(restoreSecret), "config", "get", "apiKey"))
+
+	env.SetCLI(tofuCLI)
+
+	env.Step(ctx, t, step("init", nil, "init", "-input=false", "-no-color"))
+	env.Step(ctx, t, step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	env.Step(ctx, t, step("state pull", contains(`"greeting"`), "state", "pull"))
+}
+
+// takeRestoreBackup takes backup restoreBackupID of the running server into
+// a target directory with the backup service and returns the directory. The
+// backup reads the live database in one read transaction, so the server
+// keeps running while it copies.
+func takeRestoreBackup(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	targetDir := filepath.Join(t.TempDir(), "target")
+
+	switch env.Store() {
+	case e2e.StoreSQLite:
+		takeSQLiteBackup(ctx, t, env, targetDir)
+	case e2e.StorePostgres:
+		takePostgresBackup(ctx, t, env, targetDir)
+	default:
+		t.Fatalf("unknown store: %s", env.Store())
+	}
+
+	return targetDir
+}
+
+// takeSQLiteBackup takes backup restoreBackupID of the SQLite database the
+// environment serves into targetDir.
+func takeSQLiteBackup(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+	t.Helper()
+
+	dbURL := env.DatabaseURL(t)
+
+	path, ok := strings.CutPrefix(dbURL, "sqlite:")
+	if !ok {
+		t.Fatalf("database URL %q is not a SQLite URL", dbURL)
+	}
+
+	st, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close source store: %v", closeErr)
+		}
+	}()
+
+	runBackupService(ctx, t, env, backupServiceInput{exporter: st, registry: st, targetDir: targetDir})
+}
+
+// takePostgresBackup takes backup restoreBackupID of the PostgreSQL schema
+// the environment serves into targetDir.
+func takePostgresBackup(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+	t.Helper()
+
+	st, err := postgres.Open(ctx, env.DatabaseURL(t))
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+
+	defer st.Close()
+
+	runBackupService(ctx, t, env, backupServiceInput{exporter: st, registry: st, targetDir: targetDir})
+}
+
+// backupServiceInput bundles the backup service inputs: the store as
+// exporter and registry with the target directory.
+type backupServiceInput struct {
+	exporter  backup.Exporter
+	registry  backup.Registry
+	targetDir string
+}
+
+// runBackupService runs the backup service over source blobs and store into
+// targetDir and proves the backup succeeded.
+func runBackupService(ctx context.Context, t *testing.T, env *e2e.Env, in backupServiceInput) {
+	t.Helper()
+
+	blobs, err := blobfs.Open(env.BlobDir(t))
+	if err != nil {
+		t.Fatalf("open source blobs: %v", err)
+	}
+
+	defer func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close source blobs: %v", closeErr)
+		}
+	}()
+
+	target, err := blobfs.Open(in.targetDir)
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	defer func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}()
+
+	svc, err := backup.NewService(backup.Config{
+		Exporter:    in.exporter,
+		Registry:    in.registry,
+		Blobs:       blobs,
+		Target:      target,
+		TargetName:  "dir:" + in.targetDir,
+		Now:         nil,
+		Version:     "",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("backup service: %v", err)
+	}
+
+	record, err := svc.Run(ctx, backup.ID(restoreBackupID))
+	if err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	if record.State != backup.StateSucceeded {
+		t.Fatalf("backup state = %q, want %q", record.State, backup.StateSucceeded)
+	}
+}
+
+// wipeRestoreDestination empties the destination the restore loads into: the
+// SQLite file with its blob directory, or the PostgreSQL schema recreated
+// empty, so the restore migrates it and finds no rows. The server is stopped.
+func wipeRestoreDestination(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		wipeSQLiteDestination(t, env)
+	case e2e.StorePostgres:
+		wipePostgresDestination(ctx, t, env)
+	default:
+		t.Fatalf("unknown store: %s", store)
+	}
+}
+
+// wipeSQLiteDestination removes the SQLite file with its journals and the
+// blob directory. The restore recreates both.
+func wipeSQLiteDestination(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dbURL := env.DatabaseURL(t)
+
+	path, ok := strings.CutPrefix(dbURL, "sqlite:")
+	if !ok {
+		t.Fatalf("database URL %q is not a SQLite URL", dbURL)
+	}
+
+	for _, file := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove %s: %v", file, err)
+		}
+	}
+
+	if err := os.RemoveAll(env.BlobDir(t)); err != nil {
+		t.Fatalf("remove blob directory: %v", err)
+	}
+}
+
+// wipePostgresDestination drops the PostgreSQL schema the environment serves
+// and recreates it empty, and removes the blob directory. The restore
+// migrates the empty schema and finds no rows and no blobs: a copied blob
+// that the destination already holds is an error.
+func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	schema := restoreSchema(t, env.DatabaseURL(t))
+
+	conn, err := pgx.Connect(ctx, e2e.PostgresURL())
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	name := pgx.Identifier{schema}.Sanitize()
+
+	if _, err := conn.Exec(ctx, "DROP SCHEMA "+name+" CASCADE"); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	if err := os.RemoveAll(env.BlobDir(t)); err != nil {
+		t.Fatalf("remove blob directory: %v", err)
+	}
+}
+
+// restoreSchema returns the search_path schema of schemaURL: the isolated
+// schema the environment serves.
+func restoreSchema(t *testing.T, schemaURL string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(schemaURL)
+	if err != nil {
+		t.Fatalf("parse database URL: %v", err)
+	}
+
+	if schema := parsed.Query().Get("search_path"); schema != "" {
+		return schema
+	}
+
+	t.Fatal("database URL holds no search_path schema")
+
+	return ""
+}
+
+// restoreBinaryArgs returns the restore arguments the test runs: the backup
+// from targetDir into the database and blob directory of the environment.
+func restoreBinaryArgs(t *testing.T, env *e2e.Env, targetDir string) []string {
+	t.Helper()
+
+	return []string{
+		"restore",
+		"--from", "dir:" + targetDir,
+		"--backup", restoreBackupID,
+		"--database", env.DatabaseURL(t),
+		"--blob-dir", env.BlobDir(t),
+		"--region", restoreRegion,
+	}
+}
+
+// runRestoreBinary restores the backup from targetDir into the empty
+// destination with the same key and proves the steps with the row counts.
+func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, targetDir)...)
+
+	if res.ExitCode != 0 {
+		t.Fatalf("restore exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	for _, want := range []string{
+		"restored backup " + restoreBackupID,
+		"table namespaces: 1 rows",
+		"table state_versions: 1 rows",
+	} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Fatalf("restore output lacks %q:\n%s%s", want, res.Stdout, res.Stderr)
+		}
+	}
+}
+
+// checkRestoredState proves the Pulumi secret decrypts and the OpenTofu
+// state reads on the restored data.
+func checkRestoredState(
+	ctx context.Context,
+	t *testing.T,
+	env *e2e.Env,
+	pulumiCLI, tofuCLI e2e.Install,
+) {
+	t.Helper()
+
+	env.SetCLI(pulumiCLI)
+
+	env.Step(ctx, t, step("config get after restore", contains(restoreSecret), "config", "get", "apiKey"))
+	env.Step(ctx, t, step("stack export after restore", exportHidesSecrets, "stack", "export"))
+
+	env.SetCLI(tofuCLI)
+
+	env.Step(ctx, t, step("state pull after restore", contains(`"greeting"`), "state", "pull"))
+}
+
+// checkRestoreRefusesLoaded proves a second restore into the loaded
+// destination exits 1 and names the refusal.
+func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, targetDir)...)
+
+	if res.ExitCode != 1 {
+		t.Fatalf("restore into a loaded destination exits with status %d, want 1:\n%s%s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, "not empty") {
+		t.Fatalf("restore refusal lacks %q:\n%s", "not empty", out)
 	}
 }
