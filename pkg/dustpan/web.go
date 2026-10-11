@@ -35,6 +35,9 @@ func consoleHandler(dir string) (http.Handler, error) {
 			return
 		}
 
+		// The name goes only to fsys, which is an os.Root file system: it
+		// refuses each path that leaves the console directory.
+		// nosemgrep: go.lang.security.filepath-clean-misuse.filepath-clean-misuse
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if name != "" && path.Ext(name) == "" {
 			if _, err := fs.Stat(fsys, name); errors.Is(err, fs.ErrNotExist) {

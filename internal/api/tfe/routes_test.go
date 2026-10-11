@@ -229,7 +229,7 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 
 func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
 	if ns.String() != "acme" {
-		return nil, nil
+		return []workspace.Workspace{}, nil
 	}
 
 	ws, err := stubWorkspaceByID(workspace.ID("ws-test123"))
