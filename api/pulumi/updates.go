@@ -204,13 +204,14 @@ const (
 // createUpdateHandler returns the handler that creates an update of kind.
 // The five kinds share this shape; each has its own route.
 func (h *Handler) createUpdateHandler(kind stack.UpdateKind) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
-		h.createUpdate(w, r, kind)
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+		h.createUpdate(w, r, kind, p.Subject)
 	}
 }
 
-// createUpdate records a new update without locking the stack.
-func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stack.UpdateKind) {
+// createUpdate records a new update without locking the stack. subject is
+// the caller, which the update records as its creator (ADR 28 decision 4).
+func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stack.UpdateKind, subject string) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -233,7 +234,9 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 		}
 	}
 
-	u, err := h.updates.Create(ctx, ref, stack.Plan{Kind: kind, DryRun: req.Options.DryRun})
+	u, err := h.updates.Create(ctx, ref, stack.Plan{
+		Kind: kind, DryRun: req.Options.DryRun, CreatedBy: subject, RestoredFrom: 0,
+	})
 	if err != nil {
 		h.writeError(ctx, w, err)
 
