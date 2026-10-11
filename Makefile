@@ -75,10 +75,10 @@ licenses: ## Each module linked into the binary has a license file to ship, on e
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
 STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
-DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md docs/guides/*.md docs/reference/*.md)
+DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md)
 DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 
-docs-lint: ## ASD-STE100 structural rules for README, CLAUDE.md, GLOSSARY.md, the guides, the reference and ADRs from 14 on.
+docs-lint: ## ASD-STE100 structural rules for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set.

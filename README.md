@@ -304,8 +304,12 @@ versions to install. NilAway and govulncheck need no install. Set
 real CLI versions against the server. It downloads them first, as
 `e2e/doc.go` describes.
 
-Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
-(why things are the way they are).
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
+agents and contributors) and `docs/adr/` (why things are the way they are).
+
+[SUPPORT.md](SUPPORT.md) says where to ask a question or report a bug.
+[SECURITY.md](SECURITY.md) says how to report a vulnerability in private. All
+contributors follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
