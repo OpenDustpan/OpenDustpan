@@ -1,8 +1,6 @@
 package pulumi
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,24 +124,15 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	limit := int64(h.updates.MaxCheckpointBytes())
-
-	body, ok := h.readBody(w, r, limit)
+	releaseHold, ok := h.hold(w, r, limit)
 	if !ok {
 		return
 	}
 
-	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-		body, ok = h.gunzipBody(w, r, body, limit)
-		if !ok {
-			return
-		}
-	}
+	defer releaseHold()
 
 	var req importStackRequest
-
-	if err := json.Unmarshal(body, &req); err != nil {
-		h.writeInvalidBody(ctx, w)
-
+	if !h.decodeLargeBody(w, r, limit, &req) {
 		return
 	}
 
@@ -423,24 +412,15 @@ func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, _ ident
 	}
 
 	limit := int64(h.updates.MaxCheckpointBytes())
-
-	body, ok := h.readBody(w, r, limit)
+	releaseHold, ok := h.hold(w, r, limit)
 	if !ok {
 		return
 	}
 
-	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-		body, ok = h.gunzipBody(w, r, body, limit)
-		if !ok {
-			return
-		}
-	}
+	defer releaseHold()
 
 	var req checkpointRequest
-
-	if err := json.Unmarshal(body, &req); err != nil {
-		h.writeInvalidBody(ctx, w)
-
+	if !h.decodeLargeBody(w, r, limit, &req) {
 		return
 	}
 
@@ -713,26 +693,18 @@ func (h *Handler) writeTooLarge(w http.ResponseWriter, r *http.Request, limit in
 	h.writeError(r.Context(), w, fmt.Errorf("%w: body over %d bytes", stack.ErrTooLarge, limit))
 }
 
-// readEvents reads an engine event batch, gunzipping it when the CLI sent it
-// compressed.
+// readEvents reads an engine event batch, streaming gzip decompression into
+// the decoder so only one copy is held.
 func (h *Handler) readEvents(w http.ResponseWriter, r *http.Request) ([]stack.Event, bool) {
-	body, ok := h.readBody(w, r, maxEventBatchBytes)
+	releaseHold, ok := h.hold(w, r, maxEventBatchBytes)
 	if !ok {
 		return nil, false
 	}
 
-	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-		body, ok = h.gunzipBody(w, r, body, maxEventBatchBytes)
-		if !ok {
-			return nil, false
-		}
-	}
+	defer releaseHold()
 
 	var batch engineEventBatch
-
-	if err := json.Unmarshal(body, &batch); err != nil {
-		h.writeInvalidBody(r.Context(), w)
-
+	if !h.decodeLargeBody(w, r, maxEventBatchBytes, &batch) {
 		return nil, false
 	}
 
@@ -769,36 +741,6 @@ func parseEvent(raw json.RawMessage) (stack.Event, error) {
 		Payload:   []byte(raw),
 		Sequence:  int64(header.Sequence),
 	}, nil
-}
-
-// gunzipBody decompresses a gzipped request body, bounded by limit. A body
-// that decompresses over the limit answers 413, like an oversized plain body.
-func (h *Handler) gunzipBody(w http.ResponseWriter, r *http.Request, body []byte, limit int64) ([]byte, bool) {
-	gz, err := gzip.NewReader(bytes.NewReader(body))
-	if err != nil {
-		h.writeInvalidBody(r.Context(), w)
-
-		return nil, false
-	}
-
-	defer func() {
-		_ = gz.Close() //nolint:errcheck // Close after a full read reports nothing actionable.
-	}()
-
-	out, err := io.ReadAll(io.LimitReader(gz, limit+1))
-	if err != nil {
-		h.writeInvalidBody(r.Context(), w)
-
-		return nil, false
-	}
-
-	if int64(len(out)) > limit {
-		h.writeTooLarge(w, r, limit)
-
-		return nil, false
-	}
-
-	return out, true
 }
 
 // writeInvalidBody answers a request body that is not valid JSON.

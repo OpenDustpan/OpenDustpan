@@ -65,7 +65,7 @@ const (
 	// DefaultMaxBatchBytes bounds the total size of one Encrypt or Decrypt
 	// batch. The CLI splits config batches only by size (100 MB chunks), never
 	// by count, so a count limit would reject large configs.
-	DefaultMaxBatchBytes = 200 << 20
+	DefaultMaxBatchBytes = 32 << 20
 	aadLabel             = "opendustpan/secret/v1"
 )
 

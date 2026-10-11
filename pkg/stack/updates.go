@@ -15,7 +15,7 @@ import (
 
 const (
 	// DefaultMaxCheckpointBytes bounds one checkpoint unless configured otherwise.
-	DefaultMaxCheckpointBytes = 256 << 20
+	DefaultMaxCheckpointBytes = 32 << 20
 
 	maxEventsPerBatch = 1000
 	// transitionAttempts bounds how often a transition is re-applied after a
