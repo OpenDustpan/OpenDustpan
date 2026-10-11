@@ -385,3 +385,60 @@ func startWithoutKeyOnEmptyDatabase(t *testing.T) {
 		t.Fatalf("serve without a key on an empty database: %v", err)
 	}
 }
+
+//nolint:paralleltest // serve reads process environment, so this test sets it and runs its cases in order.
+func TestServeTLSAndPublicURLFlags(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
+
+	database := "--database"
+	path := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "certificate without a key",
+			args: []string{database, path, "--tls-cert", "cert.pem"},
+			want: "DUSTPAN_TLS_KEY",
+		},
+		{
+			name: "key without a certificate",
+			args: []string{database, path, "--tls-key", "key.pem"},
+			want: "DUSTPAN_TLS_CERT",
+		},
+		{
+			name: "bad public URL",
+			args: []string{database, path, "--public-url", "not a url"},
+			want: "public URL",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := serve(t.Context(), tc.args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("serve %s: err = %v, want it to name %s", tc.name, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVersionFlag(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	if err := run(t.Context(), []string{"--version"}, &out, io.Discard); err != nil {
+		t.Fatalf("run --version: %v", err)
+	}
+
+	if got := strings.TrimSpace(out.String()); got != version {
+		t.Fatalf("--version printed %q, want %q", got, version)
+	}
+
+	if !strings.Contains(errUsage.Error(), "--version") {
+		t.Fatalf("usage = %q, want it to keep --version", errUsage.Error())
+	}
+}

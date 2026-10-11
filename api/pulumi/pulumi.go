@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
@@ -56,6 +57,9 @@ type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
+	// BaseURL reports the external base URL for a request, for absolute
+	// URLs. The zero value derives it from each request.
+	BaseURL baseurl.Resolver
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -67,6 +71,7 @@ type Handler struct {
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	logger     *slog.Logger
+	baseURL    baseurl.Resolver
 	mux        *patternMux
 	routes     []Route
 }
@@ -98,6 +103,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
 		logger:     cfg.Logger,
+		baseURL:    cfg.BaseURL,
 		mux:        newPatternMux(),
 		routes:     nil,
 	}
@@ -113,6 +119,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
+}
+
+// ExternalBaseURL returns the external base URL for r: the --public-url
+// value when one is set, else the scheme and host of the request.
+func (h *Handler) ExternalBaseURL(r *http.Request) string {
+	return h.baseURL.BaseURL(r)
 }
 
 type apiCapabilityConfig struct {

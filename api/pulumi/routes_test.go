@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 )
@@ -230,6 +231,12 @@ func (s selectiveAuthorizer) Authorize(
 func newTestHandler(t *testing.T) *pulumi.Handler {
 	t.Helper()
 
+	return newTestHandlerWithBaseURL(t, baseurl.Resolver{})
+}
+
+func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -250,6 +257,7 @@ func newTestHandler(t *testing.T) *pulumi.Handler {
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       base,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -286,6 +294,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1172,6 +1181,7 @@ func newDeleteHandler(
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
