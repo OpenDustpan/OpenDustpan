@@ -82,6 +82,42 @@ development against this server, or build it and let the server host it in one
 process: `opendustpan serve --console-dir <console>/dist`. Sign in with the
 value of `DUSTPAN_ADMIN_TOKEN`.
 
+## Container image
+
+The `Dockerfile` builds one image for linux/amd64 and linux/arm64. The image
+holds the server and the web console. The server runs as a non-root user and
+keeps its data in `/data`.
+
+Build the image. `CONSOLE_URL` and `CONSOLE_SHA256` name the console release
+tarball and its checksum. No console release exists yet, so pass a release
+tarball or build with a local test tarball as `scripts/smoke-image.sh` does.
+
+```sh
+docker build -t opendustpan:dev \
+  --build-arg VERSION="$(git describe --tags --always --dirty)" \
+  --build-arg CONSOLE_URL=<tarball URL> \
+  --build-arg CONSOLE_SHA256=<tarball SHA-256> .
+```
+
+Run it. Mount a data directory and pass the two secrets. The data directory
+must be writable by the container user. Create a namespace before the first
+login, as above.
+
+```sh
+mkdir -p data
+export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
+export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
+docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY opendustpan:dev
+docker exec dustpan /opendustpan namespace create --database sqlite:/data/dustpan.db acme
+```
+
+`make image-smoke` builds the image and runs the local smoke test. The test
+starts the container over TLS, checks the API (`/api/capabilities`) and the
+console page, and checks that the process user is not root. Behind a
+TLS-intercepting proxy, set `EXTRA_CA_FILE` to a PEM bundle file so the build
+trusts it. It is not part of `make check`.
+
 ## Concepts
 
 - **Namespace**: the unit of tenancy, what each tool calls an organization.

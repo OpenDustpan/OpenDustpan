@@ -4,7 +4,7 @@
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
 #   python3       any 3.x, standard library only (for docs-lint)
 
-.PHONY: check fmt lint docs-lint test test-postgres e2e generate build
+.PHONY: check fmt lint docs-lint test test-postgres e2e generate build image-smoke
 
 check: lint docs-lint test ## Everything CI checks.
 
@@ -40,3 +40,6 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan
+
+image-smoke: ## Build the container image and run the local smoke test (needs docker; not part of check).
+	./scripts/smoke-image.sh
