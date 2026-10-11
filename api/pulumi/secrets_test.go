@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
@@ -284,6 +285,7 @@ func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) sec
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -960,6 +962,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    allowAll(),
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

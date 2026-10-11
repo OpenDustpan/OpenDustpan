@@ -1,5 +1,6 @@
 // Command opendustpan runs the OpenDustpan server with the built-in adapters.
 //
+//	opendustpan --version
 //	opendustpan serve [flags]
 //	opendustpan namespace create [flags] <name>
 //
@@ -34,10 +35,24 @@ import (
 )
 
 var (
-	errUsage              = errors.New("usage: opendustpan serve | opendustpan namespace create <name>")
+	errUsage = errors.New(
+		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name>",
+	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
+	// errTLSCertMissing reports --tls-key without --tls-cert.
+	errTLSCertMissing = errors.New(
+		"TLS certificate is missing: set --tls-cert (DUSTPAN_TLS_CERT) or clear --tls-key",
+	)
+	// errTLSKeyMissing reports --tls-cert without --tls-key.
+	errTLSKeyMissing = errors.New(
+		"TLS key is missing: set --tls-key (DUSTPAN_TLS_KEY) or clear --tls-cert",
+	)
 )
+
+// version is the server version. The build stamps it with
+// -ldflags "-X main.version=...". A build with no stamp prints dev.
+var version = "dev"
 
 const (
 	// keyEnvVar holds the base64 key-encryption key. It wins when both key
@@ -69,6 +84,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 
 	switch {
+	case args[0] == "--version":
+		_, err := fmt.Fprintln(stdout, version)
+		if err != nil {
+			return fmt.Errorf("write version: %w", err)
+		}
+
+		return nil
 	case args[0] == "serve":
 		return serve(ctx, args[1:], stderr)
 	case len(args) >= 2 && args[0] == "namespace" && args[1] == "create":
@@ -92,26 +114,73 @@ func (c *common) register(fs *flag.FlagSet) {
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	var (
-		c          common
-		listen     string
-		consoleDir string
-		origins    string
-	)
+	var f serveFlags
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+
 	fs.SetOutput(stderr)
-	c.register(fs)
-	fs.StringVar(&listen, "listen", env("DUSTPAN_LISTEN", ":8080"), "listen address (DUSTPAN_LISTEN)")
-	fs.StringVar(&consoleDir, "console-dir", env("DUSTPAN_CONSOLE_DIR", ""),
-		"serve a built web console from this directory (DUSTPAN_CONSOLE_DIR)")
-	fs.StringVar(&origins, "allowed-origins", env("DUSTPAN_ALLOWED_ORIGINS", ""),
-		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)")
+	f.register(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	return f.run(ctx, stderr)
+}
+
+// serveFlags holds the settings of the serve subcommand.
+type serveFlags struct {
+	common
+
+	listen     string
+	consoleDir string
+	origins    string
+	tlsCert    string
+	tlsKey     string
+	publicURL  string
+}
+
+func (f *serveFlags) register(fs *flag.FlagSet) {
+	f.common.register(fs)
+	fs.StringVar(&f.listen, "listen", env("DUSTPAN_LISTEN", ":8080"), "listen address (DUSTPAN_LISTEN)")
+	fs.StringVar(
+		&f.consoleDir,
+		"console-dir",
+		env("DUSTPAN_CONSOLE_DIR", ""),
+		"serve a built web console from this directory (DUSTPAN_CONSOLE_DIR)",
+	)
+	fs.StringVar(
+		&f.origins,
+		"allowed-origins",
+		env("DUSTPAN_ALLOWED_ORIGINS", ""),
+		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
+	)
+	fs.StringVar(
+		&f.tlsCert,
+		"tls-cert",
+		env("DUSTPAN_TLS_CERT", ""),
+		"certificate file for HTTPS, with --tls-key (DUSTPAN_TLS_CERT)",
+	)
+	fs.StringVar(
+		&f.tlsKey,
+		"tls-key",
+		env("DUSTPAN_TLS_KEY", ""),
+		"key file for HTTPS, with --tls-cert (DUSTPAN_TLS_KEY)",
+	)
+	fs.StringVar(
+		&f.publicURL,
+		"public-url",
+		env("DUSTPAN_PUBLIC_URL", ""),
+		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
+	)
+}
+
+// run opens the store, runs the start-up checks and serves until ctx is done.
+func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
 
 	authn, err := identity.NewStaticToken("admin", os.Getenv("DUSTPAN_ADMIN_TOKEN"))
@@ -124,7 +193,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
-	st, err := openStore(ctx, c.database)
+	st, err := openStore(ctx, f.database)
 	if err != nil {
 		return err
 	}
@@ -137,7 +206,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 
 	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(namespace.Region(c.region)),
+		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
 		dustpan.WithUpdateStore(st),
@@ -147,9 +216,11 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
-		dustpan.WithListenAddr(listen),
-		dustpan.WithConsoleDir(consoleDir),
-		dustpan.WithAllowedOrigins(splitList(origins)...),
+		dustpan.WithListenAddr(f.listen),
+		dustpan.WithConsoleDir(f.consoleDir),
+		dustpan.WithAllowedOrigins(splitList(f.origins)...),
+		dustpan.WithTLS(f.tlsCert, f.tlsKey),
+		dustpan.WithPublicURL(f.publicURL),
 	)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
@@ -160,6 +231,21 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 
 	return nil
+}
+
+// checkTLSFlags requires both TLS files or none. It names the missing one,
+// so the operator knows which flag to set or clear.
+func checkTLSFlags(certFile, keyFile string) error {
+	switch {
+	case certFile == "" && keyFile == "":
+		return nil
+	case certFile == "":
+		return errTLSCertMissing
+	case keyFile == "":
+		return errTLSKeyMissing
+	default:
+		return nil
+	}
 }
 
 func createNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {

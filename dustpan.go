@@ -23,14 +23,18 @@ package dustpan
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
@@ -63,6 +67,9 @@ type settings struct {
 	listenAddr      string
 	consoleDir      string
 	allowedOrigins  []string
+	tlsCertFile     string
+	tlsKeyFile      string
+	publicURL       string
 }
 
 // Option configures a Server.
@@ -137,6 +144,21 @@ func WithConsoleDir(dir string) Option {
 	return func(o *settings) { o.consoleDir = dir }
 }
 
+// WithTLS serves HTTPS with the certificate and key in certFile and keyFile,
+// read once at start. The minimum version is TLS 1.2. Both names are
+// required: set both or none.
+func WithTLS(certFile, keyFile string) Option {
+	return func(o *settings) { o.tlsCertFile, o.tlsKeyFile = certFile, keyFile }
+}
+
+// WithPublicURL sets the external base URL of the server, for example
+// "https://dustpan.acme.internal". Adapters use it for absolute URLs. It
+// must be an absolute http or https URL with a host and no query. Empty
+// means each request derives it from its own scheme and host.
+func WithPublicURL(raw string) Option {
+	return func(o *settings) { o.publicURL = raw }
+}
+
 // WithAllowedOrigins lists the web console origins allowed to call the API
 // cross-origin, for example "https://dustpan.acme.internal".
 func WithAllowedOrigins(origins ...string) Option {
@@ -150,10 +172,12 @@ func WithClock(now func() time.Time) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler    http.Handler
-	logger     *slog.Logger
-	listenAddr string
-	secrets    *secret.Service
+	handler     http.Handler
+	logger      *slog.Logger
+	listenAddr  string
+	secrets     *secret.Service
+	tlsCertFile string
+	tlsKeyFile  string
 }
 
 // services holds the domain services that NewServer wires together.
@@ -182,18 +206,18 @@ func NewServer(opts ...Option) (*Server, error) {
 		listenAddr:      defaultListenAddr,
 		consoleDir:      "",
 		allowedOrigins:  nil,
+		tlsCertFile:     "",
+		tlsKeyFile:      "",
+		publicURL:       "",
 	}
 
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 
-	if cfg.authenticator == nil {
-		return nil, fmt.Errorf("%w: WithAuthenticator", ErrMissingOption)
-	}
-
-	if cfg.secretKeys == nil {
-		return nil, fmt.Errorf("%w: WithSecretKeyStore", ErrMissingOption)
+	base, err := checkSettings(&cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	svc, err := newServices(cfg)
@@ -209,6 +233,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		BaseURL:       base,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
@@ -220,11 +245,41 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	return &Server{
-		handler:    handler,
-		logger:     cfg.logger,
-		listenAddr: cfg.listenAddr,
-		secrets:    svc.secrets,
+		handler:     handler,
+		logger:      cfg.logger,
+		listenAddr:  cfg.listenAddr,
+		secrets:     svc.secrets,
+		tlsCertFile: cfg.tlsCertFile,
+		tlsKeyFile:  cfg.tlsKeyFile,
 	}, nil
+}
+
+// checkSettings validates the required options and the TLS and public URL
+// settings. It returns the parsed public URL resolver.
+func checkSettings(cfg *settings) (baseurl.Resolver, error) {
+	if cfg.authenticator == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithAuthenticator", ErrMissingOption)
+	}
+
+	if cfg.secretKeys == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithSecretKeyStore", ErrMissingOption)
+	}
+
+	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
+		missing := "WithTLS certificate file"
+		if cfg.tlsCertFile != "" {
+			missing = "WithTLS key file"
+		}
+
+		return baseurl.Resolver{}, fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	}
+
+	base, err := baseurl.Parse(cfg.publicURL)
+	if err != nil {
+		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
+	}
+
+	return base, nil
 }
 
 // newServices builds the domain services from validated settings. It reads
@@ -274,7 +329,9 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-// Run serves HTTP until ctx is done, then shuts down gracefully.
+// Run serves HTTP until ctx is done, then shuts down gracefully. With
+// WithTLS it serves HTTPS; without it, it warns when the listen address is
+// not loopback and serves plain HTTP anyway.
 func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              s.listenAddr,
@@ -283,11 +340,31 @@ func (s *Server) Run(ctx context.Context) error {
 		IdleTimeout:       idleTimeout,
 	}
 
+	if s.tlsCertFile != "" {
+		cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
+		if err != nil {
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
+
+		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	} else if !isLoopbackListenAddr(s.listenAddr) {
+		s.logger.WarnContext(
+			ctx,
+			"serving plain HTTP on a non-loopback address",
+			slog.String("addr", s.listenAddr),
+		)
+	}
+
 	serveErr := make(chan error, 1)
 
 	go func() {
 		s.logger.InfoContext(ctx, "listening", slog.String("addr", s.listenAddr))
-		serveErr <- srv.ListenAndServe()
+
+		if srv.TLSConfig != nil {
+			serveErr <- srv.ListenAndServeTLS("", "")
+		} else {
+			serveErr <- srv.ListenAndServe()
+		}
 	}()
 
 	select {
@@ -308,6 +385,27 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// isLoopbackListenAddr reports whether addr binds only the loopback
+// interface. An empty host binds every interface, so it is not loopback. A
+// name that is not an IP address counts as loopback only for localhost.
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	return ip.IsLoopback()
 }
 
 func routes(api http.Handler, cfg settings) (http.Handler, error) {
