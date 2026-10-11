@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,7 +49,15 @@ const (
 	waitDelay      = 5 * time.Second
 	maxShown       = 2000
 	baseEnvEntries = 8
-	pulumiProject  = "name: " + Project + "\nruntime: yaml\n"
+	// pulumiProject is the scratch YAML program. Its one resource is a stack
+	// reference to the other stack, which the engine serves from its built-in
+	// provider, so no provider plugin is downloaded.
+	pulumiProject = "name: " + Project + "\nruntime: yaml\n" +
+		"resources:\n" +
+		"  ref:\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + Namespace + "/" + Project + "/other\n"
 	// tofuConfig uses the cloud block, OpenTofu's client for the TFE-compatible
 	// remote API, and declares no providers so nothing is downloaded.
 	tofuConfig = `terraform {
@@ -406,6 +415,85 @@ func (e *Env) StackID(
 	return got.ID, resp.StatusCode, nil
 }
 
+// HeldUpdate is one update a scenario holds open through the API to prove
+// that a second update cannot start while it runs.
+type HeldUpdate struct {
+	Namespace string
+	Project   string
+	Name      string
+	ID        string
+	Lease     string
+}
+
+// StartHeldUpdate creates and starts a mutating update on the stack through
+// the API and returns it. The stack stays locked until EndHeldUpdate ends the
+// update. Scenario steps use it to prove that a second update cannot start
+// while one runs.
+func (e *Env) StartHeldUpdate(ctx context.Context, tb testing.TB, ns, project, name string) HeldUpdate {
+	tb.Helper()
+
+	prefix := "/api/stacks/" + ns + "/" + project + "/" + name
+
+	var created struct {
+		UpdateID string `json:"updateID"`
+	}
+
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPost,
+		Path:   prefix + "/update",
+		Auth:   "token " + e.token,
+		Body:   `{}`,
+		Out:    &created,
+	})
+
+	if created.UpdateID == "" {
+		tb.Fatalf("create held update on %s/%s/%s: no update id", ns, project, name)
+	}
+
+	var started struct {
+		Token string `json:"token"`
+	}
+
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPost,
+		Path:   prefix + "/update/" + created.UpdateID,
+		Auth:   "token " + e.token,
+		Body:   `{}`,
+		Out:    &started,
+	})
+
+	if started.Token == "" {
+		tb.Fatalf("start held update on %s/%s/%s: no lease token", ns, project, name)
+	}
+
+	return HeldUpdate{Namespace: ns, Project: project, Name: name, ID: created.UpdateID, Lease: started.Token}
+}
+
+// EndHeldUpdate completes the held update with status, releasing the stack
+// lock. Only the lease token authorizes it, as for the CLI.
+func (e *Env) EndHeldUpdate(ctx context.Context, tb testing.TB, held HeldUpdate, status string) {
+	tb.Helper()
+
+	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
+
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPost,
+		Path:   prefix + "/update/" + held.ID + "/complete",
+		Auth:   "update-token " + held.Lease,
+		Body:   `{"status":` + fmt.Sprintf("%q", status) + `}`,
+		Out:    nil,
+	})
+}
+
+// apiRequest is one authenticated API call.
+type apiRequest struct {
+	Method string
+	Path   string
+	Auth   string
+	Body   string
+	Out    any
+}
+
 // Run executes the CLI with args and returns what it printed. extra holds
 // NAME=value pairs added to the environment. A non-zero exit is reported in the
 // Result, not as an error.
@@ -637,6 +725,51 @@ func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 	})
 
 	return res
+}
+
+// apiCall sends one authenticated request and decodes a 200 JSON response
+// into req.Out (when not nil). Any other status fails the test with the
+// response body, so error paths stay visible in the log.
+func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
+	tb.Helper()
+
+	var reader io.Reader
+	if req.Body != "" {
+		reader = strings.NewReader(req.Body)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, req.Method, e.URL+req.Path, reader)
+	if err != nil {
+		tb.Fatalf("build %s %s: %v", req.Method, req.Path, err)
+	}
+
+	httpReq.Header.Set("Authorization", req.Auth)
+
+	client := &http.Client{Timeout: commandTimeout}
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		tb.Fatalf("%s %s: %v", req.Method, req.Path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tb.Fatalf("read %s %s: %v", req.Method, req.Path, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		tb.Fatalf("%s %s answers %d: %s", req.Method, req.Path, resp.StatusCode, string(respBody))
+	}
+
+	if req.Out != nil {
+		if err := json.Unmarshal(respBody, req.Out); err != nil {
+			tb.Fatalf("decode %s %s: %v (%s)", req.Method, req.Path, err, string(respBody))
+		}
+	}
 }
 
 // writeTofuFiles writes main.tf, a CLI configuration holding the token, and
