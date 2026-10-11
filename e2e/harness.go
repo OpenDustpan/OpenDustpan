@@ -46,6 +46,9 @@ const (
 	Workspace = "e2e-workspace"
 	// Subject is the principal the access token authenticates as.
 	Subject = "admin"
+	// SubjectB is the second principal for lock tests. Both principals are
+	// administrators, so the AdminOnly authorizer allows both.
+	SubjectB = "member"
 
 	region         = "e2e"
 	tokenBytes     = 24
@@ -114,7 +117,9 @@ type Env struct {
 	cli      Install
 	store    Store
 	server   serverStore
+	client   *http.Client
 	token    string
+	tokenB   string
 	home     string
 	project  string
 	steps    []StepResult
@@ -146,9 +151,16 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 
 	dir := tb.TempDir()
 	token := newToken(tb)
+	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 
-	handler, st := newServer(ctx, tb, store, filepath.Join(dir, "dustpan.db"), token)
+	handler, st := newServer(
+		ctx,
+		tb,
+		store,
+		filepath.Join(dir, "dustpan.db"),
+		serverTokens{tokenA: token, tokenB: tokenB},
+	)
 
 	ts := httptest.NewUnstartedServer(rec.Middleware(handler))
 	if cli.Tool == ToolTofu {
@@ -159,13 +171,18 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 
 	tb.Cleanup(ts.Close)
 
+	client := ts.Client()
+	client.Timeout = commandTimeout
+
 	env := &Env{
 		URL:      ts.URL,
 		Recorder: rec,
 		cli:      cli,
 		store:    store,
 		server:   st,
+		client:   client,
 		token:    token,
+		tokenB:   tokenB,
 		home:     filepath.Join(dir, "home"),
 		project:  filepath.Join(dir, "project"),
 		steps:    nil,
@@ -202,6 +219,34 @@ func newToken(tb testing.TB) string {
 	return hex.EncodeToString(raw)
 }
 
+// dualToken is a test-only Authenticator that knows two tokens with two
+// subjects. The server code does not change: production still uses a single
+// static token or real identity.
+type dualToken struct {
+	tokenA string
+	tokenB string
+}
+
+var _ identity.Authenticator = dualToken{tokenA: "", tokenB: ""}
+
+// AuthenticateToken returns the principal owning token, or ErrUnauthenticated.
+func (d dualToken) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
+	switch token {
+	case d.tokenA:
+		return identity.Principal{Subject: Subject, DisplayName: Subject, Admin: true}, nil
+	case d.tokenB:
+		return identity.Principal{Subject: SubjectB, DisplayName: SubjectB, Admin: true}, nil
+	default:
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+}
+
+// serverTokens holds the two access tokens one Env accepts.
+type serverTokens struct {
+	tokenA string
+	tokenB string
+}
+
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
 // PostgreSQL schema), creates the Namespace namespace and returns the server's
 // handler and store. The store and its schema are closed and removed when the
@@ -210,7 +255,11 @@ func newToken(tb testing.TB) string {
 //
 //nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
 func newServer(
-	ctx context.Context, tb testing.TB, store Store, dbPath, token string,
+	ctx context.Context,
+	tb testing.TB,
+	store Store,
+	dbPath string,
+	tokens serverTokens,
 ) (http.Handler, serverStore) {
 	tb.Helper()
 
@@ -234,10 +283,7 @@ func newServer(
 		tb.Fatalf("create namespace: %v", err)
 	}
 
-	authn, err := identity.NewStaticToken(Subject, token)
-	if err != nil {
-		tb.Fatalf("authenticator: %v", err)
-	}
+	authn := dualToken(tokens)
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte(testKeyEncryptionKey))
 	if err != nil {
@@ -527,6 +573,171 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 	}
 
 	return resp.StatusCode, string(respBody), nil
+}
+
+// TFEStatus sends one request to the TFE-compatible API as the given token
+// and returns its status and body. The token travels as a Bearer credential,
+// as OpenTofu sends it. It uses the test server's client, which trusts the
+// self-signed certificate OpenTofu gets through SSL_CERT_FILE.
+func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return resp.StatusCode, string(respBody), nil
+}
+
+// TFEStatusA sends one TFE API request as principal A, the default principal
+// that the CLI configuration uses.
+func (e *Env) TFEStatusA(ctx context.Context, method, path, body string) (int, string, error) {
+	return e.TFEStatus(ctx, e.token, method, path, body)
+}
+
+// TFEStatusB sends one TFE API request as principal B, the second principal
+// for lock tests.
+func (e *Env) TFEStatusB(ctx context.Context, method, path, body string) (int, string, error) {
+	return e.TFEStatus(ctx, e.tokenB, method, path, body)
+}
+
+// TofuEnvB returns the extra environment to run the OpenTofu CLI as principal
+// B: its own CLI configuration holds B's token. Later entries win in cliEnv,
+// so this overrides the default configuration.
+func (e *Env) TofuEnvB() []string {
+	return []string{"TF_CLI_CONFIG_FILE=" + filepath.Join(e.home, "tofurc-b")}
+}
+
+// workspaceIDData holds the data object of a workspace read document.
+type workspaceIDData struct {
+	ID string `json:"id"`
+}
+
+// workspaceIDDoc decodes a workspace read document in tests.
+type workspaceIDDoc struct {
+	Data workspaceIDData `json:"data"`
+}
+
+// WorkspaceID returns the ID of the e2e workspace through the TFE API as
+// principal A, failing the test when the workspace is missing.
+func (e *Env) WorkspaceID(ctx context.Context, tb testing.TB) string {
+	tb.Helper()
+
+	target := "/api/v2/organizations/" + Namespace + "/workspaces/" + Workspace
+
+	status, body, err := e.TFEStatusA(ctx, http.MethodGet, target, "")
+	if err != nil {
+		tb.Fatalf("get workspace: %v", err)
+	}
+
+	if status != http.StatusOK {
+		tb.Fatalf("get workspace answers %d: %s", status, body)
+	}
+
+	var doc workspaceIDDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Data.ID == "" {
+		tb.Fatalf("decode workspace id: %v (%s)", err, body)
+	}
+
+	return doc.Data.ID
+}
+
+// APIStepSpec describes one TFE API step.
+type APIStepSpec struct {
+	// Check inspects the response body; nil means the status is enough.
+	Check func(body string) error
+	// Name labels the subtest, the report row and the requests the step makes.
+	Name string
+	// Method is the HTTP method, for example POST.
+	Method string
+	// Path is the request path, for example /api/v2/workspaces/ws-1/actions/lock.
+	Path string
+	// Body is the request body, or "" for none.
+	Body string
+	// Want is the expected HTTP status.
+	Want int
+}
+
+// APIStep runs one TFE API request as a scenario step and records it for the
+// report. It fails the subtest when the status differs from want or when
+// check rejects the body. A failing step does not stop later steps.
+func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIStepSpec) {
+	t.Helper()
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		var failure string
+
+		var exitCode int
+
+		status, respBody, err := e.TFEStatus(ctx, token, spec.Method, spec.Path, spec.Body)
+
+		switch {
+		case err != nil:
+			failure = err.Error()
+			exitCode = 1
+		case status != spec.Want:
+			failure = fmt.Sprintf("answers %d, want %d: %s", status, spec.Want, respBody)
+			exitCode = 1
+		case spec.Check != nil:
+			if checkErr := spec.Check(respBody); checkErr != nil {
+				failure = checkErr.Error()
+				exitCode = 1
+			}
+		default:
+		}
+
+		e.steps = append(e.steps, StepResult{
+			Name:     spec.Name,
+			Command:  spec.Method + " " + spec.Path,
+			Failure:  failure,
+			Stderr:   clip(respBody),
+			ExitCode: exitCode,
+			Passed:   failure == "",
+			Skipped:  false,
+		})
+
+		if failure != "" {
+			t.Errorf("%s %s: %s", spec.Method, spec.Path, failure)
+		}
+	})
+}
+
+// APIStepA runs one TFE API request as principal A and records it as a step.
+func (e *Env) APIStepA(ctx context.Context, t *testing.T, spec APIStepSpec) {
+	t.Helper()
+	e.APIStep(ctx, t, e.token, spec)
+}
+
+// APIStepB runs one TFE API request as principal B and records it as a step.
+func (e *Env) APIStepB(ctx context.Context, t *testing.T, spec APIStepSpec) {
+	t.Helper()
+	e.APIStep(ctx, t, e.tokenB, spec)
 }
 
 // HeldUpdate is one update a scenario holds open through the API to prove
@@ -925,14 +1136,15 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 	}
 }
 
-// writeTofuFiles writes main.tf, a CLI configuration holding the token, and
-// the server certificate.
+// writeTofuFiles writes main.tf, a CLI configuration holding the token of
+// principal A, another holding the token of B, and the server certificate.
 func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 	tb.Helper()
 
 	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
 	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
+	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))
 	e.write(tb, filepath.Join(e.project, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
 }
 

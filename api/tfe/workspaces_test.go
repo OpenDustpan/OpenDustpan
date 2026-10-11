@@ -152,8 +152,8 @@ func decodeWorkspaceDoc(t *testing.T, rec *httptest.ResponseRecorder, want int) 
 
 // TestWorkspaceRoutesDeclareActionsAndObjects proves each workspace route
 // declares its action and resolves its object: reads use unit:read, creation
-// uses unit:manage, the list uses namespace:read, and every unit route
-// resolves to opentofu:acme/web.
+// and force-unlock use unit:manage, lock and unlock use unit:write, the list
+// uses namespace:read, and every unit route resolves to opentofu:acme/web.
 func TestWorkspaceRoutesDeclareActionsAndObjects(t *testing.T) {
 	t.Parallel()
 
@@ -199,6 +199,36 @@ func TestWorkspaceRoutesDeclareActionsAndObjects(t *testing.T) {
 			actions: []identity.Action{identity.ActionNamespaceRead},
 			object:  "acme",
 			isUnit:  false,
+		},
+		{
+			name:    "lock",
+			pattern: "POST /api/v2/workspaces/{id}/actions/lock",
+			method:  http.MethodPost,
+			target:  "/api/v2/workspaces/ws-test123/actions/lock",
+			body:    `{"data":{}}`,
+			actions: []identity.Action{identity.ActionUnitWrite},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
+			name:    "unlock",
+			pattern: "POST /api/v2/workspaces/{id}/actions/unlock",
+			method:  http.MethodPost,
+			target:  "/api/v2/workspaces/ws-test123/actions/unlock",
+			body:    `{"data":{}}`,
+			actions: []identity.Action{identity.ActionUnitWrite},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
+			name:    "force-unlock",
+			pattern: "POST /api/v2/workspaces/{id}/actions/force-unlock",
+			method:  http.MethodPost,
+			target:  "/api/v2/workspaces/ws-test123/actions/force-unlock",
+			body:    `{"data":{}}`,
+			actions: []identity.Action{identity.ActionUnitManage},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
 		},
 	}
 
@@ -618,6 +648,22 @@ func (p pagingWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspac
 	}
 
 	return append([]workspace.Workspace(nil), p.items...), nil
+}
+
+func (p pagingWorkspaces) Lock(
+	_ context.Context, _ workspace.ID, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (p pagingWorkspaces) Unlock(
+	_ context.Context, _ workspace.ID, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (p pagingWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
 func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {

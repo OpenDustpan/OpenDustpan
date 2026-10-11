@@ -63,6 +63,15 @@ type Route struct {
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
+	routes := h.discoveryRoutes()
+	routes = append(routes, h.workspaceRoutes()...)
+	routes = append(routes, h.lockRoutes()...)
+
+	return routes
+}
+
+// discoveryRoutes returns service discovery, ping and the entitlement set.
+func (h *Handler) discoveryRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
@@ -91,6 +100,12 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveOrganization,
 			Serve:   h.entitlementSet,
 		},
+	}
+}
+
+// workspaceRoutes returns workspace read, create and list.
+func (h *Handler) workspaceRoutes() []Route {
+	return []Route{
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/organizations/{organization}/workspaces/{workspace}",
@@ -131,6 +146,43 @@ func (h *Handler) buildRoutes() []Route {
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,
 			Serve:   h.listWorkspaces,
+		},
+	}
+}
+
+// lockRoutes returns lock, unlock and force-unlock by workspace ID.
+func (h *Handler) lockRoutes() []Route {
+	return []Route{
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/workspaces/{id}/actions/lock",
+			// A lock needs unit:write. The server mints the lock ID and
+			// records the subject of the caller as the holder.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.lockWorkspace,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/workspaces/{id}/actions/unlock",
+			// An unlock needs unit:write. The holder unlocks. Another
+			// principal gets 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.unlockWorkspace,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/workspaces/{id}/actions/force-unlock",
+			// A force-unlock needs unit:manage. It releases the lock
+			// whoever holds it. A force-unlock of an unlocked workspace
+			// answers 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitManage},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.forceUnlockWorkspace,
 		},
 	}
 }
