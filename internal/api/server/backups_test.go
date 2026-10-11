@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -142,6 +143,7 @@ func newBackupFixture(
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {
@@ -551,6 +553,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {

@@ -1529,6 +1529,52 @@ func (e *Env) StepSavedLoginIn(
 	})
 }
 
+// StatusResponse is the outcome of StatusWithHeader: the status, the
+// response headers and the body.
+type StatusResponse struct {
+	Status int
+	Header http.Header
+	Body   string
+}
+
+// StatusWithHeader sends one request with auth as the whole Authorization
+// header value (empty for none) and returns its status, headers and body.
+// Tests that check refusal headers use it. It uses the test server's
+// client, which trusts the self-signed certificate.
+func (e *Env) StatusWithHeader(
+	ctx context.Context, auth, method, path, body string,
+) (StatusResponse, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return StatusResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return StatusResponse{}, fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return StatusResponse{}, fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return StatusResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(respBody)}, nil
+}
+
 // stepInWith runs spec in dir through run and records it for the report.
 // StepIn passes RunIn; the saved-login steps pass RunSavedLogin.
 func (e *Env) stepInWith(

@@ -788,6 +788,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("cancel running update", contains("has been canceled"), "cancel", "--yes"))
 	env.Step(ctx, t, step("up after concurrent cancel", nil, "up", "--yes", "--non-interactive"))
 
+	pulumiMaintenanceScenario(t, env, org)
+
 	pulumiRestoreScenario(t, env, org)
 
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
@@ -1505,6 +1507,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	} {
 		env.Step(ctx, t, s)
 	}
+
+	tofuMaintenanceScenario(t, env)
 
 	// A second apply with a changed output makes a second state version, so
 	// the list below holds two versions.
@@ -8478,14 +8482,28 @@ func runRestoreWrongKey(ctx context.Context, t *testing.T, env *e2e.Env, target,
 	}
 }
 
+// installationTable is the backup table that the migration seeds with the
+// installation state row.
+const installationTable = "installation"
+
 // checkRestoreDestinationEmpty proves a refused restore wrote nothing: every
-// data table holds no rows and the blob directory holds no files.
+// data table holds no rows except the seeded installation row, and the blob
+// directory holds no files.
 func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
+	counts := exportRowCounts(ctx, t, env, store)
+
 	for _, table := range backup.Tables {
-		if got := exportRowCounts(ctx, t, env, store)[table]; got != 0 {
-			t.Fatalf("table %s holds %d rows after the refused restore, want none", table, got)
+		// The migration seeds the one installation row (ADR 38): an empty
+		// installation holds it, and a refused restore keeps it.
+		want := int64(0)
+		if table == installationTable {
+			want = 1
+		}
+
+		if got := counts[table]; got != want {
+			t.Fatalf("table %s holds %d rows after the refused restore, want %d", table, got, want)
 		}
 	}
 
@@ -8670,5 +8688,506 @@ func runRestoreSchemaMismatch(ctx context.Context, t *testing.T, env *e2e.Env, t
 
 	if out := res.Stdout + res.Stderr; !strings.Contains(out, "schema version") {
 		t.Fatalf("restore refusal lacks %q:\n%s", "schema version", out)
+	}
+}
+
+// maintenanceStateDoc decodes the installation state in tests.
+type maintenanceStateDoc struct {
+	State string `json:"state"`
+}
+
+// enterMaintenanceDoc decodes an enter response in tests.
+type enterMaintenanceDoc struct {
+	State    string   `json:"state"`
+	Canceled []string `json:"canceled"`
+}
+
+// maintenanceErrorDoc decodes an installation API error in tests.
+type maintenanceErrorDoc struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// getMaintenanceState reads the installation state through the installation
+// API with the admin token.
+func getMaintenanceState(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/maintenance", "")
+	if err != nil {
+		t.Fatalf("GET maintenance: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET maintenance answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc maintenanceStateDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode maintenance state %q: %v", body, err)
+	}
+
+	return doc.State
+}
+
+// enterMaintenance enters maintenance mode through the installation API and
+// returns the status with the canceled unit references. forceBody is the
+// enter body: empty enters without force, `{"force":true}` cancels the
+// active work first.
+func enterMaintenance(
+	ctx context.Context, t *testing.T, env *e2e.Env, forceBody string,
+) (int, []string, string) {
+	t.Helper()
+
+	status, resp, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/enter", forceBody)
+	if err != nil {
+		t.Fatalf("POST maintenance enter: %v", err)
+	}
+
+	if status != http.StatusOK {
+		return status, nil, resp
+	}
+
+	var doc enterMaintenanceDoc
+
+	if err := json.Unmarshal([]byte(resp), &doc); err != nil {
+		t.Fatalf("decode enter %q: %v", resp, err)
+	}
+
+	if doc.State != "maintenance" {
+		t.Fatalf("enter state = %q, want maintenance (%s)", doc.State, resp)
+	}
+
+	return status, doc.Canceled, resp
+}
+
+// leaveMaintenance leaves maintenance mode through the installation API.
+func leaveMaintenance(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/leave", "")
+	if err != nil {
+		t.Fatalf("POST maintenance leave: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("POST maintenance leave answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc maintenanceStateDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode leave %q: %v", body, err)
+	}
+
+	if doc.State != "normal" {
+		t.Fatalf("leave state = %q, want normal", doc.State)
+	}
+}
+
+// waitForToolStatus polls GET /api/user until it answers want or the wait
+// times out. The maintenance watcher caches the installation state with a
+// short limit, so a state change reaches the tool routes only after the
+// cache expires: the poll waits that out instead of sleeping a fixed time.
+func waitForToolStatus(ctx context.Context, t *testing.T, env *e2e.Env, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		status, _, err := env.APIStatus(ctx, http.MethodGet, "/api/user", "")
+		if err == nil && status == want {
+			return
+		}
+
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatalf("test ended while waiting for the maintenance gate to answer %d", want)
+		case <-timer.C:
+		}
+	}
+
+	t.Fatalf("maintenance gate never answered %d", want)
+}
+
+// waitForMaintenanceRefusal waits until the maintenance gate refuses tool
+// calls with 503.
+func waitForMaintenanceRefusal(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	waitForToolStatus(ctx, t, env, http.StatusServiceUnavailable)
+}
+
+// waitForMaintenanceServe waits until the maintenance gate serves tool calls
+// again.
+func waitForMaintenanceServe(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	waitForToolStatus(ctx, t, env, http.StatusOK)
+}
+
+// decodeMaintenanceError decodes an installation API error and proves it
+// holds want with a message naming wantName.
+func decodeMaintenanceError(t *testing.T, body string, want int, wantName string) {
+	t.Helper()
+
+	var doc maintenanceErrorDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode %d of maintenance enter: %v (%s)", want, err, body)
+	}
+
+	if doc.Code != want || !strings.Contains(doc.Message, wantName) {
+		t.Fatalf("maintenance enter error = %+v, want code %d naming %q", doc, want, wantName)
+	}
+}
+
+// pulumiMaintenanceScenario proves maintenance mode (ADR 38 decision 4) with
+// the Pulumi CLI: entering refuses while the update of the renamed stack
+// runs, force cancels the update and names it, the CLI fails with the
+// maintenance message, the probes stay available, and leaving restores the
+// CLI. It runs in every matrix version, so the report shows what each
+// supported CLI does on the 503.
+func pulumiMaintenanceScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	unit := "pulumi:" + org + "/" + e2e.Project + "/renamed"
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+
+	status, _, body := enterMaintenance(ctx, t, env, "")
+	if status != http.StatusConflict {
+		t.Fatalf("POST enter with a running update answers %d, want %d (%s)",
+			status, http.StatusConflict, body)
+	}
+
+	decodeMaintenanceError(t, body, http.StatusConflict, unit)
+
+	status, canceled, _ := enterMaintenance(ctx, t, env, `{"force":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST enter with force answers %d, want %d", status, http.StatusOK)
+	}
+
+	if len(canceled) != 1 || canceled[0] != unit {
+		t.Fatalf("force enter canceled = %v, want [%s]", canceled, unit)
+	}
+
+	// The force canceled the held update through the server, so the test
+	// never ends it: the lease is dead.
+	_ = held
+
+	waitForMaintenanceRefusal(ctx, t, env)
+
+	if got := getMaintenanceState(ctx, t, env); got != "maintenance" {
+		t.Fatalf("installation state = %q, want maintenance", got)
+	}
+
+	env.Step(ctx, t, failStep(
+		"stack ls in maintenance",
+		outputContains("maintenance"),
+		"stack", "ls", "--json",
+	))
+
+	checkReady(ctx, t, env)
+	leaveMaintenance(ctx, t, env)
+	waitForMaintenanceServe(ctx, t, env)
+
+	env.Step(ctx, t, step("stack ls after maintenance", contains("renamed"), "stack", "ls", "--json"))
+}
+
+// tofuMaintenanceScenario proves maintenance mode (ADR 38 decision 4) with
+// OpenTofu: entering refuses while the workspace is locked, force releases
+// the lock and names it, the CLI fails with the maintenance message, and
+// leaving restores the CLI. Discovery stays available, so the plan fails
+// when it reads the organization: OpenTofu prints the 503 refusal title and
+// detail ("maintenance / The installation is in maintenance mode. Retry
+// later."). It runs in every matrix version, so the report shows what each
+// supported OpenTofu does on the 503.
+func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+	unit := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
+	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock for maintenance",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+
+	status, _, body := enterMaintenance(ctx, t, env, "")
+	if status != http.StatusConflict {
+		t.Fatalf("POST enter with a locked workspace answers %d, want %d (%s)",
+			status, http.StatusConflict, body)
+	}
+
+	decodeMaintenanceError(t, body, http.StatusConflict, unit)
+
+	status, canceled, _ := enterMaintenance(ctx, t, env, `{"force":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST enter with force answers %d, want %d", status, http.StatusOK)
+	}
+
+	if len(canceled) != 1 || canceled[0] != unit {
+		t.Fatalf("force enter canceled = %v, want [%s]", canceled, unit)
+	}
+
+	waitForMaintenanceRefusal(ctx, t, env)
+
+	env.Step(ctx, t, failStep(
+		"plan in maintenance",
+		outputContains("maintenance"),
+		"plan", "-input=false", "-no-color",
+	))
+
+	leaveMaintenance(ctx, t, env)
+	waitForMaintenanceServe(ctx, t, env)
+
+	env.Step(ctx, t, step("plan after maintenance", nil, "plan", "-input=false", "-no-color"))
+}
+
+// TestMaintenance proves the installation maintenance routes (ADR 38
+// decision 4) with the first Pulumi version of the matrix on every store:
+// the state reads normal, entering refuses while an update runs, force
+// cancels it and names it, every tool adapter answers 503 with Retry-After
+// and a message that names maintenance in its own error shape, the
+// installation API and the probes stay available, and leaving restores the
+// CLI. Calls without a token answer 401.
+func TestMaintenance(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runMaintenanceOnStore(t, cli, db)
+		})
+	}
+}
+
+// runMaintenanceOnStore runs the maintenance steps on one store.
+func runMaintenanceOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	checkReady(ctx, t, env)
+
+	org := e2e.Namespace
+	qualified := org + "/" + e2e.Project + "/" + stackName
+	unit := "pulumi:" + org + "/" + e2e.Project + "/" + stackName
+
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("stack init", nil, "stack", "init", qualified),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	if got := getMaintenanceState(ctx, t, env); got != "normal" {
+		t.Fatalf("installation state = %q, want normal", got)
+	}
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, stackName)
+
+	status, _, body := enterMaintenance(ctx, t, env, "")
+	if status != http.StatusConflict {
+		t.Fatalf("POST enter with a running update answers %d, want %d (%s)",
+			status, http.StatusConflict, body)
+	}
+
+	decodeMaintenanceError(t, body, http.StatusConflict, unit)
+
+	status, canceled, _ := enterMaintenance(ctx, t, env, `{"force":true}`)
+	if status != http.StatusOK {
+		t.Fatalf("POST enter with force answers %d, want %d", status, http.StatusOK)
+	}
+
+	if len(canceled) != 1 || canceled[0] != unit {
+		t.Fatalf("force enter canceled = %v, want [%s]", canceled, unit)
+	}
+
+	// The force canceled the held update through the server, so the test
+	// never ends it: the lease is dead.
+	_ = held
+
+	waitForMaintenanceRefusal(ctx, t, env)
+
+	if got := getMaintenanceState(ctx, t, env); got != "maintenance" {
+		t.Fatalf("installation state = %q, want maintenance", got)
+	}
+
+	checkMaintenanceShapes(ctx, t, env)
+	checkMaintenanceProbes(ctx, t, env)
+	checkMaintenanceUnauthorized(ctx, t, env)
+
+	leaveMaintenance(ctx, t, env)
+	waitForMaintenanceServe(ctx, t, env)
+
+	// The force freed the stack lock, so a new update starts at once.
+	freed := env.StartHeldUpdate(ctx, t, org, e2e.Project, stackName)
+	env.EndHeldUpdate(ctx, t, freed, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+}
+
+// refusalExpect groups what one maintenance refusal must answer: the
+// adapter name for failures, its media type, and a body fragment beside the
+// maintenance message.
+type refusalExpect struct {
+	adapter   string
+	mediaType string
+	wantBody  string
+}
+
+// checkMaintenanceShapes proves every tool adapter answers 503 with
+// Retry-After and a message that names maintenance, each in its own error
+// shape.
+func checkMaintenanceShapes(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(ctx, "token "+env.TokenA(), http.MethodGet, "/api/user", "")
+	if err != nil {
+		t.Fatalf("GET /api/user in maintenance: %v", err)
+	}
+
+	checkMaintenanceRefusal(t, got.Status, got.Header, got.Body, refusalExpect{
+		adapter:   "Pulumi",
+		mediaType: "application/json",
+		wantBody:  `"code":503`,
+	})
+
+	got, err = env.StatusWithHeader(ctx, "", http.MethodGet, "/api/v2/ping", "")
+	if err != nil {
+		t.Fatalf("GET /api/v2/ping in maintenance: %v", err)
+	}
+
+	checkMaintenanceRefusal(t, got.Status, got.Header, got.Body, refusalExpect{
+		adapter:   "TFE",
+		mediaType: "application/vnd.api+json",
+		wantBody:  `"status":"503"`,
+	})
+
+	got, err = env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+e2e.Namespace, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/inventory/units in maintenance: %v", err)
+	}
+
+	checkMaintenanceRefusal(t, got.Status, got.Header, got.Body, refusalExpect{
+		adapter:   "inventory",
+		mediaType: "application/json",
+		wantBody:  `"code":503`,
+	})
+}
+
+// checkMaintenanceRefusal proves one refusal answers 503 with a Retry-After
+// wait, the media type of its adapter, and a body holding wantBody with
+// maintenance named.
+func checkMaintenanceRefusal(t *testing.T, status int, header http.Header, body string, exp refusalExpect) {
+	t.Helper()
+
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("%s refusal answers %d, want %d (%s)", exp.adapter, status, http.StatusServiceUnavailable, body)
+	}
+
+	if got := header.Get("Retry-After"); got == "" {
+		t.Fatalf("%s refusal holds no Retry-After header", exp.adapter)
+	}
+
+	if got := header.Get("Content-Type"); got != exp.mediaType {
+		t.Fatalf("%s refusal media type = %q, want %q", exp.adapter, got, exp.mediaType)
+	}
+
+	if !strings.Contains(body, exp.wantBody) || !strings.Contains(body, "maintenance") {
+		t.Fatalf("%s refusal body %q lacks %q with maintenance named", exp.adapter, body, exp.wantBody)
+	}
+}
+
+// checkMaintenanceProbes proves the probes stay available in maintenance
+// mode: readiness answers 200 and liveness answers 204, both without a
+// token.
+func checkMaintenanceProbes(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/health/ready", "")
+	if err != nil {
+		// APIStatus sends the admin token; the probes ignore it.
+		t.Fatalf("GET /health/ready: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET /health/ready in maintenance answers %d, want %d (%s)",
+			status, http.StatusOK, body)
+	}
+
+	if !strings.Contains(body, `"status":"ok"`) {
+		t.Fatalf("GET /health/ready body %q, want status ok", body)
+	}
+}
+
+// checkMaintenanceUnauthorized proves the maintenance routes answer 401
+// without a token, with the one JSON error shape.
+func checkMaintenanceUnauthorized(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	for _, target := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/api/server/maintenance"},
+		{http.MethodPost, "/api/server/maintenance/enter"},
+		{http.MethodPost, "/api/server/maintenance/leave"},
+	} {
+		status, body, err := env.ServerAPIStatusBare(ctx, target.method, target.path)
+		if err != nil {
+			t.Fatalf("%s %s without a token: %v", target.method, target.path, err)
+		}
+
+		if status != http.StatusUnauthorized {
+			t.Fatalf("%s %s without a token answers %d, want %d (%s)",
+				target.method, target.path, status, http.StatusUnauthorized, body)
+		}
+
+		var doc maintenanceErrorDoc
+
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("decode 401 of %s %s: %v (%s)", target.method, target.path, err, body)
+		}
+
+		if doc.Code != http.StatusUnauthorized || doc.Message == "" {
+			t.Fatalf("%s %s error = %+v, want code 401 with a message", target.method, target.path, doc)
+		}
 	}
 }

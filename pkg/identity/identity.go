@@ -64,6 +64,10 @@ const (
 	// ActionServerObserve allows reading installation metrics. Its object
 	// is ServerObject.
 	ActionServerObserve Action = "server:observe"
+	// ActionServerMaintenance allows reading and changing the installation
+	// state between normal operation and maintenance mode. Its object is
+	// ServerObject.
+	ActionServerMaintenance Action = "server:maintenance"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

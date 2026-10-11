@@ -54,6 +54,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
+		identity.ActionServerMaintenance,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -308,6 +309,14 @@ func TestServerActionsProveWireForms(t *testing.T) {
 	if identity.ActionServerObserve != "server:observe" {
 		t.Fatalf("observe action = %q, want %q", identity.ActionServerObserve, "server:observe")
 	}
+
+	if identity.ActionServerMaintenance != "server:maintenance" {
+		t.Fatalf(
+			"maintenance action = %q, want %q",
+			identity.ActionServerMaintenance,
+			"server:maintenance",
+		)
+	}
 }
 
 func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
@@ -324,6 +333,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
+		identity.ActionServerMaintenance,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -216,6 +217,7 @@ func newServiceBackedHandler(
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {
@@ -637,6 +639,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	}
 
@@ -648,6 +651,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		{name: "authorizer", drop: func(c *apiserver.Config) { c.Authorizer = nil }},
 		{name: "logger", drop: func(c *apiserver.Config) { c.Logger = nil }},
 		{name: "namespaces", drop: func(c *apiserver.Config) { c.Namespaces = nil }},
+		{name: "maintenance", drop: func(c *apiserver.Config) { c.Maintenance = nil }},
 		{name: "metrics", drop: func(c *apiserver.Config) { c.Metrics = nil }},
 	}
 
@@ -760,6 +764,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {
@@ -776,6 +781,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {
