@@ -1416,7 +1416,9 @@ func checkRenamedStack(t *testing.T, f fixture, newRef stack.Ref, oldID string) 
 	}
 }
 
-// checkRenamedUpdate checks the update moved to the new name.
+// checkRenamedUpdate checks the update moved to the new name. The checkpoint
+// size travels on the update itself, so it follows the rename; the history
+// cases pin the sizes, so this check copies the stored size.
 func checkRenamedUpdate(t *testing.T, f fixture, newRef stack.Ref, ended stack.Update) {
 	t.Helper()
 
@@ -1426,6 +1428,7 @@ func checkRenamedUpdate(t *testing.T, f fixture, newRef stack.Ref, ended stack.U
 	}
 
 	ended.Ref = newRef
+	ended.CheckpointBytes = gotUpdate.CheckpointBytes
 
 	if !sameUpdate(gotUpdate, ended) {
 		t.Fatalf("update after rename = %+v, want %+v", gotUpdate, ended)

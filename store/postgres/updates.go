@@ -55,6 +55,8 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			CreatedAtMs:      row.CreatedAtMs,
 			StartedAtMs:      row.StartedAtMs,
 			EndedAtMs:        row.EndedAtMs,
+			CreatedBy:        row.CreatedBy,
+			RestoredFrom:     row.RestoredFrom,
 		})
 		if err != nil {
 			return fmt.Errorf("insert update: %w", err)
@@ -93,10 +95,9 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
 		DryRun:           row.DryRun,
-		// History fields stay zero until issue #136 grows the columns.
-		CreatedBy:       "",
-		RestoredFrom:    0,
-		CheckpointBytes: 0,
+		CreatedBy:        row.CreatedBy,
+		RestoredFrom:     row.RestoredFrom,
+		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
 }
 
@@ -186,10 +187,9 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
 		DryRun:           row.DryRun,
-		// History fields stay zero until issue #136 grows the columns.
-		CreatedBy:       "",
-		RestoredFrom:    0,
-		CheckpointBytes: 0,
+		CreatedBy:        row.CreatedBy,
+		RestoredFrom:     row.RestoredFrom,
+		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
 }
 
@@ -228,10 +228,9 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 			StartedAtMs:      rows[i].StartedAtMs,
 			EndedAtMs:        rows[i].EndedAtMs,
 			DryRun:           rows[i].DryRun,
-			// History fields stay zero until issue #136 grows the columns.
-			CreatedBy:       "",
-			RestoredFrom:    0,
-			CheckpointBytes: 0,
+			CreatedBy:        rows[i].CreatedBy,
+			RestoredFrom:     rows[i].RestoredFrom,
+			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
 	}
 
