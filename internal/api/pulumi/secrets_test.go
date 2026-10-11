@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -534,6 +536,13 @@ func (f secretFixture) batchDecryptBody(t *testing.T, ciphertext string) string 
 	return string(raw)
 }
 
+// decryptBatch decrypts ciphertext on a batch-decrypt target through HTTP.
+func (f secretFixture) decryptBatch(t *testing.T, target, ciphertext string) (int, string) {
+	t.Helper()
+
+	return f.plain(t, http.MethodPost, target, f.batchDecryptBody(t, ciphertext))
+}
+
 // wantSecretSuccess returns the status an allowed request to pattern answers:
 // the audit routes answer 204 with no content, every other secrets route
 // answers 200.
@@ -987,4 +996,754 @@ func TestSecretsMissingKey(t *testing.T) {
 	if !strings.Contains(body, "DUSTPAN_KEY_ENCRYPTION_KEY") {
 		t.Fatalf("decrypt without a key answers %s, want it to name the key setting", body)
 	}
+}
+
+// failingStackStore fails GetStack with err, so the handler answers the 500
+// default branch. The other methods panic: the test never calls them, so a
+// call means the test took a wrong path.
+type failingStackStore struct {
+	err error
+}
+
+func (m *failingStackStore) CreateStack(_ context.Context, _ stack.Stack, _ namespace.Fence) error {
+	panic("failingStackStore.CreateStack is not used")
+}
+
+func (m *failingStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, error) {
+	return stack.Stack{}, m.err
+}
+
+func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
+	panic("failingStackStore.ListStacks is not used")
+}
+
+func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	panic("failingStackStore.DeleteStack is not used")
+}
+
+func (m *failingStackStore) RenameStack(
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+) error {
+	panic("failingStackStore.RenameStack is not used")
+}
+
+func (m *failingStackStore) UpdateStackTags(
+	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+) error {
+	panic("failingStackStore.UpdateStackTags is not used")
+}
+
+// errBackendBoom is the static cause of the backend failure that proves the
+// 500 default branch hides its detail.
+var errBackendBoom = errors.New("backend boom")
+
+// wantDecryptMessage is the fixed 400 body of a decryption failure. It
+// carries no scope and no key-encryption key fingerprint. Every decrypt leak
+// test asserts against this one constant, which matches the production
+// message in api/pulumi/pulumi.go verbatim, so a wording change fails here.
+const wantDecryptMessage = "Cannot decrypt the value. " +
+	"The ciphertext does not belong to this stack, or the key changed."
+
+// rotatedSecretKey seals data keys before a rotation: it differs from
+// testSecretKey in every byte, so its wrapper fingerprint differs too. It is
+// a test value only.
+const rotatedSecretKey = "fedcba9876543210fedcba9876543210"
+
+// secretLeaks holds the values that an error body must never contain: the
+// wrapper fingerprint and the scopes of the fixture stacks.
+type secretLeaks struct {
+	fingerprint string
+	prodScope   string
+	otherScope  string
+}
+
+// all returns every leak string of the fixture, so each test asserts the
+// absence of both scopes even when it exercises only one.
+func (l secretLeaks) all() []string {
+	return []string{l.fingerprint, l.prodScope, l.otherScope, "builtin-"}
+}
+
+// TestSecretsDecryptAnswersFixedMessage proves a decrypt failure answers the
+// fixed 400 message with no scope and no key-encryption key fingerprint.
+func TestSecretsDecryptAnswersFixedMessage(t *testing.T) {
+	t.Parallel()
+
+	f := newSecretFixture(t, allowAll(), 0)
+	leaks := fingerprintAndScopes(t, f)
+
+	ciphertext := f.encryptOne(t, "s3cr3t")
+
+	status, body := f.decryptOne(t, "/api/stacks/acme/web/other/decrypt", ciphertext)
+	if status != http.StatusBadRequest {
+		t.Fatalf("foreign decrypt answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	code, message := decodeErrorBody(t, body)
+	if code != http.StatusBadRequest || message != wantDecryptMessage {
+		t.Fatalf("error code %d message %q, want code 400 message %q", code, message, wantDecryptMessage)
+	}
+
+	checkNoLeak(t, body, leaks.all())
+}
+
+// TestSecretsDecryptWrapperMismatchAnswersFixedMessage proves a decrypt after
+// a key rotation answers the fixed 400 message: the domain detail names both
+// wrapper fingerprints ("wrapped by %q, server holds %q"), and none of them
+// may reach the body.
+func TestSecretsDecryptWrapperMismatchAnswersFixedMessage(t *testing.T) {
+	t.Parallel()
+
+	var logged bytes.Buffer
+
+	r := newRotatedSecretsFixture(t, &logged)
+
+	status, body := r.decryptSingle(t, "/api/stacks/acme/web/prod/decrypt")
+	if status != http.StatusBadRequest {
+		t.Fatalf("rotated decrypt answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	code, message := decodeErrorBody(t, body)
+	if code != http.StatusBadRequest || message != wantDecryptMessage {
+		t.Fatalf("error code %d message %q, want code 400 message %q", code, message, wantDecryptMessage)
+	}
+
+	checkNoLeak(t, body, r.leaks())
+
+	if logged.String() == "" {
+		t.Fatal("server log is empty, want the decrypt detail")
+	}
+
+	for _, want := range []string{r.wrapperA, r.wrapperB, r.prodScope} {
+		if !strings.Contains(logged.String(), want) {
+			t.Fatalf("server log %q lacks %q", logged.String(), want)
+		}
+	}
+}
+
+// TestSecretsBatchDecryptAnswersFixedMessage proves a batch decrypt failure
+// answers the same fixed 400 message with no scope and no fingerprint, for
+// both the cross-scope and the rotated-wrapper causes.
+func TestSecretsBatchDecryptAnswersFixedMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cross-scope", func(t *testing.T) {
+		t.Parallel()
+
+		f := newSecretFixture(t, allowAll(), 0)
+		leaks := fingerprintAndScopes(t, f)
+
+		ciphertext := f.encryptOne(t, "s3cr3t")
+
+		status, body := f.decryptBatch(t, "/api/stacks/acme/web/other/batch-decrypt", ciphertext)
+		if status != http.StatusBadRequest {
+			t.Fatalf("foreign batch decrypt answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+		}
+
+		code, message := decodeErrorBody(t, body)
+		if code != http.StatusBadRequest || message != wantDecryptMessage {
+			t.Fatalf("error code %d message %q, want code 400 message %q", code, message, wantDecryptMessage)
+		}
+
+		checkNoLeak(t, body, leaks.all())
+	})
+
+	t.Run("rotated wrapper", func(t *testing.T) {
+		t.Parallel()
+
+		var logged bytes.Buffer
+
+		r := newRotatedSecretsFixture(t, &logged)
+
+		status, body := r.decryptBatch(t, "/api/stacks/acme/web/prod/batch-decrypt")
+		if status != http.StatusBadRequest {
+			t.Fatalf("rotated batch decrypt answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+		}
+
+		code, message := decodeErrorBody(t, body)
+		if code != http.StatusBadRequest || message != wantDecryptMessage {
+			t.Fatalf("error code %d message %q, want code 400 message %q", code, message, wantDecryptMessage)
+		}
+
+		checkNoLeak(t, body, r.leaks())
+
+		for _, want := range []string{r.wrapperA, r.wrapperB, r.prodScope} {
+			if !strings.Contains(logged.String(), want) {
+				t.Fatalf("server log %q lacks %q", logged.String(), want)
+			}
+		}
+	})
+}
+
+// TestSecretsDecryptLogsDetail proves the decrypt detail goes to the server
+// log only: the body stays fixed while the log holds the scope.
+func TestSecretsDecryptLogsDetail(t *testing.T) {
+	t.Parallel()
+
+	var logged bytes.Buffer
+
+	f := newSecretFixtureWithLogger(t, &logged)
+	leaks := fingerprintAndScopes(t, f)
+
+	ciphertext := f.encryptOne(t, "s3cr3t")
+
+	status, body := f.decryptOne(t, "/api/stacks/acme/web/other/decrypt", ciphertext)
+	if status != http.StatusBadRequest {
+		t.Fatalf("foreign decrypt answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	checkNoLeak(t, body, leaks.all())
+
+	if !strings.Contains(logged.String(), leaks.otherScope) {
+		t.Fatalf("server log %q lacks scope %q", logged.String(), leaks.otherScope)
+	}
+}
+
+// TestPulumiInternalErrorHidesDetail proves the 500 default branch answers
+// "internal error" even when the backend error names a fingerprint and a
+// scope.
+func TestPulumiInternalErrorHidesDetail(t *testing.T) {
+	t.Parallel()
+
+	f := newSecretFixture(t, allowAll(), 0)
+	leaks := fingerprintAndScopes(t, f)
+
+	backendErr := fmt.Errorf("%w: %s %s", errBackendBoom, leaks.fingerprint, leaks.prodScope)
+	handler := newFailingHandler(t, backendErr)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/stacks/acme/web/prod", http.NoBody,
+	)
+	req.Header.Set("Authorization", "token test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"failing backend answers %d, want %d (%s)",
+			rec.Code,
+			http.StatusInternalServerError,
+			rec.Body.String(),
+		)
+	}
+
+	code, message := decodeErrorBody(t, rec.Body.String())
+	if code != http.StatusInternalServerError || message != "internal error" {
+		t.Fatalf("error code %d message %q, want code 500 message %q", code, message, "internal error")
+	}
+
+	checkNoLeak(t, rec.Body.String(), leaks.all())
+}
+
+// TestSecretsOversizedBatchHidesKeyMaterial proves an oversized batch (413)
+// holds no fingerprint and no scope: the detail names sizes only.
+func TestSecretsOversizedBatchHidesKeyMaterial(t *testing.T) {
+	t.Parallel()
+
+	f := newSecretFixture(t, allowAll(), smallBatch)
+	leaks := fingerprintAndScopes(t, f)
+
+	large := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'x'}, smallBatch))
+
+	raw, encodeErr := json.Marshal(map[string][]string{"plaintexts": {large, large}})
+	if encodeErr != nil {
+		t.Fatalf("encode batch body: %v", encodeErr)
+	}
+
+	status, body := f.plain(t, http.MethodPost, "/api/stacks/acme/web/prod/batch-encrypt", string(raw))
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized batch answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	checkNoLeak(t, body, leaks.all())
+}
+
+// TestSecretsMissingKeyHidesKeyMaterial proves crypting without a
+// key-encryption key (500) holds no fingerprint and no scope: the detail
+// names the key setting only.
+func TestSecretsMissingKeyHidesKeyMaterial(t *testing.T) {
+	t.Parallel()
+
+	f, prodScope := newKeylessSecretFixture(t)
+
+	for _, tc := range []struct {
+		name   string
+		target string
+		body   string
+	}{
+		{name: "encrypt", target: "/api/stacks/acme/web/prod/encrypt", body: `{"plaintext":"aGk="}`},
+		{name: "decrypt", target: "/api/stacks/acme/web/prod/decrypt", body: `{"ciphertext":"aGk="}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkKeylessCrypt(t, f, prodScope, tc.target, tc.body)
+		})
+	}
+}
+
+// checkKeylessCrypt proves one crypt route without a key-encryption key
+// answers 500 naming the setting, with no fingerprint and no scope.
+func checkKeylessCrypt(t *testing.T, f secretFixture, prodScope, target, body string) {
+	t.Helper()
+
+	status, got := f.plain(t, http.MethodPost, target, body)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("crypt without a key answers %d, want %d (%s)", status, http.StatusInternalServerError, got)
+	}
+
+	if !strings.Contains(got, "DUSTPAN_KEY_ENCRYPTION_KEY") {
+		t.Fatalf("crypt without a key answers %s, want it to name the key setting", got)
+	}
+
+	checkNoLeak(t, got, []string{prodScope, "builtin-"})
+}
+
+// newKeylessSecretFixture builds a secrets fixture with no key-encryption
+// key and one prod stack, and returns the prod scope for leak checks.
+func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
+	t.Helper()
+
+	namespaces, nsErr := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if nsErr != nil {
+		t.Fatalf("namespace service: %v", nsErr)
+	}
+
+	stacks, stacksErr := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil},
+	)
+	if stacksErr != nil {
+		t.Fatalf("stack service: %v", stacksErr)
+	}
+
+	ref, refErr := stack.ParseRef("acme", "web", "prod")
+	if refErr != nil {
+		t.Fatalf("parse ref: %v", refErr)
+	}
+
+	if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+		t.Fatalf("create stack: %v", createErr)
+	}
+
+	prod, prodErr := stacks.Get(t.Context(), ref)
+	if prodErr != nil {
+		t.Fatalf("get prod: %v", prodErr)
+	}
+
+	secrets, secretsErr := secret.NewService(secret.Config{
+		Keys:          &memSecretKeys{keys: map[secret.Scope]secret.WrappedKey{}, mu: sync.Mutex{}},
+		Wrapper:       nil,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if secretsErr != nil {
+		t.Fatalf("secret service: %v", secretsErr)
+	}
+
+	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       newEnforcingUpdates(t, namespaces),
+		Secrets:       secrets,
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
+	})
+	if handlerErr != nil {
+		t.Fatalf("handler: %v", handlerErr)
+	}
+
+	return secretFixture{handler: handler, stacks: stacks}, "acme/" + prod.ID.String()
+}
+
+// rotatedSecretsFixture is a Handler whose server wrapper rotated after the
+// stored data key was wrapped: keys holds a prod data key wrapped by wrapperA
+// while the handler serves with wrapperB. Decrypting prod ciphertexts then
+// fails in the wrapper-mismatch branch, whose detail names both fingerprints.
+type rotatedSecretsFixture struct {
+	handler    *pulumi.Handler
+	ciphertext string
+	wrapperA   string
+	wrapperB   string
+	prodScope  string
+	otherScope string
+}
+
+// leaks returns every string a rotated error body must never contain: both
+// wrapper fingerprints and both scopes.
+func (r rotatedSecretsFixture) leaks() []string {
+	return []string{r.wrapperA, r.wrapperB, r.prodScope, r.otherScope, "builtin-"}
+}
+
+// newRotatedSecretsFixture encrypts one value on prod with the test key, then
+// serves decrypts with the rotated key over the same key store.
+func newRotatedSecretsFixture(t *testing.T, logged *bytes.Buffer) rotatedSecretsFixture {
+	t.Helper()
+
+	svcs := newTwoStackServices(t)
+	namespaces, stacks, prod, other := svcs.namespaces, svcs.stacks, svcs.prod, svcs.other
+
+	prodScope, scopeErr := secret.NewScope(prod.Ref.Namespace, prod.ID.String())
+	if scopeErr != nil {
+		t.Fatalf("prod scope: %v", scopeErr)
+	}
+
+	keys := &memSecretKeys{keys: map[secret.Scope]secret.WrappedKey{}, mu: sync.Mutex{}}
+
+	wrapperA, wrapperErr := secret.NewBuiltinWrapper([]byte(testSecretKey))
+	if wrapperErr != nil {
+		t.Fatalf("key wrapper: %v", wrapperErr)
+	}
+
+	sealed := encryptWithWrapper(t, namespaces, keys, wrapperA, prodScope)
+
+	wrapperB, rotatedErr := secret.NewBuiltinWrapper([]byte(rotatedSecretKey))
+	if rotatedErr != nil {
+		t.Fatalf("rotated wrapper: %v", rotatedErr)
+	}
+
+	serveSecrets, serveErr := secret.NewService(secret.Config{
+		Keys:          keys,
+		Wrapper:       wrapperB,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if serveErr != nil {
+		t.Fatalf("secret service: %v", serveErr)
+	}
+
+	handler := newLoggedSecretsHandler(t, namespaces, stacks, serveSecrets, logged)
+
+	return rotatedSecretsFixture{
+		handler:    handler,
+		ciphertext: base64.StdEncoding.EncodeToString(sealed[0]),
+		wrapperA:   wrapperA.ID(),
+		wrapperB:   wrapperB.ID(),
+		prodScope:  "acme/" + prod.ID.String(),
+		otherScope: "acme/" + other.ID.String(),
+	}
+}
+
+// twoStackServices holds namespace and stack services with the prod and
+// other stacks of the web project already created.
+type twoStackServices struct {
+	namespaces *namespace.Service
+	stacks     *stack.Service
+	prod       stack.Stack
+	other      stack.Stack
+}
+
+// newTwoStackServices builds namespace and stack services with the prod and
+// other stacks of the web project already created.
+func newTwoStackServices(t *testing.T) twoStackServices {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	for _, name := range []string{"prod", "other"} {
+		ref, refErr := stack.ParseRef("acme", "web", name)
+		if refErr != nil {
+			t.Fatalf("parse ref: %v", refErr)
+		}
+
+		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+			t.Fatalf("create stack %s: %v", ref, createErr)
+		}
+	}
+
+	prodRef, refErr := stack.ParseRef("acme", "web", "prod")
+	if refErr != nil {
+		t.Fatalf("parse ref: %v", refErr)
+	}
+
+	prod, prodErr := stacks.Get(t.Context(), prodRef)
+	if prodErr != nil {
+		t.Fatalf("get prod: %v", prodErr)
+	}
+
+	otherRef, otherRefErr := stack.ParseRef("acme", "web", "other")
+	if otherRefErr != nil {
+		t.Fatalf("parse ref: %v", otherRefErr)
+	}
+
+	other, otherErr := stacks.Get(t.Context(), otherRef)
+	if otherErr != nil {
+		t.Fatalf("get other: %v", otherErr)
+	}
+
+	return twoStackServices{namespaces: namespaces, stacks: stacks, prod: prod, other: other}
+}
+
+// encryptWithWrapper encrypts one value under scope with wrapper through a
+// service over keys, and returns the ciphertexts.
+func encryptWithWrapper(
+	t *testing.T,
+	namespaces *namespace.Service,
+	keys *memSecretKeys,
+	wrapper secret.Wrapper,
+	scope secret.Scope,
+) [][]byte {
+	t.Helper()
+
+	secrets, secretsErr := secret.NewService(secret.Config{
+		Keys:          keys,
+		Wrapper:       wrapper,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if secretsErr != nil {
+		t.Fatalf("secret service: %v", secretsErr)
+	}
+
+	sealed, encryptErr := secrets.Encrypt(t.Context(), scope, [][]byte{[]byte("s3cr3t")})
+	if encryptErr != nil {
+		t.Fatalf("encrypt: %v", encryptErr)
+	}
+
+	return sealed
+}
+
+// newLoggedSecretsHandler builds a Handler over stacks and secrets whose log
+// goes to logged, or nowhere when logged is nil.
+func newLoggedSecretsHandler(
+	t *testing.T,
+	namespaces *namespace.Service,
+	stacks *stack.Service,
+	secrets *secret.Service,
+	logged *bytes.Buffer,
+) *pulumi.Handler {
+	t.Helper()
+
+	logger := slog.New(slog.DiscardHandler)
+	if logged != nil {
+		logger = slog.New(slog.NewJSONHandler(logged, nil))
+	}
+
+	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       newEnforcingUpdates(t, namespaces),
+		Secrets:       secrets,
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        logger,
+		BaseURL:       baseurl.Resolver{},
+	})
+	if handlerErr != nil {
+		t.Fatalf("handler: %v", handlerErr)
+	}
+
+	return handler
+}
+
+// decryptSingle decrypts the fixture ciphertext on target through HTTP.
+func (r rotatedSecretsFixture) decryptSingle(t *testing.T, target string) (int, string) {
+	t.Helper()
+
+	raw, encodeErr := json.Marshal(map[string]string{"ciphertext": r.ciphertext})
+	if encodeErr != nil {
+		t.Fatalf("encode decrypt body: %v", encodeErr)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(string(raw)))
+	req.Header.Set("Authorization", "token test-token")
+
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// decryptBatch decrypts the fixture ciphertext on target through HTTP.
+func (r rotatedSecretsFixture) decryptBatch(t *testing.T, target string) (int, string) {
+	t.Helper()
+
+	raw, encodeErr := json.Marshal(map[string][]string{"ciphertexts": {r.ciphertext}})
+	if encodeErr != nil {
+		t.Fatalf("encode batch decrypt body: %v", encodeErr)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(string(raw)))
+	req.Header.Set("Authorization", "token test-token")
+
+	rec := httptest.NewRecorder()
+	r.handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// fingerprintAndScopes returns the wrapper fingerprint of the fixture and the
+// scopes of its prod and other stacks.
+func fingerprintAndScopes(t *testing.T, f secretFixture) secretLeaks {
+	t.Helper()
+
+	wrapper, wrapperErr := secret.NewBuiltinWrapper([]byte(testSecretKey))
+	if wrapperErr != nil {
+		t.Fatalf("key wrapper: %v", wrapperErr)
+	}
+
+	prodRef, refErr := stack.ParseRef("acme", "web", "prod")
+	if refErr != nil {
+		t.Fatalf("parse ref: %v", refErr)
+	}
+
+	prod, prodErr := f.stacks.Get(t.Context(), prodRef)
+	if prodErr != nil {
+		t.Fatalf("get prod: %v", prodErr)
+	}
+
+	otherRef, otherRefErr := stack.ParseRef("acme", "web", "other")
+	if otherRefErr != nil {
+		t.Fatalf("parse ref: %v", otherRefErr)
+	}
+
+	other, otherErr := f.stacks.Get(t.Context(), otherRef)
+	if otherErr != nil {
+		t.Fatalf("get other: %v", otherErr)
+	}
+
+	return secretLeaks{
+		fingerprint: wrapper.ID(),
+		prodScope:   "acme/" + prod.ID.String(),
+		otherScope:  "acme/" + other.ID.String(),
+	}
+}
+
+// decodeErrorBody decodes an error body into its code and message.
+func decodeErrorBody(t *testing.T, body string) (int, string) {
+	t.Helper()
+
+	var decoded struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &decoded); decodeErr != nil {
+		t.Fatalf("decode error: %v (%s)", decodeErr, body)
+	}
+
+	return decoded.Code, decoded.Message
+}
+
+// checkNoLeak fails when body holds any of leaks.
+func checkNoLeak(t *testing.T, body string, leaks []string) {
+	t.Helper()
+
+	for _, leak := range leaks {
+		if strings.Contains(body, leak) {
+			t.Fatalf("error body %q contains %q", body, leak)
+		}
+	}
+}
+
+// newSecretFixtureWithLogger builds the working secrets fixture of
+// newSecretFixture, but the handler writes its log to logged.
+func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixture {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	for _, name := range []string{"prod", "other"} {
+		ref, refErr := stack.ParseRef("acme", "web", name)
+		if refErr != nil {
+			t.Fatalf("parse ref: %v", refErr)
+		}
+
+		if _, createErr := stacks.Create(t.Context(), ref, nil); createErr != nil {
+			t.Fatalf("create stack %s: %v", ref, createErr)
+		}
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte(testSecretKey))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys:          &memSecretKeys{keys: map[secret.Scope]secret.WrappedKey{}, mu: sync.Mutex{}},
+		Wrapper:       wrapper,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secret service: %v", err)
+	}
+
+	handler, err := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       newEnforcingUpdates(t, namespaces),
+		Secrets:       secrets,
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        slog.New(slog.NewJSONHandler(logged, nil)),
+		BaseURL:       baseurl.Resolver{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return secretFixture{handler: handler, stacks: stacks}
+}
+
+// newFailingHandler builds a Handler whose stack store fails GetStack with
+// err, so routes that read a stack answer the 500 default branch.
+func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
+	t.Helper()
+
+	namespaces, nsErr := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if nsErr != nil {
+		t.Fatalf("namespace service: %v", nsErr)
+	}
+
+	stacks, stacksErr := stack.NewService(
+		stack.Config{Store: &failingStackStore{err: err}, Namespaces: namespaces, Now: nil},
+	)
+	if stacksErr != nil {
+		t.Fatalf("stack service: %v", stacksErr)
+	}
+
+	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       newEnforcingUpdates(t, namespaces),
+		Secrets:       newTestSecrets(t, namespaces),
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
+	})
+	if handlerErr != nil {
+		t.Fatalf("handler: %v", handlerErr)
+	}
+
+	return handler
 }
