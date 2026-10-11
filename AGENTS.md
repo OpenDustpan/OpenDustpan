@@ -32,6 +32,9 @@ Consider a change done only when `make check` passes with zero findings:
 - `make vuln` (govulncheck) reports no known vulnerability.
 - `make semgrep` reports nothing. Allow a `// nosemgrep: <rule id>` only with
   the full rule id and a comment that gives a real reason.
+- `make trivy` reports nothing. Allow a line in `.trivyignore` only with a
+  comment that gives a real reason.
+- `make trufflehog` finds no secret in the Git history.
 - `go test -race ./...` passes, including the conformance suites. Each test
   package has a `leak_test.go` file. Its `TestMain` calls
   `goleak.VerifyTestMain`, which fails the package if a goroutine continues
