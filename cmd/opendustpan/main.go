@@ -9,8 +9,10 @@
 //	opendustpan restore [flags]
 //
 // Every flag can also be set through the environment variable shown in its
-// help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
-// never from a flag, so it does not appear in process listings. The
+// help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN or
+// from the file in DUSTPAN_ADMIN_TOKEN_FILE only, never from a flag, so it does
+// not appear in process listings; serve clears DUSTPAN_ADMIN_TOKEN from its
+// environment after the read. The
 // key-encryption key comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
 // DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag, and the server
 // never generates it.
@@ -351,9 +353,9 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		return err
 	}
 
-	authn, err := identity.NewStaticTokens(strings.Split(os.Getenv("DUSTPAN_ADMIN_TOKEN"), ",")...)
+	authn, err := adminAuthenticator()
 	if err != nil {
-		return fmt.Errorf("DUSTPAN_ADMIN_TOKEN: %w", err)
+		return err
 	}
 
 	wrapper, err := keyWrapper()
