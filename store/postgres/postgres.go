@@ -188,6 +188,23 @@ func (s *Store) RenameStackForTest(
 	})
 }
 
+// DeleteStackForTest deletes a stack and, through foreign keys, its updates,
+// checkpoints and events. It is test-only until issue #49 adds the delete port.
+func (s *Store) DeleteStackForTest(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		err := q.DeleteStack(ctx, db.DeleteStackParams{
+			Namespace: ref.Namespace.String(),
+			Project:   ref.Project.String(),
+			Name:      ref.Stack.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("delete stack: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // ListStacks implements stack.Store.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
 	if filter.Project == "" {

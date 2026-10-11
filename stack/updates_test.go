@@ -34,7 +34,7 @@ func (m *memNamespaces) GetNamespace(_ context.Context, name namespace.Name) (na
 type memUpdates struct {
 	updates      map[stack.UpdateID]stack.Update
 	stackVersion map[stack.Ref]int64
-	checkpoints  []stack.Checkpoint
+	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	mu           sync.Mutex
 	// cancelOnPut cancels the caller's context and fails PutCheckpoint, as a
@@ -48,7 +48,7 @@ func newMemUpdates() *memUpdates {
 	return &memUpdates{
 		updates:      map[stack.UpdateID]stack.Update{},
 		stackVersion: map[stack.Ref]int64{},
-		checkpoints:  nil,
+		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
 		mu:           sync.Mutex{},
 		cancelOnPut:  nil,
@@ -181,6 +181,10 @@ func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ nam
 		return stack.ErrWrongUpdateState
 	}
 
+	if !m.updates[cp.Update].Mutates() {
+		return stack.ErrWrongUpdateState
+	}
+
 	if m.cancelOnPut != nil {
 		m.cancelOnPut()
 
@@ -188,12 +192,7 @@ func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ nam
 	}
 
 	if cp.Sequence > 0 {
-		for i := range slices.Backward(m.checkpoints) {
-			last := &m.checkpoints[i]
-			if last.Update != cp.Update {
-				continue
-			}
-
+		if last, ok := m.checkpoints[cp.Update]; ok {
 			switch {
 			case cp.Sequence < last.Sequence:
 				return stack.ErrStaleCheckpoint
@@ -202,12 +201,10 @@ func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ nam
 			case cp.Sequence == last.Sequence:
 				return stack.ErrCheckpointConflict
 			}
-
-			break
 		}
 	}
 
-	m.checkpoints = append(m.checkpoints, cp)
+	m.checkpoints[cp.Update] = cp
 
 	return nil
 }
@@ -216,9 +213,44 @@ func (m *memUpdates) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.C
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for i := range slices.Backward(m.checkpoints) {
-		if m.checkpoints[i].Ref == ref {
-			return m.checkpoints[i], nil
+	var (
+		best    stack.Checkpoint
+		found   bool
+		highest int64 = -1
+	)
+
+	for id := range m.checkpoints {
+		cp := m.checkpoints[id]
+		if cp.Ref != ref {
+			continue
+		}
+
+		if v := m.updates[cp.Update].Version; v > highest {
+			highest, best, found = v, cp, true
+		}
+	}
+
+	if !found {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	return best, nil
+}
+
+func (m *memUpdates) CheckpointByVersion(
+	_ context.Context, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.checkpoints {
+		cp := m.checkpoints[id]
+		if cp.Ref != ref {
+			continue
+		}
+
+		if m.updates[cp.Update].Version == version {
+			return cp, nil
 		}
 	}
 

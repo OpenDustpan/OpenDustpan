@@ -108,19 +108,39 @@ SELECT status, lease_digest
 FROM updates
 WHERE stack_id = ? AND id = ?;
 
--- name: GetCheckpoint :one
+-- name: GetUpdateKind :one
+SELECT kind, dry_run
+FROM updates
+WHERE stack_id = ? AND id = ?;
+
+-- name: GetLatestCheckpoint :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = ?
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features_json, deployment, saved_at_ms
 FROM checkpoints
-WHERE stack_id = ?;
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: GetCheckpointByVersion :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = ? AND u.version = ?;
 
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, deployment, saved_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (stack_id) DO UPDATE SET
-    update_id = excluded.update_id,
+ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
     sequence = excluded.sequence,
@@ -129,6 +149,10 @@ ON CONFLICT (stack_id) DO UPDATE SET
     features_json = excluded.features_json,
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms;
+
+-- name: DeleteStack :exec
+DELETE FROM stacks
+WHERE namespace = ? AND project = ? AND name = ?;
 
 -- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)

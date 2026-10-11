@@ -55,19 +55,26 @@ type UpdateStore interface {
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
-// CheckpointStore persists checkpoints. Only the latest checkpoint of a stack
-// is read back; an adapter may keep deployments in the blob port.
+// CheckpointStore persists checkpoints, one for each mutating update. Each
+// write of the running update overwrites the row of that update.
 type CheckpointStore interface {
-	// PutCheckpoint saves cp as the stack's latest state, in the same
+	// PutCheckpoint saves cp as the state of update cp.Update, in the same
 	// transaction as checking that update cp.Update is still running under
 	// lease cp.Lease; otherwise it returns ErrWrongUpdateState, so a write
-	// authorized before a cancel cannot land after it. For cp.Sequence > 0 it
-	// is idempotent: if the update's last checkpoint has the same sequence and
-	// digest it returns nil without writing, a different digest returns
-	// ErrCheckpointConflict, and a lower sequence returns ErrStaleCheckpoint.
+	// authorized before a cancel cannot land after it. It returns
+	// ErrWrongUpdateState when the update is a preview or a dry run, which
+	// never saves state. For cp.Sequence > 0 it is idempotent: if the
+	// update's last checkpoint has the same sequence and digest it returns
+	// nil without writing, a different digest returns ErrCheckpointConflict,
+	// and a lower sequence returns ErrStaleCheckpoint.
 	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) error
-	// LatestCheckpoint returns the stack's latest state, or ErrNoState.
+	// LatestCheckpoint returns the checkpoint of the stack's highest version
+	// that has one, or ErrNoState.
 	LatestCheckpoint(ctx context.Context, ref Ref) (Checkpoint, error)
+	// CheckpointByVersion returns the checkpoint of the stack's update with
+	// the given version, or ErrNoState when no such update exists or it has
+	// no checkpoint. It never falls back to an older version.
+	CheckpointByVersion(ctx context.Context, ref Ref, version int64) (Checkpoint, error)
 }
 
 // EventStore persists engine events.
