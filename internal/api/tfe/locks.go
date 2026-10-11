@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -156,12 +157,17 @@ func (h *Handler) unlockWorkspace(
 
 // forceUnlockWorkspace serves POST
 // /api/v2/workspaces/{id}/actions/force-unlock. It releases the lock whoever
-// holds it. A force-unlock of an unlocked workspace answers 409.
+// holds it. A force-unlock of an unlocked workspace answers 409. A success
+// writes one info log line with the action, the unit, the principal and the
+// released holder, and never with the request path or query (ADR 28 decision
+// 10, ADR 32 decision 7). The handler owns the logger through its Config.
 func (h *Handler) forceUnlockWorkspace(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 	id := workspace.ID(r.PathValue("id"))
+
+	holder := h.lockHolder(ctx, id)
 
 	unlocked, err := h.workspaces.ForceUnlock(ctx, id)
 	if err != nil {
@@ -169,6 +175,15 @@ func (h *Handler) forceUnlockWorkspace(
 
 		return
 	}
+
+	h.logger.InfoContext(
+		ctx,
+		"force-unlock completed",
+		slog.String("action", "force-unlock"),
+		slog.String("object", obj.String()),
+		slog.String("principal", p.Subject),
+		slog.String("released", holder),
+	)
 
 	h.writeWorkspace(ctx, w, http.StatusOK, p, unlocked)
 }
