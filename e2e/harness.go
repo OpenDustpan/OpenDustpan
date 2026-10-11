@@ -841,24 +841,7 @@ type workspaceIDDoc struct {
 func (e *Env) WorkspaceID(ctx context.Context, tb testing.TB) string {
 	tb.Helper()
 
-	target := "/api/v2/organizations/" + Namespace + "/workspaces/" + Workspace
-
-	status, body, err := e.TFEStatusA(ctx, http.MethodGet, target, "")
-	if err != nil {
-		tb.Fatalf("get workspace: %v", err)
-	}
-
-	if status != http.StatusOK {
-		tb.Fatalf("get workspace answers %d: %s", status, body)
-	}
-
-	var doc workspaceIDDoc
-
-	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Data.ID == "" {
-		tb.Fatalf("decode workspace id: %v (%s)", err, body)
-	}
-
-	return doc.Data.ID
+	return e.WorkspaceIDByName(ctx, tb, Workspace)
 }
 
 // APIStepSpec describes one TFE API step.
@@ -1057,14 +1040,17 @@ type apiRequest struct {
 // NAME=value pairs added to the environment. A non-zero exit is reported in the
 // Result, not as an error.
 func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, error) {
-	return e.RunIn(ctx, e.project, extra, args...)
+	return e.RunIn(ctx, e.project, extra, "", args...)
 }
 
 // RunIn executes the CLI in dir and returns what it printed. extra holds
-// NAME=value pairs added to the environment. A non-zero exit is reported in
+// NAME=value pairs added to the environment. stdin is piped to the CLI as
+// standard input, or no input when empty. A non-zero exit is reported in
 // the Result, not as an error.
-func (e *Env) RunIn(ctx context.Context, dir string, extra []string, args ...string) (Result, error) {
-	return e.runWithEnv(ctx, dir, e.cliEnv(extra), args...)
+func (e *Env) RunIn(
+	ctx context.Context, dir string, extra []string, stdin string, args ...string,
+) (Result, error) {
+	return e.runWithEnv(ctx, dir, e.cliEnv(extra), stdin, args...)
 }
 
 // RunSavedLogin runs the CLI in dir with the saved logins and returns what
@@ -1072,7 +1058,7 @@ func (e *Env) RunIn(ctx context.Context, dir string, extra []string, args ...str
 // CLI uses the saved logins in PULUMI_HOME. Extra holds NAME=value pairs
 // for one run. A non-zero exit is a Result, not an error.
 func (e *Env) RunSavedLogin(ctx context.Context, dir string, extra []string, args ...string) (Result, error) {
-	return e.runWithEnv(ctx, dir, e.savedLoginEnv(extra), args...)
+	return e.runWithEnv(ctx, dir, e.savedLoginEnv(extra), "", args...)
 }
 
 // KillSpec describes one CLI invocation killed at a recorded request: the
@@ -1179,6 +1165,9 @@ type StepSpec struct {
 	Args []string
 	// Env holds extra NAME=value pairs for this step only.
 	Env []string
+	// Stdin is piped to the CLI as standard input, for steps that answer an
+	// interactive prompt. Empty means no input.
+	Stdin string
 	// Fail expects a non-zero exit. Check then inspects the failed run,
 	// for steps that prove an error message.
 	Fail bool
@@ -1361,7 +1350,11 @@ func (e *Env) WriteRemoteProject(tb testing.TB) string {
 func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpec) Result {
 	t.Helper()
 
-	return e.stepInWith(ctx, t, dir, spec, e.RunIn)
+	return e.stepInWith(ctx, t, dir, spec, func(
+		ctx context.Context, dir string, extra []string, stdin string, args ...string,
+	) (Result, error) {
+		return e.runWithEnv(ctx, dir, e.cliEnv(extra), stdin, args...)
+	})
 }
 
 // StepSavedLogin runs spec in the project directory with the saved logins
@@ -1380,7 +1373,11 @@ func (e *Env) StepSavedLoginIn(
 ) Result {
 	t.Helper()
 
-	return e.stepInWith(ctx, t, dir, spec, e.RunSavedLogin)
+	return e.stepInWith(ctx, t, dir, spec, func(
+		ctx context.Context, dir string, extra []string, stdin string, args ...string,
+	) (Result, error) {
+		return e.runWithEnv(ctx, dir, e.savedLoginEnv(extra), stdin, args...)
+	})
 }
 
 // stepInWith runs spec in dir through run and records it for the report.
@@ -1390,7 +1387,7 @@ func (e *Env) stepInWith(
 	t *testing.T,
 	dir string,
 	spec StepSpec,
-	run func(context.Context, string, []string, ...string) (Result, error),
+	run func(context.Context, string, []string, string, ...string) (Result, error),
 ) Result {
 	t.Helper()
 
@@ -1403,7 +1400,7 @@ func (e *Env) stepInWith(
 
 		var err error
 
-		res, err = run(ctx, dir, spec.Env, spec.Args...)
+		res, err = run(ctx, dir, spec.Env, spec.Stdin, spec.Args...)
 
 		switch {
 		case err != nil:
@@ -1441,8 +1438,11 @@ func (e *Env) stepInWith(
 }
 
 // runWithEnv executes the CLI in dir with env and returns what it printed.
-// A non-zero exit is reported in the Result, not as an error.
-func (e *Env) runWithEnv(ctx context.Context, dir string, env []string, args ...string) (Result, error) {
+// stdin is piped to the CLI as standard input, or no input when empty. A
+// non-zero exit is reported in the Result, not as an error.
+func (e *Env) runWithEnv(
+	ctx context.Context, dir string, env []string, stdin string, args ...string,
+) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
@@ -1455,6 +1455,10 @@ func (e *Env) runWithEnv(ctx context.Context, dir string, env []string, args ...
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = waitDelay
+
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 
 	start := time.Now()
 	err := cmd.Run()
