@@ -63,15 +63,16 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              updates,
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               logger,
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                logger,
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

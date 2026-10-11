@@ -47,6 +47,12 @@ var (
 	// match its record: a blob with other content, or a key the record cannot
 	// parse. The error carries no blob key.
 	ErrCheckpointMismatch = errors.New("checkpoint content differs from its record")
+	// ErrInvalidDelta reports a checkpoint delta the server does not apply:
+	// no checkpoint to apply it to, a sequence number that is not next, an
+	// edit outside the text, overlapping edits, a result over the size
+	// limit, or a hash that does not match. The CLI answers such a delta
+	// with a full save, so this always maps to a 409 conflict.
+	ErrInvalidDelta = errors.New("invalid checkpoint delta")
 	// ErrTooLarge reports a checkpoint or event batch over its size limit.
 	ErrTooLarge = errors.New("payload too large")
 )

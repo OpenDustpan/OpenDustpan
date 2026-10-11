@@ -47,22 +47,24 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 	}
 
 	src := newInprocessEnv(ctx, envInput{
-		tb:     tb,
-		cli:    cli,
-		store:  store,
-		dir:    srcDir,
-		token:  newToken(tb),
-		tokenB: newToken(tb),
-		rec:    rec,
+		tb:          tb,
+		cli:         cli,
+		store:       store,
+		dir:         srcDir,
+		token:       newToken(tb),
+		tokenB:      newToken(tb),
+		rec:         rec,
+		deltaCutoff: 0,
 	})
 	dst := newInprocessEnv(ctx, envInput{
-		tb:     tb,
-		cli:    cli,
-		store:  store,
-		dir:    dstDir,
-		token:  newToken(tb),
-		tokenB: newToken(tb),
-		rec:    rec,
+		tb:          tb,
+		cli:         cli,
+		store:       store,
+		dir:         dstDir,
+		token:       newToken(tb),
+		tokenB:      newToken(tb),
+		rec:         rec,
+		deltaCutoff: 0,
 	})
 
 	return &Pair{Src: src, Dst: dst}

@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -53,6 +54,8 @@ const (
 	databaseFlag = "--database"
 	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
+	// deltaCutoffFlag names the checkpoint delta cutoff flag serve takes.
+	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -75,6 +78,10 @@ type envInput struct {
 	token  string
 	tokenB string
 	rec    *Recorder
+	// deltaCutoff is the checkpoint size in bytes from which the CLI sends
+	// delta uploads. Zero hides the delta capability, so the CLI sends
+	// whole checkpoints.
+	deltaCutoff int
 }
 
 // backendConfig groups the settings of one backend process.
@@ -86,6 +93,10 @@ type backendConfig struct {
 	certFile     string
 	keyFile      string
 	tokens       string
+	// deltaCutoff is the checkpoint delta cutoff serve runs with. serveArgs
+	// always passes it explicitly, so an inherited
+	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
+	deltaCutoff int
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -269,6 +280,8 @@ type binaryHandle struct {
 // serveArgs returns the `serve` arguments for cfg on port. A backup target
 // joins them only when the environment configures one: the binary creates
 // the directory, so the test passes dir:<path> without creating it first.
+// The delta cutoff always joins them explicitly, so the flag default never
+// changes a test backend.
 func serveArgs(cfg backendConfig, port string) []string {
 	args := []string{
 		"serve",
@@ -278,6 +291,7 @@ func serveArgs(cfg backendConfig, port string) []string {
 		"--tls-key", cfg.keyFile,
 		"--blob-dir", cfg.blobDir,
 		regionFlag, region,
+		deltaCutoffFlag, strconv.Itoa(cfg.deltaCutoff),
 	}
 
 	if cfg.backupTarget != "" {
@@ -420,6 +434,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		certFile:     cert.cert,
 		keyFile:      cert.key,
 		tokens:       e.backendCfg.tokens,
+		deltaCutoff:  0,
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, port)
@@ -710,6 +725,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		certFile:     cert.cert,
 		keyFile:      cert.key,
 		tokens:       in.token + "," + in.tokenB,
+		deltaCutoff:  in.deltaCutoff,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 

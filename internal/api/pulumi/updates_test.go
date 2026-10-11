@@ -3,7 +3,10 @@ package pulumi_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,6 +43,8 @@ func updatePatterns() []string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim",
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/cancel",
 		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
@@ -404,6 +409,18 @@ func newUpdateFixture(t *testing.T, authz identity.Authorizer) updateFixture {
 func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit int) updateFixture {
 	t.Helper()
 
+	return newUpdateFixtureWithCutoff(t, authz, limit, 0)
+}
+
+// newUpdateFixtureWithCutoff builds a Handler as newUpdateFixture does,
+// with checkpoints bounded by limit bytes and the delta checkpoint
+// capability advertised with cutoff bytes (zero hides the capability).
+// Tests for delta uploads use a cutoff.
+func newUpdateFixtureWithCutoff(
+	t *testing.T, authz identity.Authorizer, limit, cutoff int,
+) updateFixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -436,15 +453,16 @@ func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit in
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              updates,
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: cutoff,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -562,6 +580,8 @@ type updatePaths struct {
 	Renew      string
 	Events     string
 	Checkpoint string
+	Verbatim   string
+	Delta      string
 	Complete   string
 	Cancel     string
 	Get        string
@@ -576,6 +596,8 @@ func mintedPaths(id stack.UpdateID) updatePaths {
 		Renew:      base + "/renew_lease",
 		Events:     base + "/events/batch",
 		Checkpoint: base + "/checkpoint",
+		Verbatim:   base + "/checkpointverbatim",
+		Delta:      base + "/checkpointdelta",
 		Complete:   base + "/complete",
 		Cancel:     base + "/cancel",
 		Get:        base,
@@ -585,7 +607,14 @@ func mintedPaths(id stack.UpdateID) updatePaths {
 // isLeasePattern reports whether pattern is a lease route: the lease token
 // stands in for sign-in on these routes only.
 func isLeasePattern(pattern string) bool {
-	for _, suffix := range []string{"/renew_lease", "/events/batch", "/checkpoint", "/complete"} {
+	for _, suffix := range []string{
+		"/renew_lease",
+		"/events/batch",
+		"/checkpoint",
+		"/checkpointverbatim",
+		"/checkpointdelta",
+		"/complete",
+	} {
 		if strings.HasSuffix(pattern, suffix) {
 			return true
 		}
@@ -1029,8 +1058,18 @@ func leaseBodies() map[string]string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  `{"duration":60}`,
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": `{"events":[]}`,
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":  `{"version":3,"deployment":{}}`,
-		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     `{"status":"succeeded"}`,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim": `{"version":3,` +
+			`"untypedDeployment":{},"sequenceNumber":1}`,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta": deltaLeaseBody(),
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":         `{"status":"succeeded"}`,
 	}
+}
+
+// deltaLeaseBody returns a valid delta for the seeded save of mintForLease:
+// it replaces the seeded `{}` with itself under sequence 2.
+func deltaLeaseBody() string {
+	return `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(`{}`)) +
+		`,"sequenceNumber":2,"deploymentDelta":[` + deltaEditJSON(0, 2, "{}") + `]}`
 }
 
 // leaseTargets returns the renew, event, checkpoint and complete paths for one update.
@@ -1038,21 +1077,43 @@ func leaseTargets(id stack.UpdateID) map[string]string {
 	paths := mintedPaths(id)
 
 	return map[string]string{
-		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  paths.Renew,
-		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": paths.Events,
-		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":  paths.Checkpoint,
-		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     paths.Complete,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":         paths.Renew,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch":        paths.Events,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":         paths.Checkpoint,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim": paths.Verbatim,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta":    paths.Delta,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":            paths.Complete,
 	}
 }
 
 // mintForLease creates and starts the update that pattern needs: a mutating
-// update for the checkpoint route, which a preview never saves, and a preview
-// otherwise.
+// update for the checkpoint routes, which a preview never saves, and a
+// preview otherwise. The delta route also seeds the first save, which the
+// delta applies to.
 func mintForLease(t *testing.T, f updateFixture, pattern string) (stack.UpdateID, string) {
 	t.Helper()
 
-	if strings.HasSuffix(pattern, "/checkpoint") {
+	if strings.HasSuffix(pattern, "/checkpoint") || strings.HasSuffix(pattern, "/checkpointverbatim") {
 		return f.mintStartedMutating(t)
+	}
+
+	if strings.HasSuffix(pattern, "/checkpointdelta") {
+		id, revealed := f.mintStartedMutating(t)
+
+		tok, err := token.Parse(revealed)
+		if err != nil {
+			t.Fatalf("parse lease: %v", err)
+		}
+
+		base := stack.CheckpointInput{
+			Features: nil, Deployment: []byte(`{}`), SchemaVersion: 3, Sequence: 1, Invalid: false,
+		}
+
+		if err := f.updates.SaveCheckpoint(t.Context(), f.ref, id, tok, base); err != nil {
+			t.Fatalf("seed checkpoint: %v", err)
+		}
+
+		return id, revealed
 	}
 
 	return f.mintStarted(t)
@@ -2346,5 +2407,538 @@ func TestRestoreStackConflict(t *testing.T) {
 	active, err := f.updates.Active(t.Context(), f.ref)
 	if err != nil || active.ID != id {
 		t.Fatalf("active update = %q, %v; want the running one %q", active.ID, err, id)
+	}
+}
+
+// TestStartUpdateAnswersJournalVersionZero proves StartUpdate answers
+// journalVersion 0 even when the client offers journaling, so the CLI
+// saves checkpoints instead of journal entries.
+func TestStartUpdateAnswersJournalVersionZero(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/update", `{}`))
+	if status != http.StatusOK {
+		t.Fatalf("create answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var created struct {
+		UpdateID string `json:"updateID"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.UpdateID == "" {
+		t.Fatalf("create answers %q, want an update ID: %v", body, err)
+	}
+
+	target := "/api/stacks/acme/web/prod/update/" + created.UpdateID
+	status, body = f.doUpdate(t, accessRequest(http.MethodPost, target, `{"journalVersion":1}`))
+
+	if status != http.StatusOK {
+		t.Fatalf("start answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var started struct {
+		Version        int   `json:"version"`
+		JournalVersion int64 `json:"journalVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil {
+		t.Fatalf("decode start: %v (%s)", err, body)
+	}
+
+	if started.JournalVersion != 0 {
+		t.Fatalf("start answers journalVersion %d, want 0", started.JournalVersion)
+	}
+}
+
+// verbatimPaths starts a mutating update and returns its verbatim and
+// delta paths with its lease token.
+func verbatimPaths(t *testing.T, f updateFixture) (updatePaths, string) {
+	t.Helper()
+
+	id, lease := f.mintStartedMutating(t)
+
+	return mintedPaths(id), lease
+}
+
+// exportDeployment reads the stack export through HTTP and returns its
+// deployment bytes exactly as stored.
+func exportDeployment(t *testing.T, f updateFixture) string {
+	t.Helper()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK {
+		t.Fatalf("export answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var exported struct {
+		Deployment json.RawMessage `json:"deployment"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &exported); err != nil {
+		t.Fatalf("decode export: %v (%s)", err, body)
+	}
+
+	return string(exported.Deployment)
+}
+
+// deltaHash returns the hex SHA-256 of result, as the CLI computes the
+// checkpoint hash of a delta.
+func deltaHash(result string) string {
+	sum := sha256.Sum256([]byte(result))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// deltaEditJSON renders one text edit in the shape the CLI sends: a
+// gotextdiff TextEdit with byte offsets into the saved deployment.
+func deltaEditJSON(start, end int, newText string) string {
+	return fmt.Sprintf(
+		`{"Span":{"uri":"","start":{"line":1,"column":1,"offset":%d},`+
+			`"end":{"line":1,"column":1,"offset":%d}},"NewText":%s}`,
+		start,
+		end,
+		strconv.Quote(newText),
+	)
+}
+
+// TestCheckpointVerbatimCycle saves a verbatim checkpoint and proves the
+// export holds the inner deployment it wraps, and that a retry with the
+// same sequence number succeeds.
+func TestCheckpointVerbatimCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	const deployment = `{"version":3,"deployment":{"resources":[]}}`
+	const inner = `{"resources":[]}`
+
+	payload := `{"version":3,"untypedDeployment":` + deployment + `,"sequenceNumber":1}`
+	req := leaseRequest(http.MethodPatch, paths.Verbatim, lease, payload)
+	status, body := f.doUpdate(t, req)
+
+	if status != http.StatusOK {
+		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	status, body = f.doUpdate(t, req)
+	if status != http.StatusOK {
+		t.Fatalf("verbatim retry answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	if got := exportDeployment(t, f); got != inner {
+		t.Fatalf("export = %q, want the inner deployment %q", got, inner)
+	}
+}
+
+// TestCheckpointVerbatimConflict proves a verbatim save that repeats the
+// sequence number with other content answers 409 and saves nothing, so the
+// CLI falls back to a full save.
+func TestCheckpointVerbatimConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	const first = `{"version":3,"deployment":{"resources":[]}}`
+	const other = `{"version":3,"deployment":{"resources":[{"urn":"x"}]}}`
+	const firstInner = `{"resources":[]}`
+
+	firstPayload := `{"version":3,"untypedDeployment":` + first + `,"sequenceNumber":1}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, firstPayload))
+
+	if status != http.StatusOK {
+		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	otherPayload := `{"version":3,"untypedDeployment":` + other + `,"sequenceNumber":1}`
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, otherPayload))
+
+	if status != http.StatusConflict {
+		t.Fatalf("verbatim conflict answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	checkErrorShape(t, http.StatusConflict, body)
+
+	if got := exportDeployment(t, f); got != firstInner {
+		t.Fatalf("export = %q, want the first save %q after a conflict", got, firstInner)
+	}
+}
+
+// TestCheckpointVerbatimNeedsLease proves a verbatim save without the
+// update lease token answers 401.
+func TestCheckpointVerbatimNeedsLease(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, _ := verbatimPaths(t, f)
+
+	payload := `{"version":3,"untypedDeployment":{},"sequenceNumber":1}`
+	status, _ := f.doUpdate(t, anonymousRequest(http.MethodPatch, paths.Verbatim, payload))
+
+	if status != http.StatusUnauthorized {
+		t.Fatalf("verbatim without a lease answers %d, want %d", status, http.StatusUnauthorized)
+	}
+}
+
+// TestCheckpointVerbatimSequenceZero proves a verbatim save with a sequence
+// number below 1 answers 409 and saves nothing, so the CLI falls back to a
+// full save. The CLI numbers saves from 1.
+func TestCheckpointVerbatimSequenceZero(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	payload := `{"version":3,"untypedDeployment":{"version":3,"deployment":{"resources":[]}},"sequenceNumber":0}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, payload))
+
+	if status != http.StatusConflict {
+		t.Fatalf("verbatim sequence 0 answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	checkErrorShape(t, http.StatusConflict, body)
+}
+
+// TestNegativeDeltaCutoffFails proves a negative checkpoint delta cutoff
+// fails handler construction instead of silently turning the capability off.
+func TestNegativeDeltaCutoffFails(t *testing.T) {
+	t.Parallel()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
+
+	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	mem := newMemUpdateStore()
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            mem,
+		Checkpoints:        mem,
+		Events:             mem,
+		Namespaces:         namespaces,
+		Stacks:             stacks,
+		Blobs:              newMemBlob(),
+		Now:                nil,
+		Logger:             nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("updates service: %v", err)
+	}
+
+	_, err = pulumi.NewHandler(pulumi.Config{
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            allowAll(),
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: -1,
+	})
+	if !errors.Is(err, pulumi.ErrInvalidCutoff) {
+		t.Fatalf("negative cutoff: err = %v, want %v", err, pulumi.ErrInvalidCutoff)
+	}
+}
+
+// TestCheckpointDeltaCycle saves a verbatim checkpoint and a delta, and
+// proves the export holds the patched result, a retry succeeds, and every
+// invalid delta answers 409 in the Pulumi shape without saving anything.
+func TestCheckpointDeltaCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	const base = `{"a":1,"b":2}`
+	const result = `{"a":1,"b":3}`
+
+	// The digit 2 sits at byte offset 11 of the base.
+	edits := "[" + deltaEditJSON(11, 12, "3") + "]"
+
+	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
+
+	if status != http.StatusOK {
+		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+		`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
+
+	if status != http.StatusOK {
+		t.Fatalf("delta answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	deltaReq := leaseRequest(http.MethodPatch, paths.Delta, lease, delta)
+	status, body = f.doUpdate(t, deltaReq)
+	if status != http.StatusOK {
+		t.Fatalf("delta retry answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	if got := exportDeployment(t, f); got != result {
+		t.Fatalf("export = %q, want the patched result %q", got, result)
+	}
+
+	invalid := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "skipped sequence",
+			body: `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+				`,"sequenceNumber":4,"deploymentDelta":` + edits + `}`,
+		},
+		{
+			name: "wrong hash",
+			body: `{"version":3,"checkpointHash":` +
+				strconv.Quote(deltaHash(`{"a":1,"b":4}`)) +
+				`,"sequenceNumber":3,"deploymentDelta":` + edits + `}`,
+		},
+		{
+			name: "same sequence, other hash",
+			body: `{"version":3,"checkpointHash":` +
+				strconv.Quote(deltaHash(`{"a":1,"b":4}`)) +
+				`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`,
+		},
+		{
+			name: "edit outside the text",
+			body: `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+				`,"sequenceNumber":3,"deploymentDelta":[` + deltaEditJSON(0, 99, "x") + `]}`,
+		},
+		{
+			name: "overlapping edits",
+			body: `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+				`,"sequenceNumber":3,"deploymentDelta":[` + deltaEditJSON(1, 3, "x") + `,` +
+				deltaEditJSON(2, 4, "y") + `]}`,
+		},
+		{
+			name: "delta is not a list",
+			body: `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+				`,"sequenceNumber":3,"deploymentDelta":{}}`,
+		},
+	}
+
+	for _, tt := range invalid {
+		status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, tt.body))
+		if status != http.StatusConflict {
+			t.Errorf("%s answers %d, want %d (%s)", tt.name, status, http.StatusConflict, body)
+
+			continue
+		}
+
+		checkErrorShape(t, http.StatusConflict, body)
+	}
+
+	if got := exportDeployment(t, f); got != result {
+		t.Fatalf("export = %q, want the patched result %q after rejected deltas", got, result)
+	}
+}
+
+// TestCheckpointDeltaServesInnerDeployment proves a delta over the versioned
+// bytes of a verbatim save exports the inner deployment: sequenced saves
+// keep the versioned text for later deltas, while reads serve what it
+// wraps.
+func TestCheckpointDeltaServesInnerDeployment(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	const base = `{"version":3,"deployment":{"a":1}}`
+	const result = `{"version":3,"deployment":{"a":2}}`
+	const inner = `{"a":2}`
+
+	// The digit 1 sits at byte offset 31 of the base.
+	edits := "[" + deltaEditJSON(31, 32, "2") + "]"
+
+	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
+
+	if status != http.StatusOK {
+		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(result)) +
+		`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
+
+	if status != http.StatusOK {
+		t.Fatalf("delta answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	if got := exportDeployment(t, f); got != inner {
+		t.Fatalf("export = %q, want the inner deployment %q", got, inner)
+	}
+}
+
+// TestCheckpointDeltaWithoutCheckpoint proves a delta on an update that
+// saved nothing answers 409: the first save of an update is always full.
+func TestCheckpointDeltaWithoutCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := verbatimPaths(t, f)
+
+	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(`{}`)) +
+		`,"sequenceNumber":1,"deploymentDelta":[]}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
+
+	if status != http.StatusConflict {
+		t.Fatalf("delta without a checkpoint answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	checkErrorShape(t, http.StatusConflict, body)
+}
+
+// TestCheckpointDeltaOverLimit proves a delta whose result is over the
+// checkpoint size limit answers 409, not 413: the CLI then sends a
+// verbatim save, which the normal limit governs.
+func TestCheckpointDeltaOverLimit(t *testing.T) {
+	t.Parallel()
+
+	const limit = 2048
+
+	f := newUpdateFixtureWithLimit(t, allowAll(), limit)
+	paths, lease := verbatimPaths(t, f)
+
+	// The base nearly fills the limit, so the verbatim save fits while a
+	// delta that grows it past the limit does not.
+	base := `"` + strings.Repeat("a", 1900) + `"`
+	verbatim := `{"version":3,"untypedDeployment":` + base + `,"sequenceNumber":1}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Verbatim, lease, verbatim))
+
+	if status != http.StatusOK {
+		t.Fatalf("verbatim answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	grown := `"` + strings.Repeat("a", 2) + strings.Repeat("b", 200) + strings.Repeat("a", 1890) + `"`
+	edits := `[` + deltaEditJSON(1, 11, strings.Repeat("b", 200)) + `]`
+	delta := `{"version":3,"checkpointHash":` + strconv.Quote(deltaHash(grown)) +
+		`,"sequenceNumber":2,"deploymentDelta":` + edits + `}`
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Delta, lease, delta))
+
+	if status != http.StatusConflict {
+		t.Fatalf("oversized delta result answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	checkErrorShape(t, http.StatusConflict, body)
+
+	if got := exportDeployment(t, f); got != base {
+		t.Fatal("export changed after a rejected delta")
+	}
+}
+
+// capabilitiesWithConfig is one capabilities answer entry that carries a
+// configuration document, such as the delta checkpoint cutoff.
+type capabilitiesWithConfig struct {
+	Capability    string          `json:"capability"`
+	Version       int             `json:"version"`
+	Configuration json.RawMessage `json:"configuration"`
+}
+
+// capabilitiesAnswer decodes a capabilities answer that carries
+// configurations.
+type capabilitiesAnswer struct {
+	Capabilities []capabilitiesWithConfig `json:"capabilities"`
+}
+
+// capabilityName is one capabilities answer entry without configuration,
+// for answers that must hide a capability.
+type capabilityName struct {
+	Capability string `json:"capability"`
+}
+
+// capabilitiesNames decodes a capabilities answer when only names matter.
+type capabilitiesNames struct {
+	Capabilities []capabilityName `json:"capabilities"`
+}
+
+// deltaCutoffConfig is the delta capability configuration as the CLI reads
+// it.
+type deltaCutoffConfig struct {
+	CheckpointCutoffSizeBytes int `json:"checkpointCutoffSizeBytes"`
+}
+
+// TestCapabilitiesAdvertiseDeltaCutoff proves the capabilities answer
+// carries delta-checkpoint-uploads-v2 with the configured cutoff.
+func TestCapabilitiesAdvertiseDeltaCutoff(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixtureWithCutoff(t, allowAll(), 0, pulumi.DefaultCheckpointDeltaCutoff)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/capabilities", ""))
+	if status != http.StatusOK {
+		t.Fatalf("capabilities answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var decoded capabilitiesAnswer
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode capabilities: %v (%s)", err, body)
+	}
+
+	for _, c := range decoded.Capabilities {
+		if c.Capability != "delta-checkpoint-uploads-v2" {
+			continue
+		}
+
+		if c.Version != 2 {
+			t.Fatalf("delta capability version = %d, want 2 (%s)", c.Version, body)
+		}
+
+		var cfg deltaCutoffConfig
+
+		if err := json.Unmarshal(c.Configuration, &cfg); err != nil {
+			t.Fatalf("decode delta configuration: %v (%s)", err, c.Configuration)
+		}
+
+		if cfg.CheckpointCutoffSizeBytes != pulumi.DefaultCheckpointDeltaCutoff {
+			t.Fatalf("cutoff = %d, want %d", cfg.CheckpointCutoffSizeBytes, pulumi.DefaultCheckpointDeltaCutoff)
+		}
+
+		return
+	}
+
+	t.Fatalf("capabilities = %s, want delta-checkpoint-uploads-v2 among them", body)
+}
+
+// TestCapabilitiesHideDeltaWhenCutoffZero proves a zero cutoff hides the
+// delta checkpoint capability, so the CLI sends whole checkpoints.
+func TestCapabilitiesHideDeltaWhenCutoffZero(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/capabilities", ""))
+	if status != http.StatusOK {
+		t.Fatalf("capabilities answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var decoded capabilitiesNames
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode capabilities: %v (%s)", err, body)
+	}
+
+	for _, c := range decoded.Capabilities {
+		if c.Capability == "delta-checkpoint-uploads-v2" {
+			t.Fatalf("capabilities = %s, want no delta capability with a zero cutoff", body)
+		}
 	}
 }

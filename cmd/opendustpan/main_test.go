@@ -2713,3 +2713,63 @@ func TestOpenS3StoreEmptyRegion(t *testing.T) {
 
 	checkBackupTargetRoundTrip(t, target)
 }
+
+// TestServeDeltaCutoffDefault proves the checkpoint delta cutoff defaults
+// to 1 MiB, so the server advertises delta uploads unless configured
+// otherwise.
+func TestServeDeltaCutoffDefault(t *testing.T) {
+	t.Parallel()
+
+	var f serveFlags
+
+	fs := newTestFlagSet(&f)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if f.checkpointDeltaCutoff != 1<<20 {
+		t.Fatalf("checkpoint delta cutoff = %d, want %d", f.checkpointDeltaCutoff, 1<<20)
+	}
+}
+
+// TestServeDeltaCutoffFlag proves --checkpoint-delta-cutoff sets the
+// cutoff, 0 turns delta uploads off, and a negative value fails naming
+// the flag.
+//
+//nolint:paralleltest // serve reads process environment, so this test sets it and runs its cases in order.
+func TestServeDeltaCutoffFlag(t *testing.T) {
+	var f serveFlags
+
+	fs := newTestFlagSet(&f)
+	if err := fs.Parse([]string{"--checkpoint-delta-cutoff", "1"}); err != nil {
+		t.Fatalf("parse cutoff: %v", err)
+	}
+
+	if f.checkpointDeltaCutoff != 1 {
+		t.Fatalf("checkpoint delta cutoff = %d, want 1", f.checkpointDeltaCutoff)
+	}
+
+	var off serveFlags
+
+	if err := newTestFlagSet(&off).Parse([]string{"--checkpoint-delta-cutoff", "0"}); err != nil {
+		t.Fatalf("parse zero cutoff: %v", err)
+	}
+
+	if off.checkpointDeltaCutoff != 0 {
+		t.Fatalf("checkpoint delta cutoff = %d, want 0", off.checkpointDeltaCutoff)
+	}
+
+	setServeEnv(t, testKeyBase64())
+
+	database := "--database"
+	path := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	err := serve(
+		t.Context(),
+		[]string{database, path, "--checkpoint-delta-cutoff", "-1"},
+		io.Discard,
+	)
+	if err == nil || !strings.Contains(err.Error(), "--checkpoint-delta-cutoff") {
+		t.Fatalf("serve with a negative cutoff: err = %v, want it to name the flag", err)
+	}
+}
