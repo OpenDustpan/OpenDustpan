@@ -72,6 +72,10 @@ func TestCLIs(t *testing.T) {
 		if err := e2e.WriteSummary(reports); err != nil {
 			t.Errorf("write summary: %v", err)
 		}
+
+		// Fails for every served route that no step reached, so an
+		// endpoint can never land without its e2e step again.
+		checkRouteCoverage(t, reports)
 	})
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
@@ -896,8 +900,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	for _, s := range []e2e.StepSpec{
 		step("plan", nil, "plan", "-input=false", "-no-color"),
-		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
-		step("output", contains(`"hello"`), "output", "-json", "-no-color"),
+		step("apply", checkApplyReadsStateVersion(env), "apply", "-input=false", "-auto-approve", "-no-color"),
+		step("output", checkTofuOutput(env), "output", "-json", "-no-color"),
 		step("state pull", contains(`"greeting"`), "state", "pull"),
 	} {
 		env.Step(ctx, t, s)
@@ -931,6 +935,51 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The stdlib http backend is the T1 import source (ADR 29): init, apply
 	// of a built-in resource and state pull pass against it.
 	tofuHTTPScenario(t, env)
+}
+
+// checkApplyReadsStateVersion proves apply fetched the state version it
+// created through GET /api/v2/state-versions/{id}: the CLI reads back what
+// it wrote before it unlocks.
+func checkApplyReadsStateVersion(env *e2e.Env) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			entry := &entries[i]
+			if entry.Step != "apply" || entry.Method != http.MethodGet {
+				continue
+			}
+
+			if strings.HasPrefix(entry.Path, "/api/v2/state-versions/") &&
+				!strings.HasSuffix(entry.Path, "/download") &&
+				entry.Status == http.StatusOK {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: apply never read its state version", errUnexpected)
+	}
+}
+
+// checkTofuOutput proves output printed the greeting and read the outputs
+// through GET .../current-state-version-outputs.
+func checkTofuOutput(env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if !strings.Contains(r.Stdout, `"hello"`) {
+			return fmt.Errorf("%w: stdout lacks the greeting: %s", errUnexpected, r.Stdout)
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			entry := &entries[i]
+			if entry.Step == "output" && entry.Method == http.MethodGet &&
+				strings.HasSuffix(entry.Path, "/current-state-version-outputs") &&
+				entry.Status == http.StatusOK {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: output never read the current outputs", errUnexpected)
+	}
 }
 
 // tofuRemoteScenario drives the remote backend with a workspace prefix in its
