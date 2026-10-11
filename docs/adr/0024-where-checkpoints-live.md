@@ -1,6 +1,6 @@
 # 24. Where checkpoints live
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · decisions 3, 6 and 7 superseded by ADR 37
 
 ## Context
 
