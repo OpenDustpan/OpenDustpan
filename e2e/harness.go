@@ -362,8 +362,10 @@ func newServer(
 		tb.Fatalf("key wrapper: %v", err)
 	}
 
-	// The start-up check refuses a key-encryption key that matches none of
-	// the wrapped keys in the database (ADR 23).
+	// The start-up check refuses a key-encryption key that opens less than
+	// every wrapped key in the database (ADR 23). The harness serves the
+	// handler directly, so it runs the check here. Servers that run
+	// Server.Run get the same check at start.
 	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
