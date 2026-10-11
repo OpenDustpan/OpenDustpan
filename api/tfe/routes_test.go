@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +49,21 @@ func productionPublicPatterns() []string {
 		"GET /.well-known/terraform.json",
 		"GET /api/v2/ping",
 	}
+}
+
+// uploadPatterns lists the routes that may use the upload scope: the state
+// content and JSON rendering uploads carry the capability in the path. Every
+// other route must authenticate.
+func uploadPatterns() []string {
+	return []string{
+		"PUT /api/v2/state-uploads/{id}/{token}",
+		"PUT /api/v2/json-state-uploads/{id}/{token}",
+	}
+}
+
+// isUploadAllowed reports whether pattern may use the upload scope.
+func isUploadAllowed(pattern string) bool {
+	return slices.Contains(uploadPatterns(), pattern)
 }
 
 // stubAuthenticator denies every token. The declaration tests send no token,
@@ -530,8 +546,28 @@ func checkRoutesDeclareActions(t *testing.T, handler *tfe.Handler, publicList []
 		}
 	}
 
+	checkUploadRoutesDeclared(t, byPattern)
+
 	for _, route := range byPattern {
 		probeRoute(t, handler, route)
+	}
+}
+
+// checkUploadRoutesDeclared fails for an upload list entry with no table row
+// or with a scope other than the upload scope. It keeps the allowlist from
+// drifting from the production table.
+func checkUploadRoutesDeclared(t *testing.T, byPattern map[string]tfe.Route) {
+	t.Helper()
+
+	for _, pattern := range uploadPatterns() {
+		route, ok := byPattern[pattern]
+		if !ok {
+			t.Fatalf("upload route %q is not declared", pattern)
+		}
+
+		if route.Scope != tfe.ScopeUpload {
+			t.Fatalf("upload route %q uses scope %d, want the upload scope", pattern, route.Scope)
+		}
 	}
 }
 
@@ -649,12 +685,17 @@ func validateAuthorizedRoute(route tfe.Route, public map[string]bool) error {
 	return nil
 }
 
-// validateUploadRoute fails for an upload route that is on the public list,
-// that declares anything but unit:write, or that declares a resolver. The
-// capability in the path stands in for unit:write granted at creation, so
-// the Authorizer does not run and no resolver is needed.
+// validateUploadRoute fails for an upload route that is not on the upload
+// list, that is on the public list, that declares anything but unit:write,
+// or that declares a resolver. The capability in the path stands in for
+// unit:write granted at creation, so the Authorizer does not run and no
+// resolver is needed.
 func validateUploadRoute(route tfe.Route, public map[string]bool) error {
 	pattern := route.Method + " " + route.Path
+
+	if !isUploadAllowed(pattern) {
+		return fmt.Errorf("%w: %q uses the upload scope but is not on the upload list", errInvalidRoute, pattern)
+	}
 
 	if public[pattern] {
 		return fmt.Errorf("%w: %q is on the public list but declares the upload scope", errInvalidRoute, pattern)
@@ -720,6 +761,25 @@ func TestPublicRouteNotOnListFails(t *testing.T) {
 
 	if err := validateRoute(route, map[string]bool{}); err == nil {
 		t.Fatal("public route not on the list passed, want an error")
+	}
+}
+
+// TestUploadRouteNotOnListFails proves an upload route that is not on the
+// upload list fails the route test.
+func TestUploadRouteNotOnListFails(t *testing.T) {
+	t.Parallel()
+
+	route := tfe.Route{
+		Method:  http.MethodPut,
+		Path:    "/api/v2/hidden-upload/{id}/{token}",
+		Scope:   tfe.ScopeUpload,
+		Actions: []identity.Action{identity.ActionUnitWrite},
+		Resolve: nil,
+		Serve:   nil,
+	}
+
+	if err := validateRoute(route, map[string]bool{}); err == nil {
+		t.Fatal("upload route not on the list passed, want an error")
 	}
 }
 
