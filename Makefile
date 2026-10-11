@@ -2,11 +2,13 @@
 # Tool versions are pinned here and in CI; install the matching binaries:
 #   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
+#   semgrep       1.178.0  https://semgrep.dev/docs/getting-started/quickstart
 #   python3       any 3.x, standard library only (for docs-lint)
+# nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint docs-lint test test-postgres e2e upgrade-test generate build image-smoke
+.PHONY: check fmt lint nilaway vuln semgrep docs-lint test test-postgres e2e upgrade-test generate build image-smoke
 
-check: lint docs-lint test ## Everything CI checks.
+check: lint nilaway vuln semgrep docs-lint test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -15,6 +17,25 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
 	golangci-lint run ./...
+
+# The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
+ANALYSIS_TAGS := e2e,upgrade
+NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
+GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
+	GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
+
+vuln: ## Known vulnerabilities in the code paths we call (reads the database at vuln.go.dev).
+	$(GOVULNCHECK) -tags $(ANALYSIS_TAGS) ./...
+
+# The rule packs come from the Semgrep registry on each run. No metrics are sent.
+# use-of-md5 is excluded: gosec reports the same lines, and each one has a
+# nolint with its reason.
+semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
+	semgrep scan --error --metrics=off --disable-version-check --quiet \
+		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
+		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.

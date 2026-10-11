@@ -58,5 +58,8 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/opendustpan /opendustpan
 COPY --from=console /console /console
 VOLUME /data
+# The base image already runs as nonroot. The explicit USER keeps that true if
+# the base changes.
+USER nonroot:nonroot
 ENTRYPOINT ["/opendustpan"]
 CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--blob-dir", "/data/blobs", "--listen", ":8080", "--console-dir", "/console"]

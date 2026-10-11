@@ -1193,7 +1193,7 @@ func (s *fakeBackupStore) ListStateVersions(
 		return nil, 0, errFakeClosed
 	}
 
-	var all []workspace.StateVersion
+	all := []workspace.StateVersion{}
 
 	for key := range s.data.states {
 		if sv := s.data.states[key]; sv.Workspace == id && sv.Status == workspace.StatusFinalized {

@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/ncruces/go-sqlite3 v0.35.6
+	go.uber.org/goleak v1.3.0
 )
 
 require (
