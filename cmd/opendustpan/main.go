@@ -254,12 +254,6 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		}
 	}()
 
-	// The start-up check refuses a key-encryption key that matches none of
-	// the wrapped keys in the database (ADR 23).
-	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
-		return checkErr
-	}
-
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
@@ -286,6 +280,8 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		return fmt.Errorf("configure server: %w", err)
 	}
 
+	// Run runs the start-up checks, including the key-encryption key check
+	// (ADR 23), before it serves.
 	if err := srv.Run(ctx); err != nil {
 		return fmt.Errorf("run server: %w", err)
 	}
@@ -527,8 +523,18 @@ func splitList(s string) []string {
 // (base64) or from the file in DUSTPAN_KEY_ENCRYPTION_KEY_FILE. The direct
 // value wins when both settings are present. It returns nil without an error
 // when neither setting is present: the server may start without a key while
-// the database holds no wrapped key.
+// the database holds no wrapped key. It clears DUSTPAN_KEY_ENCRYPTION_KEY
+// from the process environment after the read, so the key does not stay in
+// memory that child processes inherit.
 func loadKeyEncryptionKey() ([]byte, error) {
+	if raw, ok := os.LookupEnv(keyEnvVar); ok && strings.TrimSpace(raw) != "" {
+		if err := os.Unsetenv(keyEnvVar); err != nil {
+			return nil, fmt.Errorf("%s: clear variable: %w", keyEnvVar, err)
+		}
+
+		return decodeKey(keyEnvVar, raw)
+	}
+
 	return loadKeyEncryptionKeyFrom(os.LookupEnv)
 }
 

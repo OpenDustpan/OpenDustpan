@@ -124,9 +124,9 @@ func WithSecretKeyStore(s secret.KeyStore) Option {
 }
 
 // WithSecretWrapper sets the key-encryption key holder. Optional: nil means
-// no key-encryption key is configured. Every main calls secret.CheckWrapper
-// during start-up: the server starts without a key only while the database
-// holds no wrapped key (ADR 23).
+// no key-encryption key is configured. Run runs secret.CheckWrapper at
+// start: the server starts without a key only while the database holds no
+// wrapped key (ADR 23).
 func WithSecretWrapper(w secret.Wrapper) Option {
 	return func(o *settings) { o.secretWrapper = w }
 }
@@ -216,15 +216,17 @@ func WithVersion(v string) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler     http.Handler
-	logger      *slog.Logger
-	listenAddr  string
-	secrets     *secret.Service
-	workspaces  *workspace.Service
-	registry    *metrics.Registry
-	tlsCertFile string
-	tlsKeyFile  string
-	observed    *metrics.ServerMetrics
+	handler       http.Handler
+	logger        *slog.Logger
+	listenAddr    string
+	secrets       *secret.Service
+	secretKeys    secret.KeyStore
+	secretWrapper secret.Wrapper
+	workspaces    *workspace.Service
+	registry      *metrics.Registry
+	tlsCertFile   string
+	tlsKeyFile    string
+	observed      *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -294,15 +296,17 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	return &Server{
-		handler:     handler,
-		logger:      cfg.logger,
-		listenAddr:  cfg.listenAddr,
-		secrets:     svc.secrets,
-		workspaces:  svc.workspaces,
-		registry:    registry,
-		tlsCertFile: cfg.tlsCertFile,
-		tlsKeyFile:  cfg.tlsKeyFile,
-		observed:    observed,
+		handler:       handler,
+		logger:        cfg.logger,
+		listenAddr:    cfg.listenAddr,
+		secrets:       svc.secrets,
+		secretKeys:    cfg.secretKeys,
+		secretWrapper: cfg.secretWrapper,
+		workspaces:    svc.workspaces,
+		registry:      registry,
+		tlsCertFile:   cfg.tlsCertFile,
+		tlsKeyFile:    cfg.tlsKeyFile,
+		observed:      observed,
 	}, nil
 }
 
@@ -411,8 +415,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 }
 
 // newServices builds the domain services from validated settings. It reads
-// no database: mains run the start-up checks (such as secret.CheckWrapper)
-// with their own context before or after it.
+// no database. Run runs the start-up checks (such as secret.CheckWrapper)
+// with its own context.
 func newServices(cfg settings) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
@@ -489,8 +493,15 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
 // WithTLS it serves HTTPS; without it, it warns when the listen address is
-// not loopback and serves plain HTTP anyway.
+// not loopback and serves plain HTTP anyway. Run first runs the start-up
+// check that refuses a key-encryption key that opens less than every wrapped
+// key in the database (ADR 23), so a program that embeds the server cannot
+// start with the wrong key.
 func (s *Server) Run(ctx context.Context) error {
+	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              s.listenAddr,
 		Handler:           s.handler,

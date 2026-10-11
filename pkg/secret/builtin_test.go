@@ -239,6 +239,23 @@ func TestCheckWrapper(t *testing.T) {
 		}
 	})
 
+	t.Run("a half-rotated store is refused", func(t *testing.T) {
+		t.Parallel()
+
+		keys := &memKeys{keys: map[secret.Scope]secret.WrappedKey{}, mu: sync.Mutex{}}
+		seedMemKeys(t, keys, scope(t, "stack-1"), right.ID())
+		seedMemKeys(t, keys, scope(t, "stack-2"), wrongWrapper(t).ID())
+
+		err := secret.CheckWrapper(t.Context(), keys, right)
+		if !errors.Is(err, secret.ErrWrapperMismatch) {
+			t.Fatalf("check a half-rotated store: err = %v, want ErrWrapperMismatch", err)
+		}
+
+		if err == nil || !strings.Contains(err.Error(), "rewrap") {
+			t.Fatalf("check a half-rotated store: err = %v, want it to name the rewrap command", err)
+		}
+	})
+
 	t.Run("a missing key store fails", func(t *testing.T) {
 		t.Parallel()
 

@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -669,6 +670,131 @@ func checkMissingOption(t *testing.T, full []dustpan.Option, drop int, name stri
 		!errors.Is(err, stack.ErrMissingDependency) {
 		t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption or ErrMissingDependency", name, err)
 	}
+}
+
+// TestRunRefusesMismatchedKey proves Run runs the key-encryption key
+// start-up check itself (ADR 23): a program that embeds the server and never
+// calls secret.CheckWrapper still refuses to start with the wrong key.
+func TestRunRefusesMismatchedKey(t *testing.T) {
+	t.Parallel()
+
+	st := seedRunCheckStore(t)
+	srv := newRunCheckServer(t, st)
+
+	runErr := srv.Run(t.Context())
+	if !errors.Is(runErr, secret.ErrWrapperMismatch) {
+		t.Fatalf("run with another key: err = %v, want ErrWrapperMismatch", runErr)
+	}
+
+	if !strings.Contains(runErr.Error(), "rewrap") {
+		t.Fatalf("run with another key: err = %v, want it to name the rewrap command", runErr)
+	}
+}
+
+// seedRunCheckStore opens a SQLite store with one wrapped key under the
+// right key-encryption key.
+func seedRunCheckStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	namespaces, nsErr := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
+	if nsErr != nil {
+		t.Fatalf("namespace service: %v", nsErr)
+	}
+
+	createErr := st.CreateNamespace(
+		t.Context(),
+		namespace.Namespace{CreatedAt: time.Now(), Name: "acme", HomeRegion: region, FailoverVersion: 1},
+	)
+	if createErr != nil {
+		t.Fatalf("create namespace: %v", createErr)
+	}
+
+	right, wrapErr := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if wrapErr != nil {
+		t.Fatalf("new wrapper: %v", wrapErr)
+	}
+
+	secrets, svcErr := secret.NewService(secret.Config{
+		Keys:          st,
+		Wrapper:       right,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if svcErr != nil {
+		t.Fatalf("secret service: %v", svcErr)
+	}
+
+	sc, scopeErr := secret.NewScope("acme", "stk-runcheck00000000001")
+	if scopeErr != nil {
+		t.Fatalf("new scope: %v", scopeErr)
+	}
+
+	if _, encErr := secrets.Encrypt(t.Context(), sc, [][]byte{[]byte("s3cr3t")}); encErr != nil {
+		t.Fatalf("seed wrapped key: %v", encErr)
+	}
+
+	return st
+}
+
+// newRunCheckServer wires a server over st with another key-encryption key
+// than the one that wrapped its keys.
+func newRunCheckServer(t *testing.T, st *sqlite.Store) *dustpan.Server {
+	t.Helper()
+
+	wrong, err := secret.NewBuiltinWrapper([]byte("fedcba9876543210fedcba9876543210"))
+	if err != nil {
+		t.Fatalf("new other wrapper: %v", err)
+	}
+
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	authn, err := identity.NewStaticToken("admin", adminToken)
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	srv, err := dustpan.NewServer(
+		dustpan.WithRegion(region),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrong),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
+		dustpan.WithAuthenticator(authn),
+		dustpan.WithListenAddr("127.0.0.1:0"),
+	)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv
 }
 
 func TestConsoleDir(t *testing.T) {

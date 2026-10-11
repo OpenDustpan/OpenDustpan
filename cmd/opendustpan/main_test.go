@@ -174,6 +174,23 @@ func TestLoadKeyEncryptionKey(t *testing.T) {
 	})
 }
 
+func TestLoadKeyEncryptionKeyClearsVariable(t *testing.T) {
+	t.Setenv(keyEnvVar, testKeyBase64())
+
+	key, err := loadKeyEncryptionKey()
+	if err != nil {
+		t.Fatalf("load key: %v", err)
+	}
+
+	if !bytes.Equal(key, []byte(testKeyString)) {
+		t.Fatalf("loaded key = %x, want %x", key, []byte(testKeyString))
+	}
+
+	if _, ok := os.LookupEnv(keyEnvVar); ok {
+		t.Fatalf("load kept %s in the process environment", keyEnvVar)
+	}
+}
+
 // setServeEnv sets the admin token and the key-encryption key for a serve
 // test: an empty key means no key is configured.
 func setServeEnv(t *testing.T, keyBase64 string) {
@@ -327,6 +344,7 @@ func (b *lockedBuffer) String() string {
 func TestServeKeyStartup(t *testing.T) {
 	refuseWithoutKey(t)
 	refuseAnotherKey(t)
+	refuseHalfRotatedKey(t)
 	startWithMatchingKey(t)
 	startWithoutKeyOnEmptyDatabase(t)
 }
@@ -356,6 +374,80 @@ func refuseAnotherKey(t *testing.T) {
 	err := serveDatabase(t, path)
 	if err == nil || !strings.Contains(err.Error(), keyEnvVar) {
 		t.Fatalf("serve with another key: err = %v, want it to name %s", err, keyEnvVar)
+	}
+
+	if _, ok := os.LookupEnv(keyEnvVar); ok {
+		t.Fatalf("serve kept %s in the process environment", keyEnvVar)
+	}
+}
+
+// seedSecondKey stores one wrapped key with key in a second scope of the
+// SQLite database at path. The namespace already exists, so it creates no
+// namespace.
+func seedSecondKey(t *testing.T, path string, key []byte) {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	}()
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper(key)
+	if err != nil {
+		t.Fatalf("new wrapper: %v", err)
+	}
+
+	svc, err := secret.NewService(secret.Config{
+		Keys:          st,
+		Wrapper:       wrapper,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secret service: %v", err)
+	}
+
+	sc, err := secret.NewScope("acme", "stk-mainseed00000000002")
+	if err != nil {
+		t.Fatalf("new scope: %v", err)
+	}
+
+	if _, err := svc.Encrypt(t.Context(), sc, [][]byte{[]byte("other")}); err != nil {
+		t.Fatalf("seed second wrapped key: %v", err)
+	}
+}
+
+// refuseHalfRotatedKey proves serve refuses a database that holds wrapped
+// keys under more than one key-encryption key, and names the missing rewrap
+// command (ADR 23).
+func refuseHalfRotatedKey(t *testing.T) {
+	t.Helper()
+
+	setServeEnv(t, testKeyBase64())
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	seedMainKey(t, path, []byte(testKeyString))
+	seedSecondKey(t, path, []byte(otherKeyString))
+
+	err := serveDatabase(t, path)
+	if !errors.Is(err, secret.ErrWrapperMismatch) {
+		t.Fatalf("serve a half-rotated database: err = %v, want ErrWrapperMismatch", err)
+	}
+
+	if !strings.Contains(err.Error(), "rewrap") {
+		t.Fatalf("serve a half-rotated database: err = %v, want it to name the rewrap command", err)
 	}
 }
 
