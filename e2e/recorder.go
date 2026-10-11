@@ -22,6 +22,7 @@ const maxCapturedBody = 4096
 type Entry struct {
 	Step          string `json:"step"`
 	Method        string `json:"method"`
+	Host          string `json:"host,omitempty"`
 	Path          string `json:"path"`
 	Query         string `json:"query,omitempty"`
 	UserAgent     string `json:"userAgent,omitempty"`
@@ -108,6 +109,7 @@ func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, 
 	r.entries = append(r.entries, Entry{
 		Step:          step,
 		Method:        req.Method,
+		Host:          req.Host,
 		Path:          req.URL.Path,
 		Query:         req.URL.RawQuery,
 		UserAgent:     req.UserAgent(),
