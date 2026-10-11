@@ -1037,6 +1037,46 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Fail:  false,
 	})
 
+	// With the workspace locked by B, a read as A shows the holder, time
+	// and reason. After the unlock the three are empty or absent. The CLI
+	// steps around them prove no CLI rejects the new attributes.
+	wsPath := "/api/v2/workspaces/" + wsID
+
+	const lockReason = "e2e lock reason"
+
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by B with reason",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
+		Want:   http.StatusOK,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
+		Name:   "workspace shows lock holder",
+		Method: http.MethodGet,
+		Path:   wsPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "unlock by B",
+		Method: http.MethodPost,
+		Path:   unlockPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkWorkspaceHidesLock,
+		Name:   "workspace hides lock holder",
+		Method: http.MethodGet,
+		Path:   wsPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
 	// A force-unlock of an unlocked workspace answers 409.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
 		Check:  nil,
@@ -1371,6 +1411,97 @@ func checkWorkspaceUnlocked(body string) error {
 
 	if locked {
 		return fmt.Errorf("%w: locked is true, want false", errUnexpected)
+	}
+
+	return nil
+}
+
+// workspaceLockAttributes holds the lock view of a workspace document.
+type workspaceLockAttributes struct {
+	Locked     bool   `json:"locked"`
+	LockHolder string `json:"lock-holder"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockedAt   string `json:"locked-at"`   //nolint:tagliatelle // The TFE wire name; it must not change.
+	LockReason string `json:"lock-reason"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// workspaceLockData holds the data object of a workspace document.
+type workspaceLockData struct {
+	Attributes workspaceLockAttributes `json:"attributes"`
+}
+
+// workspaceLockDoc decodes a workspace document in tests.
+type workspaceLockDoc struct {
+	Data workspaceLockData `json:"data"`
+}
+
+// decodeWorkspaceLock returns the lock view of a workspace document. A
+// missing attribute decodes as empty, so absent and empty both read as "".
+func decodeWorkspaceLock(body string) (workspaceLockAttributes, error) {
+	var doc workspaceLockDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return workspaceLockAttributes{}, fmt.Errorf("%w: decode workspace: %w", errUnexpected, err)
+	}
+
+	return doc.Data.Attributes, nil
+}
+
+// checkWorkspaceShowsLock proves a workspace document shows the lock of
+// holder with reason: locked is true, the holder and reason match, and the
+// time parses as RFC 3339.
+func checkWorkspaceShowsLock(holder, reason string) func(string) error {
+	return func(body string) error {
+		attrs, err := decodeWorkspaceLock(body)
+		if err != nil {
+			return err
+		}
+
+		if !attrs.Locked {
+			return fmt.Errorf("%w: locked is false, want true", errUnexpected)
+		}
+
+		if attrs.LockHolder != holder {
+			return fmt.Errorf("%w: lock-holder is %q, want %q", errUnexpected, attrs.LockHolder, holder)
+		}
+
+		if attrs.LockReason != reason {
+			return fmt.Errorf("%w: lock-reason is %q, want %q", errUnexpected, attrs.LockReason, reason)
+		}
+
+		if attrs.LockedAt == "" {
+			return fmt.Errorf("%w: locked-at is empty", errUnexpected)
+		}
+
+		if _, err := time.Parse(time.RFC3339, attrs.LockedAt); err != nil {
+			return fmt.Errorf("%w: locked-at %q is not RFC 3339: %w", errUnexpected, attrs.LockedAt, err)
+		}
+
+		return nil
+	}
+}
+
+// checkWorkspaceHidesLock proves a workspace document shows no lock: locked
+// is false and the holder, time and reason are empty or absent.
+func checkWorkspaceHidesLock(body string) error {
+	attrs, err := decodeWorkspaceLock(body)
+	if err != nil {
+		return err
+	}
+
+	if attrs.Locked {
+		return fmt.Errorf("%w: locked is true, want false", errUnexpected)
+	}
+
+	if attrs.LockHolder != "" {
+		return fmt.Errorf("%w: lock-holder is %q, want empty", errUnexpected, attrs.LockHolder)
+	}
+
+	if attrs.LockedAt != "" {
+		return fmt.Errorf("%w: locked-at is %q, want empty", errUnexpected, attrs.LockedAt)
+	}
+
+	if attrs.LockReason != "" {
+		return fmt.Errorf("%w: lock-reason is %q, want empty", errUnexpected, attrs.LockReason)
 	}
 
 	return nil
