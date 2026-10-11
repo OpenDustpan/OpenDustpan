@@ -53,6 +53,14 @@ var (
 	errTLSKeyMissing = errors.New(
 		"TLS key is missing: set --tls-key (DUSTPAN_TLS_KEY) or clear --tls-cert",
 	)
+	// errLogLevel reports an unknown --log-level value.
+	errLogLevel = errors.New(
+		"log level must be debug, info, warn or error: set --log-level (DUSTPAN_LOG_LEVEL)",
+	)
+	// errLogFormat reports an unknown --log-format value.
+	errLogFormat = errors.New(
+		"log format must be json or text: set --log-format (DUSTPAN_LOG_FORMAT)",
+	)
 )
 
 // version is the server version. The build stamps it with
@@ -137,6 +145,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
+	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
+		return err
+	}
+
 	return f.run(ctx, stderr)
 }
 
@@ -151,6 +163,8 @@ type serveFlags struct {
 	tlsKey     string
 	publicURL  string
 	blobDir    string
+	logLevel   string
+	logFormat  string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -192,11 +206,26 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 		env("DUSTPAN_BLOB_DIR", ""),
 		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
 	)
+	fs.StringVar(
+		&f.logLevel,
+		"log-level",
+		env("DUSTPAN_LOG_LEVEL", "info"),
+		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
+	)
+	fs.StringVar(
+		&f.logFormat,
+		"log-format",
+		env("DUSTPAN_LOG_FORMAT", "json"),
+		"log format: json or text (DUSTPAN_LOG_FORMAT)",
+	)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
 func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+	logger, err := f.loggerFor(stderr)
+	if err != nil {
+		return err
+	}
 
 	authn, err := identity.NewStaticTokens(strings.Split(os.Getenv("DUSTPAN_ADMIN_TOKEN"), ",")...)
 	if err != nil {
@@ -214,13 +243,7 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	}
 	defer st.close()
 
-	blobDir := defaultBlobDir(f.database, f.blobDir)
-
-	if mkdirErr := os.MkdirAll(blobDir, blobDirPerm); mkdirErr != nil {
-		return fmt.Errorf("create blob directory: %w", mkdirErr)
-	}
-
-	blobs, err := blobfs.Open(blobDir)
+	blobs, err := openBlobs(f.database, f.blobDir)
 	if err != nil {
 		return err
 	}
@@ -269,6 +292,22 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	return nil
 }
 
+// openBlobs creates the state content directory and opens it.
+func openBlobs(database, flagDir string) (*blobfs.Store, error) {
+	blobDir := defaultBlobDir(database, flagDir)
+
+	if err := os.MkdirAll(blobDir, blobDirPerm); err != nil {
+		return nil, fmt.Errorf("create blob directory: %w", err)
+	}
+
+	blobs, err := blobfs.Open(blobDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return blobs, nil
+}
+
 // checkTLSFlags requires both TLS files or none. It names the missing one,
 // so the operator knows which flag to set or clear.
 func checkTLSFlags(certFile, keyFile string) error {
@@ -282,6 +321,59 @@ func checkTLSFlags(certFile, keyFile string) error {
 	default:
 		return nil
 	}
+}
+
+// checkLogFlags rejects an unknown log level or format. It names the flag,
+// so the operator knows which flag to fix.
+func checkLogFlags(level, format string) error {
+	switch normalizeLogLevel(level) {
+	case "debug", "info", "warn", "error":
+	default:
+		return errLogLevel
+	}
+
+	switch normalizeLogLevel(format) {
+	case "json", "text":
+	default:
+		return errLogFormat
+	}
+
+	return nil
+}
+
+// normalizeLogLevel trims and lowers a log setting, so flags and the
+// environment match the same values.
+func normalizeLogLevel(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// loggerFor builds the serve logger from the log flags. It keeps the JSON
+// default and switches to text only when asked.
+func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
+	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
+		return nil, err
+	}
+
+	var level slog.Level
+
+	switch normalizeLogLevel(f.logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{Level: level}
+
+	if normalizeLogLevel(f.logFormat) == "text" {
+		return slog.New(slog.NewTextHandler(stderr, opts)), nil
+	}
+
+	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
 }
 
 func createNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {

@@ -27,7 +27,9 @@ package dustpan
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -582,6 +584,200 @@ func newServerHandler(cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// requestIDHeader carries the request ID in each response. The server mints
+// a new ID for each request and ignores any ID the client sends.
+const requestIDHeader = "X-Request-Id"
+
+// unmatchedRoute is the route label for a request that matches no pattern.
+// It holds no path, so it cannot leak a capability token.
+const unmatchedRoute = "unmatched"
+
+// requestIDBytes is the entropy of one request ID in bytes, as hex.
+const requestIDBytes = 16
+
+// requestIDKey holds the request ID in the request context.
+type requestIDKey struct{}
+
+// RequestID returns the request ID in ctx, or "" when ctx holds none. The
+// middleware sets it for each request, so handlers and later issues can log
+// it without reading headers.
+func RequestID(ctx context.Context) string {
+	id, ok := ctx.Value(requestIDKey{}).(string)
+	if !ok {
+		return ""
+	}
+
+	return id
+}
+
+// newRequestID mints one request ID: 128 bits from crypto/rand as hex. It
+// falls back to the time when the reader fails, so it never returns "".
+func newRequestID() string {
+	buf := make([]byte, requestIDBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+	}
+
+	return hex.EncodeToString(buf)
+}
+
+// statusWriter records the status and the body size of one response.
+type statusWriter struct {
+	http.ResponseWriter
+
+	status int
+	bytes  int64
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += int64(n)
+
+	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
+}
+
+// adapterForRequest maps a request to its adapter label from the route
+// pattern, or from the path when no pattern matched. It returns pulumi,
+// opentofu, inventory or server. It never returns the path itself.
+func adapterForRequest(pattern, path string) string {
+	route := pattern
+	if route == "" {
+		route = path
+	}
+
+	name := route
+	if _, rest, ok := strings.Cut(route, " "); ok {
+		name = rest
+	}
+
+	switch {
+	case strings.HasPrefix(name, "/api/inventory/"):
+		return "inventory"
+	case strings.HasPrefix(name, "/api/server/"):
+		return "server"
+	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"):
+		return "opentofu"
+	case strings.HasPrefix(name, "/api/"):
+		return "pulumi"
+	default:
+		return "server"
+	}
+}
+
+// debugRoute reports whether pattern logs at debug. Probes and the metrics
+// route log at debug. Every other request logs at info.
+func debugRoute(pattern string) bool {
+	name := pattern
+	if _, rest, ok := strings.Cut(pattern, " "); ok {
+		name = rest
+	}
+
+	switch name {
+	case "/health/live", "/health/ready", "/api/server/metrics":
+		return true
+	default:
+		return false
+	}
+}
+
+// subjectForRequest returns the subject of the signed-in principal, or false
+// when the request carries no valid access token. Lease and upload requests
+// carry no access token, so they log with no subject.
+func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *http.Request) (string, bool) {
+	header := r.Header.Get("Authorization")
+
+	var raw string
+
+	switch {
+	case strings.HasPrefix(header, "token "):
+		raw = strings.TrimPrefix(header, "token ")
+	case strings.HasPrefix(header, "Bearer "):
+		raw = strings.TrimPrefix(header, "Bearer ")
+	default:
+		return "", false
+	}
+
+	if raw == "" {
+		return "", false
+	}
+
+	principal, err := authn.AuthenticateToken(ctx, raw)
+	if err != nil || principal.Subject == "" {
+		return "", false
+	}
+
+	return principal.Subject, true
+}
+
+// withRequestLog mints a request ID, stores it in the context, and writes
+// one log line for each request. The line holds the method, the route, the
+// status, the duration, the size, the ID, the adapter and, for a signed-in
+// request, the subject. It holds nothing else.
+//
+// Go's ServeMux stores the matched pattern in Request.Pattern. The root mux
+// matches a prefix such as /api/ and forwards the request to an adapter
+// mux. The adapter mux overwrites Pattern with its own method and path
+// pattern. The middleware reads Pattern after the next handler returns, so
+// it sees the inner pattern. When nothing matches, Pattern stays empty and
+// the line uses unmatched. The line names the pattern only, never the path,
+// so a capability token in the path cannot leak into the log.
+func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authenticator) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := newRequestID()
+		w.Header().Set(requestIDHeader, id)
+
+		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
+
+		r = r.WithContext(ctx)
+
+		subject, signedIn := subjectForRequest(ctx, authn, r)
+
+		start := time.Now()
+		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
+
+		next.ServeHTTP(wrapped, r)
+
+		route := r.Pattern
+		if route == "" {
+			route = unmatchedRoute
+		}
+
+		// A root prefix without a method means the adapter found no route.
+		// Log it as unmatched, so the line never names a bare prefix.
+		if !strings.Contains(route, " ") && route != unmatchedRoute {
+			route = unmatchedRoute
+		}
+
+		adapter := adapterForRequest(r.Pattern, r.URL.Path)
+
+		attrs := []slog.Attr{
+			slog.String("method", r.Method),
+			slog.String("route", route),
+			slog.Int64("status", int64(wrapped.status)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.Int64("bytes", wrapped.bytes),
+			slog.String("request_id", id),
+			slog.String("adapter", adapter),
+		}
+
+		if signedIn {
+			attrs = append(attrs, slog.String("subject", subject))
+		}
+
+		level := slog.LevelInfo
+		if debugRoute(r.Pattern) {
+			level = slog.LevelDebug
+		}
+
+		logger.LogAttrs(ctx, level, "request", attrs...)
+	})
+}
+
 func routes(api, units, tfeAPI, serverAPI http.Handler, cfg settings) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
@@ -610,5 +806,5 @@ func routes(api, units, tfeAPI, serverAPI http.Handler, cfg settings) (http.Hand
 		mux.Handle("/", console)
 	}
 
-	return mux, nil
+	return withRequestLog(mux, cfg.logger, cfg.authenticator), nil
 }
