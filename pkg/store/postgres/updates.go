@@ -263,6 +263,11 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 // without a key keeps the content as given. Each write of the running update
 // overwrites the row of that update.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+	// The resource count scans the deployment bytes, about one second for a
+	// large checkpoint under the race detector. Compute it before the fenced
+	// transaction, so the lock covers only SQL statements.
+	resourceCount := stack.CountManagedResources(cp.Deployment)
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
@@ -273,7 +278,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 			return err
 		}
 
-		row, rowErr := codec.ToCheckpointRow(cp, stack.ID(stackID))
+		row, rowErr := codec.ToCheckpointRowCounted(cp, stack.ID(stackID), resourceCount)
 		if rowErr != nil {
 			return rowErr
 		}
