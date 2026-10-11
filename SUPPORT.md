@@ -19,8 +19,8 @@ Search the open and closed issues first. Your question may have an answer.
 
 - Read the [README](README.md), with its quickstart and its section "When not
   to use OpenDustpan".
-- Read the [guides](docs/guides/). `opendustpan serve --help` lists every
-  setting of the server.
+- Read the [guides](docs/guides/) and the
+  [configuration reference](docs/reference/configuration.md).
 
 ## Vendor support
 
