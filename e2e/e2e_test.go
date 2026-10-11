@@ -5774,10 +5774,11 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkBackupUnauthorized(ctx, t, env, id)
 
 	if !e2e.UseBinaryServer() {
-		t.Log("skipping the restart part without E2E_SERVER=binary")
+		t.Log("skipping the binary parts without E2E_SERVER=binary")
 		return
 	}
 
+	checkBackupCommand(ctx, t, env)
 	checkBackupRestartFailed(ctx, t, env, id)
 }
 
@@ -6069,6 +6070,31 @@ func checkBackupUnauthorized(ctx context.Context, t *testing.T, env *e2e.Env, id
 			t.Fatalf("%s %s error = %+v, want code 401 with a message", target.method, target.path, doc)
 		}
 	}
+}
+
+// checkBackupCommand runs `opendustpan backup` through RunBinary against
+// the running server (ADR 30 decision 10): the command starts a backup,
+// waits, and exits with status 0. The output names the backup ID, the
+// succeeded state and the key warning that a backup cannot decrypt secrets
+// without DUSTPAN_KEY_ENCRYPTION_KEY. The command trusts the server through
+// --ca-file with the same certificate bundle the CLIs trust through
+// SSL_CERT_FILE, and it reads the token from DUSTPAN_ADMIN_TOKEN in the
+// RunBinary environment. It needs E2E_SERVER=binary.
+func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, "backup", "--server", env.URL, "--ca-file", env.CABundle())
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan backup exits with status %d: %s%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "plain text"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Fatalf("opendustpan backup output lacks %q: %q", want, res.Stdout)
+		}
+	}
+
+	t.Logf("opendustpan backup: %s", strings.TrimSpace(res.Stdout))
 }
 
 // checkBackupRestartFailed stops the server during a running backup, starts
