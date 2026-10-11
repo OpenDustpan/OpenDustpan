@@ -1144,6 +1144,18 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 	return e.RunIn(ctx, e.project, extra, "", args...)
 }
 
+// RunAs executes the CLI of tool cli in dir and returns what it printed,
+// without touching the environment CLI. Background writers use it to drive
+// one tool while the environment CLI serves another, so concurrent runs never
+// race on SetCLI. extra holds NAME=value pairs added to the environment. It
+// sends no standard input. A non-zero exit is reported in the Result, not as
+// an error.
+func (e *Env) RunAs(
+	ctx context.Context, cli Install, dir string, extra []string, args ...string,
+) (Result, error) {
+	return e.runCLI(ctx, cliCall{cli: cli, dir: dir, env: e.cliEnvFor(cli, extra), stdin: "", args: args})
+}
+
 // RunIn executes the CLI in dir and returns what it printed. extra holds
 // NAME=value pairs added to the environment. stdin is piped to the CLI as
 // standard input, or no input when empty. A non-zero exit is reported in
@@ -1590,33 +1602,45 @@ func (e *Env) stepInWith(
 func (e *Env) runWithEnv(
 	ctx context.Context, dir string, env []string, stdin string, args ...string,
 ) (Result, error) {
+	return e.runCLI(ctx, cliCall{cli: e.cli, dir: dir, env: env, stdin: stdin, args: args})
+}
+
+// cliCall groups one CLI process invocation: the tool with the directory,
+// environment, standard input and arguments.
+type cliCall struct {
+	cli   Install
+	dir   string
+	env   []string
+	stdin string
+	args  []string
+}
+
+// runCLI executes one CLI call in its directory and returns what it printed.
+// stdin is piped to the CLI as standard input, or no input when empty. A
+// non-zero exit is reported in the Result, not as an error.
+func (e *Env) runCLI(ctx context.Context, call cliCall) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
 
 	//nolint:gosec // The binary is the CLI this suite downloaded and checksum-verified.
-	cmd := exec.CommandContext(ctx, e.cli.Binary(), args...)
-	cmd.Dir = dir
-	cmd.Env = env
-
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-
+	cmd := exec.CommandContext(ctx, call.cli.Binary(), call.args...)
+	cmd.Dir = call.dir
+	cmd.Env = call.env
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = waitDelay
 
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
+	if call.stdin != "" {
+		cmd.Stdin = strings.NewReader(call.stdin)
 	}
 
 	start := time.Now()
 	err := cmd.Run()
 	timedOut := ctx.Err()
 	res := Result{
-		Command:  e.cli.Tool + " " + strings.Join(args, " "),
+		Command:  call.cli.Tool + " " + strings.Join(call.args, " "),
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		Duration: time.Since(start),
@@ -1767,15 +1791,21 @@ func (e *Env) write(tb testing.TB, name, content string) {
 // cliEnv builds the CLI environment from scratch, so nothing from the
 // developer's own Pulumi or OpenTofu setup leaks into a run.
 func (e *Env) cliEnv(extra []string) []string {
+	return e.cliEnvFor(e.cli, extra)
+}
+
+// cliEnvFor builds the CLI environment of tool cli from scratch, so nothing
+// from the developer's own Pulumi or OpenTofu setup leaks into a run.
+func (e *Env) cliEnvFor(cli Install, extra []string) []string {
 	env := make([]string, 0, baseEnvEntries+len(extra))
 	env = append(env,
-		"PATH="+e.cli.Dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+cli.Dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+e.home,
 		"NO_COLOR=1",
 		"NO_PROXY=127.0.0.1,localhost",
 	)
 
-	if e.cli.Tool == ToolTofu {
+	if cli.Tool == ToolTofu {
 		env = append(env,
 			"TF_CLI_CONFIG_FILE="+filepath.Join(e.home, "tofurc"),
 			"TF_IN_AUTOMATION=1",

@@ -10,10 +10,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -24,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -7207,9 +7210,6 @@ func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, f
 	}
 }
 
-// restoreBackupID is the backup the restore test takes and loads.
-const restoreBackupID = "bkp-e2e-restore"
-
 // restoreRegion is the region the restore test passes. It matches the region
 // of the harness environment, so no region warning appears.
 const restoreRegion = "e2e"
@@ -7218,13 +7218,18 @@ const restoreRegion = "e2e"
 // backup and reads back after the restore.
 const restoreSecret = "s3cr3t"
 
-// TestBackupRestore proves `opendustpan restore` with RunBinary: while the
-// server runs, the test writes a Pulumi secret and OpenTofu state, takes a
-// backup, stops the server, restores the backup into an empty destination
-// with the same key, starts the server on the restored data, and checks that
-// the Pulumi secret decrypts and the OpenTofu state reads. A second restore
-// into the loaded destination exits 1. It runs only with E2E_SERVER=binary,
-// on SQLite and on PostgreSQL with an empty schema.
+// TestBackupRestore proves the backup exit test of ADR 30 consequence 5 with
+// the real binary. Server A serves with --backup-target. Both CLIs write
+// first, then background writers churn other stacks while `opendustpan
+// backup` runs, and `backup check` exits 0. The test stops A, restores the
+// backup into an empty destination with the same key, starts server B on it,
+// and proves both CLIs read the same state: the Pulumi export and the OpenTofu
+// pull match server A, the secret decrypts, and the history and state version
+// counts match. A restore with a wrong key exits 1, names
+// DUSTPAN_KEY_ENCRYPTION_KEY and writes nothing. Restores into a loaded
+// destination and into another schema version exit 1. It runs for every CLI
+// version of both tools, paired, on SQLite and on PostgreSQL, and only with
+// E2E_SERVER=binary on Linux.
 func TestBackupRestore(t *testing.T) {
 	t.Parallel()
 
@@ -7255,28 +7260,74 @@ func TestBackupRestore(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
-	if err != nil {
-		t.Fatalf("install pulumi %s: %v", pulumiVersions[0], err)
-	}
+	pulumiCLIs := installBackupCLIs(installCtx, t, fetcher, e2e.Pulumi(), pulumiVersions)
+	tofuCLIs := installBackupCLIs(installCtx, t, fetcher, e2e.OpenTofu(), tofuVersions)
 
-	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
-	if err != nil {
-		t.Fatalf("install tofu %s: %v", tofuVersions[0], err)
-	}
+	pairs := pairBackupCLIs(pulumiCLIs, tofuCLIs)
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runBackupRestoreOnStore(t, pulumiCLI, tofuCLI, db)
+
+			for _, p := range pairs {
+				t.Run(p.name, func(t *testing.T) {
+					t.Parallel()
+					runBackupRestoreOnStore(t, p, db)
+				})
+			}
 		})
 	}
 }
 
-// runBackupRestoreOnStore writes state with both CLIs, backs it up, stops
-// the server, restores into an empty destination, restarts on the restored
-// data and checks both tools read the same state back.
-func runBackupRestoreOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2e.Store) {
+// installBackupCLIs installs every version label of tool in order and returns
+// the installs, so the restore test drives every CLI version of its matrix.
+func installBackupCLIs(
+	ctx context.Context, t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, labels []string,
+) []e2e.Install {
+	t.Helper()
+
+	clis := make([]e2e.Install, 0, len(labels))
+
+	for _, label := range labels {
+		cli, err := fetcher.Install(ctx, tool, label)
+		if err != nil {
+			t.Fatalf("install %s %s: %v", tool.Name, label, err)
+		}
+
+		clis = append(clis, cli)
+	}
+
+	return clis
+}
+
+// backupPair is one Pulumi CLI with one OpenTofu CLI for one restore run.
+type backupPair struct {
+	name   string
+	pulumi e2e.Install
+	tofu   e2e.Install
+}
+
+// pairBackupCLIs pairs the CLI versions of both tools round-robin, so every
+// version of each matrix runs at least once with the other tool.
+func pairBackupCLIs(pulumi, tofu []e2e.Install) []backupPair {
+	count := max(len(pulumi), len(tofu))
+	pairs := make([]backupPair, 0, count)
+
+	for i := range count {
+		p, q := pulumi[i%len(pulumi)], tofu[i%len(tofu)]
+		pairs = append(pairs, backupPair{name: p.Label + "+" + q.Label, pulumi: p, tofu: q})
+	}
+
+	return pairs
+}
+
+// runBackupRestoreOnStore runs the backup exit test on one store with one
+// CLI pair: both CLIs write, a backup runs while background writers churn,
+// backup check exits 0, the backup restores into an empty destination with
+// the same key, server B reads the same state, a wrong-key restore names the
+// key and writes nothing, and loaded-destination and schema-mismatch restores
+// exit 1.
+func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -7284,161 +7335,500 @@ func runBackupRestoreOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, pulumiCLI, store)
+	env := e2e.NewEnv(ctx, t, tools.pulumi, store)
 
-	writeRestoreState(ctx, t, env, tofuCLI)
-	targetDir := takeRestoreBackup(ctx, t, env)
+	target := env.BackupTarget(t)
+	if dir, ok := strings.CutPrefix(target, "dir:"); !ok || strings.TrimSpace(dir) == "" {
+		t.Fatalf("backup target = %q, want dir:<path> on server A", target)
+	}
+
+	writeExitTestState(ctx, t, env, tools.pulumi, tools.tofu)
+
+	before := captureExitState(ctx, t, env, tools, "before backup")
+	id := backupWhileWriting(ctx, t, env, tools.pulumi, tools.tofu)
+	after := captureExitState(ctx, t, env, tools, "after backup")
+	checkExitStateStable(t, before, after)
+	runBackupCheck(ctx, t, env, target, id)
 
 	env.StopServer(ctx, t)
 	wipeRestoreDestination(ctx, t, env, store)
-	runRestoreBinary(ctx, t, env, targetDir)
+	runRestoreBinary(ctx, t, env, target, id)
 	env.StartServer(ctx, t)
 
-	checkRestoredState(ctx, t, env, pulumiCLI, tofuCLI)
-	checkRestoreRefusesLoaded(ctx, t, env, targetDir)
+	restored := captureExitState(ctx, t, env, tools, "after restore")
+	checkExitStateMatches(t, after, restored)
+	checkRestoreRefusesLoaded(ctx, t, env, target, id)
+
+	env.StopServer(ctx, t)
+	wipeRestoreDestination(ctx, t, env, store)
+	runRestoreWrongKey(ctx, t, env, target, id)
+	checkRestoreDestinationEmpty(ctx, t, env, store)
+	runRestoreSchemaMismatch(ctx, t, env, tamperManifestSchema(t, target, id), id)
 }
 
-// writeRestoreState writes a Pulumi secret with an up and OpenTofu state
-// with an apply: a small part of the backup scenario, enough to prove that
-// secrets decrypt and state reads after the restore.
-func writeRestoreState(ctx context.Context, t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
+// writeExitTestState writes the checked state with both CLIs: a Pulumi stack
+// with a secret and an up, and OpenTofu state with an apply. It then grows
+// the database with one padded checkpoint, so the backup window stays open
+// while the background writers churn.
+func writeExitTestState(ctx context.Context, t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install) {
 	t.Helper()
+
+	env.SetCLI(pulumiCLI)
 
 	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
 
-	env.Step(ctx, t, step("login", contains(env.URL), "login"))
-	env.Step(ctx, t, step("stack init", nil, "stack", "init", qualified))
-	// The scratch program reads stack other, so up needs it to exist.
-	env.Step(ctx, t, step("stack init other", nil, "stack", "init", "other"))
-	env.Step(ctx, t, step("config set secret", nil, "config", "set", "--secret", "apiKey", restoreSecret))
-	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
-	env.Step(ctx, t, step("config get", contains(restoreSecret), "config", "get", "apiKey"))
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("stack init", nil, "stack", "init", qualified),
+		// The scratch program reads stack other, so up needs it to exist.
+		step("stack init other", nil, "stack", "init", "other"),
+		step("stack select", nil, "stack", "select", qualified),
+		step("config set secret", nil, "config", "set", "--secret", "apiKey", restoreSecret),
+		step("up", nil, "up", "--yes", "--non-interactive"),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	exported := env.Step(ctx, t, step("stack export for pad", exportHoldsReference, "stack", "export"))
+
+	held := env.StartHeldUpdate(ctx, t, e2e.Namespace, e2e.Project, stackName)
+	env.SaveHeldPaddedCheckpoint(ctx, t, held, exported.Stdout, map[string]string{
+		"e2ePad": strings.Repeat("x", backupPadBytes),
+	})
+	env.EndHeldUpdate(ctx, t, held, "succeeded")
 
 	env.SetCLI(tofuCLI)
 
-	env.Step(ctx, t, step("init", nil, "init", "-input=false", "-no-color"))
-	env.Step(ctx, t, step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
-	env.Step(ctx, t, step("state pull", contains(`"greeting"`), "state", "pull"))
+	for _, s := range []e2e.StepSpec{
+		step("init", nil, "init", "-input=false", "-no-color"),
+		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	} {
+		env.Step(ctx, t, s)
+	}
 }
 
-// takeRestoreBackup takes backup restoreBackupID of the running server into
-// a target directory with the backup service and returns the directory. The
-// backup reads the live database in one read transaction, so the server
-// keeps running while it copies.
-func takeRestoreBackup(ctx context.Context, t *testing.T, env *e2e.Env) string {
-	t.Helper()
-
-	targetDir := filepath.Join(t.TempDir(), "target")
-
-	switch env.Store() {
-	case e2e.StoreSQLite:
-		takeSQLiteBackup(ctx, t, env, targetDir)
-	case e2e.StorePostgres:
-		takePostgresBackup(ctx, t, env, targetDir)
-	default:
-		t.Fatalf("unknown store: %s", env.Store())
-	}
-
-	return targetDir
+// exitState holds the checked state of one server: the Pulumi export with the
+// history count, and the OpenTofu pull with the state version count.
+type exitState struct {
+	export       string
+	pull         importStateDoc
+	history      int
+	tofuVersions int
 }
 
-// takeSQLiteBackup takes backup restoreBackupID of the SQLite database the
-// environment serves into targetDir.
-func takeSQLiteBackup(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+// captureExitState reads the checked state with both CLIs: the Pulumi export
+// with the secret and the history count, and the OpenTofu pull with the state
+// version count. tag names the phase in the report, for example
+// "before backup".
+func captureExitState(
+	ctx context.Context, t *testing.T, env *e2e.Env, tools backupPair, tag string,
+) exitState {
 	t.Helper()
 
-	dbURL := env.DatabaseURL(t)
+	env.SetCLI(tools.pulumi)
 
-	path, ok := strings.CutPrefix(dbURL, "sqlite:")
-	if !ok {
-		t.Fatalf("database URL %q is not a SQLite URL", dbURL)
-	}
+	exported := env.Step(ctx, t, step("stack export "+tag, exportHoldsReference, "stack", "export"))
+	env.Step(ctx, t, step("config get "+tag, contains(restoreSecret), "config", "get", "apiKey"))
+	history := env.Step(ctx, t, step("stack history "+tag, nil, "stack", "history", "--json"))
 
-	st, err := sqlite.Open(ctx, path)
+	env.SetCLI(tools.tofu)
+
+	pulled := env.Step(ctx, t, step("state pull "+tag, contains(`"greeting"`), "state", "pull"))
+
+	doc, err := decodeImportState(pulled.Stdout)
 	if err != nil {
-		t.Fatalf("open source store: %v", err)
+		t.Fatalf("decode pulled state %s: %v", tag, err)
 	}
 
-	defer func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close source store: %v", closeErr)
-		}
+	return exitState{
+		export:       strings.TrimSpace(exported.Stdout),
+		pull:         doc,
+		history:      countHistory(t, history.Stdout, tag),
+		tofuVersions: countStateVersions(ctx, t, env, tag),
+	}
+}
+
+// countHistory returns the number of entries in a `stack history --json`
+// document.
+func countHistory(t *testing.T, stdout, tag string) int {
+	t.Helper()
+
+	var updates []struct {
+		Kind string `json:"kind"`
+	}
+
+	if err := json.Unmarshal([]byte(stdout), &updates); err != nil {
+		t.Fatalf("decode stack history %s: %v", tag, err)
+	}
+
+	return len(updates)
+}
+
+// countStateVersions returns the total state version count of the checked
+// workspace through the list route.
+func countStateVersions(ctx context.Context, t *testing.T, env *e2e.Env, tag string) int {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, stateVersionListBase(), "")
+	if err != nil {
+		t.Fatalf("list state versions %s: %v", tag, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list state versions %s answers %d: %s", tag, status, body)
+	}
+
+	doc, err := decodeStateVersionList(body)
+	if err != nil {
+		t.Fatalf("decode state version list %s: %v", tag, err)
+	}
+
+	return doc.Meta.Pagination.TotalCount
+}
+
+// checkExitStateStable proves the background writers left the checked state
+// alone: the export, pull, history count and state version count match across
+// the concurrent backup window.
+func checkExitStateStable(t *testing.T, before, after exitState) {
+	t.Helper()
+	checkExitStateEqual(t, before, after, "across the backup while writers churn")
+}
+
+// checkExitStateMatches proves server B reads the same state server A held at
+// the manifest: the same export, pull serial and lineage and content, history
+// count and state version count.
+func checkExitStateMatches(t *testing.T, want, got exitState) {
+	t.Helper()
+	checkExitStateEqual(t, want, got, "after restore")
+}
+
+// checkExitStateEqual proves two checked states hold the same export bytes,
+// pull serial and lineage and content, history count and state version count.
+func checkExitStateEqual(t *testing.T, want, got exitState, tag string) {
+	t.Helper()
+
+	if got.export != want.export {
+		t.Errorf("stack export %s differs from server A at the manifest", tag)
+	}
+
+	if got.pull.Serial != want.pull.Serial || got.pull.Lineage != want.pull.Lineage {
+		t.Errorf(
+			"state pull %s holds serial %d lineage %q, want serial %d lineage %q",
+			tag,
+			got.pull.Serial,
+			got.pull.Lineage,
+			want.pull.Serial,
+			want.pull.Lineage,
+		)
+	}
+
+	wantContent, err := canonicalImportState(want.pull)
+	if err != nil {
+		t.Fatalf("encode pulled state: %v", err)
+	}
+
+	gotContent, err := canonicalImportState(got.pull)
+	if err != nil {
+		t.Fatalf("encode restored state: %v", err)
+	}
+
+	if gotContent != wantContent {
+		t.Errorf("state pull content %s differs from server A at the manifest", tag)
+	}
+
+	if got.history != want.history {
+		t.Errorf("stack history %s holds %d entries, want %d", tag, got.history, want.history)
+	}
+
+	if got.tofuVersions != want.tofuVersions {
+		t.Errorf("state versions %s hold %d, want %d", tag, got.tofuVersions, want.tofuVersions)
+	}
+}
+
+// churnFirstTimeout bounds the wait for the first write of one background
+// writer: a stack init and a workspace new finish well before it.
+const churnFirstTimeout = 5 * time.Minute
+
+// churnOutcome is the result of one background writer: its tool with the
+// completed writes, or the first error.
+type churnOutcome struct {
+	tool   string
+	writes int
+	err    error
+}
+
+// backupWhileWriting starts one background writer per tool, waits for the
+// first write of each, runs `opendustpan backup` while they keep writing,
+// stops them and returns the backup ID. Each writer churns units outside the
+// checked dev stack and cloud workspace, so the checked state stays stable
+// while the database still writes during the backup.
+func backupWhileWriting(
+	ctx context.Context, t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install,
+) string {
+	t.Helper()
+
+	pulumiDir := t.TempDir()
+	pulumiProject := []byte("name: " + e2e.Project + "\nruntime: yaml\n")
+
+	if err := os.WriteFile(filepath.Join(pulumiDir, "Pulumi.yaml"), pulumiProject, 0o600); err != nil {
+		t.Fatalf("write churn project: %v", err)
+	}
+
+	tofuDir := env.WriteRemoteProject(t)
+
+	res, err := env.RunAs(ctx, tofuCLI, tofuDir, nil, "init", "-input=false", "-no-color")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("init churn project: exit %d: %v\n%s%s", res.ExitCode, err, res.Stdout, res.Stderr)
+	}
+
+	stop := make(chan struct{})
+
+	var stopOnce sync.Once
+
+	stopWriters := func() {
+		stopOnce.Do(func() { close(stop) })
+	}
+
+	defer stopWriters()
+
+	pulumiFirst := make(chan struct{}, 1)
+	tofuFirst := make(chan struct{}, 1)
+	done := make(chan churnOutcome, 2)
+
+	go func() {
+		done <- churnPulumiStacks(ctx, churnInput{
+			env:   env,
+			cli:   pulumiCLI,
+			dir:   pulumiDir,
+			stop:  stop,
+			first: pulumiFirst,
+		})
 	}()
 
-	runBackupService(ctx, t, env, backupServiceInput{exporter: st, registry: st, targetDir: targetDir})
-}
-
-// takePostgresBackup takes backup restoreBackupID of the PostgreSQL schema
-// the environment serves into targetDir.
-func takePostgresBackup(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
-	t.Helper()
-
-	st, err := postgres.Open(ctx, env.DatabaseURL(t))
-	if err != nil {
-		t.Fatalf("open source store: %v", err)
-	}
-
-	defer st.Close()
-
-	runBackupService(ctx, t, env, backupServiceInput{exporter: st, registry: st, targetDir: targetDir})
-}
-
-// backupServiceInput bundles the backup service inputs: the store as
-// exporter and registry with the target directory.
-type backupServiceInput struct {
-	exporter  backup.Exporter
-	registry  backup.Registry
-	targetDir string
-}
-
-// runBackupService runs the backup service over source blobs and store into
-// targetDir and proves the backup succeeded.
-func runBackupService(ctx context.Context, t *testing.T, env *e2e.Env, in backupServiceInput) {
-	t.Helper()
-
-	blobs, err := blobfs.Open(env.BlobDir(t))
-	if err != nil {
-		t.Fatalf("open source blobs: %v", err)
-	}
-
-	defer func() {
-		if closeErr := blobs.Close(); closeErr != nil {
-			t.Errorf("close source blobs: %v", closeErr)
-		}
+	go func() {
+		done <- churnTofuWorkspaces(ctx, churnInput{
+			env:   env,
+			cli:   tofuCLI,
+			dir:   tofuDir,
+			stop:  stop,
+			first: tofuFirst,
+		})
 	}()
 
-	target, err := blobfs.Open(in.targetDir)
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
+	waitChurnFirst(ctx, t, pulumiFirst, pulumiCLI.Tool)
+	waitChurnFirst(ctx, t, tofuFirst, tofuCLI.Tool)
 
-	defer func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
+	id := runBackupCommand(ctx, t, env)
+
+	stopWriters()
+
+	outcomes := []churnOutcome{<-done, <-done}
+
+	for _, o := range outcomes {
+		if o.err != nil {
+			t.Fatalf("%s writer: %v", o.tool, o.err)
 		}
-	}()
 
-	svc, err := backup.NewService(backup.Config{
-		Exporter:    in.exporter,
-		Registry:    in.registry,
-		Blobs:       blobs,
-		Target:      target,
-		TargetName:  "dir:" + in.targetDir,
-		Now:         nil,
-		Version:     "",
-		MaxSQLBytes: 0,
-	})
-	if err != nil {
-		t.Fatalf("backup service: %v", err)
+		if o.writes == 0 {
+			t.Fatalf("%s writer completed no writes during the backup", o.tool)
+		}
 	}
 
-	record, err := svc.Run(ctx, backup.ID(restoreBackupID))
-	if err != nil {
-		t.Fatalf("run backup: %v", err)
+	env.NoteStep(t, "backup while writing", churnSummary(outcomes, id))
+
+	return id
+}
+
+// waitChurnFirst waits for the first write of one background writer, so the
+// backup starts only after both tools write.
+func waitChurnFirst(ctx context.Context, t *testing.T, first <-chan struct{}, tool string) {
+	t.Helper()
+
+	deadline, cancel := context.WithTimeout(ctx, churnFirstTimeout)
+	defer cancel()
+
+	select {
+	case <-first:
+	case <-deadline.Done():
+		t.Fatalf("%s writer completed no write, want churn during the backup", tool)
+	}
+}
+
+// churnSummary renders the completed writes of the background writers with
+// the backup ID for the report.
+func churnSummary(outcomes []churnOutcome, id string) string {
+	parts := make([]string, 0, len(outcomes))
+
+	for _, o := range outcomes {
+		parts = append(parts, fmt.Sprintf("%s writes=%d", o.tool, o.writes))
 	}
 
-	if record.State != backup.StateSucceeded {
-		t.Fatalf("backup state = %q, want %q", record.State, backup.StateSucceeded)
+	return fmt.Sprintf("backup %s while %s", id, strings.Join(parts, ", "))
+}
+
+// churnInput groups what one background writer needs: the server with the
+// CLI and directory it drives, the stop channel that ends the loop, and the
+// channel that takes the first completed write.
+type churnInput struct {
+	env   *e2e.Env
+	cli   e2e.Install
+	dir   string
+	stop  <-chan struct{}
+	first chan<- struct{}
+}
+
+// churnPulumiStacks creates one Pulumi stack per iteration until stop closes.
+// Stack names are unique per run, so every iteration writes rows without
+// touching the checked dev stack. It signals the first completed write on
+// first.
+func churnPulumiStacks(ctx context.Context, in churnInput) churnOutcome {
+	outcome := churnOutcome{tool: in.cli.Tool, writes: 0, err: nil}
+	signaled := false
+
+	for i := 0; ; i++ {
+		select {
+		case <-in.stop:
+			return outcome
+		default:
+		}
+
+		name := fmt.Sprintf("%s/%s/churn-%d", e2e.Namespace, e2e.Project, i)
+
+		res, err := in.env.RunAs(ctx, in.cli, in.dir, nil, "stack", "init", name, "--no-select")
+		if err != nil {
+			outcome.err = err
+
+			return outcome
+		}
+
+		if res.ExitCode != 0 {
+			outcome.err = fmt.Errorf(
+				"%w: stack init %s exits %d: %s%s",
+				errUnexpected,
+				name,
+				res.ExitCode,
+				res.Stdout,
+				res.Stderr,
+			)
+
+			return outcome
+		}
+
+		outcome.writes++
+
+		if !signaled {
+			signaled = true
+
+			select {
+			case in.first <- struct{}{}:
+			case <-in.stop:
+				return outcome
+			}
+		}
+	}
+}
+
+// churnTofuWorkspaces creates one OpenTofu workspace per iteration until stop
+// closes. Workspace names are unique per run, so every iteration writes rows
+// without touching the checked cloud workspace. It signals the first
+// completed write on first.
+func churnTofuWorkspaces(ctx context.Context, in churnInput) churnOutcome {
+	outcome := churnOutcome{tool: in.cli.Tool, writes: 0, err: nil}
+	signaled := false
+
+	for i := 0; ; i++ {
+		select {
+		case <-in.stop:
+			return outcome
+		default:
+		}
+
+		name := fmt.Sprintf("churn-%d", i)
+
+		res, err := in.env.RunAs(ctx, in.cli, in.dir, nil, "workspace", "new", name, "-no-color")
+		if err != nil {
+			outcome.err = err
+
+			return outcome
+		}
+
+		if res.ExitCode != 0 {
+			outcome.err = fmt.Errorf(
+				"%w: workspace new %s exits %d: %s%s",
+				errUnexpected,
+				name,
+				res.ExitCode,
+				res.Stdout,
+				res.Stderr,
+			)
+
+			return outcome
+		}
+
+		outcome.writes++
+
+		if !signaled {
+			signaled = true
+
+			select {
+			case in.first <- struct{}{}:
+			case <-in.stop:
+				return outcome
+			}
+		}
+	}
+}
+
+// runBackupCommand runs `opendustpan backup` against the running server and
+// returns the backup ID. The output names the ID, the succeeded state, the
+// key warning that a backup cannot decrypt secrets without
+// DUSTPAN_KEY_ENCRYPTION_KEY, and the plain-text state warning.
+func runBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, "backup", "--server", env.URL, "--ca-file", env.CABundle())
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan backup exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "plain text"} {
+		if !strings.Contains(res.Stdout, want) {
+			t.Fatalf("opendustpan backup output lacks %q:\n%s", want, res.Stdout)
+		}
+	}
+
+	id := parseBackupID(res.Stdout)
+	if id == "" {
+		t.Fatalf("opendustpan backup output holds no backup ID:\n%s", res.Stdout)
+	}
+
+	return id
+}
+
+// parseBackupID returns the first bkp- ID in the backup command output, or
+// "" when the output holds none.
+func parseBackupID(stdout string) string {
+	for field := range strings.FieldsSeq(stdout) {
+		if strings.HasPrefix(field, "bkp-") {
+			return field
+		}
+	}
+
+	return ""
+}
+
+// runBackupCheck runs `opendustpan backup check` for id against target and
+// proves it exits 0 with the complete verdict.
+func runBackupCheck(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", target)
+	if res.ExitCode != 0 {
+		t.Fatalf("backup check exits with status %d, want 0:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	if !strings.Contains(res.Stdout, "backup "+id+" is complete") {
+		t.Fatalf("backup check output lacks the verdict:\n%s%s", res.Stdout, res.Stderr)
 	}
 }
 
@@ -7536,33 +7926,33 @@ func restoreSchema(t *testing.T, schemaURL string) string {
 }
 
 // restoreBinaryArgs returns the restore arguments the test runs: the backup
-// from targetDir into the database and blob directory of the environment.
-func restoreBinaryArgs(t *testing.T, env *e2e.Env, targetDir string) []string {
+// id from target into the database and blob directory of the environment.
+func restoreBinaryArgs(t *testing.T, env *e2e.Env, target, id string) []string {
 	t.Helper()
 
 	return []string{
 		"restore",
-		"--from", "dir:" + targetDir,
-		"--backup", restoreBackupID,
+		"--from", target,
+		"--backup", id,
 		"--database", env.DatabaseURL(t),
 		"--blob-dir", env.BlobDir(t),
 		"--region", restoreRegion,
 	}
 }
 
-// runRestoreBinary restores the backup from targetDir into the empty
+// runRestoreBinary restores the backup id from target into the empty
 // destination with the same key and proves the steps with the row counts.
-func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, targetDir)...)
+	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
 
 	if res.ExitCode != 0 {
 		t.Fatalf("restore exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
 	for _, want := range []string{
-		"restored backup " + restoreBackupID,
+		"restored backup " + id,
 		"table namespaces: 1 rows",
 		"table state_versions: 1 rows",
 	} {
@@ -7572,32 +7962,12 @@ func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, targetDir
 	}
 }
 
-// checkRestoredState proves the Pulumi secret decrypts and the OpenTofu
-// state reads on the restored data.
-func checkRestoredState(
-	ctx context.Context,
-	t *testing.T,
-	env *e2e.Env,
-	pulumiCLI, tofuCLI e2e.Install,
-) {
-	t.Helper()
-
-	env.SetCLI(pulumiCLI)
-
-	env.Step(ctx, t, step("config get after restore", contains(restoreSecret), "config", "get", "apiKey"))
-	env.Step(ctx, t, step("stack export after restore", exportHidesSecrets, "stack", "export"))
-
-	env.SetCLI(tofuCLI)
-
-	env.Step(ctx, t, step("state pull after restore", contains(`"greeting"`), "state", "pull"))
-}
-
 // checkRestoreRefusesLoaded proves a second restore into the loaded
 // destination exits 1 and names the refusal.
-func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, targetDir string) {
+func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, targetDir)...)
+	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
 
 	if res.ExitCode != 1 {
 		t.Fatalf("restore into a loaded destination exits with status %d, want 1:\n%s%s",
@@ -7606,5 +7976,233 @@ func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, 
 
 	if out := res.Stdout + res.Stderr; !strings.Contains(out, "not empty") {
 		t.Fatalf("restore refusal lacks %q:\n%s", "not empty", out)
+	}
+}
+
+// wrongRestoreKeyBytes is the size of the wrong key-encryption key the
+// wrong-key step restores with: a full builtin wrapper key, so the key loads
+// and the restore refuses on the mismatch instead of the key size.
+const wrongRestoreKeyBytes = 32
+
+// runRestoreWrongKey restores the backup id from target with a different
+// key-encryption key and proves it exits 1 naming DUSTPAN_KEY_ENCRYPTION_KEY.
+func runRestoreWrongKey(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
+	t.Helper()
+
+	raw := make([]byte, wrongRestoreKeyBytes)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("generate wrong key: %v", err)
+	}
+
+	key := base64.StdEncoding.EncodeToString(raw)
+	res := env.RunBinaryWithEnv(
+		ctx,
+		t,
+		[]string{"DUSTPAN_KEY_ENCRYPTION_KEY=" + key},
+		restoreBinaryArgs(t, env, target, id)...,
+	)
+
+	if res.ExitCode != 1 {
+		t.Fatalf("restore with a wrong key exits with status %d, want 1:\n%s%s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, "DUSTPAN_KEY_ENCRYPTION_KEY") {
+		t.Fatalf("restore refusal lacks %q:\n%s", "DUSTPAN_KEY_ENCRYPTION_KEY", out)
+	}
+}
+
+// checkRestoreDestinationEmpty proves a refused restore wrote nothing: every
+// data table holds no rows and the blob directory holds no files.
+func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	for _, table := range backup.Tables {
+		if got := exportRowCounts(ctx, t, env, store)[table]; got != 0 {
+			t.Fatalf("table %s holds %d rows after the refused restore, want none", table, got)
+		}
+	}
+
+	if got := countBlobFiles(t, env); got != 0 {
+		t.Fatalf("blob directory holds %d files after the refused restore, want none", got)
+	}
+}
+
+// exportRowCounts returns the row count of each data table in the destination
+// the environment serves, read straight from the store.
+func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) map[string]int64 {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
+		if !ok {
+			t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
+		}
+
+		st, err := sqlite.Open(ctx, path)
+		if err != nil {
+			t.Fatalf("open destination store: %v", err)
+		}
+
+		defer func() {
+			if closeErr := st.Close(); closeErr != nil {
+				t.Errorf("close destination store: %v", closeErr)
+			}
+		}()
+
+		sum, err := st.Export(ctx, io.Discard)
+		if err != nil {
+			t.Fatalf("export destination: %v", err)
+		}
+
+		return sum.RowCounts
+	case e2e.StorePostgres:
+		st, err := postgres.Open(ctx, env.DatabaseURL(t))
+		if err != nil {
+			t.Fatalf("open destination store: %v", err)
+		}
+
+		defer st.Close()
+
+		sum, err := st.Export(ctx, io.Discard)
+		if err != nil {
+			t.Fatalf("export destination: %v", err)
+		}
+
+		return sum.RowCounts
+	default:
+		t.Fatalf("unknown store: %s", store)
+
+		return nil
+	}
+}
+
+// countBlobFiles returns the number of files in the blob directory of the
+// environment, or 0 when the directory is gone.
+func countBlobFiles(t *testing.T, env *e2e.Env) int {
+	t.Helper()
+
+	files := 0
+
+	err := filepath.WalkDir(env.BlobDir(t), func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+
+			return err
+		}
+
+		if !entry.IsDir() {
+			files++
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk blob directory: %v", err)
+	}
+
+	return files
+}
+
+// tamperManifestSchema copies the backup target to a new directory and moves
+// its manifest to a schema version the binary never wrote, so a restore from
+// the copy names the schema versions and exits 1. The backup target stays
+// intact.
+func tamperManifestSchema(t *testing.T, target, id string) string {
+	t.Helper()
+
+	dir, ok := strings.CutPrefix(target, "dir:")
+	if !ok || strings.TrimSpace(dir) == "" {
+		t.Fatalf("backup target = %q, want dir:<path>", target)
+	}
+
+	dst := filepath.Join(t.TempDir(), "tampered-target")
+	copyDir(t, dir, dst)
+
+	manifestPath := filepath.Join(dst, "backups", id, "manifest.json")
+
+	// The test reads the manifest it copied from its own backup target.
+	raw, err := os.ReadFile(manifestPath) //nolint:gosec // Test file copied from the own backup target.
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+
+	var manifest backup.Manifest
+
+	if decodeErr := json.Unmarshal(raw, &manifest); decodeErr != nil {
+		t.Fatalf("decode manifest: %v", decodeErr)
+	}
+
+	manifest.SchemaVersion += 1000
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+
+	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	return "dir:" + dst
+}
+
+// copyDir copies the directory tree src to dst, so a test tampers the copy
+// while the backup target stays intact.
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+
+	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", src, err)
+		}
+
+		out := filepath.Join(dst, rel)
+
+		if entry.IsDir() {
+			return os.MkdirAll(out, 0o700)
+		}
+
+		// The test copies its own backup target, so the walked paths stay
+		// inside it.
+		raw, err := os.ReadFile(path) //nolint:gosec // Test file inside the own backup target.
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", src, err)
+		}
+
+		// The destination holds the copied backup, so it stays owner-only.
+		if err := os.WriteFile(out, raw, 0o600); err != nil { //nolint:gosec // Test file inside the copied target.
+			return fmt.Errorf("copy %s: %w", src, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("copy %s: %v", src, err)
+	}
+}
+
+// runRestoreSchemaMismatch restores the backup id from the tampered copy into
+// the empty destination and proves it exits 1 naming the schema versions.
+func runRestoreSchemaMismatch(ctx context.Context, t *testing.T, env *e2e.Env, tampered, id string) {
+	t.Helper()
+
+	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, tampered, id)...)
+
+	if res.ExitCode != 1 {
+		t.Fatalf("restore into another schema version exits with status %d, want 1:\n%s%s",
+			res.ExitCode, res.Stdout, res.Stderr)
+	}
+
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, "schema version") {
+		t.Fatalf("restore refusal lacks %q:\n%s", "schema version", out)
 	}
 }
