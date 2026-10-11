@@ -49,6 +49,12 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
+	// databaseFlag names the database flag every serve and namespace
+	// command takes.
+	databaseFlag = "--database"
+	// regionFlag names the region flag every serve and namespace command
+	// takes.
+	regionFlag = "--region"
 )
 
 // UseBinaryServer reports whether the suite runs the real server binary.
@@ -261,12 +267,12 @@ type binaryHandle struct {
 func serveArgs(cfg backendConfig, port string) []string {
 	return []string{
 		"serve",
-		"--database", cfg.dbURL,
+		databaseFlag, cfg.dbURL,
 		"--listen", "127.0.0.1:" + port,
 		"--tls-cert", cfg.certFile,
 		"--tls-key", cfg.keyFile,
 		"--blob-dir", cfg.blobDir,
-		"--region", region,
+		regionFlag, region,
 	}
 }
 
