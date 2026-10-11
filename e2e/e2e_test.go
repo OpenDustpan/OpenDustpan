@@ -246,6 +246,25 @@ func outputContains(want string) func(e2e.Result) error {
 	}
 }
 
+// checkReady proves GET /health/ready answers 200 with {"status":"ok"} after
+// the server starts, on every store. It sends no token: the probe is public.
+func checkReady(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/health/ready", "")
+	if err != nil {
+		t.Fatalf("GET /health/ready: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET /health/ready status %d, want %d (body %s)", status, http.StatusOK, body)
+	}
+
+	if !strings.Contains(body, `"status":"ok"`) {
+		t.Fatalf("GET /health/ready body %q, want status ok", body)
+	}
+}
+
 // pulumiScenario exercises login and stack management. A namespace is a
 // Pulumi organization, so every step that names or implies an organization
 // should resolve to the Namespace namespace.
@@ -253,6 +272,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	ctx := t.Context()
+	checkReady(ctx, t, env)
 	org := e2e.Namespace
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, stackName)
 	renamedQualified := fmt.Sprintf("%s/%s/renamed", org, e2e.Project)
@@ -847,6 +867,7 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	ctx := t.Context()
+	checkReady(ctx, t, env)
 
 	for _, s := range []e2e.StepSpec{
 		// Init reads the workspace by name and creates it when missing, so
