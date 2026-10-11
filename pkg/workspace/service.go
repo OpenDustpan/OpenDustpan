@@ -320,7 +320,9 @@ func (s *Service) Upload(
 // outputs declared at creation, never the rendering. The capability rules
 // match Upload, except that a retry of a finalized version with the same
 // capability succeeds whatever the rendering holds: the two PUTs of one
-// upload carry other content by design. Unlike Upload it never finalizes and
+// upload carry other content by design. A rendering over the size limit
+// fails with ErrTooLarge, and an expired capability fails whatever the
+// version status. Unlike Upload it never finalizes and
 // never consumes the capability, so the state upload with the same
 // capability still works afterwards.
 func (s *Service) DiscardJSONRendering(
@@ -338,12 +340,17 @@ func (s *Service) DiscardJSONRendering(
 		return fmt.Errorf("%w: wrong capability for state version %s", ErrUploadDenied, id)
 	}
 
-	if sv.Status == StatusPending && !s.clock().Before(sv.UploadExpiresAt) {
+	if !s.clock().Before(sv.UploadExpiresAt) {
 		return fmt.Errorf("%w: capability for state version %s expired", ErrUploadDenied, id)
 	}
 
-	if _, err := io.Copy(io.Discard, content); err != nil {
+	n, err := io.Copy(io.Discard, io.LimitReader(content, s.maxState+1))
+	if err != nil {
 		return fmt.Errorf("read JSON rendering of %s: %w", id, err)
+	}
+
+	if n > s.maxState {
+		return fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
 	}
 
 	return nil
