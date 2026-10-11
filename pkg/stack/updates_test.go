@@ -1,9 +1,13 @@
 package stack_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -11,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -380,6 +385,41 @@ func (m *memUpdates) CheckpointByVersion(
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
+// CheckpointByUpdate implements stack.CheckpointStore.
+func (m *memUpdates) CheckpointByUpdate(
+	_ context.Context, ref stack.Ref, id stack.UpdateID,
+) (stack.Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cp, ok := m.checkpoints[id]
+	if !ok || cp.Ref != ref {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	return cp, nil
+}
+
+// ReferencedCheckpointKeys implements stack.CheckpointStore.
+func (m *memUpdates) ReferencedCheckpointKeys(
+	_ context.Context, ref stack.Ref,
+) ([]blob.Key, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Key
+
+	for id := range m.checkpoints {
+		if cp := m.checkpoints[id]; cp.Ref == ref && cp.BlobKey != "" {
+			out = append(out, cp.BlobKey)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 func (m *memUpdates) AppendEvents(_ context.Context, batch stack.EventBatch, _ namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -413,6 +453,14 @@ func (m *memUpdates) ListEvents(
 	}
 
 	return out, nil
+}
+
+// addStack registers a stack with a stable ID under ref. Callers hold no lock.
+func (m *memUpdates) addStack(ref stack.Ref, id stack.ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.stacks[ref] = stack.Stack{CreatedAt: time.Time{}, UpdatedAt: time.Time{}, Tags: nil, Ref: ref, ID: id, Version: 0}
 }
 
 // runningUnder reports whether update id is running under lease; callers hold mu.
@@ -468,17 +516,120 @@ func (c *clock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// memBlob is an in-memory blob.Store. Writes are write-once, as the port
+// requires: Put on an existing key fails with ErrExists.
+type memBlob struct {
+	objects map[blob.Key]memObject
+	clock   *clock
+	mu      sync.Mutex
+}
+
+type memObject struct {
+	data       []byte
+	modifiedAt time.Time
+}
+
+func newMemBlob(clock *clock) *memBlob {
+	return &memBlob{objects: map[blob.Key]memObject{}, clock: clock, mu: sync.Mutex{}}
+}
+
+func (m *memBlob) Put(_ context.Context, key blob.Key, r io.Reader) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read blob: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.objects[key]; ok {
+		return blob.ErrExists
+	}
+
+	m.objects[key] = memObject{data: data, modifiedAt: m.clock.Now()}
+
+	return nil
+}
+
+func (m *memBlob) Get(_ context.Context, key blob.Key) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	obj, ok := m.objects[key]
+	if !ok {
+		return nil, blob.ErrNotFound
+	}
+
+	return io.NopCloser(bytes.NewReader(obj.data)), nil
+}
+
+func (m *memBlob) Delete(_ context.Context, key blob.Key) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.objects, key)
+
+	return nil
+}
+
+func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Object
+
+	for key, obj := range m.objects {
+		if strings.HasPrefix(key.String(), prefix) {
+			out = append(out, blob.Object{ModifiedAt: obj.modifiedAt, Key: key})
+		}
+	}
+
+	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return out, nil
+}
+
+func (m *memBlob) Ping(context.Context) error {
+	return nil
+}
+
+// ageAll moves every stored modification time back by d, so tests prove the
+// sweep grace period without advancing the lease clock past the lease.
+func (m *memBlob) ageAll(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, obj := range m.objects {
+		obj.modifiedAt = obj.modifiedAt.Add(-d)
+		m.objects[key] = obj
+	}
+}
+
 type updatesFixture struct {
 	svc   *stack.Updates
 	store *memUpdates
+	blobs blob.Store
 	clock *clock
 	ref   stack.Ref
+}
+
+// newClock returns a clock at the fixture start time.
+func newClock() *clock {
+	return &clock{now: time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
 }
 
 func newUpdates(t *testing.T) updatesFixture {
 	t.Helper()
 
-	clk := &clock{now: time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
+	return newUpdatesWith(t, newClock(), nil, nil)
+}
+
+// newUpdatesWith builds the fixture around blobs and logger: a nil blob store
+// means a fresh in-memory store on clk, and a nil logger discards sweep
+// failures.
+func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
+	t.Helper()
+
 	ns := namespace.Namespace{CreatedAt: clk.now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
 
 	namespaces, err := namespace.NewService(
@@ -490,12 +641,19 @@ func newUpdates(t *testing.T) updatesFixture {
 
 	store := newMemUpdates()
 
+	if blobs == nil {
+		blobs = newMemBlob(clk)
+	}
+
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            store,
 		Checkpoints:        store,
 		Events:             store,
 		Namespaces:         namespaces,
+		Stacks:             store,
+		Blobs:              blobs,
 		Now:                clk.Now,
+		Logger:             logger,
 		MaxCheckpointBytes: 1024,
 	})
 	if err != nil {
@@ -507,7 +665,9 @@ func newUpdates(t *testing.T) updatesFixture {
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return updatesFixture{svc: svc, store: store, clock: clk, ref: ref}
+	store.addStack(ref, "stk-test")
+
+	return updatesFixture{svc: svc, store: store, blobs: blobs, clock: clk, ref: ref}
 }
 
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
@@ -1266,4 +1426,447 @@ func TestParseCompletion(t *testing.T) {
 			t.Errorf("ParseCompletion(%q): %v, want ErrInvalidUpdate", s, err)
 		}
 	}
+}
+
+// TestCrashBetweenBlobWriteAndCommitLeavesNoRow proves a crash between the
+// blob write and the SQL commit leaves no row that names a missing blob, and
+// that the retry with the same content then succeeds instead of reporting a
+// conflict.
+func TestCrashBetweenBlobWriteAndCommitLeavesNoRow(t *testing.T) {
+	t.Parallel()
+
+	for _, seq := range []int64{1, 0} {
+		t.Run(fmt.Sprintf("sequence %d", seq), func(t *testing.T) {
+			t.Parallel()
+
+			crashLeavesNoRow(t, seq)
+		})
+	}
+}
+
+// crashLeavesNoRow abandons one save of a started update after its blob
+// write, proves no row names the missing blob, and proves the retry with the
+// same content succeeds.
+func crashLeavesNoRow(t *testing.T, seq int64) {
+	t.Helper()
+
+	f := newUpdates(t)
+	s := f.started(t, stack.KindUpdate)
+
+	abandoned, cancel := context.WithCancel(t.Context())
+
+	f.store.mu.Lock()
+	f.store.cancelOnPut = cancel
+	f.store.mu.Unlock()
+
+	in := checkpoint(seq, `{"a":1}`)
+
+	if err := f.svc.SaveCheckpoint(abandoned, f.ref, s.Update.ID, s.Token, in); !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned save: %v, want context.Canceled", err)
+	}
+
+	if _, err := f.store.CheckpointByUpdate(t.Context(), f.ref, s.Update.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after the crash: %v, want ErrNoState", err)
+	}
+
+	f.store.mu.Lock()
+	f.store.cancelOnPut = nil
+	f.store.mu.Unlock()
+
+	if err := f.svc.SaveCheckpoint(t.Context(), f.ref, s.Update.ID, s.Token, in); err != nil {
+		t.Fatalf("retry after the crash: %v", err)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil || string(cp.Deployment) != `{"a":1}` {
+		t.Fatalf("export after the retry: %q, %v; want the checkpoint", cp.Deployment, err)
+	}
+}
+
+// TestSweepDeletesUnreferencedBlobs proves the save-time sweep deletes the
+// orphan blobs of the update older than the grace period while it keeps the
+// blob the checkpoint names.
+func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	s := f.started(t, stack.KindUpdate)
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	orphan, orphanErr := blob.ParseKey("pulumi/stk-test/" + s.Update.ID.String() + "/99")
+	if orphanErr != nil {
+		t.Fatalf("parse orphan key: %v", orphanErr)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	if putErr := mem.Put(ctx, orphan, strings.NewReader("orphan")); putErr != nil {
+		t.Fatalf("write orphan blob: %v", putErr)
+	}
+
+	mem.ageAll(2 * time.Hour)
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	if _, err := mem.Get(ctx, orphan); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("orphan blob: %v, want it deleted", err)
+	}
+
+	cp, err := f.svc.Export(ctx, f.ref)
+	if err != nil || string(cp.Deployment) != `{"a":2}` {
+		t.Fatalf("export after the sweep: %q, %v; want the second checkpoint", cp.Deployment, err)
+	}
+}
+
+// TestStartSweepsOldOrphanBlobs proves the start-time sweep deletes an old
+// orphan blob of an idle update when the next update starts: an orphan of an
+// update that never saves again is collected by the next update on the stack.
+func TestStartSweepsOldOrphanBlobs(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	orphan, orphanErr := blob.ParseKey("pulumi/stk-test/" + first.Update.ID.String() + "/99")
+	if orphanErr != nil {
+		t.Fatalf("parse orphan key: %v", orphanErr)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	if putErr := mem.Put(ctx, orphan, strings.NewReader("orphan")); putErr != nil {
+		t.Fatalf("write orphan blob: %v", putErr)
+	}
+
+	if _, err := f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	mem.ageAll(2 * time.Hour)
+
+	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create next update: %v", err)
+	}
+
+	if _, err := f.svc.Start(ctx, f.ref, next.ID); err != nil {
+		t.Fatalf("start next update: %v", err)
+	}
+
+	if _, err := mem.Get(ctx, orphan); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("orphan blob: %v, want it deleted", err)
+	}
+}
+
+// TestStartKeepsYoungBlobs proves the start-time sweep keeps a blob younger
+// than the grace period, so a save that still commits is never collected.
+func TestStartKeepsYoungBlobs(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	orphan, orphanErr := blob.ParseKey("pulumi/stk-test/" + first.Update.ID.String() + "/99")
+	if orphanErr != nil {
+		t.Fatalf("parse orphan key: %v", orphanErr)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	if putErr := mem.Put(ctx, orphan, strings.NewReader("orphan")); putErr != nil {
+		t.Fatalf("write orphan blob: %v", putErr)
+	}
+
+	if _, err := f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create next update: %v", err)
+	}
+
+	if _, err := f.svc.Start(ctx, f.ref, next.ID); err != nil {
+		t.Fatalf("start next update: %v", err)
+	}
+
+	if _, err := mem.Get(ctx, orphan); err != nil {
+		t.Fatalf("young orphan blob: %v, want it kept", err)
+	}
+}
+
+// TestStartKeepsReferencedBlobs proves the start-time sweep keeps a blob that
+// a checkpoint row names, even when it is older than the grace period.
+func TestStartKeepsReferencedBlobs(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, `{"a":1}`)); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	if _, err := f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	refs, err := f.store.ReferencedCheckpointKeys(ctx, f.ref)
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("referenced keys: %v, %v; want one", refs, err)
+	}
+
+	mem, ok := f.blobs.(*memBlob)
+	if !ok {
+		t.Fatalf("fixture blobs = %T, want *memBlob", f.blobs)
+	}
+
+	mem.ageAll(90 * time.Minute)
+
+	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create next update: %v", err)
+	}
+
+	if _, startErr := f.svc.Start(ctx, f.ref, next.ID); startErr != nil {
+		t.Fatalf("start next update: %v", startErr)
+	}
+
+	if _, getErr := mem.Get(ctx, refs[0]); getErr != nil {
+		t.Fatalf("referenced blob: %v, want it kept", getErr)
+	}
+
+	cp, err := f.svc.Export(ctx, f.ref)
+	if err != nil || string(cp.Deployment) != `{"a":1}` {
+		t.Fatalf("export after the sweep: %q, %v; want the checkpoint", cp.Deployment, err)
+	}
+}
+
+// TestStartSucceedsWhenSweepDeleteFails proves a failed blob delete does not
+// fail the update start: the sweep is best effort and the blob stays for the
+// next sweep.
+func TestStartSucceedsWhenSweepDeleteFails(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	mem := newMemBlob(clk)
+	failing := &failBlob{memBlob: mem, listErr: nil, deleteErr: errDeleteBoom}
+	f := newUpdatesWith(t, clk, failing, nil)
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	orphan, orphanErr := blob.ParseKey("pulumi/stk-test/" + first.Update.ID.String() + "/99")
+	if orphanErr != nil {
+		t.Fatalf("parse orphan key: %v", orphanErr)
+	}
+
+	if putErr := mem.Put(ctx, orphan, strings.NewReader("orphan")); putErr != nil {
+		t.Fatalf("write orphan blob: %v", putErr)
+	}
+
+	if _, err := f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	mem.ageAll(2 * time.Hour)
+
+	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
+	if err != nil {
+		t.Fatalf("create next update: %v", err)
+	}
+
+	if _, err := f.svc.Start(ctx, f.ref, next.ID); err != nil {
+		t.Fatalf("start next update with a failing sweep delete: %v", err)
+	}
+
+	if _, err := mem.Get(ctx, orphan); err != nil {
+		t.Fatalf("orphan blob after a failed delete: %v, want it kept for the next sweep", err)
+	}
+}
+
+// TestSweepListsOneUpdatePrefix proves the save-time sweep lists one update
+// prefix, so a stack with many updates never loads every blob key.
+func TestSweepListsOneUpdatePrefix(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	mem := newMemBlob(clk)
+	rec := &recordBlob{memBlob: mem, listed: nil}
+	f := newUpdatesWith(t, clk, rec, nil)
+	ctx := t.Context()
+	s := f.started(t, stack.KindUpdate)
+
+	// The start-time sweep lists the stack prefix; the save-time sweep below
+	// must list one update prefix only.
+	rec.listed = nil
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	want := "pulumi/stk-test/" + s.Update.ID.String() + "/"
+
+	if len(rec.listed) == 0 {
+		t.Fatal("sweep listed no prefix")
+	}
+
+	for _, prefix := range rec.listed {
+		if prefix != want {
+			t.Fatalf("sweep listed %q, want only %q", prefix, want)
+		}
+	}
+}
+
+// TestCheckpointLogsHoldNoBlobKey proves no log line and no returned error
+// names a checkpoint blob key: sweep and delete failures log the stack
+// without the key, and a missing blob fails without it too.
+func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	clk := newClock()
+	mem := newMemBlob(clk)
+	failing := &failBlob{memBlob: mem, listErr: errListBoom, deleteErr: errDeleteBoom}
+	f := newUpdatesWith(t, clk, failing, logger)
+	ctx := t.Context()
+	s := f.started(t, stack.KindUpdate)
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(1, `{"a":1}`)); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(2, `{"a":2}`)); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	missing, err := blob.ParseKey("pulumi/stk-test/" + s.Update.ID.String() + "/7")
+	if err != nil {
+		t.Fatalf("parse missing key: %v", err)
+	}
+
+	stored := stack.Checkpoint{
+		SavedAt:       clk.Now(),
+		Features:      nil,
+		Deployment:    nil,
+		Update:        s.Update.ID,
+		Ref:           f.ref,
+		Lease:         s.Update.Lease.Digest,
+		SchemaVersion: 3,
+		Sequence:      5,
+		Digest:        [sha256.Size]byte{},
+		Invalid:       false,
+		BlobKey:       missing,
+		BlobSize:      0,
+		BlobMD5:       [16]byte{},
+	}
+
+	if err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
+		t.Fatalf("store checkpoint with a missing blob: %v", err)
+	}
+
+	exportErr := checkExportHoldsNoKey(t, f)
+
+	if out := buf.String(); !strings.Contains(out, "sweep checkpoint blobs") {
+		t.Fatalf("log holds no sweep failure: %q", out)
+	} else if strings.Contains(out, "pulumi/") {
+		t.Fatalf("log holds a blob key: %q", out)
+	}
+
+	if exportErr != nil && strings.Contains(exportErr.Error(), "pulumi/") {
+		t.Fatalf("export error holds a blob key: %v", exportErr)
+	}
+}
+
+// checkExportHoldsNoKey exports the stack whose checkpoint names a missing
+// blob and returns the error the export fails with.
+func checkExportHoldsNoKey(t *testing.T, f updatesFixture) error {
+	t.Helper()
+
+	_, err := f.svc.Export(t.Context(), f.ref)
+	if err == nil {
+		t.Fatal("export of a missing blob succeeded, want an error")
+	}
+
+	return err
+}
+
+// errListBoom and errDeleteBoom fail blob listings and deletes in the log
+// redaction test.
+var (
+	errListBoom   = errors.New("list boom")
+	errDeleteBoom = errors.New("delete boom")
+)
+
+// recordBlob records the prefixes a sweep lists.
+type recordBlob struct {
+	*memBlob
+
+	listed []string
+}
+
+// List implements blob.Store, recording prefix.
+func (m *recordBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	m.listed = append(m.listed, prefix)
+
+	return m.memBlob.List(ctx, prefix)
+}
+
+// failBlob fails listings and deletes, to prove sweep failures stay out of
+// saves and hold no blob key in the logs.
+type failBlob struct {
+	*memBlob
+
+	listErr   error
+	deleteErr error
+}
+
+// List implements blob.Store.
+func (m *failBlob) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+
+	return m.memBlob.List(ctx, prefix)
+}
+
+// Delete implements blob.Store.
+func (m *failBlob) Delete(ctx context.Context, key blob.Key) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+
+	return m.memBlob.Delete(ctx, key)
 }

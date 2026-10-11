@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -68,6 +69,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		name string
 	}{
 		{name: "round trip over every table keeps every row", test: testBackupRoundTrip},
+		{name: "export names checkpoint blobs", test: testBackupCheckpointBlob},
 		{name: "table list covers every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "export does not tear a concurrent stack write", test: testBackupExportDoesNotTear},
 		{name: "import refuses a destination that is not empty", test: testBackupImportRefusesNonEmpty},
@@ -587,6 +589,56 @@ func testBackupRoundTrip(t *testing.T, newStore BackupFactory) {
 	assertSummary(t, got, sum)
 	assertExportGroundTruth(t, dst, newStore, &seed, got)
 	compareBackupStores(t, dst, src, &seed)
+}
+
+// testBackupCheckpointBlob covers a checkpoint kept in blobs: the export
+// summary names its blob with the stored size and MD5, and the import keeps
+// the row with its key.
+func testBackupCheckpointBlob(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	st := mustGetStack(t, src, f.ref)
+
+	key, err := blob.ParseKey("pulumi/" + st.ID.String() + "/" + u.ID.String() + "/0")
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
+
+	if putErr := src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+		t.Fatalf("put checkpoint: %v", putErr)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	sum, data := exportBackup(t, src)
+
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize}}
+	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
+	}
+
+	dst := newStore(t)
+	importBackup(t, dst, data, sum)
+
+	got, err := dst.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("checkpoint of update %s after import: %v", u.ID, err)
+	}
+
+	if len(got.Deployment) != 0 {
+		t.Fatalf("checkpoint deployment after import = %q, want empty: the content lives in blobs", got.Deployment)
+	}
+
+	if got.BlobKey != key || got.BlobSize != want.BlobSize || got.BlobMD5 != want.BlobMD5 ||
+		got.Sequence != want.Sequence || got.Digest != want.Digest {
+		t.Fatalf("checkpoint after import = %+v, want key %q with the stored size and digest", got, key)
+	}
 }
 
 // assertSummary compares two summaries field by field.

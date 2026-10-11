@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"crypto/md5" //nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 )
 
 // Sentinel errors of the update cycle, returned by Updates and by the update,
@@ -37,6 +39,14 @@ var (
 	ErrCheckpointConflict = errors.New("checkpoint differs from the one saved with the same sequence number")
 	// ErrNoState reports a stack that has never had a checkpoint.
 	ErrNoState = errors.New("stack has no state")
+	// ErrCheckpointUnavailable reports that the checkpoint content in the blob
+	// store cannot be read or written. The error carries no blob key: keys
+	// never appear in responses or logs.
+	ErrCheckpointUnavailable = errors.New("checkpoint content is unavailable")
+	// ErrCheckpointMismatch reports stored checkpoint content that does not
+	// match its record: a blob with other content, or a key the record cannot
+	// parse. The error carries no blob key.
+	ErrCheckpointMismatch = errors.New("checkpoint content differs from its record")
 	// ErrTooLarge reports a checkpoint or event batch over its size limit.
 	ErrTooLarge = errors.New("payload too large")
 )
@@ -315,6 +325,12 @@ func (u Update) end(now time.Time, status UpdateStatus) Update {
 // Without the delta capability the CLI sends whole checkpoints with no
 // sequence number, and the last write wins. Sequence numbers arrive only with
 // verbatim and delta checkpoints, which this server does not advertise yet.
+// Every save still writes its own blob key, so a repeated save without a
+// sequence number mints the next key of its update.
+//
+// New saves keep the content in the blob store under BlobKey and keep only
+// metadata in SQL. Rows from before blobs keep the content in the SQL column
+// and hold no key: reads accept either shape.
 type Checkpoint struct {
 	SavedAt    time.Time
 	Features   []string
@@ -333,6 +349,16 @@ type Checkpoint struct {
 	// Invalid is the client's mark that it could not verify this snapshot.
 	// It is stored as sent.
 	Invalid bool
+	// BlobKey names the gzip content in the blob store:
+	// pulumi/<stack ID>/<update ID>/<sequence>. Empty for rows from before
+	// blobs, which keep the content in the SQL column instead.
+	BlobKey blob.Key
+	// BlobSize is the size of the stored gzip bytes. Zero for rows without
+	// a key.
+	BlobSize int64
+	// BlobMD5 is the MD5 of the stored gzip bytes, for backups. Zero for
+	// rows without a key.
+	BlobMD5 [md5.Size]byte
 }
 
 // CheckpointInput is a checkpoint as a client submits it.

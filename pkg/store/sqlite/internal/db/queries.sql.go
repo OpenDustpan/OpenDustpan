@@ -14,7 +14,7 @@ const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -553,7 +553,8 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, deployment, saved_at_ms, resource_count
+       digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+       blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = ? AND update_id = ?
 `
@@ -578,13 +579,18 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 		&i.Deployment,
 		&i.SavedAtMs,
 		&i.ResourceCount,
+		&i.BlobKey,
+		&i.Size,
+		&i.BlobSize,
+		&i.BlobMd5,
 	)
 	return i, err
 }
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = ? AND u.version = ?
@@ -610,6 +616,10 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.Deployment,
 		&i.SavedAtMs,
 		&i.ResourceCount,
+		&i.BlobKey,
+		&i.Size,
+		&i.BlobSize,
+		&i.BlobMd5,
 	)
 	return i, err
 }
@@ -680,7 +690,8 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = ?
@@ -703,6 +714,10 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 		&i.Deployment,
 		&i.SavedAtMs,
 		&i.ResourceCount,
+		&i.BlobKey,
+		&i.Size,
+		&i.BlobSize,
+		&i.BlobMd5,
 	)
 	return i, err
 }
@@ -896,7 +911,7 @@ const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ? AND u.id = ?
@@ -925,9 +940,10 @@ type GetUpdateRow struct {
 	CheckpointBytes  int64
 }
 
-// The checkpoint size is the byte length of the saved deployment, read
-// without loading the document: the checkpoints table holds one row for
-// each update, so the join finds at most one row.
+// The checkpoint size is the stored uncompressed size, or the byte length of
+// the saved deployment for rows from before blobs, read without loading the
+// document: the checkpoints table holds one row for each update, so the join
+// finds at most one row.
 func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getUpdate, arg.StackID, arg.ID)
 	var i GetUpdateRow
@@ -1134,6 +1150,39 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
+SELECT blob_key
+FROM checkpoints
+WHERE stack_id = ? AND blob_key IS NOT NULL AND blob_key <> ''
+ORDER BY blob_key
+`
+
+// Every blob key the checkpoints of one stack name, without the empty ones,
+// ordered. A sweeper compares this set against the stored objects to find
+// blobs no checkpoint references.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]sql.NullString, error) {
+	rows, err := q.db.QueryContext(ctx, listCheckpointBlobKeys, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []sql.NullString
+	for rows.Next() {
+		var blob_key sql.NullString
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1577,7 +1626,7 @@ const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -1695,8 +1744,9 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms, resource_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+    blob_key, size, blob_size, blob_md5
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -1706,7 +1756,11 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     features_json = excluded.features_json,
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
-    resource_count = excluded.resource_count
+    resource_count = excluded.resource_count,
+    blob_key = excluded.blob_key,
+    size = excluded.size,
+    blob_size = excluded.blob_size,
+    blob_md5 = excluded.blob_md5
 `
 
 type PutCheckpointParams struct {
@@ -1721,6 +1775,10 @@ type PutCheckpointParams struct {
 	Deployment    []byte
 	SavedAtMs     int64
 	ResourceCount sql.NullInt64
+	BlobKey       sql.NullString
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
 }
 
 func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) error {
@@ -1736,6 +1794,10 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.Deployment,
 		arg.SavedAtMs,
 		arg.ResourceCount,
+		arg.BlobKey,
+		arg.Size,
+		arg.BlobSize,
+		arg.BlobMd5,
 	)
 	return err
 }

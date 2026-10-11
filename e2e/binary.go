@@ -733,6 +733,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		server:        st,
 		client:        client,
 		workspaces:    newWorkspaceService(tb, st, blobs, namespaces),
+		blobs:         blobs,
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
@@ -749,6 +750,16 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       dbProxy,
 	}
 
+	prepareBinaryEnvDirs(tb, env, proxy)
+
+	return env
+}
+
+// prepareBinaryEnvDirs creates the home and project directories of a binary
+// environment and writes its CLI project files. It keeps newBinaryEnv short.
+func prepareBinaryEnvDirs(tb testing.TB, env *Env, proxy *httptest.Server) {
+	tb.Helper()
+
 	for _, d := range []string{env.home, env.project} {
 		if err := os.MkdirAll(d, dirMode); err != nil {
 			tb.Fatalf("create %s: %v", d, err)
@@ -757,8 +768,6 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 
 	env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 	env.writeTofuFiles(tb, proxy)
-
-	return env
 }
 
 // createFirstNamespaceViaBinary creates the first namespace on an empty

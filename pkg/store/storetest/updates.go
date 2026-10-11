@@ -2,16 +2,20 @@ package storetest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/md5" //nolint:gosec // Test digests of stored bytes, for integrity, not security.
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -60,6 +64,10 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "active update is the running mutating one", test: testActiveUpdate},
 		{name: "history is started mutating updates, newest first", test: testListUpdates},
 		{name: "checkpoint round trip keeps bytes", test: testCheckpointRoundTrip},
+		{name: "checkpoint blob metadata round trip", test: testCheckpointBlobMetadata},
+		{name: "checkpoint by update returns only that update", test: testCheckpointByUpdate},
+		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
+		{name: "referenced checkpoint keys list only blob rows", test: testReferencedCheckpointKeys},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
@@ -922,6 +930,56 @@ func testHistoryCreateFenced(t *testing.T, f historyFixture) {
 	}
 }
 
+// newBlobCheckpoint returns a checkpoint of u kept in blobs under key: the
+// store keeps the key with the size, the digest and the sequence, and no
+// content. The deployment travels for the resource count only.
+func newBlobCheckpoint(u stack.Update, key blob.Key, seq int64, deployment string) stack.Checkpoint {
+	cp := newCheckpoint(u, seq, deployment)
+	cp.BlobKey = key
+	cp.BlobSize, cp.BlobMD5 = gzipAttrs(deployment)
+
+	return cp
+}
+
+// gzipAttrs returns the size and MD5 of deployment gzipped, as the blob store
+// holds it.
+func gzipAttrs(deployment string) (int64, [md5.Size]byte) {
+	var buf bytes.Buffer
+
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte(deployment)); err != nil {
+		panic(err)
+	}
+
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+
+	sum := md5.Sum(buf.Bytes()) //nolint:gosec // Test digests of stored bytes, for integrity, not security.
+
+	return int64(buf.Len()), sum
+}
+
+// blobKey returns the blob key of a save of u with seq, for the stack of the
+// fixture.
+func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
+	t.Helper()
+
+	st, err := f.s.GetStack(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("get stack %s: %v", f.ref, err)
+	}
+
+	key, err := blob.ParseKey(
+		"pulumi/" + st.ID.String() + "/" + u.ID.String() + "/" + strconv.FormatInt(seq, 10),
+	)
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	return key
+}
+
 // newCheckpoint returns a checkpoint of u written under its current lease.
 func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoint {
 	return stack.Checkpoint{
@@ -935,6 +993,9 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		Sequence:      seq,
 		Digest:        sha256.Sum256([]byte(deployment)),
 		Invalid:       false,
+		BlobKey:       "",
+		BlobSize:      0,
+		BlobMD5:       [md5.Size]byte{},
 	}
 }
 
@@ -1154,6 +1215,158 @@ func testCheckpointByVersion(t *testing.T, f fixture) {
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
 	if _, err := f.s.CheckpointByVersion(t.Context(), ghost, 1); !errors.Is(err, stack.ErrNoState) {
 		t.Errorf("checkpoint of a missing stack: err = %v, want ErrNoState", err)
+	}
+}
+
+// testCheckpointBlobMetadata checks that a row with a blob key keeps the
+// key with the size, the digest and the sequence, and no content: the content
+// lives in blobs. Every reader returns the metadata with an empty deployment.
+func testCheckpointBlobMetadata(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	want := newBlobCheckpoint(u, f.blobKey(t, u, 3), 3, "{\"b\": 1,  \"a\":[ ], \"b\":2}\n")
+	want.Invalid = true
+
+	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	// The row keeps the metadata only; the content lives in blobs.
+	stored := want
+	stored.Deployment = nil
+
+	assertCheckpoint(t, f, f.ref, stored)
+
+	got, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("checkpoint of update %s: %v", u.ID, err)
+	}
+
+	assertSameCheckpoint(t, got, stored, "checkpoint of update")
+
+	if len(got.Deployment) != 0 {
+		t.Fatalf("checkpoint deployment = %q, want empty: the content lives in blobs", got.Deployment)
+	}
+
+	assertCheckpointVersion(t, f, f.ref, u.Version, stored)
+}
+
+// testCheckpointByUpdate checks that the update checkpoint read returns only
+// that update: no fallback to another update, and ErrNoState for an update
+// without a checkpoint, for another stack and for a missing stack.
+func testCheckpointByUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	first := f.run(t, f.ref, "u1", mutating())
+	want := newCheckpoint(first, 0, `{"v":1}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u1: %v", err)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+
+	second := f.run(t, f.ref, "u2", mutating())
+
+	got, err := f.s.CheckpointByUpdate(t.Context(), f.ref, first.ID)
+	if err != nil {
+		t.Fatalf("checkpoint of update %s: %v", first.ID, err)
+	}
+
+	assertSameCheckpoint(t, got, want, "checkpoint of update")
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, second.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("checkpoint of an update with no checkpoint: err = %v, want ErrNoState", err)
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.other(t), first.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("checkpoint through another stack: err = %v, want ErrNoState", err)
+	}
+
+	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
+	if _, err := f.s.CheckpointByUpdate(t.Context(), ghost, first.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("checkpoint of a missing stack: err = %v, want ErrNoState", err)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+}
+
+// testHistoryBlobSize checks that history reports the stored size for a blob
+// row: the content column is empty, so the size cannot come from it.
+func testHistoryBlobSize(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	body := `{"v":1,"more":"a longer deployment"}`
+	want := newBlobCheckpoint(u, f.blobKey(t, u, 0), 0, body)
+
+	if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	got, err := f.s.GetUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get update %s: %v", u.ID, err)
+	}
+
+	if got.CheckpointBytes != int64(len(body)) {
+		t.Fatalf("checkpoint size of %s = %d, want %d", u.ID, got.CheckpointBytes, len(body))
+	}
+
+	history, err := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(history) != 1 || history[0].CheckpointBytes != int64(len(body)) {
+		t.Fatalf("history checkpoint size = %+v, want one update with %d", history, len(body))
+	}
+}
+
+// testReferencedCheckpointKeys checks that the referenced keys hold every
+// blob key the stack's checkpoints name, ordered, without the rows that keep
+// content. A stack without checkpoints, or one that does not exist, yields an
+// empty list.
+func testReferencedCheckpointKeys(t *testing.T, f fixture) {
+	t.Helper()
+
+	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.ref); err != nil || len(keys) != 0 {
+		t.Fatalf("referenced keys of a new stack = %v, %v; want empty", keys, err)
+	}
+
+	first := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(first, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint of u1: %v", err)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+
+	second := f.run(t, f.ref, "u2", mutating())
+	secondKey := f.blobKey(t, second, 0)
+
+	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(second, secondKey, 0, `{"v":2}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint of u2: %v", err)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+
+	keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("referenced keys: %v", err)
+	}
+
+	if !slices.Equal(keys, []blob.Key{secondKey}) {
+		t.Fatalf("referenced keys = %v, want [%s]", keys, secondKey)
+	}
+
+	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
+		t.Fatalf("referenced keys of another stack = %v, %v; want empty", keys, err)
+	}
+
+	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
+	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
+		t.Fatalf("referenced keys of a missing stack = %v, %v; want empty", keys, err)
 	}
 }
 
@@ -1922,14 +2135,25 @@ func assertCheckpointVersion(t *testing.T, f fixture, ref stack.Ref, version int
 func assertSameCheckpoint(t *testing.T, got, want stack.Checkpoint, what string) {
 	t.Helper()
 
-	same := got.Ref == want.Ref && got.Update == want.Update && got.Lease == want.Lease &&
-		got.SchemaVersion == want.SchemaVersion && got.Sequence == want.Sequence &&
-		got.Digest == want.Digest && got.Invalid == want.Invalid && sameTime(got.SavedAt, want.SavedAt) &&
-		bytes.Equal(got.Deployment, want.Deployment) && slices.Equal(got.Features, want.Features)
-	if !same {
+	if !sameCheckpointRow(got, want) || !sameCheckpointBlob(got, want) ||
+		!bytes.Equal(got.Deployment, want.Deployment) || !slices.Equal(got.Features, want.Features) {
 		t.Fatalf("%s = %+v (deployment %q), want %+v (deployment %q)",
 			what, got, got.Deployment, want, want.Deployment)
 	}
+}
+
+// sameCheckpointRow compares the row fields of two checkpoints: the update,
+// the lease, the version parts and the times.
+func sameCheckpointRow(got, want stack.Checkpoint) bool {
+	return got.Ref == want.Ref && got.Update == want.Update && got.Lease == want.Lease &&
+		got.SchemaVersion == want.SchemaVersion && got.Sequence == want.Sequence &&
+		got.Digest == want.Digest && got.Invalid == want.Invalid && sameTime(got.SavedAt, want.SavedAt)
+}
+
+// sameCheckpointBlob compares the blob metadata of two checkpoints: the key
+// with the size and MD5 of the stored bytes.
+func sameCheckpointBlob(got, want stack.Checkpoint) bool {
+	return got.BlobKey == want.BlobKey && got.BlobSize == want.BlobSize && got.BlobMD5 == want.BlobMD5
 }
 
 // assertEvents checks that update u has no events.

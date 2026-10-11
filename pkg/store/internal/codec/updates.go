@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"crypto/md5" //nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -41,7 +43,12 @@ type UpdateRow struct {
 // current reference. ResourceCount holds the number of managed resources
 // beyond the automatic stack resource, so the final delete checks it without
 // loading the deployment. Rows written before the count hold NULL, which
-// means not counted; new checkpoints always store the count.
+// means not counted; new checkpoints always store the count. BlobKey names
+// the gzip content in the blob store; rows with a key keep no content.
+// Size is the uncompressed size for history; rows from before blobs hold
+// NULL, which reads as the length of the stored content. BlobSize with
+// BlobMD5 describe the stored bytes for backups; rows without a key hold no
+// stored bytes.
 type CheckpointRow struct {
 	StackID       string
 	UpdateID      string
@@ -54,6 +61,10 @@ type CheckpointRow struct {
 	SavedAtMs     int64
 	Invalid       bool
 	ResourceCount int64
+	BlobKey       string
+	Size          int64
+	BlobSize      int64
+	BlobMD5       []byte
 }
 
 // OptionalMillis encodes t as Unix milliseconds, and the zero time as 0.
@@ -161,9 +172,16 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 	}
 
 	deployment := cp.Deployment
-	if deployment == nil {
-		// NOT NULL columns: a nil slice would bind as NULL.
+	if deployment == nil || cp.BlobKey != "" {
+		// NOT NULL columns: a nil slice would bind as NULL. Rows with a blob
+		// key keep the metadata only; the content lives in blobs.
 		deployment = []byte{}
+	}
+
+	var blobMD5 []byte
+
+	if cp.BlobMD5 != ([md5.Size]byte{}) {
+		blobMD5 = cp.BlobMD5[:]
 	}
 
 	return CheckpointRow{
@@ -178,6 +196,10 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 		SavedAtMs:     Millis(cp.SavedAt),
 		Invalid:       cp.Invalid,
 		ResourceCount: stack.CountManagedResources(cp.Deployment),
+		BlobKey:       cp.BlobKey.String(),
+		Size:          int64(len(cp.Deployment)),
+		BlobSize:      cp.BlobSize,
+		BlobMD5:       blobMD5,
 	}, nil
 }
 
@@ -203,6 +225,16 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 		)
 	}
 
+	key, err := parseBlobKey(row)
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
+	sum, err := parseBlobMD5(row)
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
 	return stack.Checkpoint{
 		SavedAt:       FromMillis(row.SavedAtMs),
 		Features:      features,
@@ -214,7 +246,44 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 		Sequence:      row.Sequence,
 		Digest:        [sha256.Size]byte(row.Digest),
 		Invalid:       row.Invalid,
+		BlobKey:       key,
+		BlobSize:      row.BlobSize,
+		BlobMD5:       sum,
 	}, nil
+}
+
+// parseBlobKey decodes the blob key of a checkpoint row: empty for rows that
+// keep content.
+func parseBlobKey(row CheckpointRow) (blob.Key, error) {
+	if row.BlobKey == "" {
+		return "", nil
+	}
+
+	key, err := blob.ParseKey(row.BlobKey)
+	if err != nil {
+		return "", fmt.Errorf("%w: checkpoint key of update %s: %w", ErrCorruptRow, row.UpdateID, err)
+	}
+
+	return key, nil
+}
+
+// parseBlobMD5 decodes the MD5 of the stored bytes of a checkpoint row: zero
+// for rows without a key.
+func parseBlobMD5(row CheckpointRow) ([md5.Size]byte, error) {
+	var sum [md5.Size]byte
+
+	switch len(row.BlobMD5) {
+	case 0:
+		return sum, nil
+	case md5.Size:
+		copy(sum[:], row.BlobMD5)
+
+		return sum, nil
+	default:
+		return sum, fmt.Errorf(
+			"%w: checkpoint MD5 of update %s has %d bytes", ErrCorruptRow, row.UpdateID, len(row.BlobMD5),
+		)
+	}
 }
 
 // EncodeDigest encodes a lease digest; the zero digest encodes as empty.

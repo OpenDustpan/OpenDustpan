@@ -95,7 +95,7 @@ INSERT INTO updates (
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1 AND u.id = $2;
@@ -131,7 +131,7 @@ WHERE namespace = $3 AND project = $4 AND name = $5;
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
@@ -141,7 +141,7 @@ WHERE u.stack_id = $1
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from,
-       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
@@ -170,7 +170,8 @@ FOR SHARE;
 
 -- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1
@@ -179,13 +180,15 @@ LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features, deployment, saved_at_ms, resource_count
+       digest, invalid, features, deployment, saved_at_ms, resource_count,
+       blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count,
+       c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1 AND u.version = $2;
@@ -193,8 +196,9 @@ WHERE c.stack_id = $1 AND u.version = $2;
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms, resource_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    digest, invalid, features, deployment, saved_at_ms, resource_count,
+    blob_key, size, blob_size, blob_md5
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -204,7 +208,20 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     features = excluded.features,
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
-    resource_count = excluded.resource_count;
+    resource_count = excluded.resource_count,
+    blob_key = excluded.blob_key,
+    size = excluded.size,
+    blob_size = excluded.blob_size,
+    blob_md5 = excluded.blob_md5;
+
+-- name: ListCheckpointBlobKeys :many
+-- Every blob key the checkpoints of one stack name, without the empty ones,
+-- ordered. A sweeper compares this set against the stored objects to find
+-- blobs no checkpoint references.
+SELECT blob_key
+FROM checkpoints
+WHERE stack_id = $1 AND blob_key IS NOT NULL AND blob_key <> ''
+ORDER BY blob_key;
 
 -- name: LatestResourceCount :one
 -- The stored managed resource count of the stack's latest checkpoint. It is
@@ -489,7 +506,13 @@ FROM secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
+-- Every blob key the state versions and the checkpoints name, with the size
+-- and MD5 of the stored bytes, ordered by key.
 SELECT content_key, size, md5
 FROM state_versions
 WHERE content_key <> ''
+UNION ALL
+SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5
+FROM checkpoints
+WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key;

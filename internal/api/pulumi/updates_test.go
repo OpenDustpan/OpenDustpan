@@ -1,9 +1,11 @@
 package pulumi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +14,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -226,6 +230,41 @@ func (m *memUpdateStore) CheckpointByVersion(
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
+// CheckpointByUpdate implements stack.CheckpointStore.
+func (m *memUpdateStore) CheckpointByUpdate(
+	_ context.Context, ref stack.Ref, id stack.UpdateID,
+) (stack.Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cp, ok := m.checkpoints[id]
+	if !ok || cp.Ref != ref {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	return cp, nil
+}
+
+// ReferencedCheckpointKeys implements stack.CheckpointStore.
+func (m *memUpdateStore) ReferencedCheckpointKeys(
+	_ context.Context, ref stack.Ref,
+) ([]blob.Key, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Key
+
+	for id := range m.checkpoints {
+		if cp := m.checkpoints[id]; cp.Ref == ref && cp.BlobKey != "" {
+			out = append(out, cp.BlobKey)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 func (m *memUpdateStore) AppendEvents(
 	_ context.Context,
 	batch stack.EventBatch,
@@ -272,6 +311,77 @@ func (m *memUpdateStore) ListEvents(
 	return out, nil
 }
 
+// memBlob is an in-memory blob.Store. Writes are write-once, as the port
+// requires: Put on an existing key fails with ErrExists.
+type memBlob struct {
+	objects map[blob.Key][]byte
+	mu      sync.Mutex
+}
+
+func newMemBlob() *memBlob {
+	return &memBlob{objects: map[blob.Key][]byte{}, mu: sync.Mutex{}}
+}
+
+func (m *memBlob) Put(_ context.Context, key blob.Key, r io.Reader) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read blob: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.objects[key]; ok {
+		return blob.ErrExists
+	}
+
+	m.objects[key] = data
+
+	return nil
+}
+
+func (m *memBlob) Get(_ context.Context, key blob.Key) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	data, ok := m.objects[key]
+	if !ok {
+		return nil, blob.ErrNotFound
+	}
+
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (m *memBlob) Delete(_ context.Context, key blob.Key) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.objects, key)
+
+	return nil
+}
+
+func (m *memBlob) List(_ context.Context, prefix string) ([]blob.Object, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Object
+
+	for key := range m.objects {
+		if strings.HasPrefix(key.String(), prefix) {
+			out = append(out, blob.Object{ModifiedAt: time.Time{}, Key: key})
+		}
+	}
+
+	slices.SortFunc(out, func(a, b blob.Object) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+
+	return out, nil
+}
+
+func (m *memBlob) Ping(context.Context) error {
+	return nil
+}
+
 // updateFixture is a Handler backed by real stack and update services over
 // in-memory stores, plus the services to mint update state with.
 type updateFixture struct {
@@ -315,7 +425,10 @@ func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit in
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
+		Stacks:             stacks,
+		Blobs:              newMemBlob(),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: limit,
 	})
 	if err != nil {

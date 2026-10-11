@@ -29,6 +29,10 @@ type Checkpoint struct {
 	SavedAtMs     int64
 	StackID       string
 	ResourceCount pgtype.Int8
+	BlobKey       pgtype.Text
+	Size          pgtype.Int8
+	BlobSize      pgtype.Int8
+	BlobMd5       []byte
 }
 
 type Installation struct {

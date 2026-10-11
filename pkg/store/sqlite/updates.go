@@ -10,6 +10,7 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -206,9 +207,10 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	return codec.FromUpdateRows(converted, ref)
 }
 
-// PutCheckpoint implements stack.CheckpointStore. The deployment is stored in
-// the row, one row for each mutating update; each write of the running
-// update overwrites the row of that update.
+// PutCheckpoint implements stack.CheckpointStore. A row with a blob key keeps
+// the key with the size, the digest and the sequence, and no content; a row
+// without a key keeps the content as given. Each write of the running update
+// overwrites the row of that update.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
@@ -261,6 +263,14 @@ func writeCheckpoint(
 		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
 		ResourceCount: sql.NullInt64{Int64: row.ResourceCount, Valid: true},
+		BlobKey:       sql.NullString{String: row.BlobKey, Valid: row.BlobKey != ""},
+		// Size is always stored: rows from before blobs hold the content
+		// length, so history needs no fallback for new rows, while reads
+		// still fall back to the content length for old NULL rows. Only the
+		// blob columns stay NULL without a key.
+		Size:     sql.NullInt64{Int64: row.Size, Valid: true},
+		BlobSize: sql.NullInt64{Int64: row.BlobSize, Valid: row.BlobKey != ""},
+		BlobMd5:  row.BlobMD5,
 	})
 	if putErr != nil {
 		return fmt.Errorf("upsert checkpoint: %w", putErr)
@@ -319,6 +329,64 @@ func (s *Store) CheckpointByVersion(
 	}
 
 	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
+}
+
+// CheckpointByUpdate implements stack.CheckpointStore.
+func (s *Store) CheckpointByUpdate(
+	ctx context.Context, ref stack.Ref, id stack.UpdateID,
+) (stack.Checkpoint, error) {
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
+	row, err := s.queries.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
+		StackID:  stackID,
+		UpdateID: id.String(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
+	}
+
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
+}
+
+// ReferencedCheckpointKeys implements stack.CheckpointStore.
+func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.queries.ListCheckpointBlobKeys(ctx, stackID)
+	if err != nil {
+		return nil, fmt.Errorf("select checkpoint blob keys: %w", err)
+	}
+
+	out := make([]blob.Key, 0, len(rows))
+
+	for _, row := range rows {
+		key, err := blob.ParseKey(row.String)
+		if err != nil {
+			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row.String, err)
+		}
+
+		out = append(out, key)
+	}
+
+	return out, nil
 }
 
 // AppendEvents implements stack.EventStore.
@@ -638,6 +706,13 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		// A NULL count predates the count column; the domain checkpoint
 		// holds no count, and the delete guard handles NULL itself.
 		ResourceCount: row.ResourceCount.Int64,
+		// A NULL key predates blobs; the row keeps content instead. A NULL
+		// size reads as 0 here; history falls back to the content length in
+		// SQL itself.
+		BlobKey:  row.BlobKey.String,
+		Size:     row.Size.Int64,
+		BlobSize: row.BlobSize.Int64,
+		BlobMD5:  row.BlobMd5,
 	}
 }
 
