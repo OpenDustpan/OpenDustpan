@@ -1,5 +1,0 @@
-# Findings that Trivy reports and the project accepts. Each line needs a reason.
-
-# DS-0026 (add HEALTHCHECK): the image is distroless static, with no shell and
-# no HTTP client to run a check. The orchestrator probes GET /health/ready. Issue #272 adds a HEALTHCHECK and removes this line.
-DS-0026

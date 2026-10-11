@@ -3,8 +3,13 @@
 #
 # It builds the image, generates a self-signed certificate, starts the
 # container over TLS, creates a namespace, requests the API and the console
-# page, checks that the process user is not root, then removes the container.
-# It is not part of `make check`: run it with `make image-smoke`.
+# page, waits until the container reports healthy, checks that the process
+# user is not root, then removes the container. It is not part of `make
+# check`: run it with `make image-smoke`.
+#
+# TLS goes through the environment (DUSTPAN_TLS_CERT, DUSTPAN_TLS_KEY), not
+# through serve flags, so the HEALTHCHECK probe of the image sees the same
+# TLS settings as the server (issue #272).
 #
 # Environment:
 #   IMAGE           image tag to build (default opendustpan:smoke)
@@ -101,9 +106,9 @@ echo "smoke-image: starting $CONTAINER"
 docker run -d --name "$CONTAINER" -p 127.0.0.1::8080 \
   -v "$DATA_DIR:/data" -v "$CERT_DIR:/certs:ro" \
   -e DUSTPAN_ADMIN_TOKEN \
+  -e DUSTPAN_TLS_CERT=/certs/cert.pem -e DUSTPAN_TLS_KEY=/certs/key.pem \
   "$IMAGE" serve \
   --database sqlite:/data/dustpan.db --listen :8080 \
-  --tls-cert /certs/cert.pem --tls-key /certs/key.pem \
   --console-dir /console >/dev/null
 
 HOSTPORT="$(docker port "$CONTAINER" 8080/tcp | head -n 1)"
@@ -132,6 +137,21 @@ fi
 echo "smoke-image: checking GET / (console page)"
 if ! curl -sSf --cacert "$CERT_DIR/cert.pem" "$BASE/" | grep -q "opendustpan smoke console"; then
   fail "GET / did not serve the console page"
+fi
+
+echo "smoke-image: waiting for a healthy status"
+for _ in $(seq 1 120); do
+  HEALTH="$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER")"
+  if [ "$HEALTH" = "healthy" ]; then
+    break
+  fi
+  if [ "$HEALTH" = "unhealthy" ]; then
+    fail "container reported unhealthy"
+  fi
+  sleep 1
+done
+if [ "$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER")" != "healthy" ]; then
+  fail "container did not report healthy in time"
 fi
 
 echo "smoke-image: checking the version stamp"

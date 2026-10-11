@@ -66,5 +66,12 @@ VOLUME /data
 # The base image already runs as nonroot. The explicit USER keeps that true if
 # the base changes.
 USER nonroot:nonroot
+# The base image has no shell, curl or wget, so the check runs the binary
+# in the exec form. It probes GET /health/ready with the same listen
+# address and TLS settings as serve: override the check when --listen
+# changes, and set DUSTPAN_TLS_CERT with DUSTPAN_TLS_KEY when the server
+# uses TLS. Kubernetes ignores this instruction and uses its own probes.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD ["/opendustpan", "health"]
 ENTRYPOINT ["/opendustpan"]
 CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--blob-dir", "/data/blobs", "--listen", ":8080", "--console-dir", "/console"]
