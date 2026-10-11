@@ -16,6 +16,9 @@ import (
 // jsonAPIMediaType is the media type of every response, including errors.
 const jsonAPIMediaType = "application/vnd.api+json"
 
+// notFoundTitle is the title of every 404 error document.
+const notFoundTitle = "not found"
+
 // errInvalidBody reports a request body that is not valid. classify maps it
 // to 422.
 var errInvalidBody = errors.New("invalid request body")
@@ -84,7 +87,7 @@ func (h *Handler) writeForbidden(ctx context.Context, w http.ResponseWriter, det
 
 // writeNotFound answers 404.
 func (h *Handler) writeNotFound(ctx context.Context, w http.ResponseWriter, detail string) {
-	h.writeJSONAPIError(ctx, w, http.StatusNotFound, "not found", detail)
+	h.writeJSONAPIError(ctx, w, http.StatusNotFound, notFoundTitle, detail)
 }
 
 // writeConflict answers 409.
@@ -128,7 +131,7 @@ func classify(err error) errorClass {
 	case errors.Is(err, identity.ErrDenied):
 		return errorClass{status: http.StatusForbidden, title: "forbidden", detail: "forbidden"}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
-		return errorClass{status: http.StatusNotFound, title: "not found", detail: err.Error()}
+		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}
 	case errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),
 		errors.Is(err, workspace.ErrNotLocked),
