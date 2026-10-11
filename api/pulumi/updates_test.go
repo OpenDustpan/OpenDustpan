@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
@@ -319,6 +320,7 @@ func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit in
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

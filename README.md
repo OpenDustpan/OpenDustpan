@@ -102,6 +102,9 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 | `--listen` | `DUSTPAN_LISTEN` | `:8080` |
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | (none) |
 | `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | (none) |
+| `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
+| `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
+| `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
 | | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |

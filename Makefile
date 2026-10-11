@@ -39,4 +39,4 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
 	sqlc generate
 
 build: ## Build the server binary.
-	go build -o bin/opendustpan ./cmd/opendustpan
+	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan
