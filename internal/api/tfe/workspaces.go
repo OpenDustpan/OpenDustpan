@@ -31,6 +31,8 @@ const (
 	localExecutionMode = "local"
 	// defaultPageSize is the list size when the caller sends no page[size].
 	defaultPageSize = 20
+	// maxPageSize caps page[size]: larger values read as 100, the TFE cap.
+	maxPageSize = 100
 	// duplicateWorkspaceDetail is the 422 detail a duplicate create answers
 	// with. go-tfe reads the detail text, so it must hold these words.
 	duplicateWorkspaceDetail = "Name has already been taken"
@@ -258,9 +260,11 @@ func (h *Handler) createWorkspace(
 }
 
 // listWorkspaces serves GET /api/v2/organizations/{organization}/workspaces,
-// ordered by name, with page[number] and page[size]. search[name] keeps the
-// workspaces whose name contains the value; an empty value keeps every
-// workspace. An unknown organization answers 404.
+// ordered by name, with page[number] and page[size] capped at maxPageSize.
+// search[name] keeps the workspaces whose name contains the value; an empty
+// value keeps every workspace. The list holds only the workspaces the caller
+// may unit:read, so the current-state-version relationship and the permission
+// checks run only for the visible page. An unknown organization answers 404.
 func (h *Handler) listWorkspaces(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -293,7 +297,40 @@ func (h *Handler) listWorkspaces(
 		return
 	}
 
-	h.writeWorkspaceList(ctx, w, p, filterWorkspaces(all, r.URL.Query().Get("search[name]")), page)
+	visible, err := h.filterReadable(ctx, p, filterWorkspaces(all, r.URL.Query().Get("search[name]")))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeWorkspaceList(ctx, w, p, visible, page)
+}
+
+// filterReadable keeps the workspaces the caller may unit:read. A denied
+// workspace is left out. Another authorizer failure fails the list.
+func (h *Handler) filterReadable(
+	ctx context.Context, p identity.Principal, all []workspace.Workspace,
+) ([]workspace.Workspace, error) {
+	kept := make([]workspace.Workspace, 0, len(all))
+
+	for i := range all {
+		obj, err := unitObject(all[i].Ref)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := h.authz.Authorize(ctx, p, identity.ActionUnitRead, obj); err != nil {
+			if errors.Is(err, identity.ErrDenied) {
+				continue
+			}
+
+			return nil, err
+		}
+		kept = append(kept, all[i])
+	}
+
+	return kept, nil
 }
 
 // filterWorkspaces keeps the workspaces whose name contains search. An empty
@@ -322,7 +359,8 @@ type workspacePage struct {
 
 // parseWorkspacePage reads page[number] and page[size] from the query.
 // Missing values default to the first page of defaultPageSize entries. A
-// value that is not a positive integer fails with a 422 error.
+// value that is not a positive integer fails with a 422 error. A size above
+// maxPageSize reads as maxPageSize.
 func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 	number, err := workspacePageValue(r.URL.Query().Get("page[number]"), 1)
 	if err != nil {
@@ -332,6 +370,10 @@ func parseWorkspacePage(r *http.Request) (workspacePage, error) {
 	size, err := workspacePageValue(r.URL.Query().Get("page[size]"), defaultPageSize)
 	if err != nil {
 		return workspacePage{}, err
+	}
+
+	if size > maxPageSize {
+		size = maxPageSize
 	}
 
 	return workspacePage{number: number, size: size}, nil
