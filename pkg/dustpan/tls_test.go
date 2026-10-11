@@ -412,7 +412,8 @@ func checkRunWithListenerTLS(t *testing.T) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2: true,
 		},
 	}
 
@@ -434,6 +435,11 @@ func checkRunWithListenerTLS(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("GET /health/live status %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// A TLS listener keeps HTTP/2, as the server had before WithListener.
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("GET /health/live protocol %s, want HTTP/2", resp.Proto)
 	}
 
 	cancel()

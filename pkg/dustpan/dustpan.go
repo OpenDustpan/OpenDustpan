@@ -743,7 +743,10 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 		s.logger.InfoContext(ctx, "listening", slog.String("addr", boundAddr))
 
 		if srv.TLSConfig != nil {
-			serveErr <- srv.Serve(tls.NewListener(ln, srv.TLSConfig))
+			// ServeTLS, not Serve on a tls listener, so the server keeps
+			// HTTP/2. The certificate is already in TLSConfig, so the file
+			// arguments stay empty.
+			serveErr <- srv.ServeTLS(ln, "", "")
 		} else {
 			serveErr <- srv.Serve(ln)
 		}
