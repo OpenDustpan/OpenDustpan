@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,48 +14,120 @@ import (
 
 	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/store/storetest"
 	"opendustpan.org/opendustpan/workspace"
 )
 
-type oneNamespace struct{}
+// memInventoryTool names OpenTofu in inventory entries.
+const memInventoryTool = "opentofu"
 
-func (oneNamespace) CreateNamespace(context.Context, namespace.Namespace) error {
-	return namespace.ErrAlreadyExists
-}
-
-func (oneNamespace) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
-	return namespace.Namespace{CreatedAt: time.Time{}, Name: name, HomeRegion: "local", FailoverVersion: 1}, nil
-}
-
-func (oneNamespace) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
-	return nil, nil
-}
-
-// memStore implements Store and StateStore in memory, following their contracts.
+// memStore implements namespace.Store, workspace.Store, workspace.StateStore
+// and inventory.Reader in memory, following their contracts.
 type memStore struct {
+	namespaces map[namespace.Name]namespace.Namespace
 	workspaces map[workspace.ID]workspace.Workspace
 	versions   map[workspace.StateVersionID]workspace.StateVersion
 	current    map[workspace.ID]workspace.StateVersionID
+	entries    map[memInventoryKey]inventory.Entry
 	mu         sync.Mutex
 	// lostAck makes the next finalize commit and then report an error, as a
 	// dropped connection after COMMIT would.
 	lostAck bool
 }
 
+type memInventoryKey struct {
+	namespace namespace.Name
+	tool      string
+	name      string
+}
+
+var _ storetest.WorkspaceStore = (*memStore)(nil)
+
 func newMemStore() *memStore {
 	return &memStore{
+		namespaces: map[namespace.Name]namespace.Namespace{},
 		workspaces: map[workspace.ID]workspace.Workspace{},
 		versions:   map[workspace.StateVersionID]workspace.StateVersion{},
 		current:    map[workspace.ID]workspace.StateVersionID{},
+		entries:    map[memInventoryKey]inventory.Entry{},
 		mu:         sync.Mutex{},
 		lostAck:    false,
 	}
 }
 
-func (m *memStore) CreateWorkspace(_ context.Context, w workspace.Workspace, _ namespace.Fence) error {
+func (m *memStore) CreateNamespace(_ context.Context, ns namespace.Namespace) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, ok := m.namespaces[ns.Name]; ok {
+		return namespace.ErrAlreadyExists
+	}
+
+	m.namespaces[ns.Name] = ns
+
+	return nil
+}
+
+func (m *memStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ns, ok := m.namespaces[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return ns, nil
+}
+
+func (m *memStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]namespace.Namespace, 0, len(m.namespaces))
+	for _, ns := range m.namespaces {
+		out = append(out, ns)
+	}
+
+	slices.SortFunc(out, func(a, b namespace.Namespace) int {
+		return strings.Compare(a.Name.String(), b.Name.String())
+	})
+
+	return out, nil
+}
+
+func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]inventory.Entry, 0)
+
+	for key := range m.entries {
+		if key.namespace == ns {
+			out = append(out, m.entries[key])
+		}
+	}
+
+	slices.SortFunc(out, func(a, b inventory.Entry) int {
+		if a.Tool != b.Tool {
+			return strings.Compare(a.Tool, b.Tool)
+		}
+
+		return strings.Compare(a.Name, b.Name)
+	})
+
+	return out, nil
+}
+
+func (m *memStore) CreateWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
 
 	for id := range m.workspaces {
 		if m.workspaces[id].Ref == w.Ref {
@@ -63,6 +136,7 @@ func (m *memStore) CreateWorkspace(_ context.Context, w workspace.Workspace, _ n
 	}
 
 	m.workspaces[w.ID] = w
+	m.publish(w)
 
 	return nil
 }
@@ -92,26 +166,61 @@ func (m *memStore) GetWorkspaceByID(_ context.Context, id workspace.ID) (workspa
 	return w, nil
 }
 
-func (m *memStore) ListWorkspaces(context.Context, namespace.Name) ([]workspace.Workspace, error) {
-	return nil, nil
-}
-
-func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, _ namespace.Fence) error {
+func (m *memStore) ListWorkspaces(_ context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.workspaces[w.ID].Revision != w.Revision-1 {
+	out := make([]workspace.Workspace, 0)
+
+	for id := range m.workspaces {
+		if m.workspaces[id].Ref.Namespace == ns {
+			out = append(out, m.workspaces[id])
+		}
+	}
+
+	slices.SortFunc(out, func(a, b workspace.Workspace) int {
+		return strings.Compare(a.Ref.Name.String(), b.Ref.Name.String())
+	})
+
+	return out, nil
+}
+
+func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	stored, ok := m.workspaces[w.ID]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if stored.Revision != w.Revision-1 {
 		return workspace.ErrConcurrentModification
 	}
 
 	m.workspaces[w.ID] = w
+	m.publish(w)
 
 	return nil
 }
 
-func (m *memStore) CreateStateVersion(_ context.Context, sv workspace.StateVersion, _ namespace.Fence) error {
+func (m *memStore) CreateStateVersion(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if _, ok := m.workspaces[sv.Workspace]; !ok {
+		return workspace.ErrNotFound
+	}
 
 	m.versions[sv.ID] = sv
 
@@ -130,18 +239,34 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 	return sv, nil
 }
 
-func (m *memStore) FinalizeStateVersion(_ context.Context, sv workspace.StateVersion, _ namespace.Fence) error {
+func (m *memStore) FinalizeStateVersion(
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.versions[sv.ID].Status != workspace.StatusPending {
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	stored, ok := m.versions[sv.ID]
+	if !ok {
+		return workspace.ErrStateVersionNotFound
+	}
+
+	if stored.Status != workspace.StatusPending {
 		return workspace.ErrUploadDenied
 	}
 
-	switch lock := m.workspaces[sv.Workspace].Lock; {
-	case !lock.Locked():
+	w, ok := m.workspaces[sv.Workspace]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	switch {
+	case !w.Lock.Locked():
 		return workspace.ErrNotLocked
-	case lock.ID != sv.LockID:
+	case w.Lock.ID != sv.LockID:
 		return workspace.ErrLockedByOther
 	}
 
@@ -156,6 +281,10 @@ func (m *memStore) FinalizeStateVersion(_ context.Context, sv workspace.StateVer
 
 	m.versions[sv.ID] = sv
 	m.current[sv.Workspace] = sv.ID
+
+	w.UpdatedAt = sv.FinalizedAt
+	m.workspaces[sv.Workspace] = w
+	m.publish(w)
 
 	if m.lostAck {
 		m.lostAck = false
@@ -180,6 +309,37 @@ func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (work
 	return m.versions[cur], nil
 }
 
+// checkFence rejects a write to an unknown namespace or a stale failover
+// version. The caller holds mu.
+func (m *memStore) checkFence(fence namespace.Fence) error {
+	ns, ok := m.namespaces[fence.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if ns.FailoverVersion != fence.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// publish writes the inventory entry for w. The caller holds mu.
+func (m *memStore) publish(w workspace.Workspace) {
+	name := w.Ref.Name.String()
+
+	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		LastChanged:   w.UpdatedAt,
+		Namespace:     w.Ref.Namespace,
+		Tool:          memInventoryTool,
+		Name:          name,
+		UnitID:        w.ID.String(),
+		DisplayName:   name,
+		Status:        "",
+		ResourceCount: nil,
+	}
+}
+
 type fixture struct {
 	svc   *workspace.Service
 	store *memStore
@@ -190,7 +350,15 @@ type fixture struct {
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Region: "local"})
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+	store := newMemStore()
+	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+
+	if err := store.CreateNamespace(t.Context(), acme); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
@@ -205,9 +373,6 @@ func newFixture(t *testing.T) fixture {
 			t.Errorf("close blob store: %v", closeErr)
 		}
 	})
-
-	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
-	store := newMemStore()
 
 	svc, err := workspace.NewService(workspace.Config{
 		Workspaces:    store,
@@ -256,6 +421,18 @@ func (f fixture) push(t *testing.T, in workspace.NewState, content string) error
 	_, err = f.svc.Upload(t.Context(), pending.Version.ID, pending.Upload, strings.NewReader(content))
 
 	return err
+}
+
+// TestWorkspaceConformance runs the store conformance suite of the workspace
+// ports against the in-memory store, proving the suite before an adapter runs it.
+func TestWorkspaceConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunWorkspace(t, func(t *testing.T) storetest.WorkspaceStore {
+		t.Helper()
+
+		return newMemStore()
+	})
 }
 
 func TestLocking(t *testing.T) {

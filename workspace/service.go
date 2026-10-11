@@ -24,8 +24,9 @@ const (
 // Store persists workspaces. Writes carry the namespace fence and fail with
 // namespace.ErrFenced if it is stale.
 type Store interface {
-	// CreateWorkspace persists a new w. It returns ErrAlreadyExists, or
-	// namespace.ErrNotFound if the namespace does not exist.
+	// CreateWorkspace persists a new w. It returns ErrAlreadyExists,
+	// namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale.
 	CreateWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
 	// GetWorkspace returns the workspace called ref, or ErrNotFound.
 	GetWorkspace(ctx context.Context, ref Ref) (Workspace, error)
@@ -35,27 +36,31 @@ type Store interface {
 	// empty list if it has none or does not exist.
 	ListWorkspaces(ctx context.Context, ns namespace.Name) ([]Workspace, error)
 	// SaveWorkspace persists w if the store holds w.Revision-1, else returns
-	// ErrConcurrentModification.
+	// ErrConcurrentModification. It returns ErrNotFound if the workspace does
+	// not exist, namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale.
 	SaveWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
 }
 
 // StateStore persists state version metadata.
 type StateStore interface {
 	// CreateStateVersion persists a new, pending sv. It returns ErrNotFound
-	// if sv.Workspace does not exist.
+	// if sv.Workspace does not exist, namespace.ErrNotFound if the namespace
+	// does not exist, or namespace.ErrFenced if fence is stale.
 	CreateStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
-	// FinalizeStateVersion saves the finalized sv (with its Content key) and
-	// makes it the workspace's current state, checking in the same
-	// transaction that:
+	// FinalizeStateVersion saves the finalized sv (with its Content key),
+	// stamps the workspace's UpdatedAt with sv.FinalizedAt, and makes sv the
+	// workspace's current state, checking in the same transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
 	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
 	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
-	// Those errors and namespace.ErrFenced mean nothing was written. Any
-	// other error leaves the outcome unknown: the version may be current.
+	// Those errors, namespace.ErrNotFound and namespace.ErrFenced mean
+	// nothing was written. Any other error leaves the outcome unknown: the
+	// version may be current.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
