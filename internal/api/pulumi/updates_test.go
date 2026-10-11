@@ -157,7 +157,15 @@ func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.P
 
 	for id := range m.updates {
 		if m.updates[id].Ref == ref && m.updates[id].Mutates() && m.updates[id].Status != stack.StatusNotStarted {
-			list = append(list, m.updates[id])
+			u := m.updates[id]
+			// The SQL stores fill the checkpoint size from the checkpoint
+			// row on read; the memory store does the same, so history
+			// tests see the size of the checkpoint each update saved.
+			if cp, ok := m.checkpoints[id]; ok {
+				u.CheckpointBytes = int64(len(cp.Deployment))
+			}
+
+			list = append(list, u)
 		}
 	}
 
@@ -1079,9 +1087,10 @@ func (a *objectToggleAuthorizer) Authorize(
 
 // historyEntry is one entry of the stack history as the tests decode it.
 type historyEntry struct {
-	Result  string `json:"result"`
-	Kind    string `json:"kind"`
-	Version int    `json:"version"`
+	Result      string `json:"result"`
+	Kind        string `json:"kind"`
+	Version     int    `json:"version"`
+	RequestedBy string `json:"requestedBy"`
 }
 
 // historyPayload is the stack history as the tests decode it.
@@ -1343,9 +1352,7 @@ func TestImportStackCycle(t *testing.T) {
 	}
 
 	got := history.Updates[0]
-	if got.Kind != "import" || got.Result != "succeeded" || got.Version != 1 {
-		t.Fatalf("history entry = %+v, want kind import result succeeded version 1", got)
-	}
+	checkImportedHistoryEntry(t, got)
 
 	checkImportCreator(t, f, imported.UpdateID)
 
@@ -1372,6 +1379,20 @@ func checkImportCreator(t *testing.T, f updateFixture, updateID string) {
 
 	if u.CreatedBy != "tester" {
 		t.Fatalf("CreatedBy = %q, want %q", u.CreatedBy, "tester")
+	}
+}
+
+// checkImportedHistoryEntry proves an import shows in history as kind import
+// with the caller as its requester.
+func checkImportedHistoryEntry(t *testing.T, got historyEntry) {
+	t.Helper()
+
+	if got.Kind != "import" || got.Result != "succeeded" || got.Version != 1 {
+		t.Fatalf("history entry = %+v, want kind import result succeeded version 1", got)
+	}
+
+	if got.RequestedBy != "tester" {
+		t.Fatalf("history entry requestedBy = %q, want the caller %q", got.RequestedBy, "tester")
 	}
 }
 
@@ -1687,6 +1708,330 @@ func TestGetStackShowsActiveUpdate(t *testing.T) {
 
 	// The preview still runs, so this stays the preview-only case.
 	check("")
+}
+
+// historyFullEntry is one entry of the stack history with the ADR 28 fields.
+type historyFullEntry struct {
+	Result          string `json:"result"`
+	Kind            string `json:"kind"`
+	Version         int    `json:"version"`
+	StartTime       int64  `json:"startTime"`
+	EndTime         int64  `json:"endTime"`
+	UpdateID        string `json:"updateID"`
+	RequestedBy     string `json:"requestedBy"`
+	CheckpointBytes int64  `json:"checkpointBytes"`
+	LeaseExpiresAt  int64  `json:"leaseExpiresAt"`
+	RestoredFrom    int64  `json:"restoredFrom"`
+}
+
+// historyFullPayload is the stack history with the ADR 28 fields.
+type historyFullPayload struct {
+	Updates []historyFullEntry `json:"updates"`
+}
+
+// historySeed holds the updates a history-field test seeds and the lease
+// tokens that must never appear in a response.
+type historySeed struct {
+	finished stack.Update
+	restored stack.Update
+	running  stack.Update
+	leases   []string
+	expiry   int64
+	size     int64
+}
+
+// seedHistoryFields finishes an update with a checkpoint, restores its
+// version, and holds a running update without one.
+func seedHistoryFields(t *testing.T, f updateFixture) historySeed {
+	t.Helper()
+
+	const deployment = `{"v":1}`
+
+	u, createErr := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind:         stack.KindUpdate,
+		DryRun:       false,
+		CreatedBy:    "tester",
+		RestoredFrom: 0,
+	})
+	if createErr != nil {
+		t.Fatalf("create: %v", createErr)
+	}
+
+	started, startErr := f.updates.Start(t.Context(), f.ref, u.ID)
+	if startErr != nil {
+		t.Fatalf("start: %v", startErr)
+	}
+
+	input := stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(deployment),
+		SchemaVersion: 3,
+		Sequence:      0,
+		Invalid:       false,
+	}
+
+	if saveErr := f.updates.SaveCheckpoint(t.Context(), f.ref, u.ID, started.Token, input); saveErr != nil {
+		t.Fatalf("save checkpoint: %v", saveErr)
+	}
+
+	finished, completeErr := f.updates.Complete(t.Context(), f.ref, u.ID, started.Token, stack.StatusSucceeded)
+	if completeErr != nil {
+		t.Fatalf("complete: %v", completeErr)
+	}
+
+	restored, restoreErr := f.updates.Restore(t.Context(), f.ref, 1, "tester")
+	if restoreErr != nil {
+		t.Fatalf("restore: %v", restoreErr)
+	}
+
+	held, heldErr := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind:         stack.KindUpdate,
+		DryRun:       false,
+		CreatedBy:    "tester",
+		RestoredFrom: 0,
+	})
+	if heldErr != nil {
+		t.Fatalf("create running: %v", heldErr)
+	}
+
+	running, runningErr := f.updates.Start(t.Context(), f.ref, held.ID)
+	if runningErr != nil {
+		t.Fatalf("start running: %v", runningErr)
+	}
+
+	return historySeed{
+		finished: finished,
+		restored: restored,
+		running:  running.Update,
+		leases:   []string{started.Token.Reveal(), running.Token.Reveal()},
+		expiry:   running.Update.Lease.ExpiresAt.Unix(),
+		size:     int64(len(deployment)),
+	}
+}
+
+// getHistoryFields reads the stack history with the ADR 28 fields.
+func getHistoryFields(t *testing.T, f updateFixture) (string, historyFullPayload) {
+	t.Helper()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""))
+	if status != http.StatusOK {
+		t.Fatalf("history answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var history historyFullPayload
+
+	if err := json.Unmarshal([]byte(body), &history); err != nil {
+		t.Fatalf("decode history: %v (%s)", err, body)
+	}
+
+	return body, history
+}
+
+// historyByVersion returns the entry with version.
+func historyByVersion(t *testing.T, history historyFullPayload, version int) historyFullEntry {
+	t.Helper()
+
+	for _, entry := range history.Updates {
+		if entry.Version == version {
+			return entry
+		}
+	}
+
+	t.Fatalf("history holds no version %d (%+v)", version, history.Updates)
+
+	return historyFullEntry{
+		Result:          "",
+		Kind:            "",
+		Version:         0,
+		StartTime:       0,
+		EndTime:         0,
+		UpdateID:        "",
+		RequestedBy:     "",
+		CheckpointBytes: 0,
+		LeaseExpiresAt:  0,
+		RestoredFrom:    0,
+	}
+}
+
+// checkFinishedHistoryEntry proves a finished update shows its ID, requester
+// and checkpoint size, and no lease expiry or restore source.
+func checkFinishedHistoryEntry(t *testing.T, id stack.UpdateID, size int64, got historyFullEntry) {
+	t.Helper()
+
+	if got.Result != "succeeded" || got.Kind != "update" || got.Version != 1 {
+		t.Fatalf("finished entry = %+v, want result succeeded kind update version 1", got)
+	}
+
+	if got.StartTime <= 0 || got.EndTime <= 0 {
+		t.Fatalf("finished entry = %+v, want start and end times set", got)
+	}
+
+	if got.UpdateID != id.String() {
+		t.Fatalf("updateID = %q, want %q", got.UpdateID, id.String())
+	}
+
+	if got.RequestedBy != "tester" {
+		t.Fatalf("requestedBy = %q, want %q", got.RequestedBy, "tester")
+	}
+
+	if got.CheckpointBytes != size {
+		t.Fatalf("checkpointBytes = %d, want %d", got.CheckpointBytes, size)
+	}
+
+	if got.LeaseExpiresAt != 0 {
+		t.Fatalf("leaseExpiresAt = %d, want 0 for a finished update", got.LeaseExpiresAt)
+	}
+
+	if got.RestoredFrom != 0 {
+		t.Fatalf("restoredFrom = %d, want 0 for a plain update", got.RestoredFrom)
+	}
+}
+
+// checkRestoredHistoryEntry proves a restore shows its source version and the
+// copied checkpoint size.
+func checkRestoredHistoryEntry(t *testing.T, id stack.UpdateID, size int64, got historyFullEntry) {
+	t.Helper()
+
+	if got.Kind != "restore" || got.Result != "succeeded" || got.Version != 2 {
+		t.Fatalf("restored entry = %+v, want kind restore result succeeded version 2", got)
+	}
+
+	if got.UpdateID != id.String() {
+		t.Fatalf("updateID = %q, want %q", got.UpdateID, id.String())
+	}
+
+	if got.RequestedBy != "tester" {
+		t.Fatalf("requestedBy = %q, want %q", got.RequestedBy, "tester")
+	}
+
+	if got.CheckpointBytes != size {
+		t.Fatalf("checkpointBytes = %d, want the copied size %d", got.CheckpointBytes, size)
+	}
+
+	if got.LeaseExpiresAt != 0 {
+		t.Fatalf("leaseExpiresAt = %d, want 0 for a finished update", got.LeaseExpiresAt)
+	}
+
+	if got.RestoredFrom != 1 {
+		t.Fatalf("restoredFrom = %d, want 1", got.RestoredFrom)
+	}
+}
+
+// checkRunningHistoryEntry proves the running update shows its requester and
+// lease expiry, and no checkpoint size yet.
+func checkRunningHistoryEntry(t *testing.T, id stack.UpdateID, expiry int64, got historyFullEntry) {
+	t.Helper()
+
+	if got.Result != "in-progress" || got.Kind != "update" || got.Version != 3 {
+		t.Fatalf("running entry = %+v, want result in-progress kind update version 3", got)
+	}
+
+	if got.UpdateID != id.String() {
+		t.Fatalf("updateID = %q, want %q", got.UpdateID, id.String())
+	}
+
+	if got.RequestedBy != "tester" {
+		t.Fatalf("requestedBy = %q, want %q", got.RequestedBy, "tester")
+	}
+
+	if got.CheckpointBytes != 0 {
+		t.Fatalf("checkpointBytes = %d, want 0 before any checkpoint", got.CheckpointBytes)
+	}
+
+	if expiry <= 0 {
+		t.Fatalf("seed lease expiry = %d, want above 0", expiry)
+	}
+
+	if got.LeaseExpiresAt != expiry {
+		t.Fatalf("leaseExpiresAt = %d, want the lease expiry %d", got.LeaseExpiresAt, expiry)
+	}
+
+	if got.RestoredFrom != 0 {
+		t.Fatalf("restoredFrom = %d, want 0 for a plain update", got.RestoredFrom)
+	}
+}
+
+// TestHistoryShowsNewFields proves the history carries the update ID, the
+// requester, the checkpoint size, the lease expiry and the restore source
+// (ADR 28 decision 4), and keeps every old field with its name and shape.
+func TestHistoryShowsNewFields(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seed := seedHistoryFields(t, f)
+
+	_, history := getHistoryFields(t, f)
+
+	if len(history.Updates) != 3 {
+		t.Fatalf("history holds %d updates, want 3 (%+v)", len(history.Updates), history.Updates)
+	}
+
+	checkFinishedHistoryEntry(t, seed.finished.ID, seed.size, historyByVersion(t, history, 1))
+	checkRestoredHistoryEntry(t, seed.restored.ID, seed.size, historyByVersion(t, history, 2))
+	checkRunningHistoryEntry(t, seed.running.ID, seed.expiry, historyByVersion(t, history, 3))
+}
+
+// TestHistoryKeepsOldFieldNames proves every history entry carries the five
+// old fields with their names, the five new fields, and nothing else: no
+// rename, no removal, no token.
+func TestHistoryKeepsOldFieldNames(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedHistoryFields(t, f)
+
+	body, _ := getHistoryFields(t, f)
+
+	var raw struct {
+		Updates []map[string]any `json:"updates"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		t.Fatalf("decode history: %v (%s)", err, body)
+	}
+
+	want := map[string]bool{
+		"result": true, "kind": true, "version": true, "startTime": true, "endTime": true,
+		"updateID": true, "requestedBy": true, "checkpointBytes": true,
+		"leaseExpiresAt": true, "restoredFrom": true,
+	}
+
+	for _, entry := range raw.Updates {
+		if len(entry) != len(want) {
+			t.Fatalf("history entry holds %d keys, want %d (%v)", len(entry), len(want), entry)
+		}
+
+		for key := range entry {
+			if !want[key] {
+				t.Fatalf("history entry holds unexpected key %q (%v)", key, entry)
+			}
+		}
+	}
+}
+
+// TestHistoryHidesLeaseSecrets proves the history carries no lease token:
+// neither presented token appears in the response body.
+func TestHistoryHidesLeaseSecrets(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seed := seedHistoryFields(t, f)
+
+	body, _ := getHistoryFields(t, f)
+
+	for _, lease := range seed.leases {
+		if lease == "" {
+			t.Fatal("seed holds an empty lease token")
+		}
+
+		if strings.Contains(body, lease) {
+			t.Fatal("history response holds a lease token")
+		}
+	}
+
+	if strings.Contains(body, `"token"`) {
+		t.Fatalf("history response holds a token field (%s)", body)
+	}
 }
 
 // TestCreateUpdateRecordsCaller checks that a new update records the subject
