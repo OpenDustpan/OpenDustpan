@@ -520,19 +520,20 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 
 // openBinaryStore opens a direct store handle on the database the backend
 // serves, so seed helpers keep working. It returns the --database value for
-// the backend and the handle.
+// the backend, which reaches PostgreSQL through a TCP proxy, with the handle
+// and the proxy. On SQLite the proxy is nil.
 //
 //nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
 func openBinaryStore(
 	ctx context.Context, tb testing.TB, store Store, dir string,
-) (string, serverStore) {
+) (string, serverStore, *DBProxy) {
 	tb.Helper()
 
 	switch store {
 	case StoreSQLite:
 		dbPath := filepath.Join(dir, "dustpan.db")
 
-		return "sqlite:" + dbPath, openSQLiteStore(ctx, tb, dbPath)
+		return "sqlite:" + dbPath, openSQLiteStore(ctx, tb, dbPath), nil
 	case StorePostgres:
 		base := PostgresURL()
 		if base == "" {
@@ -540,12 +541,13 @@ func openBinaryStore(
 		}
 
 		st, schemaURL := openPostgresStoreWithURL(ctx, tb, base)
+		proxy, proxiedURL := startDBProxy(ctx, tb, schemaURL)
 
-		return schemaURL, st
+		return proxiedURL, st, proxy
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
-		return "", nil
+		return "", nil, nil
 	}
 }
 
@@ -559,7 +561,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	bin := serverBinary(ctx, tb, in.dir)
 	cert := writeBackendCert(tb, in.dir)
 	blobDir := filepath.Join(in.dir, "blobs")
-	dbURL, st := openBinaryStore(ctx, tb, in.store, in.dir)
+	dbURL, st, dbProxy := openBinaryStore(ctx, tb, in.store, in.dir)
 	blobs := openBlobStoreAt(tb, blobDir)
 
 	runBinary(ctx, tb, bin, []string{
@@ -610,6 +612,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendCmd:    handle.cmd,
 		backendLogs:   handle.logs,
 		certBundle:    "",
+		dbProxy:       dbProxy,
 	}
 
 	for _, d := range []string{env.home, env.project} {

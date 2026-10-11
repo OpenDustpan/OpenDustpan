@@ -44,6 +44,22 @@ const (
 	// Makefile's -parallel must cover the whole matrix (12 runs by default: 6
 	// versions on 2 stores).
 	installLimit = 10 * time.Minute
+	// readinessWithoutDBStep proves a stopped database turns /health/ready to
+	// 503 while /health/live stays 204.
+	readinessWithoutDBStep = "readiness without database"
+	// healthReadyPath and healthLivePath are the probe paths (ADR 34).
+	healthReadyPath = "/health/ready"
+	healthLivePath  = "/health/live"
+	// readyOKBody is the readiness body when every check passes.
+	readyOKBody = `{"status":"ok"}`
+	// readyStoreFailedBody is the readiness body when only the store fails.
+	readyStoreFailedBody = `{"status":"unavailable","failed":["store"]}`
+	// readyWaitTimeout bounds the wait for the readiness status to change
+	// after the proxy closes or reopens. The probe itself has a 2-second
+	// limit per check, so this covers several probes.
+	readyWaitTimeout = 20 * time.Second
+	// readyPollInterval sets how often the wait checks the probe.
+	readyPollInterval = 100 * time.Millisecond
 )
 
 var errUnexpected = errors.New("unexpected output")
@@ -196,6 +212,7 @@ func runOnStore(t *testing.T, cli e2e.Install, store e2e.Store, scenario func(*t
 	env = e2e.NewEnv(t.Context(), t, cli, store)
 
 	scenario(t, env)
+	checkReadyWithoutDatabase(t.Context(), t, env)
 }
 
 func writeReport(t *testing.T, r e2e.Run) {
@@ -284,6 +301,208 @@ func checkReady(ctx context.Context, t *testing.T, env *e2e.Env) {
 	if !strings.Contains(body, `"status":"ok"`) {
 		t.Fatalf("GET /health/ready body %q, want status ok", body)
 	}
+}
+
+// checkReadyWithoutDatabase proves a stopped database turns /health/ready to
+// 503 with the check name only while /health/live stays 204, and that
+// reopening the database turns /health/ready to 200 again. The binary server
+// and the in-process server both reach PostgreSQL through a TCP proxy, so
+// closing the proxy stops the database for that server only. On SQLite the
+// step is skipped with a report entry that says why.
+func checkReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	if env.Store() == e2e.StoreSQLite {
+		reason := "SQLite has no separate database process to stop; the step needs PostgreSQL"
+		env.SkipStep(readinessWithoutDBStep, reason)
+		t.Logf("skipped %q: %s", readinessWithoutDBStep, reason)
+
+		return
+	}
+
+	t.Run(readinessWithoutDBStep, func(t *testing.T) {
+		env.Recorder.SetStep(readinessWithoutDBStep)
+
+		if err := doReadyWithoutDatabase(ctx, t, env); err != nil {
+			env.AddStep(e2e.StepResult{
+				Name:     readinessWithoutDBStep,
+				Command:  http.MethodGet + " " + healthReadyPath,
+				Failure:  err.Error(),
+				Stderr:   "",
+				ExitCode: 1,
+				Passed:   false,
+				Skipped:  false,
+			})
+			t.Errorf("%s: %v", readinessWithoutDBStep, err)
+		} else {
+			env.AddStep(e2e.StepResult{
+				Name:     readinessWithoutDBStep,
+				Command:  http.MethodGet + " " + healthReadyPath,
+				Failure:  "",
+				Stderr:   "",
+				ExitCode: 0,
+				Passed:   true,
+				Skipped:  false,
+			})
+		}
+	})
+}
+
+// doReadyWithoutDatabase runs the stopped-database sequence and returns an
+// error for the first check that fails. It reopens the proxy before
+// returning an error after the stop, so the environment stays usable.
+func doReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) error {
+	t.Helper()
+
+	if _, _, err := waitReadyStatus(ctx, env, http.StatusOK); err != nil {
+		return err
+	}
+
+	env.StopDatabase(t)
+
+	stoppedErr := checkStoppedDatabase(ctx, env)
+	if stoppedErr != nil {
+		env.StartDatabase(ctx, t)
+
+		return stoppedErr
+	}
+
+	env.StartDatabase(ctx, t)
+
+	return checkRecoveredDatabase(ctx, env)
+}
+
+// checkStoppedDatabase proves the stopped state: /health/ready answers 503
+// with the store check name and no driver text, and /health/live stays 204.
+func checkStoppedDatabase(ctx context.Context, env *e2e.Env) error {
+	status, body, err := waitReadyStatus(ctx, env, http.StatusServiceUnavailable)
+	if err != nil {
+		return err
+	}
+
+	if checkErr := checkStoppedBody(status, body); checkErr != nil {
+		return checkErr
+	}
+
+	liveStatus, liveBody, liveErr := env.APIStatus(ctx, http.MethodGet, healthLivePath, "")
+	if liveErr != nil {
+		return fmt.Errorf("%w: GET %s: %w", errUnexpected, healthLivePath, liveErr)
+	}
+
+	if liveStatus != http.StatusNoContent {
+		return fmt.Errorf(
+			"%w: GET %s status %d, want %d (body %s)",
+			errUnexpected,
+			healthLivePath,
+			liveStatus,
+			http.StatusNoContent,
+			liveBody,
+		)
+	}
+
+	return nil
+}
+
+// checkRecoveredDatabase proves /health/ready answers 200 again after the
+// proxy reopens. pgxpool discards the broken connections and dials anew
+// through the proxy, so the first probes after the reopen already pass.
+func checkRecoveredDatabase(ctx context.Context, env *e2e.Env) error {
+	_, body, err := waitReadyStatus(ctx, env, http.StatusOK)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(body) != readyOKBody {
+		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyOKBody)
+	}
+
+	return nil
+}
+
+// waitReadyStatus polls GET /health/ready until it answers want or the wait
+// times out. It returns the last status and body, or an error when the probe
+// never answers want.
+func waitReadyStatus(ctx context.Context, env *e2e.Env, want int) (int, string, error) {
+	deadline := time.Now().Add(readyWaitTimeout)
+
+	var lastStatus int
+
+	var lastBody string
+
+	for time.Now().Before(deadline) {
+		status, body, err := env.APIStatus(ctx, http.MethodGet, healthReadyPath, "")
+		if err == nil {
+			lastStatus, lastBody = status, body
+
+			if status == want {
+				return status, body, nil
+			}
+		} else {
+			lastBody = err.Error()
+		}
+
+		timer := time.NewTimer(readyPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return lastStatus, lastBody, fmt.Errorf(
+				"%w: context done while waiting for %s %d: %s",
+				errUnexpected,
+				healthReadyPath,
+				want,
+				lastBody,
+			)
+		case <-timer.C:
+		}
+	}
+
+	return lastStatus, lastBody, fmt.Errorf(
+		"%w: GET %s status %d, want %d (body %s)",
+		errUnexpected,
+		healthReadyPath,
+		lastStatus,
+		want,
+		lastBody,
+	)
+}
+
+// checkStoppedBody proves a 503 readiness body names the store check only,
+// with no driver text. The blob store stays healthy, so the body must not
+// name it.
+func checkStoppedBody(status int, body string) error {
+	if status != http.StatusServiceUnavailable {
+		return fmt.Errorf(
+			"%w: GET %s status %d, want %d (body %s)",
+			errUnexpected,
+			healthReadyPath,
+			status,
+			http.StatusServiceUnavailable,
+			body,
+		)
+	}
+
+	trimmed := strings.TrimSpace(body)
+	if !strings.Contains(trimmed, `"store"`) {
+		return fmt.Errorf("%w: GET %s body %q lacks the store check name", errUnexpected, healthReadyPath, body)
+	}
+
+	if strings.Contains(trimmed, `"blob"`) {
+		return fmt.Errorf("%w: GET %s body %q names the healthy blob check", errUnexpected, healthReadyPath, body)
+	}
+
+	lowered := strings.ToLower(trimmed)
+	for _, leaked := range []string{"postgres", "pgx", "dial", "refused", "connect", "driver", "eof", "pool"} {
+		if strings.Contains(lowered, leaked) {
+			return fmt.Errorf("%w: GET %s body %q holds driver text %q", errUnexpected, healthReadyPath, body, leaked)
+		}
+	}
+
+	if trimmed != readyStoreFailedBody {
+		return fmt.Errorf("%w: GET %s body %q, want %q", errUnexpected, healthReadyPath, body, readyStoreFailedBody)
+	}
+
+	return nil
 }
 
 // pulumiScenario exercises login and stack management. A namespace is a

@@ -238,6 +238,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		backendCmd:    handle.cmd,
 		backendLogs:   handle.logs,
 		certBundle:    "",
+		dbProxy:       nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
