@@ -7,7 +7,12 @@ created: 2026-10-10
 
 # RFC 42. Migration from other backends and operators
 
-Status: draft. The scope and the order of sources are proposals. Migration is
+Status: accepted (ADR 29) for milestone 3: an import as a tested guide, for
+four first sources. The import resource, the source adapters and runner
+execution stay open. ADR 29 says "import" and "source" for the move of a unit
+into OpenDustpan, because "migration" means a SQL schema migration here.
+
+The rest stays a draft. The scope and the order of sources are proposals. Migration is
 planned early: every team that tries OpenDustpan already has state somewhere
 else, and a migration that loses history or secrets ends the trial.
 
