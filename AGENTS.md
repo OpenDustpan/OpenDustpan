@@ -48,6 +48,7 @@ blob/                port: object storage; blob/fs adapter; blob/blobtest suite
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
 api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
+api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
 e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 internal/            helpers shared across packages, not part of the SDK
 docs/adr/            architecture decision records: accepted decisions only
