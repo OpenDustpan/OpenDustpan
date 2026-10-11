@@ -395,7 +395,9 @@ func (f updateFixture) doUpdate(t *testing.T, req updateRequest) (int, string) {
 func (f updateFixture) mintStarted(t *testing.T) (stack.UpdateID, string) {
 	t.Helper()
 
-	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -413,7 +415,11 @@ func (f updateFixture) mintStarted(t *testing.T) (stack.UpdateID, string) {
 func (f updateFixture) mintStartedMutating(t *testing.T) (stack.UpdateID, string) {
 	t.Helper()
 
-	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	u, err := f.updates.Create(
+		t.Context(),
+		f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -852,7 +858,11 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 	case strings.HasSuffix(pattern, "/import"):
 		return accessTarget{Target: "/api/stacks/acme/web/prod/import", Body: `{"version":3,"deployment":{}}`}
 	case strings.HasSuffix(pattern, "/cancel"):
-		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+		u, err := f.updates.Create(
+			t.Context(),
+			f.ref,
+			stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -863,7 +873,9 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 
 		return accessTarget{Target: "/api/stacks/acme/web/prod/update/" + u.ID.String() + "/cancel", Body: ""}
 	case strings.HasSuffix(pattern, "/update/{update}"):
-		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+			Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		})
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -979,7 +991,11 @@ func TestHistoryShowsFinishedUpdates(t *testing.T) {
 
 	f := newUpdateFixture(t, allowAll())
 
-	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	u, err := f.updates.Create(
+		t.Context(),
+		f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1365,7 +1381,11 @@ func TestExportStackVersionNoFallback(t *testing.T) {
 func finishMutatingUpdate(t *testing.T, f updateFixture, deployment string, status stack.UpdateStatus) {
 	t.Helper()
 
-	u, createErr := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	u, createErr := f.updates.Create(
+		t.Context(),
+		f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
 	if createErr != nil {
 		t.Fatalf("create: %v", createErr)
 	}
@@ -1412,7 +1432,11 @@ func TestCancelUpdateCycle(t *testing.T) {
 	}
 
 	// A canceled update keeps its number, so the next one does not reuse it.
-	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	u, err := f.updates.Create(
+		t.Context(),
+		f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1509,7 +1533,9 @@ func TestGetStackShowsActiveUpdate(t *testing.T) {
 	check("")
 
 	// A preview alone never shows.
-	preview, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+	preview, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
 	if err != nil {
 		t.Fatalf("create preview: %v", err)
 	}
@@ -1534,4 +1560,39 @@ func TestGetStackShowsActiveUpdate(t *testing.T) {
 
 	// The preview still runs, so this stays the preview-only case.
 	check("")
+}
+
+// TestCreateUpdateRecordsCaller checks that a new update records the subject
+// of the caller as its creator (ADR 28 decision 4).
+func TestCreateUpdateRecordsCaller(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	code, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/update", `{}`))
+	if code != http.StatusOK {
+		t.Fatalf("create update: status %d, body %s", code, body)
+	}
+
+	var resp struct {
+		UpdateID string `json:"updateID"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+
+	id, err := stack.ParseUpdateID(resp.UpdateID)
+	if err != nil {
+		t.Fatalf("parse update ID %q: %v", resp.UpdateID, err)
+	}
+
+	u, err := f.updates.Get(t.Context(), f.ref, id)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if u.CreatedBy != "tester" {
+		t.Fatalf("CreatedBy = %q, want %q", u.CreatedBy, "tester")
+	}
 }

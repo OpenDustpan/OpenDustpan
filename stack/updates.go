@@ -160,7 +160,9 @@ type Started struct {
 	Update Update
 }
 
-// Create records a new update. It does not lock the stack.
+// Create records a new update. It does not lock the stack. It records who
+// asked in CreatedBy and, for a restore, which version it copies in
+// RestoredFrom, both as given in plan.
 func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
@@ -179,11 +181,9 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		DryRun:    plan.DryRun,
 		Version:   0,
 		Revision:  1,
-		// CreatedBy stays empty until the API passes the principal, and
-		// RestoredFrom stays 0 until the restore route sets it. Sizes come
-		// from the checkpoint rows on read.
-		CreatedBy:       "",
-		RestoredFrom:    0,
+		// Sizes come from the checkpoint rows on read.
+		CreatedBy:       plan.CreatedBy,
+		RestoredFrom:    plan.RestoredFrom,
 		CheckpointBytes: 0,
 	}
 
@@ -329,7 +329,48 @@ func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Upda
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false})
+	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	if err != nil {
+		return Update{}, err
+	}
+
+	closing, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+	defer cancel()
+
+	started, err := s.Start(ctx, ref, u.ID)
+	if err != nil {
+		// Do not leave a not-started update behind for every conflicting attempt.
+		_, cancelErr := s.Cancel(closing, ref, u.ID)
+
+		return Update{}, errors.Join(err, cancelErr)
+	}
+
+	status := StatusSucceeded
+
+	saveErr := s.SaveCheckpoint(ctx, ref, u.ID, started.Token, in)
+	if saveErr != nil {
+		status = StatusFailed
+	}
+
+	done, err := s.Complete(closing, ref, u.ID, started.Token, status)
+
+	return done, errors.Join(saveErr, err)
+}
+
+// Restore copies the checkpoint of version into a new update of kind
+// "restore" and completes it. It follows the rules of Import: the restore
+// update shows in history with RestoredFrom set, respects the stack lock,
+// and always ends, even when ctx is canceled. A version without a checkpoint
+// fails with ErrNoState before any update exists. A restore changes no
+// infrastructure; it writes old state as a new version. The deployment stays
+// opaque: the service never reads secret content.
+func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject string) (Update, error) {
+	in, err := s.restoreInput(ctx, ref, version)
+	if err != nil {
+		return Update{}, err
+	}
+
+	u, err := s.Create(ctx, ref, Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version})
 	if err != nil {
 		return Update{}, err
 	}
@@ -447,6 +488,26 @@ func (s *Updates) validate(in CheckpointInput) error {
 	default:
 		return nil
 	}
+}
+
+// restoreInput returns the checkpoint input that restores version of ref: a
+// copy of that version's checkpoint. It returns ErrNoState when the version
+// has no checkpoint, before any update exists.
+func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (CheckpointInput, error) {
+	src, err := s.checkpoints.CheckpointByVersion(ctx, ref, version)
+	if err != nil {
+		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
+	}
+
+	in := CheckpointInput{
+		Features:      src.Features,
+		Deployment:    src.Deployment,
+		SchemaVersion: src.SchemaVersion,
+		Sequence:      0,
+		Invalid:       src.Invalid,
+	}
+
+	return in, s.validate(in)
 }
 
 // transition applies change to the stored update and saves the result. The

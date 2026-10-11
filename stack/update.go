@@ -78,13 +78,18 @@ func ParseUpdateKind(s string) (UpdateKind, error) {
 	}
 }
 
-// Plan is what a client asks to run: a kind, and whether it is a dry run. The
-// CLI runs the preview phase of `pulumi up`, `refresh` and `destroy` with the
-// real kind and DryRun set, so the kind alone does not say whether an update
-// changes state.
+// Plan is what a client asks to run: a kind, whether it is a dry run, who
+// asked, and for a restore which stack version it copies. The CLI runs the
+// preview phase of `pulumi up`, `refresh` and `destroy` with the real kind
+// and DryRun set, so the kind alone does not say whether an update changes
+// state. CreatedBy is the subject of the principal that asked; it stays
+// empty when the caller gives none. RestoredFrom is 0 unless Kind is
+// KindRestore.
 type Plan struct {
-	Kind   UpdateKind
-	DryRun bool
+	Kind         UpdateKind
+	DryRun       bool
+	CreatedBy    string
+	RestoredFrom int64
 }
 
 // UpdateStatus is where an update is in its lifecycle.
