@@ -135,7 +135,8 @@ func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, erro
 }
 
 // CreateStack implements stack.Store with a fenced insert. Tags go to the
-// stack_tags table, keyed by the new stack ID.
+// stack_tags table, keyed by the new stack ID. The inventory entry is written
+// in the same transaction.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
 	row := codec.ToStackRow(st)
 
@@ -157,7 +158,11 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return stack.ErrAlreadyExists
 		}
 
-		return insertStackTags(ctx, q, row.ID, st.Tags)
+		if err := insertStackTags(ctx, q, row.ID, st.Tags); err != nil {
+			return err
+		}
+
+		return publishStackInventory(ctx, q, st.Ref, row.ID, row.UpdatedAtMs)
 	})
 }
 
@@ -193,7 +198,8 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 }
 
 // UpdateStackTags implements stack.Store: it replaces every tag row of the
-// stack, keyed by its stable ID, and stamps updatedAt.
+// stack, keyed by its stable ID, and stamps updatedAt. The inventory entry is
+// written in the same transaction.
 func (s *Store) UpdateStackTags(
 	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
 ) error {
@@ -223,7 +229,11 @@ func (s *Store) UpdateStackTags(
 			return fmt.Errorf("stamp stack: %w", touchErr)
 		}
 
-		return insertStackTags(ctx, q, id, tags)
+		if err := insertStackTags(ctx, q, id, tags); err != nil {
+			return err
+		}
+
+		return publishStackInventory(ctx, q, ref, id, codec.Millis(updatedAt))
 	})
 }
 
@@ -260,7 +270,9 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 }
 
 // RenameStack implements stack.Store. It renames the stack without moving its
-// history, checkpoint or events: child rows key on the stable stack ID.
+// history, checkpoint or events: child rows key on the stable stack ID. The
+// inventory keeps one entry for the same stack ID, under the new name, in the
+// same transaction.
 func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
@@ -287,7 +299,22 @@ func (s *Store) RenameStack(
 			return stack.ErrNotFound
 		}
 
-		return nil
+		if removeErr := removeStackInventory(ctx, q, oldRef); removeErr != nil {
+			return removeErr
+		}
+
+		newRef := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName}
+
+		row, err := q.GetStack(ctx, db.GetStackParams{
+			Namespace: newRef.Namespace.String(),
+			Project:   newRef.Project.String(),
+			Name:      newRef.Stack.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("read renamed stack: %w", err)
+		}
+
+		return publishStackInventory(ctx, q, newRef, row.ID, row.UpdatedAtMs)
 	})
 }
 
@@ -335,6 +362,7 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // DeleteStack implements stack.Store. It removes the stack with its updates,
 // checkpoints, events and wrapped data key in one fenced transaction: child
 // rows go through foreign keys, the data key through an explicit delete. It
+// removes the inventory entry in the same transaction. It
 // returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
 // while a mutating update of the stack runs.
 func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
@@ -370,7 +398,7 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 			return stack.ErrNotFound
 		}
 
-		return nil
+		return removeStackInventory(ctx, q, ref)
 	})
 }
 

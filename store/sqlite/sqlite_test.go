@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret/secrettest"
 	"opendustpan.org/opendustpan/stack"
@@ -297,6 +298,170 @@ func TestMigration0007KeepsTags(t *testing.T) {
 
 	if got.Tags["team"] != "platform" || len(got.Tags) != 1 {
 		t.Fatalf("migrated tags = %v, want map[team:platform]", got.Tags)
+	}
+}
+
+func TestMigration0009FillsInventory(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	seedAt0008WithStacks(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	checkMigratedInventory(t, s)
+}
+
+// checkMigratedInventory checks the migration filled one entry per stack.
+func checkMigratedInventory(t *testing.T, s *sqlite.Store) {
+	t.Helper()
+
+	entries, err := s.ListUnits(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("list inventory: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("migrated inventory entries = %+v, want two", entries)
+	}
+
+	for i := range entries {
+		checkMigratedEntry(t, &entries[i])
+	}
+}
+
+// checkMigratedEntry checks one migrated entry against its stack.
+func checkMigratedEntry(t *testing.T, e *inventory.Entry) {
+	t.Helper()
+
+	want := map[string]struct {
+		unitID      string
+		lastChanged time.Time
+	}{
+		"web/prod": {unitID: "stk-aaaaaaaaaaaaaaaaaaaa", lastChanged: time.UnixMilli(2000).UTC()},
+		"web/dev":  {unitID: "stk-bbbbbbbbbbbbbbbbbbbb", lastChanged: time.UnixMilli(3000).UTC()},
+	}
+
+	w, ok := want[e.Name]
+	if !ok {
+		t.Fatalf("migrated inventory entry name = %q, want web/prod or web/dev", e.Name)
+	}
+
+	if e.Tool != "pulumi" || e.Namespace.String() != "acme" || e.UnitID != w.unitID ||
+		e.DisplayName != e.Name || !e.LastChanged.Equal(w.lastChanged) ||
+		e.Status != "" || e.ResourceCount != nil {
+		t.Fatalf("migrated inventory entry = %+v, want unit %q changed %v", e, w.unitID, w.lastChanged)
+	}
+}
+
+// seedAt0008WithStacks creates a database at migration 0008 with two stacks
+// and no inventory rows.
+func seedAt0008WithStacks(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0008(t, conn)
+	recordMigrations0008(t, conn)
+	seedInventoryStacks(t, conn)
+}
+
+// applyMigrations0008 applies migrations 0001 to 0008 to conn.
+func applyMigrations0008(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql",
+	}
+
+	for _, name := range names {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+// recordMigrations0008 records migrations 0001 to 0008 as applied.
+func recordMigrations0008(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER NOT NULL PRIMARY KEY,
+		name    TEXT    NOT NULL
+	) STRICT`
+
+	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
+			t.Fatalf("record migration: %v", err)
+		}
+	}
+}
+
+// seedInventoryStacks seeds a namespace with two stacks.
+func seedInventoryStacks(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const seedNamespace = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.ExecContext(t.Context(), seedNamespace); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+
+	const seedStack = `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', ?, ?, 0, 1000, ?)`
+
+	for _, s := range []struct {
+		name    string
+		id      string
+		updated int64
+	}{
+		{name: "prod", id: "stk-aaaaaaaaaaaaaaaaaaaa", updated: 2000},
+		{name: "dev", id: "stk-bbbbbbbbbbbbbbbbbbbb", updated: 3000},
+	} {
+		if _, err := conn.ExecContext(t.Context(), seedStack, s.name, s.id, s.updated); err != nil {
+			t.Fatalf("seed stack %s: %v", s.name, err)
+		}
 	}
 }
 

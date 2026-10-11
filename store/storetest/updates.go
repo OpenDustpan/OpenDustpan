@@ -61,6 +61,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
+		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 	}
 
 	for _, tc := range cases {
@@ -1211,6 +1212,33 @@ func (f fixture) stackID(t *testing.T, ref stack.Ref) string {
 	}
 
 	return st.ID.String()
+}
+
+// testInventoryAfterUpdateFinish ends a mutating update and checks the entry
+// follows the update's end time.
+func testInventoryAfterUpdateFinish(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	done := f.end(t, u, stack.StatusSucceeded)
+
+	entries, err := f.s.ListUnits(t.Context(), f.ref.Namespace)
+	if err != nil {
+		t.Fatalf("list inventory: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	got := entries[0]
+	wantName := f.ref.Project.String() + "/" + f.ref.Stack.String()
+
+	if got.Tool != "pulumi" || got.Namespace != f.ref.Namespace || got.Name != wantName ||
+		got.UnitID != f.stackID(t, f.ref) || got.DisplayName != wantName ||
+		!got.LastChanged.Equal(done.EndedAt) || got.Status != "" || got.ResourceCount != nil {
+		t.Fatalf("inventory entry = %+v, want pulumi %q changed %v", got, wantName, done.EndedAt)
+	}
 }
 
 func assertUpdate(t *testing.T, f fixture, want stack.Update) {

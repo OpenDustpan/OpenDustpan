@@ -120,7 +120,9 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 	return u, nil
 }
 
-// SaveUpdate implements stack.UpdateStore.
+// SaveUpdate implements stack.UpdateStore. When a mutating update ends, the
+// stack version moves and the inventory entry moves with it, in the same
+// transaction.
 func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, u.Ref)
@@ -147,7 +149,7 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return fmt.Errorf("set stack version: %w", err)
 		}
 
-		return nil
+		return publishStackInventory(ctx, q, u.Ref, locked.ID, codec.Millis(u.EndedAt))
 	})
 }
 

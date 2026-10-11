@@ -4,6 +4,10 @@
 
 package db
 
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
 type Checkpoint struct {
 	UpdateID      string
 	LeaseDigest   []byte
@@ -15,6 +19,17 @@ type Checkpoint struct {
 	Deployment    []byte
 	SavedAtMs     int64
 	StackID       string
+}
+
+type Inventory struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount pgtype.Int8
 }
 
 type Namespace struct {
