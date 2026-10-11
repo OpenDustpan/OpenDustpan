@@ -238,3 +238,7 @@ Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 ## License
 
 OpenDustpan is under the [Apache License 2.0](LICENSE).
+
+Each release archive holds the license files of the dependencies that its
+binary links, in `third_party_licenses/`. The container image holds them in
+`/licenses`. `scripts/third-party-licenses.sh` collects them.

@@ -49,6 +49,8 @@ jobs:
         run: pipx install semgrep==1.178.0
       - name: Semgrep rules
         run: make semgrep
+      - name: Each linked module has a license file to ship
+        run: make licenses
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
       - name: Test
