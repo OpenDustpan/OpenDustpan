@@ -21,26 +21,16 @@ var (
 
 // CreateUpdate implements stack.UpdateStore.
 func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
-	row := codec.ToUpdateRow(u)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		exists, err := q.StackExists(ctx, db.StackExistsParams{
-			Namespace: row.Namespace,
-			Project:   row.Project,
-			Name:      row.Stack,
-		})
+		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if err != nil {
-			return fmt.Errorf("check stack: %w", err)
+			return err
 		}
 
-		if !exists {
-			return stack.ErrNotFound
-		}
+		row := codec.ToUpdateRow(u, stack.ID(stackID))
 
 		err = q.CreateUpdate(ctx, db.CreateUpdateParams{
-			Namespace:        row.Namespace,
-			Project:          row.Project,
-			Stack:            row.Stack,
+			StackID:          row.StackID,
 			ID:               row.ID,
 			Kind:             row.Kind,
 			DryRun:           row.DryRun,
@@ -63,12 +53,12 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 
 // GetUpdate implements stack.UpdateStore.
 func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
-	row, err := s.queries.GetUpdate(ctx, db.GetUpdateParams{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Stack:     ref.Stack.String(),
-		ID:        id.String(),
-	})
+	stackID, err := s.stackID(ctx, ref)
+	if err != nil {
+		return stack.Update{}, err
+	}
+
+	row, err := s.queries.GetUpdate(ctx, db.GetUpdateParams{StackID: stackID, ID: id.String()})
 	if errors.Is(err, sql.ErrNoRows) {
 		return stack.Update{}, stack.ErrUpdateNotFound
 	}
@@ -77,32 +67,40 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		return stack.Update{}, fmt.Errorf("select update: %w", err)
 	}
 
-	return codec.FromUpdateRow(fromUpdateRow(&row))
+	return codec.FromUpdateRow(fromUpdateRow(&row), ref)
 }
 
 // StartUpdate implements stack.UpdateStore. The write lock taken when the
 // transaction begins makes the conflict check and version allocation atomic.
 func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) (stack.Update, error) {
-	stk := stackParams(u.Ref)
-
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		var err error
-
-		if u.Mutates() {
-			u.Version, err = allocateVersion(ctx, q, stk)
-		} else {
-			u.Version, err = q.GetStackVersion(ctx, db.GetStackVersionParams{
-				Namespace: stk.Namespace,
-				Project:   stk.Project,
-				Name:      stk.Stack,
-			})
+		stackID, err := stackIDFor(ctx, q, u.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrUpdateNotFound
 		}
 
 		if err != nil {
 			return err
 		}
 
-		return saveUpdate(ctx, q, u)
+		if u.Mutates() {
+			u.Version, err = allocateVersion(ctx, q, stackID)
+		} else {
+			u.Version, err = q.GetStackVersion(ctx, db.GetStackVersionParams{
+				Namespace: u.Ref.Namespace.String(),
+				Project:   u.Ref.Project.String(),
+				Name:      u.Ref.Stack.String(),
+			})
+			if errors.Is(err, sql.ErrNoRows) {
+				return stack.ErrUpdateNotFound
+			}
+		}
+
+		if err != nil {
+			return err
+		}
+
+		return saveUpdate(ctx, q, u, stackID)
 	})
 	if err != nil {
 		return stack.Update{}, err
@@ -114,15 +112,24 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 // SaveUpdate implements stack.UpdateStore.
 func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if err := saveUpdate(ctx, q, u); err != nil {
+		stackID, err := stackIDFor(ctx, q, u.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrUpdateNotFound
+		}
+
+		if err != nil {
 			return err
+		}
+
+		if saveErr := saveUpdate(ctx, q, u, stackID); saveErr != nil {
+			return saveErr
 		}
 
 		if !u.Mutates() || !u.Status.Terminal() || u.Version == 0 {
 			return nil
 		}
 
-		err := q.SetStackVersion(ctx, db.SetStackVersionParams{
+		err = q.SetStackVersion(ctx, db.SetStackVersionParams{
 			Version:     u.Version,
 			UpdatedAtMs: codec.Millis(u.EndedAt),
 			Namespace:   u.Ref.Namespace.String(),
@@ -139,7 +146,12 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 
 // ActiveUpdate implements stack.UpdateStore.
 func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, error) {
-	row, err := s.queries.ActiveUpdate(ctx, db.ActiveUpdateParams(stackParams(ref)))
+	stackID, err := s.stackID(ctx, ref)
+	if err != nil {
+		return stack.Update{}, err
+	}
+
+	row, err := s.queries.ActiveUpdate(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return stack.Update{}, stack.ErrUpdateNotFound
 	}
@@ -148,17 +160,24 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		return stack.Update{}, fmt.Errorf("select active update: %w", err)
 	}
 
-	return codec.FromUpdateRow(fromUpdateRow(&row))
+	return codec.FromUpdateRow(fromUpdateRow(&row), ref)
 }
 
 // ListUpdates implements stack.UpdateStore.
 func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.queries.ListUpdates(ctx, db.ListUpdatesParams{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Stack:     ref.Stack.String(),
-		Limit:     int64(page.Limit),
-		Offset:    int64(page.Offset),
+		StackID: stackID,
+		Limit:   int64(page.Limit),
+		Offset:  int64(page.Offset),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select updates: %w", err)
@@ -169,54 +188,77 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 		converted = append(converted, fromUpdateRow(&rows[i]))
 	}
 
-	return codec.FromUpdateRows(converted)
+	return codec.FromUpdateRows(converted, ref)
 }
 
 // PutCheckpoint implements stack.CheckpointStore. The deployment is stored in
 // the row; only the stack's latest checkpoint is kept.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
-	row, err := codec.ToCheckpointRow(cp)
-	if err != nil {
-		return err
-	}
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if err := checkLease(ctx, q, cp.Ref, cp.Update, row.LeaseDigest); err != nil {
+		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrWrongUpdateState
+		}
+
+		if err != nil {
 			return err
 		}
 
-		if cp.Sequence > 0 {
-			retried, err := checkSequence(ctx, q, cp)
-			if err != nil || retried {
-				return err
-			}
+		row, rowErr := codec.ToCheckpointRow(cp, stack.ID(stackID))
+		if rowErr != nil {
+			return rowErr
 		}
 
-		err := q.PutCheckpoint(ctx, db.PutCheckpointParams{
-			Namespace:     row.Namespace,
-			Project:       row.Project,
-			Stack:         row.Stack,
-			UpdateID:      row.UpdateID,
-			LeaseDigest:   row.LeaseDigest,
-			SchemaVersion: row.SchemaVersion,
-			Sequence:      row.Sequence,
-			Digest:        row.Digest,
-			Invalid:       row.Invalid,
-			FeaturesJson:  string(row.Features),
-			Deployment:    row.Deployment,
-			SavedAtMs:     row.SavedAtMs,
-		})
-		if err != nil {
-			return fmt.Errorf("upsert checkpoint: %w", err)
-		}
-
-		return nil
+		return writeCheckpoint(ctx, q, cp, stackID, row)
 	})
+}
+
+// writeCheckpoint checks the lease and sequence, then upserts the checkpoint.
+func writeCheckpoint(
+	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
+) error {
+	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
+		return leaseErr
+	}
+
+	if cp.Sequence > 0 {
+		retried, seqErr := checkSequence(ctx, q, cp, stackID)
+		if seqErr != nil || retried {
+			return seqErr
+		}
+	}
+
+	putErr := q.PutCheckpoint(ctx, db.PutCheckpointParams{
+		StackID:       row.StackID,
+		UpdateID:      row.UpdateID,
+		LeaseDigest:   row.LeaseDigest,
+		SchemaVersion: row.SchemaVersion,
+		Sequence:      row.Sequence,
+		Digest:        row.Digest,
+		Invalid:       row.Invalid,
+		FeaturesJson:  string(row.Features),
+		Deployment:    row.Deployment,
+		SavedAtMs:     row.SavedAtMs,
+	})
+	if putErr != nil {
+		return fmt.Errorf("upsert checkpoint: %w", putErr)
+	}
+
+	return nil
 }
 
 // LatestCheckpoint implements stack.CheckpointStore.
 func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
-	row, err := s.queries.GetCheckpoint(ctx, db.GetCheckpointParams(stackParams(ref)))
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
+	row, err := s.queries.GetCheckpoint(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -225,21 +267,28 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(row))
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // AppendEvents implements stack.EventStore.
 func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if err := checkLease(ctx, q, batch.Ref, batch.Update, codec.EncodeDigest(batch.Lease)); err != nil {
+		stackID, err := stackIDFor(ctx, q, batch.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrWrongUpdateState
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if err := checkLease(ctx, q, stackID, batch.Update, codec.EncodeDigest(batch.Lease)); err != nil {
 			return err
 		}
 
 		for _, e := range batch.Events {
 			err := q.AppendEvent(ctx, db.AppendEventParams{
-				Namespace:   batch.Ref.Namespace.String(),
-				Project:     batch.Ref.Project.String(),
-				Stack:       batch.Ref.Stack.String(),
+				StackID:     stackID,
 				UpdateID:    batch.Update.String(),
 				Sequence:    e.Sequence,
 				TimestampMs: codec.Millis(e.Timestamp),
@@ -259,7 +308,12 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
 ) ([]stack.Event, error) {
-	_, err := s.queries.GetUpdateLease(ctx, db.GetUpdateLeaseParams(updateParams(ref, id)))
+	stackID, err := s.stackID(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = s.queries.GetUpdateLease(ctx, db.GetUpdateLeaseParams{StackID: stackID, ID: id.String()})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, stack.ErrUpdateNotFound
 	}
@@ -269,12 +323,10 @@ func (s *Store) ListEvents(
 	}
 
 	rows, err := s.queries.ListEvents(ctx, db.ListEventsParams{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Stack:     ref.Stack.String(),
-		UpdateID:  id.String(),
-		Sequence:  after,
-		Limit:     int64(limit),
+		StackID:  stackID,
+		UpdateID: id.String(),
+		Sequence: after,
+		Limit:    int64(limit),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select events: %w", err)
@@ -292,10 +344,50 @@ func (s *Store) ListEvents(
 	return events, nil
 }
 
+// stackID resolves ref to its stable ID, or ErrUpdateNotFound if the stack
+// does not exist. Reads use it to scope by ID; a missing stack then reads as
+// no update, no state or no events, as before.
+func (s *Store) stackID(ctx context.Context, ref stack.Ref) (string, error) {
+	id, err := s.queries.GetStackID(ctx, db.GetStackIDParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", stack.ErrUpdateNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve stack: %w", err)
+	}
+
+	return id, nil
+}
+
+// stackIDFor resolves ref to its stable ID inside a fenced write, or
+// ErrNotFound if the stack does not exist and ErrUpdateNotFound where an
+// update is expected.
+func stackIDFor(ctx context.Context, q *db.Queries, ref stack.Ref) (string, error) {
+	id, err := q.GetStackID(ctx, db.GetStackIDParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", stack.ErrNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve stack: %w", err)
+	}
+
+	return id, nil
+}
+
 // allocateVersion returns the next version of a stack with no running
 // mutating update, or ErrUpdateConflict.
-func allocateVersion(ctx context.Context, q *db.Queries, stk stackKey) (int64, error) {
-	running, err := q.RunningMutatingUpdates(ctx, db.RunningMutatingUpdatesParams(stk))
+func allocateVersion(ctx context.Context, q *db.Queries, stackID string) (int64, error) {
+	running, err := q.RunningMutatingUpdates(ctx, stackID)
 	if err != nil {
 		return 0, fmt.Errorf("count running updates: %w", err)
 	}
@@ -304,7 +396,7 @@ func allocateVersion(ctx context.Context, q *db.Queries, stk stackKey) (int64, e
 		return 0, stack.ErrUpdateConflict
 	}
 
-	highest, err := q.HighestUpdateVersion(ctx, db.HighestUpdateVersionParams(stk))
+	highest, err := q.HighestUpdateVersion(ctx, stackID)
 	if err != nil {
 		return 0, fmt.Errorf("read highest update version: %w", err)
 	}
@@ -313,8 +405,8 @@ func allocateVersion(ctx context.Context, q *db.Queries, stk stackKey) (int64, e
 }
 
 // saveUpdate writes u if the store holds u.Revision-1.
-func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update) error {
-	row := codec.ToUpdateRow(u)
+func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID string) error {
+	row := codec.ToUpdateRow(u, stack.ID(stackID))
 
 	n, err := q.SaveUpdate(ctx, db.SaveUpdateParams{
 		Status:           row.Status,
@@ -324,9 +416,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update) error {
 		LeaseExpiresAtMs: row.LeaseExpiresAtMs,
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
-		Namespace:        row.Namespace,
-		Project:          row.Project,
-		Stack:            row.Stack,
+		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,
 	})
@@ -338,7 +428,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update) error {
 		return nil
 	}
 
-	_, err = q.GetUpdateLease(ctx, db.GetUpdateLeaseParams(updateParams(u.Ref, u.ID)))
+	_, err = q.GetUpdateLease(ctx, db.GetUpdateLeaseParams{StackID: stackID, ID: u.ID.String()})
 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -351,8 +441,8 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update) error {
 }
 
 // checkLease returns ErrWrongUpdateState unless the update runs under lease.
-func checkLease(ctx context.Context, q *db.Queries, ref stack.Ref, id stack.UpdateID, lease []byte) error {
-	row, err := q.GetUpdateLease(ctx, db.GetUpdateLeaseParams(updateParams(ref, id)))
+func checkLease(ctx context.Context, q *db.Queries, stackID string, id stack.UpdateID, lease []byte) error {
+	row, err := q.GetUpdateLease(ctx, db.GetUpdateLeaseParams{StackID: stackID, ID: id.String()})
 	if errors.Is(err, sql.ErrNoRows) {
 		return stack.ErrWrongUpdateState
 	}
@@ -371,8 +461,8 @@ func checkLease(ctx context.Context, q *db.Queries, ref stack.Ref, id stack.Upda
 
 // checkSequence compares cp with the last checkpoint of its update and
 // reports whether cp repeats it.
-func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint) (bool, error) {
-	last, err := q.GetCheckpoint(ctx, db.GetCheckpointParams(stackParams(cp.Ref)))
+func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
+	last, err := q.GetCheckpoint(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -397,39 +487,9 @@ func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint) (boo
 	}
 }
 
-// stackKey matches every generated parameter struct that names only a stack.
-type stackKey struct {
-	Namespace string
-	Project   string
-	Stack     string
-}
-
-func stackParams(ref stack.Ref) stackKey {
-	return stackKey{Namespace: ref.Namespace.String(), Project: ref.Project.String(), Stack: ref.Stack.String()}
-}
-
-// updateKey matches every generated parameter struct that names one update.
-type updateKey struct {
-	Namespace string
-	Project   string
-	Stack     string
-	ID        string
-}
-
-func updateParams(ref stack.Ref, id stack.UpdateID) updateKey {
-	return updateKey{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Stack:     ref.Stack.String(),
-		ID:        id.String(),
-	}
-}
-
 func fromUpdateRow(row *db.Update) codec.UpdateRow {
 	return codec.UpdateRow{
-		Namespace:        row.Namespace,
-		Project:          row.Project,
-		Stack:            row.Stack,
+		StackID:          row.StackID,
 		ID:               row.ID,
 		Kind:             row.Kind,
 		Status:           row.Status,
@@ -446,9 +506,7 @@ func fromUpdateRow(row *db.Update) codec.UpdateRow {
 
 func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 	return codec.CheckpointRow{
-		Namespace:     row.Namespace,
-		Project:       row.Project,
-		Stack:         row.Stack,
+		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,

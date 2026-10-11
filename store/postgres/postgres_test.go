@@ -106,6 +106,238 @@ func TestMigration0003FillsIDs(t *testing.T) {
 	}
 }
 
+func TestMigration0005KeepsHistory(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+	seedAt0003WithHistory(t, migrated)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	checkMigratedStack(t, s, ref)
+	checkMigratedUpdate(t, s, ref)
+	checkMigratedHistory(t, s, ref)
+	checkMigratedCheckpoint(t, s, ref)
+	checkMigratedEvents(t, s, ref)
+}
+
+func checkMigratedStack(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	gotStack, err := s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if gotStack.ID.String() != "stk-aaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("migrated stack ID = %q, want stk-aaaaaaaaaaaaaaaaaaaa", gotStack.ID)
+	}
+}
+
+func checkMigratedUpdate(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	gotUpdate, err := s.GetUpdate(t.Context(), ref, "u1")
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if gotUpdate.Version != 1 || gotUpdate.Status != stack.StatusSucceeded {
+		t.Fatalf("migrated update = version %d status %q, want 1 succeeded", gotUpdate.Version, gotUpdate.Status)
+	}
+}
+
+func checkMigratedHistory(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	history, err := s.ListUpdates(t.Context(), ref, stack.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(history) != 1 || history[0].ID != "u1" {
+		t.Fatalf("migrated history = %+v, want one update u1", history)
+	}
+}
+
+func checkMigratedCheckpoint(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	cp, err := s.LatestCheckpoint(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("latest checkpoint: %v", err)
+	}
+
+	if string(cp.Deployment) != "{}" || cp.Update != "u1" {
+		t.Fatalf("migrated checkpoint = deployment %q update %q, want {} u1", cp.Deployment, cp.Update)
+	}
+}
+
+func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	events, err := s.ListEvents(t.Context(), ref, "u1", -1, 10)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("migrated events = %d, want 2", len(events))
+	}
+}
+
+// seedAt0003WithHistory creates a database at migration 0003 with a stack,
+// one update, its checkpoint and two events, all keyed by name.
+func seedAt0003WithHistory(t *testing.T, migrated string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0003(t, conn)
+	recordMigrations0003(t, conn)
+	seedHistoryNamespace(t, conn)
+	seedHistoryStack(t, conn)
+	seedHistoryUpdate(t, conn)
+	seedHistoryCheckpoint(t, conn)
+	seedHistoryEvents(t, conn)
+}
+
+func applyMigrations0003(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	for _, name := range []string{"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql"} {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		_, execErr := conn.Exec(t.Context(), string(data))
+		if execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+func recordMigrations0003(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	_, err := conn.Exec(t.Context(), createMigrations)
+	if err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	for _, m := range []struct {
+		version int64
+		name    string
+	}{{version: 1, name: "0001_init.sql"}, {version: 2, name: "0002_updates.sql"}, {version: 3, name: "0003_stack_id.sql"}} {
+		_, err := conn.Exec(t.Context(), record, m.version, m.name)
+		if err != nil {
+			t.Fatalf("record migration %s: %v", m.name, err)
+		}
+	}
+}
+
+func seedHistoryNamespace(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	_, err := conn.Exec(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+}
+
+func seedHistoryStack(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
+
+	_, err := conn.Exec(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("seed stack: %v", err)
+	}
+}
+
+func seedHistoryUpdate(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO updates (namespace, project, stack, id, kind, dry_run, status, version, revision,
+		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
+		VALUES ('acme', 'web', 'prod', 'u1', 'update', false, 'succeeded', 1, 3, ''::bytea, 0, 1000, 2000, 3000)`
+
+	_, err := conn.Exec(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+}
+
+func seedHistoryCheckpoint(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO checkpoints (namespace, project, stack, update_id, lease_digest, schema_version, sequence,
+		digest, invalid, features, deployment, saved_at_ms)
+		VALUES ('acme', 'web', 'prod', 'u1', ''::bytea, 3, 0,
+		'\x0000000000000000000000000000000000000000000000000000000000000000', false, '[]', '{}', 4000)`
+
+	_, err := conn.Exec(t.Context(), seed)
+	if err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+}
+
+func seedHistoryEvents(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO update_events (namespace, project, stack, update_id, sequence, timestamp_ms, payload)
+		VALUES ('acme', 'web', 'prod', 'u1', $1, $2, '{}')`
+
+	_, err := conn.Exec(t.Context(), seed, 0, 5000)
+	if err != nil {
+		t.Fatalf("seed event 0: %v", err)
+	}
+
+	_, err = conn.Exec(t.Context(), seed, 1, 5001)
+	if err != nil {
+		t.Fatalf("seed event 1: %v", err)
+	}
+}
+
 // seedAt0002 creates a database at migration 0002 with two stacks and no IDs.
 func seedAt0002(t *testing.T, migrated string) {
 	t.Helper()

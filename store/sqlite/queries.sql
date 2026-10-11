@@ -35,22 +35,25 @@ FROM stacks
 WHERE namespace = ? AND project = ?
 ORDER BY name;
 
--- name: StackExists :one
-SELECT EXISTS (
-    SELECT 1 FROM stacks WHERE namespace = ? AND project = ? AND name = ?
-);
+-- name: RenameStack :execrows
+UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?;
+
+-- name: GetStackID :one
+SELECT id
+FROM stacks
+WHERE namespace = ? AND project = ? AND name = ?;
 
 -- name: CreateUpdate :exec
 INSERT INTO updates (
-    namespace, project, stack, id, kind, dry_run, status, version, revision,
+    stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetUpdate :one
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ? AND id = ?;
+WHERE stack_id = ? AND id = ?;
 
 -- name: SaveUpdate :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
@@ -59,19 +62,19 @@ UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
     started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms
-WHERE namespace = @namespace AND project = @project AND stack = @stack AND id = @id
+WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
 -- name: RunningMutatingUpdates :one
 SELECT COUNT(*)
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview';
 
 -- name: HighestUpdateVersion :one
 SELECT CAST(COALESCE(MAX(version), 0) AS INTEGER)
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview';
 
 -- name: GetStackVersion :one
@@ -85,17 +88,17 @@ SET version = ?, updated_at_ms = ?
 WHERE namespace = ? AND project = ? AND name = ?;
 
 -- name: ActiveUpdate :one
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview';
 
 -- name: ListUpdates :many
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview'
 ORDER BY version DESC
 LIMIT ? OFFSET ?;
@@ -103,20 +106,20 @@ LIMIT ? OFFSET ?;
 -- name: GetUpdateLease :one
 SELECT status, lease_digest
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ? AND id = ?;
+WHERE stack_id = ? AND id = ?;
 
 -- name: GetCheckpoint :one
-SELECT namespace, project, stack, update_id, lease_digest, schema_version, sequence,
+SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features_json, deployment, saved_at_ms
 FROM checkpoints
-WHERE namespace = ? AND project = ? AND stack = ?;
+WHERE stack_id = ?;
 
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
-    namespace, project, stack, update_id, lease_digest, schema_version, sequence,
+    stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, deployment, saved_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (namespace, project, stack) DO UPDATE SET
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
     update_id = excluded.update_id,
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -128,13 +131,13 @@ ON CONFLICT (namespace, project, stack) DO UPDATE SET
     saved_at_ms = excluded.saved_at_ms;
 
 -- name: AppendEvent :exec
-INSERT INTO update_events (namespace, project, stack, update_id, sequence, timestamp_ms, payload)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: ListEvents :many
 SELECT sequence, timestamp_ms, payload
 FROM update_events
-WHERE namespace = ? AND project = ? AND stack = ? AND update_id = ? AND sequence > ?
+WHERE stack_id = ? AND update_id = ? AND sequence > ?
 ORDER BY sequence
 LIMIT ?;
