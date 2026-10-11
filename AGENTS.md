@@ -45,6 +45,7 @@ secret/              domain: per-scope envelope encryption (first user: the Pulu
 workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
 identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
 blob/                port: object storage; blob/fs adapter; blob/blobtest suite
+backup/              domain: backup ports (export, import, registry) and the table list
 store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
 api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
@@ -79,7 +80,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`) never import
+- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`) never import
   `net/http`, `database/sql`, drivers, `store/...` or `api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.

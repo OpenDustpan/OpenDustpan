@@ -91,6 +91,7 @@ linters:
             - "**/secret/**"
             - "**/workspace/**"
             - "**/inventory/**"
+            - "**/backup/**"
             - "**/blob/*.go"
             - "!**/*_test.go"
             - "!**/api/inventory/**"
