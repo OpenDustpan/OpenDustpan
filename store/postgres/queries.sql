@@ -203,3 +203,22 @@ FROM update_events
 WHERE stack_id = $1 AND update_id = $2 AND sequence > $3
 ORDER BY sequence
 LIMIT $4;
+
+-- name: CreateSecretKey :execrows
+INSERT INTO secret_keys (namespace, stack_id, wrapper_id, ciphertext, created_at_ms)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: GetSecretKey :one
+SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
+FROM secret_keys
+WHERE namespace = $1 AND stack_id = $2;
+
+-- name: ListSecretWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM secret_keys
+ORDER BY wrapper_id;
+
+-- name: DeleteSecretKeysOfStack :exec
+DELETE FROM secret_keys
+WHERE stack_id = $1;

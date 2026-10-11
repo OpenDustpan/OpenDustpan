@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -101,6 +102,26 @@ func (m *memKeys) GetKey(_ context.Context, scope secret.Scope) (secret.WrappedK
 	}
 
 	return k, nil
+}
+
+func (m *memKeys) ListWrapperIDs(_ context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[string]bool{}
+
+	for _, k := range m.keys {
+		seen[k.WrapperID] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
 }
 
 type oneNamespace struct{}

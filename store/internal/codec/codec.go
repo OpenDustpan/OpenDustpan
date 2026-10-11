@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 )
 
@@ -91,5 +92,39 @@ func ToNamespaceRow(ns namespace.Namespace) NamespaceRow {
 		HomeRegion:      ns.HomeRegion.String(),
 		FailoverVersion: ns.FailoverVersion,
 		CreatedAtMs:     Millis(ns.CreatedAt),
+	}
+}
+
+// SecretKeyRow is the column representation of a wrapped data key, keyed by
+// namespace and stack ID.
+type SecretKeyRow struct {
+	Namespace   string
+	StackID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
+}
+
+// ToSecretKeyRow converts a domain wrapped key into a row.
+func ToSecretKeyRow(k secret.WrappedKey) SecretKeyRow {
+	return SecretKeyRow{
+		Namespace:   k.Scope.Namespace.String(),
+		StackID:     k.Scope.ID,
+		WrapperID:   k.WrapperID,
+		Ciphertext:  k.Ciphertext,
+		CreatedAtMs: Millis(k.CreatedAt),
+	}
+}
+
+// FromSecretKeyRow converts a row into a domain wrapped key.
+func FromSecretKeyRow(row SecretKeyRow) secret.WrappedKey {
+	return secret.WrappedKey{
+		CreatedAt: FromMillis(row.CreatedAtMs),
+		Scope: secret.Scope{
+			Namespace: namespace.Name(row.Namespace),
+			ID:        row.StackID,
+		},
+		WrapperID:  row.WrapperID,
+		Ciphertext: row.Ciphertext,
 	}
 }

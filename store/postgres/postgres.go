@@ -313,7 +313,8 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 }
 
 // DeleteStack implements stack.Store. It removes the stack with its updates,
-// checkpoints and events in one fenced transaction, through foreign keys. It
+// checkpoints, events and wrapped data key in one fenced transaction: child
+// rows go through foreign keys, the data key through an explicit delete. It
 // returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
 // while a mutating update of the stack runs. The stack row is locked before
 // the running check, so a concurrent start either wins the lock and the
@@ -336,6 +337,10 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 
 		if running > 0 {
 			return stack.ErrUpdateConflict
+		}
+
+		if err = q.DeleteSecretKeysOfStack(ctx, locked.ID); err != nil {
+			return fmt.Errorf("delete secret key: %w", err)
 		}
 
 		n, err := q.DeleteStack(ctx, db.DeleteStackParams{
