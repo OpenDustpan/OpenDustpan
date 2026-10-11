@@ -41,9 +41,9 @@ const (
 	binaryServer = "binary"
 	// binaryBuildTimeout bounds the `go build` of the server binary.
 	binaryBuildTimeout = 5 * time.Minute
-	// binaryStartTimeout bounds the wait for the backend's /healthz.
+	// binaryStartTimeout bounds the wait for the backend's /health/live.
 	binaryStartTimeout = 30 * time.Second
-	// binaryStartPoll sets how often the wait checks /healthz.
+	// binaryStartPoll sets how often the wait checks /health/live.
 	binaryStartPoll = 50 * time.Millisecond
 	// backendCertLifetime sets how long the generated backend certificate lasts.
 	backendCertLifetime = 24 * time.Hour
@@ -271,7 +271,7 @@ func serveArgs(cfg backendConfig, port string) []string {
 }
 
 // launchBinaryBackend starts `opendustpan serve` for cfg on port and waits
-// until /healthz answers 204. It registers a cleanup that kills a child that
+// until /health/live answers 204. It registers a cleanup that kills a child that
 // still runs, and logs the process output.
 func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, port string) *binaryHandle {
 	tb.Helper()
@@ -304,7 +304,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 
 // startBinaryBackend picks a loopback port, starts `opendustpan serve` with
 // TLS on it and returns the handle and its base URL. It fails the test when
-// /healthz never answers 204.
+// /health/live never answers 204.
 func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) (*binaryHandle, string) {
 	tb.Helper()
 
@@ -413,7 +413,7 @@ func (e *Env) StopServer(ctx context.Context, tb testing.TB) {
 }
 
 // StartServer starts the same binary again on the same database, blob
-// directory, certificate and port, and waits for GET /healthz to answer 204.
+// directory, certificate and port, and waits for GET /health/live to answer 204.
 // It needs E2E_SERVER=binary.
 func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 	tb.Helper()
@@ -431,7 +431,7 @@ func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 	e.backendLogs = handle.logs
 }
 
-// waitForBackend waits until the backend answers /healthz with 204.
+// waitForBackend waits until the backend answers /health/live with 204.
 func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs *bytes.Buffer) {
 	tb.Helper()
 
@@ -444,7 +444,7 @@ func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs 
 	deadline := time.Now().Add(binaryStartTimeout)
 
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, backendURL+"/healthz", http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, backendURL+"/health/live", http.NoBody)
 		if err != nil {
 			tb.Fatalf("build health request: %v", err)
 		}
