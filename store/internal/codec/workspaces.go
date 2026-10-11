@@ -30,7 +30,8 @@ type WorkspaceRow struct {
 
 // StateVersionRow is the column representation of a state version. The upload
 // capability is a digest only. Unset times are 0 and a pending version keeps
-// an empty content key and size 0.
+// an empty content key and size 0. RestoredFrom is empty unless the version
+// restores another one.
 type StateVersionRow struct {
 	ID                string
 	WorkspaceID       string
@@ -45,6 +46,7 @@ type StateVersionRow struct {
 	Serial            int64
 	Size              int64
 	Force             bool
+	RestoredFrom      string
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	UploadExpiresAtMs int64
@@ -116,6 +118,7 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		Serial:            sv.Serial,
 		Size:              sv.Size,
 		Force:             sv.Force,
+		RestoredFrom:      sv.RestoredFrom.String(),
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
 		UploadExpiresAtMs: Millis(sv.UploadExpiresAt),
@@ -184,5 +187,6 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Serial:          row.Serial,
 		Size:            row.Size,
 		Force:           row.Force,
+		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
 	}, nil
 }

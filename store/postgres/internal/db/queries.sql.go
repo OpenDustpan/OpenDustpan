@@ -79,6 +79,19 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const countStateVersions = `-- name: CountStateVersions :one
+SELECT COUNT(*)
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+`
+
+func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createNamespace = `-- name: CreateNamespace :execrows
 INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -184,9 +197,10 @@ func (q *Queries) CreateStackTag(ctx context.Context, arg CreateStackTagParams) 
 const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+    restored_from
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
 `
 
@@ -207,6 +221,7 @@ type CreateStateVersionParams struct {
 	LockID            string
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
+	RestoredFrom      string
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -227,6 +242,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.LockID,
 		arg.CreatedAtMs,
 		arg.FinalizedAtMs,
+		arg.RestoredFrom,
 	)
 	return err
 }
@@ -487,7 +503,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -515,6 +531,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.LockID,
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
@@ -707,7 +724,8 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
 FROM state_versions
 WHERE id = $1
 `
@@ -732,6 +750,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.LockID,
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
+		&i.RestoredFrom,
 	)
 	return i, err
 }
@@ -1127,6 +1146,62 @@ func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProje
 			&i.Version,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStateVersions = `-- name: ListStateVersions :many
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT $2 OFFSET $3
+`
+
+type ListStateVersionsParams struct {
+	WorkspaceID string
+	Limit       int32
+	Offset      int32
+}
+
+// Finalized versions of one workspace, newest first. Ties on finalize time
+// break by ID, as the port comment promises. The caller normalizes the page.
+func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsParams) ([]StateVersion, error) {
+	rows, err := q.db.Query(ctx, listStateVersions, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateVersion
+	for rows.Next() {
+		var i StateVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.Serial,
+			&i.Lineage,
+			&i.Md5,
+			&i.Size,
+			&i.ContentKey,
+			&i.Outputs,
+			&i.Force,
+			&i.UploadDigest,
+			&i.UploadExpiresAtMs,
+			&i.Holder,
+			&i.LockID,
+			&i.CreatedAtMs,
+			&i.FinalizedAtMs,
+			&i.RestoredFrom,
 		); err != nil {
 			return nil, err
 		}
