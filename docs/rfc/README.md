@@ -87,7 +87,7 @@ both together.
 | [36](0036-high-availability.md) | High availability and scale-out | draft |
 | [37](0037-federation.md) | One view over many OpenDustpan installs | draft |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
-| [39](0039-reading-state.md) | Reading state contents | draft |
+| [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
 | [42](0042-migration-import.md) | Migration from other backends and operators | accepted |
