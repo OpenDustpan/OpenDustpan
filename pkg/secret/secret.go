@@ -41,9 +41,9 @@ var (
 	// check (ADR 23).
 	ErrKeyNotConfigured = errors.New("no key-encryption key is configured: set " + keyEnvSetting)
 	// ErrWrapperMismatch reports that the configured key-encryption key
-	// matches none of the wrapper IDs of stored data keys. The message names
-	// the settings that provide the key, because this error reaches
-	// operators directly from the start-up check (ADR 23).
+	// does not open every stored data key. The message names the settings
+	// that provide the key and the missing rewrap command, because this
+	// error reaches operators directly from the start-up check (ADR 23).
 	ErrWrapperMismatch = errors.New(
 		"key-encryption key does not match stored keys: set " + keyEnvSetting + " to the matching key",
 	)
@@ -130,8 +130,8 @@ type KeyStore interface {
 	// GetKey returns the scope's key, or ErrKeyNotFound.
 	GetKey(ctx context.Context, scope Scope) (WrappedKey, error)
 	// ListWrapperIDs returns the distinct wrapper IDs of stored keys, ordered,
-	// for the start-up check that refuses a key-encryption key that matches
-	// none of them. It returns an empty list when no key exists.
+	// for the start-up check that refuses a key-encryption key that opens
+	// less than every one of them. It returns an empty list when no key exists.
 	ListWrapperIDs(ctx context.Context) ([]string, error)
 }
 
@@ -186,11 +186,12 @@ func (s *Service) MaxBatchBytes() int {
 }
 
 // CheckWrapper reports whether wrapper can open the data keys in keys, for
-// the start-up check that refuses a key-encryption key that matches none of
-// them (ADR 23). It returns nil when keys holds no wrapped key: a server
-// without a key-encryption key may start while the database holds no wrapped
-// key. Otherwise wrapper must be set, and its ID must name one of the stored
-// wrapper IDs.
+// the start-up check that refuses a key-encryption key that opens less than
+// every one of them (ADR 23). It returns nil when keys holds no wrapped key:
+// a server without a key-encryption key may start while the database holds
+// no wrapped key. Otherwise wrapper must be set, and every stored wrapper ID
+// must name it. A database with keys under more than one key stays refused
+// until a rewrap command exists to move them to one key.
 func CheckWrapper(ctx context.Context, keys KeyStore, wrapper Wrapper) error {
 	if keys == nil {
 		return fmt.Errorf("%w: key store", ErrMissingDependency)
@@ -210,17 +211,18 @@ func CheckWrapper(ctx context.Context, keys KeyStore, wrapper Wrapper) error {
 	}
 
 	for _, id := range ids {
-		if id == wrapper.ID() {
-			return nil
+		if id != wrapper.ID() {
+			return fmt.Errorf(
+				"server refuses to start: database holds keys wrapped by %q: server holds %q: "+
+					"rewrap the database with one key-encryption key: no rewrap command exists yet (ADR 23): %w",
+				ids,
+				wrapper.ID(),
+				ErrWrapperMismatch,
+			)
 		}
 	}
 
-	return fmt.Errorf(
-		"server refuses to start: database holds keys wrapped by %q: server holds %q: %w",
-		ids,
-		wrapper.ID(),
-		ErrWrapperMismatch,
-	)
+	return nil
 }
 
 // Encrypt seals each plaintext under the scope's data key, creating the key on
