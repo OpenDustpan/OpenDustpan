@@ -2276,3 +2276,204 @@ func readRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 }
+
+// TestPairTwoLogins proves two servers in one test with two saved Pulumi
+// logins in one home: a stack exists on the source S, login works for S and
+// for the destination D, and both list through the saved logins with no
+// access token in the environment. It runs on every store under test and
+// writes a -pair report that holds both servers.
+func TestPairTwoLogins(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runPairLoginsOnStore(t, cli, db)
+		})
+	}
+}
+
+// runPairLoginsOnStore runs the two-login smoke test on one store.
+func runPairLoginsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	pair := e2e.NewPair(ctx, t, cli, store)
+
+	t.Cleanup(func() {
+		writeReport(t, pair.NewPairRun())
+	})
+
+	pair.SharePulumiHome()
+
+	src := pair.Src
+	dst := pair.Dst
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+
+	src.Step(ctx, t, step("login to source with token", contains(src.URL), "login"))
+	src.Step(ctx, t, step("init on source", nil, "stack", "init", qualified))
+
+	pair.SavePulumiLogin(ctx, t, src, "save login for source")
+	pair.SavePulumiLogin(ctx, t, dst, "save login for destination")
+
+	pair.UsePulumiBackend(ctx, t, src, "use source")
+	src.StepSavedLogin(ctx, t, step("list on source", stackListed, "stack", "ls", "--json"))
+
+	pair.UsePulumiBackend(ctx, t, dst, "use destination")
+	src.StepSavedLogin(ctx, t, step("init on destination", nil, "stack", "init", qualified))
+	src.StepSavedLogin(ctx, t, step("list on destination", stackListed, "stack", "ls", "--json"))
+
+	checkPairReport(t, pair)
+}
+
+// checkPairReport proves the report records both servers: one step command
+// holds the source URL and another holds the destination URL.
+func checkPairReport(t *testing.T, pair *e2e.Pair) {
+	t.Helper()
+
+	run := pair.NewPairRun()
+	seenSrc, seenDst := false, false
+
+	for _, s := range run.Steps {
+		if strings.Contains(s.Command, pair.Src.URL) {
+			seenSrc = true
+		}
+
+		if strings.Contains(s.Command, pair.Dst.URL) {
+			seenDst = true
+		}
+	}
+
+	if !seenSrc || !seenDst {
+		t.Fatalf("pair report holds source %v and destination %v, want both", seenSrc, seenDst)
+	}
+
+	if len(run.Requests) == 0 {
+		t.Fatal("pair report holds no requests")
+	}
+}
+
+// TestTofuPairHosts proves one OpenTofu client addresses both servers in one
+// test: after the trust bundle and the merged credentials, init works in the
+// source project and in the destination project. It runs on Linux on every
+// store under test and writes a -pair report.
+func TestTofuPairHosts(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skipf("the OpenTofu pair suite needs Linux, not %s", runtime.GOOS)
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.OpenTofu().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.OpenTofu(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runTofuPairOnStore(t, cli, db)
+		})
+	}
+}
+
+// runTofuPairOnStore runs the two-host OpenTofu test on one store.
+func runTofuPairOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	pair := e2e.NewPair(ctx, t, cli, store)
+
+	t.Cleanup(func() {
+		writeReport(t, pair.NewPairRun())
+	})
+
+	pair.MergeTofuPair(t)
+
+	pair.Src.Step(ctx, t, step("init on source host", nil, "init", "-input=false", "-no-color"))
+	pair.Dst.Step(ctx, t, step("init on destination host", nil, "init", "-input=false", "-no-color"))
+
+	checkTofuPairReport(ctx, t, pair)
+}
+
+// checkTofuPairReport proves one client addressed both hosts and the report
+// records both: each server holds one workspace in its inventory and the
+// steps hold the init on each host.
+func checkTofuPairReport(ctx context.Context, t *testing.T, pair *e2e.Pair) {
+	t.Helper()
+
+	for _, env := range []*e2e.Env{pair.Src, pair.Dst} {
+		entries, err := env.ListInventory(ctx, e2e.Namespace)
+		if err != nil {
+			t.Fatalf("list inventory: %v", err)
+		}
+
+		if len(entries) != 1 {
+			t.Fatalf("inventory holds %d entries, want one workspace", len(entries))
+		}
+	}
+
+	run := pair.NewPairRun()
+	seenSrc, seenDst := false, false
+
+	for _, s := range run.Steps {
+		switch s.Name {
+		case "init on source host":
+			seenSrc = true
+		case "init on destination host":
+			seenDst = true
+		default:
+		}
+	}
+
+	if !seenSrc || !seenDst {
+		t.Fatalf("pair report holds source %v and destination %v, want both", seenSrc, seenDst)
+	}
+
+	if len(run.Requests) == 0 {
+		t.Fatal("pair report holds no requests")
+	}
+}
