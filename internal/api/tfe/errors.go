@@ -23,6 +23,10 @@ const notFoundTitle = "not found"
 // to 422.
 var errInvalidBody = errors.New("invalid request body")
 
+// errMissingFilter reports a state version list without its organization or
+// workspace filter. classify maps it to 400.
+var errMissingFilter = errors.New("state version list needs filter[organization][name] and filter[workspace][name]")
+
 // jsonAPIError is one entry of a JSON:API error document.
 type jsonAPIError struct {
 	Status string `json:"status"`
@@ -124,6 +128,8 @@ func classify(err error) errorClass {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
+	case errors.Is(err, errMissingFilter):
+		return errorClass{status: http.StatusBadRequest, title: "bad request", detail: err.Error()}
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
 		return errorClass{status: http.StatusForbidden, title: "forbidden", detail: "forbidden"}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),

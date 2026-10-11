@@ -3,10 +3,11 @@
 //
 // Service discovery, ping, the entitlement set, the workspace read, create
 // and list routes, the state read routes (current state, one state
-// version, its download and its outputs) and the state write routes (create
-// a state version and upload its content through a capability) exist so far.
-// Every further endpoint lands with its e2e step first, so no other route is
-// served until its issue adds it with the CLI coverage.
+// version, its download, its outputs and the state version list) and the
+// state write routes (create a state version and upload its content through
+// a capability) exist so far. Every further endpoint lands with its e2e step
+// first, so no other route is served until its issue adds it with the CLI
+// coverage.
 package tfe
 
 import (
@@ -83,6 +84,9 @@ type StateReader interface {
 	ReadState(ctx context.Context, id workspace.StateVersionID) (workspace.StateVersion, error)
 	// Open returns the content of sv. The caller closes it.
 	Open(ctx context.Context, sv workspace.StateVersion) (io.ReadCloser, error)
+	// History returns the finalized state versions of the workspace, newest
+	// first, with the total count of finalized versions.
+	History(ctx context.Context, id workspace.ID, page workspace.Page) ([]workspace.StateVersion, int, error)
 }
 
 // StateWriter is what the state write routes need: declare a version and

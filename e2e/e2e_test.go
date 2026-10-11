@@ -902,6 +902,14 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
+	// A second apply with a changed output makes a second state version, so
+	// the list below holds two versions.
+	env.WriteTofuConfig(t, tofuSecondConfig(env.Host()))
+	env.Step(ctx, t, step("apply again", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+
+	// The list route serves the two versions with the go-tfe query shape.
+	tofuStateVersionListScenario(t, env)
+
 	// state push rejects a stale serial and another lineage, and accepts
 	// -force.
 	tofuStatePushScenario(t, env)
@@ -1331,6 +1339,216 @@ func checkTofuDiscovery(env *e2e.Env) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// tofuSecondConfig is the configuration of the second apply: the same cloud
+// block with a changed greeting output, so the apply writes a second state
+// version.
+func tofuSecondConfig(host string) string {
+	return `terraform {
+  cloud {
+    hostname     = ` + strconv.Quote(host) + `
+    organization = ` + strconv.Quote(e2e.Namespace) + `
+    workspaces {
+      name = ` + strconv.Quote(e2e.Workspace) + `
+    }
+  }
+}
+
+output "greeting" {
+  value = "hello again"
+}
+`
+}
+
+// stateVersionListAttributes holds the listed attributes the e2e list step
+// checks: the serial for order and the added holder, force and
+// restored-from attributes.
+type stateVersionListAttributes struct {
+	Serial       int64  `json:"serial"`
+	Holder       string `json:"holder"`
+	Force        bool   `json:"force"`
+	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// stateVersionListItem holds one entry of a state version list document.
+type stateVersionListItem struct {
+	ID         string                     `json:"id"`
+	Type       string                     `json:"type"`
+	Attributes stateVersionListAttributes `json:"attributes"`
+}
+
+// stateVersionListPagination holds the meta.pagination object of a state
+// version list document.
+type stateVersionListPagination struct {
+	CurrentPage int `json:"current-page"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	PageSize    int `json:"page-size"`    //nolint:tagliatelle // The TFE wire name; it must not change.
+	TotalCount  int `json:"total-count"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+	TotalPages  int `json:"total-pages"`  //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// stateVersionListMeta holds the meta object of a state version list
+// document.
+type stateVersionListMeta struct {
+	Pagination stateVersionListPagination `json:"pagination"`
+}
+
+// stateVersionListDoc decodes a state version list document.
+type stateVersionListDoc struct {
+	Data []stateVersionListItem `json:"data"`
+	Meta stateVersionListMeta   `json:"meta"`
+}
+
+// decodeStateVersionList decodes body into a state version list document.
+func decodeStateVersionList(body string) (stateVersionListDoc, error) {
+	var doc stateVersionListDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return stateVersionListDoc{}, fmt.Errorf("%w: decode state version list: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// stateVersionListBase is the list target with the go-tfe request shape:
+// filter[organization][name], filter[workspace][name], page[number] and
+// page[size].
+func stateVersionListBase() string {
+	return "/api/v2/state-versions?filter[organization][name]=" + e2e.Namespace +
+		"&filter[workspace][name]=" + e2e.Workspace
+}
+
+// checkStateVersionListTwo proves the list holds two versions, newest first,
+// with the holder, force and restored-from attributes on every entry.
+func checkStateVersionListTwo(body string) error {
+	var raw struct {
+		Data []map[string]any `json:"data"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		return fmt.Errorf("%w: decode state version list: %w", errUnexpected, err)
+	}
+
+	if len(raw.Data) != 2 {
+		return fmt.Errorf("%w: list holds %d versions, want 2: %s", errUnexpected, len(raw.Data), body)
+	}
+
+	for _, item := range raw.Data {
+		attrs, ok := item["attributes"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%w: entry holds no attributes: %s", errUnexpected, body)
+		}
+
+		for _, key := range []string{"holder", "force", "restored-from"} {
+			if _, ok := attrs[key]; !ok {
+				return fmt.Errorf("%w: entry lacks attribute %q: %s", errUnexpected, key, body)
+			}
+		}
+	}
+
+	doc, err := decodeStateVersionList(body)
+	if err != nil {
+		return err
+	}
+
+	if doc.Data[0].ID == doc.Data[1].ID {
+		return fmt.Errorf("%w: list holds the same version twice: %s", errUnexpected, body)
+	}
+
+	if doc.Data[0].Attributes.Serial <= doc.Data[1].Attributes.Serial {
+		return fmt.Errorf(
+			"%w: list is not newest first: serials %d then %d",
+			errUnexpected,
+			doc.Data[0].Attributes.Serial,
+			doc.Data[1].Attributes.Serial,
+		)
+	}
+
+	if doc.Meta.Pagination.TotalCount != 2 {
+		return fmt.Errorf("%w: total count is %d, want 2: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	}
+
+	return nil
+}
+
+// checkStateVersionListPage proves one list page holds the want ID with the
+// want pagination.
+func checkStateVersionListPage(wantID string, number, size int) func(string) error {
+	return func(body string) error {
+		doc, err := decodeStateVersionList(body)
+		if err != nil {
+			return err
+		}
+
+		if len(doc.Data) != 1 || doc.Data[0].ID != wantID {
+			return fmt.Errorf("%w: page holds %+v, want one entry %q", errUnexpected, doc.Data, wantID)
+		}
+
+		page := doc.Meta.Pagination
+		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 2 || page.TotalPages != 2 {
+			return fmt.Errorf(
+				"%w: pagination %+v, want page %d of size %d with 2 entries in 2 pages",
+				errUnexpected,
+				page,
+				number,
+				size,
+			)
+		}
+
+		return nil
+	}
+}
+
+// tofuStateVersionListScenario proves the list route after two applies: both
+// versions listed newest first with the added attributes, and page[size] and
+// page[number] respected. Every request uses the go-tfe query shape.
+func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	base := stateVersionListBase()
+
+	var newest, oldest string
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			if err := checkStateVersionListTwo(body); err != nil {
+				return err
+			}
+
+			doc, err := decodeStateVersionList(body)
+			if err != nil {
+				return err
+			}
+
+			newest, oldest = doc.Data[0].ID, doc.Data[1].ID
+
+			return nil
+		},
+		Name:   "list state versions",
+		Method: http.MethodGet,
+		Path:   base,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkStateVersionListPage(newest, 1, 1),
+		Name:   "list state versions first page",
+		Method: http.MethodGet,
+		Path:   base + "&page[size]=1&page[number]=1",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkStateVersionListPage(oldest, 2, 1),
+		Name:   "list state versions second page",
+		Method: http.MethodGet,
+		Path:   base + "&page[size]=1&page[number]=2",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
 }
 
 // tofuSlowConfig is the crash configuration: the built-in terraform_data
