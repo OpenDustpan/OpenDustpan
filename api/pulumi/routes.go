@@ -132,6 +132,17 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveGetStack,
 			Serve:   h.renameStack,
 		},
+		{
+			Method: http.MethodPatch,
+			Path:   "/api/stacks/{namespace}/{project}/{stack}/tags",
+			// PATCH replaces all tags with the map the Pulumi CLI sends, so
+			// `stack tag set` and `stack tag rm` both land here. It writes
+			// the stack's record without changing its resources.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.updateStackTags,
+		},
 	}
 }
 

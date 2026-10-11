@@ -3,11 +3,15 @@ package sqlite_test
 import (
 	"database/sql"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 	"opendustpan.org/opendustpan/store/storetest"
@@ -49,6 +53,70 @@ func open(t *testing.T) *sqlite.Store {
 	})
 
 	return s
+}
+
+// TestRenameKeepsTags checks that tags follow the stack ID through a rename:
+// the renamed stack keeps its tags and ID, and the old name is gone.
+func TestRenameKeepsTags(t *testing.T) {
+	t.Parallel()
+
+	s := open(t)
+	ctx := t.Context()
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+
+	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	if err := s.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	ref, parseErr := stack.ParseRef("acme", "web", "prod")
+	if parseErr != nil {
+		t.Fatalf("parse ref: %v", parseErr)
+	}
+
+	st := stack.Stack{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Tags:      map[string]string{"team": "platform"},
+		Ref:       ref,
+		ID:        stack.ID(ident.NewID("stk-")),
+		Version:   0,
+	}
+
+	if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	next := map[string]string{"team": "e2e"}
+	if err := s.UpdateStackTags(ctx, ref, next, now, ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	renamed, err := stack.ParseRef("acme", "web", "renamed")
+	if err != nil {
+		t.Fatalf("parse renamed ref: %v", err)
+	}
+
+	got, err := s.GetStack(ctx, renamed)
+	if err != nil {
+		t.Fatalf("get renamed stack: %v", err)
+	}
+
+	if !maps.Equal(got.Tags, next) {
+		t.Fatalf("renamed tags = %v, want %v", got.Tags, next)
+	}
+
+	if got.ID != st.ID {
+		t.Fatalf("renamed ID = %q, want %q", got.ID, st.ID)
+	}
+
+	if _, err := s.GetStack(ctx, ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("get old name: err = %v, want ErrNotFound", err)
+	}
 }
 
 func TestMigration0003FillsIDs(t *testing.T) {
@@ -185,6 +253,108 @@ func checkMigratedEvents(t *testing.T, s *sqlite.Store, ref stack.Ref) {
 
 	if len(events) != 2 {
 		t.Fatalf("migrated events = %d, want 2", len(events))
+	}
+}
+
+func TestMigration0007KeepsTags(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	seedAt0006WithTags(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if got.Tags["team"] != "platform" || len(got.Tags) != 1 {
+		t.Fatalf("migrated tags = %v, want map[team:platform]", got.Tags)
+	}
+}
+
+// seedAt0006WithTags creates a database at migration 0006 with a stack whose
+// tags still live in the stacks row.
+func seedAt0006WithTags(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	for _, name := range []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+	} {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER NOT NULL PRIMARY KEY,
+		name    TEXT    NOT NULL
+	) STRICT`
+
+	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
+			t.Fatalf("record migration: %v", err)
+		}
+	}
+
+	const seedNamespace = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.ExecContext(t.Context(), seedNamespace); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+
+	const seedStack = `INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{"team":"platform"}', 0, 0, 0)`
+
+	if _, err := conn.ExecContext(t.Context(), seedStack); err != nil {
+		t.Fatalf("seed stack: %v", err)
 	}
 }
 
