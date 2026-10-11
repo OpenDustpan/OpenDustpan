@@ -401,6 +401,22 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	}
 }
 
+// ListInventory returns the inventory entries of ns, so scenarios can prove
+// a CLI step published its unit through a direct store call.
+func (e *Env) ListInventory(ctx context.Context, ns string) ([]inventory.Entry, error) {
+	name, err := namespace.ParseName(ns)
+	if err != nil {
+		return nil, fmt.Errorf("parse namespace %q: %w", ns, err)
+	}
+
+	entries, err := e.server.ListUnits(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("list inventory of %q: %w", ns, err)
+	}
+
+	return entries, nil
+}
+
 // Steps returns the scenario steps run so far.
 func (e *Env) Steps() []StepResult {
 	return append([]StepResult(nil), e.steps...)

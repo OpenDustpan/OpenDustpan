@@ -1,9 +1,10 @@
 // Package tfe serves the HTTP API that OpenTofu speaks to its remote
 // backend (the TFE-compatible API). The web console uses the same API.
 //
-// Only service discovery, ping and the entitlement set exist so far. Every
-// further endpoint lands with its e2e step first, so no other route is
-// served until its issue adds it with the CLI coverage.
+// Only service discovery, ping, the entitlement set and the workspace
+// read, create and list routes exist so far. Every further endpoint lands
+// with its e2e step first, so no other route is served until its issue adds
+// it with the CLI coverage.
 package tfe
 
 import (
@@ -32,11 +33,21 @@ const (
 	maxBodyBytes = 1 << 20
 )
 
-// WorkspaceLookup resolves a workspace ID to its workspace. It is the part
-// of the workspace port that the ID resolver needs.
-type WorkspaceLookup interface {
-	// GetWorkspaceByID returns the workspace with id, or workspace.ErrNotFound.
-	GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
+// WorkspaceService is the workspace use cases the workspace routes need:
+// create, read and list for the documents, and the current state for the
+// current-state-version relationship.
+type WorkspaceService interface {
+	// Create creates an unlocked workspace without state.
+	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	// Get returns the workspace called ref, or workspace.ErrNotFound.
+	Get(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	// GetByID returns the workspace with id, or workspace.ErrNotFound.
+	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
+	// List returns the namespace's workspaces, ordered by name.
+	List(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error)
+	// Current returns the workspace's current state version, or
+	// workspace.ErrNoState.
+	Current(ctx context.Context, id workspace.ID) (workspace.StateVersion, error)
 }
 
 // Config holds the dependencies of a Handler.
@@ -45,9 +56,9 @@ type Config struct {
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
 	Namespaces    *namespace.Service
-	// Workspaces resolves workspace IDs. It is nil until the first route by
-	// ID lands; ID routes answer 500 while it is nil.
-	Workspaces WorkspaceLookup
+	// Workspaces serves the workspace routes. It is required: routes by ID
+	// resolve the ID through it.
+	Workspaces WorkspaceService
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -57,14 +68,12 @@ type Handler struct {
 	authz      identity.Authorizer
 	logger     *slog.Logger
 	namespaces *namespace.Service
-	workspaces WorkspaceLookup
+	workspaces WorkspaceService
 	mux        *patternMux
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Authenticator, Authorizer, Logger and
-// Namespaces are required. Workspaces is optional until the first route by
-// ID lands.
+// NewHandler returns a Handler. Every Config field is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Authenticator == nil:
@@ -75,6 +84,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Workspaces == nil:
+		return nil, fmt.Errorf("%w: workspace service", ErrMissingDependency)
 	}
 
 	h := &Handler{

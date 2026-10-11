@@ -843,10 +843,9 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 
 	for _, s := range []e2e.StepSpec{
-		// Init gets past service discovery but stops at the workspace
-		// endpoints that later issues own, so it expects a failure while
-		// the check pins the discovery calls.
-		failStep("init", checkTofuDiscovery(env), "init", "-input=false", "-no-color"),
+		// Init reads the workspace by name and creates it when missing, so
+		// it proves the read, create and list routes with the inventory check.
+		step("init", checkTofuInit(ctx, env), "init", "-input=false", "-no-color"),
 		step("workspace show", contains(e2e.Workspace), "workspace", "show"),
 		step("plan", nil, "plan", "-input=false", "-no-color"),
 		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
@@ -854,6 +853,39 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		step("state pull", contains(`"greeting"`), "state", "pull"),
 	} {
 		env.Step(ctx, t, s)
+	}
+}
+
+// checkTofuInit proves that init got past service discovery and created the
+// workspace: the CLI called discovery, ping and the entitlement set in order,
+// and a direct store call sees one inventory entry for the workspace.
+func checkTofuInit(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if err := checkTofuDiscovery(env)(r); err != nil {
+			return err
+		}
+
+		entries, err := env.ListInventory(ctx, e2e.Namespace)
+		if err != nil {
+			return err
+		}
+
+		if len(entries) != 1 {
+			return fmt.Errorf("%w: inventory holds %d entries, want one for the workspace", errUnexpected, len(entries))
+		}
+
+		entry := entries[0]
+		want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
+
+		if entry.Reference() != want || entry.Tool != "opentofu" || entry.Name != e2e.Workspace {
+			return fmt.Errorf("%w: inventory entry %+v, want reference %q", errUnexpected, entry, want)
+		}
+
+		if entry.UnitID == "" || !strings.HasPrefix(entry.UnitID, "ws-") {
+			return fmt.Errorf("%w: inventory unit id %q, want the ws- workspace id", errUnexpected, entry.UnitID)
+		}
+
+		return nil
 	}
 }
 
