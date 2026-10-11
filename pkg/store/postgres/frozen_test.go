@@ -1,0 +1,90 @@
+package postgres_test
+
+import (
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+)
+
+//go:embed migrations/*.sql
+var frozenMigrations embed.FS
+
+// TestFrozenMigrations holds the SHA-256 of each released migration file. It
+// fails when a file changes, when a file has no hash entry, and when a hash
+// entry has no file. Never edit an applied migration. Add a new numbered file
+// and its hash in the same change.
+func TestFrozenMigrations(t *testing.T) {
+	t.Parallel()
+
+	// wantFrozenHashes holds the SHA-256 of each released migration file. A new
+	// migration adds its hash here in the same change.
+	//nolint:gosec // SHA-256 hashes of migration files, not credentials.
+	wantFrozenHashes := map[string]string{
+		"0001_init.sql":                      "9b7354cc3f1dbedd3f8e3559e1770b7d5ce267e2014233332522fbeac62ec40f",
+		"0002_updates.sql":                   "9589fc4dbfd9cd98b3b2a1e624c0b986081d0e123b91171ca3144e845564f6d4",
+		"0003_stack_id.sql":                  "b859d2ec3bfe15466ecab4521a0c2cb7bb76fd7e1f8ccd7d5ca7ea57f3bcc724",
+		"0004_updates_stack_id.sql":          "f7436ce58185b0065a15641cb7448f1dadce5118da10db69e63f9608dc59e3a9",
+		"0005_updates_drop_names.sql":        "47fd896ec98b889118327d4ed1dcb3471c80fe52aeb6fac9b5f10768f5c64553",
+		"0006_checkpoints_per_update.sql":    "277600f92cb5b8d9cc109045f30e4f3b587cedc10c7196e38729cbd7fe0eb034",
+		"0007_stack_tags.sql":                "1f7497d17d2bbea22bc89e683e368f4f84ba29edf9774329ad3adee256f44837",
+		"0008_secret_keys.sql":               "de34b1a2f9ff8f3438c99e79c39d8f0d4da581d4df8c6f54f384f8e72e919f07",
+		"0009_inventory.sql":                 "dd55120732d2b1e747a2a564057c39894dea33849e6d9a1284894e138b7cbd79",
+		"0010_workspaces.sql":                "5e0bb9862882850c84f3a1709f611bfcf70252c60b80f9215d733b4993693e45",
+		"0011_restored_from.sql":             "32a8f5ef75af5407cf56308fe9ba5198d564da7caedea353ad470f89c8e42f4a",
+		"0012_update_history_fields.sql":     "929d598c14a67c3d9ac278537f83eb23dbb4a92164eeef669fd31ae89aab0235",
+		"0013_backups.sql":                   "9586a4e167c09ca919012fe269d44cc9183182823ff980949183d8060370df13",
+		"0014_checkpoint_resource_count.sql": "eef1ec99c03704c66f80929fda35cbe13edaed395847867b248cd34cdb66a2bf",
+	}
+
+	all, err := migrate.Load(frozenMigrations, "migrations")
+	if err != nil {
+		t.Fatalf("load embedded migrations: %v", err)
+	}
+
+	for _, m := range all {
+		want, ok := wantFrozenHashes[m.Name]
+		if !ok {
+			t.Errorf(
+				"migration %s has no hash entry: add its hash in TestFrozenMigrations; "+
+					"never edit an applied migration, add a new numbered file for a change",
+				m.Name,
+			)
+
+			continue
+		}
+
+		sum := sha256.Sum256([]byte(m.SQL))
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Errorf(
+				"migration %s hash = %s, want %s: "+
+					"never edit an applied migration; add a new numbered file and its hash",
+				m.Name,
+				got,
+				want,
+			)
+		}
+	}
+
+	for name := range wantFrozenHashes {
+		found := false
+
+		for _, m := range all {
+			if m.Name == name {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Errorf(
+				"hash entry %s has no migration file: "+
+					"never edit an applied migration; add a new numbered file and its hash",
+				name,
+			)
+		}
+	}
+}
