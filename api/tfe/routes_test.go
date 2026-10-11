@@ -159,6 +159,41 @@ func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Wo
 	return []workspace.Workspace{ws}, nil
 }
 
+func (stubWorkspaces) Lock(
+	_ context.Context, id workspace.ID, holder, _ string,
+) (workspace.Workspace, error) {
+	ws, err := stubWorkspaceByID(id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	ws.Lock = workspace.Lock{LockedAt: stubWorkspaceTime(), ID: "lock-test", Holder: holder, Reason: ""}
+
+	return ws, nil
+}
+
+func (stubWorkspaces) Unlock(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
+	ws, err := stubWorkspaceByID(id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	ws.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+
+	return ws, nil
+}
+
+func (stubWorkspaces) ForceUnlock(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+	ws, err := stubWorkspaceByID(id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	ws.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+
+	return ws, nil
+}
+
 func (stubWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrNoState
 }
@@ -834,6 +869,22 @@ func (errorWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.Wor
 
 func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Workspace, error) {
 	return nil, errTestInternal
+}
+
+func (errorWorkspaces) Lock(
+	_ context.Context, _ workspace.ID, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) Unlock(
+	_ context.Context, _ workspace.ID, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
 }
 
 func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {

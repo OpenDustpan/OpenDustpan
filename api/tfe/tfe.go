@@ -34,8 +34,8 @@ const (
 )
 
 // WorkspaceService is the workspace use cases the workspace routes need:
-// create, read and list for the documents, and the current state for the
-// current-state-version relationship.
+// create, read and list for the documents, lock and unlock for the lock
+// routes, and the current state for the current-state-version relationship.
 type WorkspaceService interface {
 	// Create creates an unlocked workspace without state.
 	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
@@ -45,6 +45,13 @@ type WorkspaceService interface {
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// List returns the namespace's workspaces, ordered by name.
 	List(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error)
+	// Lock locks the workspace for holder, the subject of the calling
+	// principal.
+	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
+	// Unlock releases holder's lock.
+	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
+	// ForceUnlock releases the lock whoever holds it.
+	ForceUnlock(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
 	Current(ctx context.Context, id workspace.ID) (workspace.StateVersion, error)

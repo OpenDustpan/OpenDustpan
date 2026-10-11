@@ -847,12 +847,149 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		// it proves the read, create and list routes with the inventory check.
 		step("init", checkTofuInit(ctx, env), "init", "-input=false", "-no-color"),
 		step("workspace show", contains(e2e.Workspace), "workspace", "show"),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	// Lock steps run before any state write: a failed apply would hold the
+	// lock, and the lock scenario needs an unlocked workspace.
+	tofuLockScenario(t, env)
+
+	for _, s := range []e2e.StepSpec{
 		step("plan", nil, "plan", "-input=false", "-no-color"),
 		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
 		step("output", contains(`"hello"`), "output", "-json", "-no-color"),
 		step("state pull", contains(`"greeting"`), "state", "pull"),
 	} {
 		env.Step(ctx, t, s)
+	}
+}
+
+// tofuLockScenario proves workspace locks across two principals: A locks
+// through the API, B cannot plan until it force-unlocks.
+func tofuLockScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
+	unlockPath := "/api/v2/workspaces/" + wsID + "/actions/unlock"
+	forcePath := "/api/v2/workspaces/" + wsID + "/actions/force-unlock"
+
+	// Principal A locks through the API. The step records 200.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by A",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+
+	// A plan as B fails at once. go-tfe discards the 409 detail for lock, so
+	// the CLI prints the generic message. The step still proves the holder:
+	// the lock request the plan made answers 409 with "is locked by User"
+	// and the holder of A.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: checkPlanLockedByAnother(ctx, env),
+		Name:  "plan locked by another",
+		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
+		Env:   env.TofuEnvB(),
+		Fail:  true,
+	})
+
+	// A second lock by B answers 409.
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by B conflicts",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusConflict,
+	})
+
+	// An unlock by B answers 409: only the holder unlocks.
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "unlock by B conflicts",
+		Method: http.MethodPost,
+		Path:   unlockPath,
+		Body:   "",
+		Want:   http.StatusConflict,
+	})
+
+	// A force-unlock as B succeeds. The CLI sends no lock ID that the
+	// server uses: the workspace ID in the path names the workspace.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: nil,
+		Name:  "force-unlock by B",
+		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:   env.TofuEnvB(),
+		Fail:  false,
+	})
+
+	// A plan as B now passes.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: nil,
+		Name:  "plan after force-unlock",
+		Args:  []string{"plan", "-input=false", "-no-color"},
+		Env:   env.TofuEnvB(),
+		Fail:  false,
+	})
+
+	// A force-unlock of an unlocked workspace answers 409.
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "force-unlock unlocked conflicts",
+		Method: http.MethodPost,
+		Path:   forcePath,
+		Body:   "",
+		Want:   http.StatusConflict,
+	})
+}
+
+// checkPlanLockedByAnother proves a plan as B fails on the held lock and
+// that the lock request it made answers 409 with "is locked by User" and the
+// holder of A. go-tfe maps any 409 on lock to its generic error, so the CLI
+// prints "workspace already locked" without the holder; the recorded response
+// body holds the detail the unit test also proves.
+func checkPlanLockedByAnother(_ context.Context, env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if out := r.Stdout + r.Stderr; !strings.Contains(out, "workspace already locked") {
+			return fmt.Errorf("%w: plan output lacks the lock failure: %s", errUnexpected, out)
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			e := &entries[i]
+			if e.Step != "plan locked by another" || e.Method != http.MethodPost ||
+				!strings.HasSuffix(e.Path, "/actions/lock") {
+				continue
+			}
+
+			if e.Status != http.StatusConflict {
+				return fmt.Errorf(
+					"%w: lock during plan answers %d, want %d",
+					errUnexpected,
+					e.Status,
+					http.StatusConflict,
+				)
+			}
+
+			if !strings.Contains(e.ResponseBody, "is locked by User") ||
+				!strings.Contains(e.ResponseBody, e2e.Subject) {
+				return fmt.Errorf(
+					"%w: lock detail lacks %q and the holder: %s",
+					errUnexpected,
+					"is locked by User",
+					e.ResponseBody,
+				)
+			}
+
+			return nil
+		}
+
+		return fmt.Errorf("%w: plan made no lock request", errUnexpected)
 	}
 }
 
