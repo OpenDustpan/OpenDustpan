@@ -311,6 +311,27 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
 }
 
+// cancelUpdate ends the update without its lease, as `pulumi cancel` does.
+// It is the only way to release a stack whose client vanished. Canceling an
+// already canceled update succeeds. The CLI authorizes with its access token,
+// so this route needs no lease token.
+func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	if _, err := h.updates.Cancel(ctx, ref, id); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
 // saveCheckpoint stores the running update's checkpoint; the last write
 // wins. The lease token in the Authorization header authorizes the write. A
 // checkpoint over the size limit answers 413. The CLI may gzip the body. The

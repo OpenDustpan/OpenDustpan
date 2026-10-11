@@ -482,13 +482,26 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 		return
 	}
 
+	// The CLI finds the running update here: `pulumi cancel` reads
+	// activeUpdate with GetStack and stops with an error if it is empty.
+	// Only a running mutating update shows; otherwise the answer is "".
+	active := ""
+
+	if u, err := h.updates.Active(ctx, ref); err == nil {
+		active = u.ID.String()
+	} else if !errors.Is(err, stack.ErrUpdateNotFound) {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	h.writeJSON(ctx, w, http.StatusOK, stackResponse{
 		Tags:         st.Tags,
 		OrgName:      st.Ref.Namespace.String(),
 		ProjectName:  st.Ref.Project.String(),
 		StackName:    st.Ref.Stack.String(),
 		ID:           st.ID.String(),
-		ActiveUpdate: "",
+		ActiveUpdate: active,
 		Version:      st.Version,
 	})
 }

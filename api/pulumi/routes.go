@@ -74,6 +74,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.stackRoutes()...)
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
+	routes = append(routes, h.updateCancelRoute())
 
 	return routes
 }
@@ -207,6 +208,8 @@ func (h *Handler) updateCreateRoutes() []Route {
 
 // updateRunRoutes returns the start, lease, checkpoint, read, history and
 // export routes for an update. Reads need unit:read; writes need unit:write.
+// Cancel has its own route (updateCancelRoute): it serves the access token,
+// not the lease.
 func (h *Handler) updateRunRoutes() []Route {
 	return []Route{
 		{
@@ -276,6 +279,21 @@ func (h *Handler) updateRunRoutes() []Route {
 			Resolve: resolveGetStack,
 			Serve:   h.exportStack,
 		},
+	}
+}
+
+// updateCancelRoute returns the cancel route: it ends the update named by the
+// update ID without its lease, so it frees a stack locked by a vanished
+// client. The CLI sends its access token, not the lease, so anyone with the
+// right to update the stack may cancel.
+func (h *Handler) updateCancelRoute() Route {
+	return Route{
+		Method:  http.MethodPost,
+		Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/cancel",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitWrite},
+		Resolve: resolveGetStack,
+		Serve:   h.cancelUpdate,
 	}
 }
 

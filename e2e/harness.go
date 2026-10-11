@@ -469,6 +469,45 @@ func (e *Env) StartHeldUpdate(ctx context.Context, tb testing.TB, ns, project, n
 	return HeldUpdate{Namespace: ns, Project: project, Name: name, ID: created.UpdateID, Lease: started.Token}
 }
 
+// SaveHeldCheckpoint saves the exported deployment into the held update
+// through the checkpoint route with its lease token, as the engine would have
+// before the CLI vanished. It adds the crash marker: an unknown field the
+// engine ignores, so the next up still previews against the matching base
+// snapshot while the export after cancel proves cancel kept the checkpoint.
+func (e *Env) SaveHeldCheckpoint(ctx context.Context, tb testing.TB, held HeldUpdate, exportStdout string) {
+	tb.Helper()
+
+	var doc struct {
+		Deployment map[string]any `json:"deployment"`
+		Version    int            `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(exportStdout), &doc); err != nil {
+		tb.Fatalf("decode stack export: %v", err)
+	}
+
+	if doc.Deployment == nil {
+		tb.Fatalf("decode stack export: no deployment to save")
+	}
+
+	doc.Deployment["crashMarker"] = "crash-marker"
+
+	raw, err := json.Marshal(doc.Deployment)
+	if err != nil {
+		tb.Fatalf("encode crash checkpoint: %v", err)
+	}
+
+	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
+
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPatch,
+		Path:   prefix + "/update/" + held.ID + "/checkpoint",
+		Auth:   "update-token " + held.Lease,
+		Body:   fmt.Sprintf(`{"version":%d,"deployment":%s}`, doc.Version, raw),
+		Out:    nil,
+	})
+}
+
 // EndHeldUpdate completes the held update with status, releasing the stack
 // lock. Only the lease token authorizes it, as for the CLI.
 func (e *Env) EndHeldUpdate(ctx context.Context, tb testing.TB, held HeldUpdate, status string) {
