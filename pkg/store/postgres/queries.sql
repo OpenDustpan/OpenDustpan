@@ -362,3 +362,44 @@ WHERE id = @id AND status = 'pending';
 UPDATE workspaces
 SET current_state_version_id = $1, updated_at_ms = $2
 WHERE id = $3;
+
+-- name: CreateBackup :execrows
+INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: GetBackup :one
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+WHERE id = $1;
+
+-- name: ListBackups :many
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishBackup :execrows
+UPDATE backups
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state = 'running';
+
+-- name: FailRunningBackups :exec
+UPDATE backups
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state = 'running';
+
+-- name: BackupHomeRegions :many
+SELECT DISTINCT home_region
+FROM namespaces
+ORDER BY home_region;
+
+-- name: BackupWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM secret_keys
+ORDER BY wrapper_id;
+
+-- name: BackupBlobs :many
+SELECT content_key, size, md5
+FROM state_versions
+WHERE content_key <> ''
+ORDER BY content_key;

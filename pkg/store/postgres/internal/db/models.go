@@ -8,6 +8,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Backup struct {
+	ID          string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Target      string
+	Error       string
+}
+
 type Checkpoint struct {
 	UpdateID      string
 	LeaseDigest   []byte

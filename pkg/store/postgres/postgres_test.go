@@ -137,6 +137,70 @@ func TestWorkspaceConformance(t *testing.T) {
 	})
 }
 
+func TestBackupConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunBackup(t, func(t *testing.T) storetest.BackupStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
+// backupStore wraps a PostgreSQL store with the URL of its schema, so the
+// suite can close and reopen the same backing storage.
+type backupStore struct {
+	*postgres.Store
+
+	url string
+	t   *testing.T
+}
+
+var _ storetest.Reopener = (*backupStore)(nil)
+
+// openBackup returns a backup store in a fresh schema of the database at base.
+func openBackup(t *testing.T, base string) *backupStore {
+	t.Helper()
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return &backupStore{Store: s, url: schemaURL, t: t}
+}
+
+// Close implements storetest.Reopener: it releases the pool. Closing twice is
+// safe, so the cleanup above stays.
+func (s *backupStore) Close() error {
+	s.Store.Close()
+
+	return nil
+}
+
+// Reopen implements storetest.Reopener: it reconnects to the same schema. A
+// reconnect preserves running backup rows; the server, not Open, marks them
+// failed at start.
+func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reopener returns a new handle as the interface.
+	reopened, err := postgres.Open(s.t.Context(), s.url)
+	if err != nil {
+		s.t.Fatalf("reopen store: %v", err)
+	}
+
+	s.t.Cleanup(reopened.Close)
+
+	return &backupStore{Store: reopened, url: s.url, t: s.t}
+}
+
 // open returns a store in a fresh schema of the database at base.
 func open(t *testing.T, base string) *postgres.Store {
 	t.Helper()
