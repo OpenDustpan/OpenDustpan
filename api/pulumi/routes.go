@@ -74,6 +74,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.stackRoutes()...)
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
+	routes = append(routes, h.updateImportExportRoutes()...)
 	routes = append(routes, h.updateCancelRoute())
 
 	return routes
@@ -177,8 +178,10 @@ func (h *Handler) stackRoutes() []Route {
 	}
 }
 
-// updateCreateRoutes returns one create route per update kind. The five kinds
-// share the create shape; each has its own route.
+// updateCreateRoutes returns one create route per update kind. The four kinds
+// share the create shape; each has its own route. Stack import has its own
+// route (updateImportExportRoutes): the server runs the whole import update,
+// so the CLI sends the deployment once instead of driving the update cycle.
 func (h *Handler) updateCreateRoutes() []Route {
 	kinds := []struct {
 		path string
@@ -188,7 +191,6 @@ func (h *Handler) updateCreateRoutes() []Route {
 		{"preview", stack.KindPreview},
 		{"refresh", stack.KindRefresh},
 		{"destroy", stack.KindDestroy},
-		{"import", stack.KindImport},
 	}
 
 	routes := make([]Route, 0, len(kinds))
@@ -278,6 +280,30 @@ func (h *Handler) updateRunRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.exportStack,
+		},
+	}
+}
+
+// updateImportExportRoutes returns the stack import route and the versioned
+// export route. An import replaces the stack's state, so it needs
+// unit:write; either export reads state, so it needs unit:read.
+func (h *Handler) updateImportExportRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/import",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.importStack,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/export/{version}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: resolveGetStack,
+			Serve:   h.exportStackVersion,
 		},
 	}
 }

@@ -477,6 +477,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{project}", "web",
 		"{stack}", "prod",
 		"{update}", "update0123456789abcdef",
+		"{version}", "1",
 	).Replace(route.Path)
 
 	target := path

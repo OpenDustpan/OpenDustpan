@@ -302,6 +302,27 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("up", checkCheckpointSaved(env, "up"), "up", "--yes", "--non-interactive"))
 	exported := env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
 	env.Step(ctx, t, step("stack history after up", historyShowsKinds("update"), "stack", "history", "--json"))
+
+	// An export round-trips through import: the deployment is saved to a
+	// file and imported back, which records an import update. State does not
+	// change, so the next up has nothing to do.
+	importPath := writeImportFile(t, exported.Stdout)
+	env.Step(ctx, t, step("stack import", nil, "stack", "import", "--file", importPath))
+	env.Step(
+		ctx,
+		t,
+		step("stack history after import", historyShowsKinds("update", "import"), "stack", "history", "--json"),
+	)
+	env.Step(ctx, t, step("up after import", upHasNoChanges, "up", "--yes", "--non-interactive"))
+
+	// Version 1 keeps its checkpoint after later updates, so exporting it
+	// returns the first state. A version that does not exist has no state.
+	env.Step(ctx, t, step("stack export version 1", exportHoldsReference, "stack", "export", "--version", "1"))
+	env.Step(
+		ctx,
+		t,
+		failStep("stack export missing version", outputContains("no state"), "stack", "export", "--version", "999999"),
+	)
 	env.Step(
 		ctx,
 		t,
@@ -328,6 +349,11 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		"second up while one runs",
 		outputContains("another update of this stack is in progress"),
 		"up", "--yes", "--non-interactive",
+	))
+	env.Step(ctx, t, failStep(
+		"stack import while one runs",
+		outputContains("another update of this stack is in progress"),
+		"stack", "import", "--file", importPath,
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 
@@ -623,6 +649,29 @@ func historyShowsKinds(kinds ...string) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// writeImportFile saves an exported deployment for a later stack import
+// step and returns its path.
+func writeImportFile(t *testing.T, deployment string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "stack.json")
+	if err := os.WriteFile(path, []byte(deployment), 0o600); err != nil {
+		t.Fatalf("write import file: %v", err)
+	}
+
+	return path
+}
+
+// upHasNoChanges proves an up changed nothing: the engine reported its
+// resources unchanged.
+func upHasNoChanges(r e2e.Result) error {
+	if strings.Contains(r.Stdout, "unchanged") {
+		return nil
+	}
+
+	return fmt.Errorf("%w: up lacks an unchanged report: %s", errUnexpected, r.Stdout)
 }
 
 // exportHoldsReference proves that stack export after up holds the stack

@@ -747,6 +747,104 @@ func TestImportEndsItsUpdateWhenTheCallerGivesUp(t *testing.T) {
 	}
 }
 
+func TestImportFailureKeepsLatestState(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+
+	seedFirstCheckpoint(t, f)
+
+	done, importErr := abandonImport(t, f)
+	if !errors.Is(importErr, context.Canceled) {
+		t.Fatalf("import: %v, want context.Canceled", importErr)
+	}
+
+	checkFailedImport(t, f, done)
+}
+
+// seedFirstCheckpoint records version 1 with a checkpoint, so a later failed
+// import has earlier state to keep.
+func seedFirstCheckpoint(t *testing.T, f updatesFixture) {
+	t.Helper()
+
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	saveErr := f.svc.SaveCheckpoint(ctx, f.ref, first.Update.ID, first.Token, checkpoint(0, `{"v":1}`))
+	if saveErr != nil {
+		t.Fatalf("save checkpoint: %v", saveErr)
+	}
+
+	_, completeErr := f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded)
+	if completeErr != nil {
+		t.Fatalf("complete: %v", completeErr)
+	}
+}
+
+// abandonImport runs an import whose save fails after the import update
+// started, as a client that hangs up mid-upload would. It returns the ended
+// update and the save error.
+func abandonImport(t *testing.T, f updatesFixture) (stack.Update, error) {
+	t.Helper()
+
+	abandoned, cancel := context.WithCancel(t.Context())
+
+	f.store.mu.Lock()
+	f.store.cancelOnPut = cancel
+	f.store.mu.Unlock()
+
+	return f.svc.Import(abandoned, f.ref, checkpoint(0, `{"v":2}`))
+}
+
+// checkFailedImport proves a failed import ended without state: nothing runs,
+// the export still returns the first checkpoint, and history holds the failed
+// import on top.
+func checkFailedImport(t *testing.T, f updatesFixture, done stack.Update) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if done.Kind != stack.KindImport || done.Status != stack.StatusFailed || done.Version != 2 {
+		t.Errorf("import update: kind %q status %q version %d, want import failed version 2",
+			done.Kind, done.Status, done.Version)
+	}
+
+	active, activeErr := f.svc.Active(ctx, f.ref)
+	if !errors.Is(activeErr, stack.ErrUpdateNotFound) {
+		t.Errorf("active update after a failed import: %q, %v; want none", active.Status, activeErr)
+	}
+
+	cp, exportErr := f.svc.Export(ctx, f.ref)
+	if exportErr != nil || string(cp.Deployment) != `{"v":1}` {
+		t.Errorf("export after a failed import: %q, %v; want the first checkpoint", cp.Deployment, exportErr)
+	}
+
+	history, historyErr := f.svc.History(ctx, f.ref, stack.Page{Limit: 0, Offset: 0})
+	if historyErr != nil || len(history) != 2 {
+		t.Fatalf("history: %d entries, %v; want the update and the failed import", len(history), historyErr)
+	}
+
+	if history[0].ID != done.ID || history[0].Status != stack.StatusFailed {
+		t.Errorf("newest history entry = %+v, want the failed import", history[0])
+	}
+}
+
+func TestParseStackVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"0", "1", "99"} {
+		if _, err := stack.ParseStackVersion(s); err != nil {
+			t.Errorf("ParseStackVersion(%q): %v", s, err)
+		}
+	}
+
+	for _, s := range []string{"", "abc", "1.5", "-1"} {
+		if _, err := stack.ParseStackVersion(s); !errors.Is(err, stack.ErrInvalidUpdate) {
+			t.Errorf("ParseStackVersion(%q): %v, want ErrInvalidUpdate", s, err)
+		}
+	}
+}
+
 func TestParseCompletion(t *testing.T) {
 	t.Parallel()
 

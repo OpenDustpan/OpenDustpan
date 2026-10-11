@@ -93,9 +93,76 @@ type checkpointRequest struct {
 	Deployment json.RawMessage `json:"deployment,omitempty"`
 }
 
+// importStackRequest is one deployment as `stack import` sends it: the
+// export shape with the schema version and the opaque deployment. The CLI
+// may gzip the body.
+type importStackRequest struct {
+	Deployment json.RawMessage `json:"deployment,omitempty"`
+	Version    int             `json:"version,omitempty"`
+	Features   []string        `json:"features,omitempty"`
+}
+
+// importStackResponse answers an import with the ID of the import update.
+// The server already ended the update; the CLI polls it until it ends.
+type importStackResponse struct {
+	UpdateID string `json:"updateId"` //nolint:tagliatelle // The Pulumi CLI's wire name; it must not change.
+}
+
 // updateResultEvent is one entry of the legacy event list. Engine events are
 // write-only in milestone 1, so the list always stays empty.
 type updateResultEvent struct{}
+
+// importStack replaces the stack's state with the deployment the client
+// sends, as `stack import` does. It runs as an update of kind import, so it
+// shows in history and respects the stack lock: while another update runs it
+// answers 409. The server always ends the update that it started.
+func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	ref, ok := h.updateRef(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+
+	body, ok := h.readBody(w, r, limit)
+	if !ok {
+		return
+	}
+
+	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
+		body, ok = h.gunzipBody(w, r, body, limit)
+		if !ok {
+			return
+		}
+	}
+
+	var req importStackRequest
+
+	if err := json.Unmarshal(body, &req); err != nil {
+		h.writeInvalidBody(ctx, w)
+
+		return
+	}
+
+	in := stack.CheckpointInput{
+		Features:      req.Features,
+		Deployment:    req.Deployment,
+		SchemaVersion: req.Version,
+		Sequence:      0,
+		Invalid:       false,
+	}
+
+	u, err := h.updates.Import(ctx, ref, in)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, importStackResponse{UpdateID: u.ID.String()})
+}
 
 // updateResults answers a get of one update. Engine events are write-only in
 // milestone 1: the legacy shape cannot carry them, so the list stays empty.
@@ -448,8 +515,7 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 
 // exportStack returns the stack's latest checkpoint, or an empty deployment
 // when the stack has no state yet. A preview needs the base snapshot before
-// it runs, so this route serves it even though versioned export and stack
-// import belong to later issues.
+// it runs, so this route serves it on every stack.
 func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -469,6 +535,36 @@ func (h *Handler) exportStack(w http.ResponseWriter, r *http.Request, _ identity
 			return
 		}
 
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{Deployment: cp.Deployment, Version: cp.SchemaVersion})
+}
+
+// exportStackVersion returns the checkpoint of one stack version, as
+// `stack export --version N` reads it. It answers 404 when version N does
+// not exist or has no checkpoint, and never falls back to an older one.
+func (h *Handler) exportStackVersion(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	ref, ok := h.updateRef(w, r)
+	if !ok {
+		return
+	}
+
+	version, err := stack.ParseStackVersion(r.PathValue("version"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	cp, err := h.updates.ExportVersion(ctx, ref, version)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return

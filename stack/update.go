@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -120,6 +121,18 @@ func ParseUpdateID(s string) (UpdateID, error) {
 	}
 
 	return UpdateID(s), nil
+}
+
+// ParseStackVersion validates s as a stack version in a request path: a
+// non-negative integer. Whether that version exists is decided later, when
+// its checkpoint is read.
+func ParseStackVersion(s string) (int64, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%w: stack version %q", ErrInvalidUpdate, s)
+	}
+
+	return int64(n), nil
 }
 
 // String returns the ID as a plain string.
