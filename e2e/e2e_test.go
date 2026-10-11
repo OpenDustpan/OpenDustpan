@@ -240,13 +240,13 @@ func tagAbsent(name string) func(e2e.Result) error {
 
 // step is a scenario step with no extra environment.
 func step(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
-	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Fail: false}
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: false}
 }
 
 // failStep is a scenario step that expects the CLI to fail, for steps that
 // prove an error message.
 func failStep(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
-	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Fail: true}
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: true}
 }
 
 // outputContains reports whether stdout or stderr holds want. Failing CLI
@@ -328,6 +328,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		Name:  "stack rename",
 		Args:  []string{"stack", "rename", renamedQualified, "--stack", qualified},
 		Env:   nil,
+		Stdin: "",
 		Fail:  false,
 	})
 
@@ -534,10 +535,11 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 
 				return nil
 			},
-			Name: "stack init default org",
-			Args: []string{"stack", "init", "other"},
-			Env:  nil,
-			Fail: false,
+			Name:  "stack init default org",
+			Args:  []string{"stack", "init", "other"},
+			Env:   nil,
+			Stdin: "",
+			Fail:  false,
 		},
 	}
 }
@@ -570,10 +572,11 @@ func pulumiResourcedRemoveSteps(env *e2e.Env, resourced, resourcedPath string) [
 
 				return nil
 			},
-			Name: "stack rm with resources without force",
-			Args: []string{"stack", "rm", "--yes", "--stack", resourced},
-			Env:  nil,
-			Fail: true,
+			Name:  "stack rm with resources without force",
+			Args:  []string{"stack", "rm", "--yes", "--stack", resourced},
+			Env:   nil,
+			Stdin: "",
+			Fail:  true,
 		},
 		step("stack rm with resources with force",
 			func(_ e2e.Result) error {
@@ -1123,14 +1126,16 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
 		// test server acting as an HTTP proxy; the server routes on the request path.
-		Env:  []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
-		Fail: false,
+		Env:   []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
+		Stdin: "",
+		Fail:  false,
 	})
 	env.Step(ctx, t, e2e.StepSpec{
 		Check: contains("(" + overrideURL + ")"),
 		Name:  "console url from PULUMI_CONSOLE_DOMAIN",
 		Args:  []string{"login"},
 		Env:   []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
+		Stdin: "",
 		Fail:  false,
 	})
 }
@@ -1195,6 +1200,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The stdlib http backend is the T1 import source (ADR 29): init, apply
 	// of a built-in resource and state pull pass against it.
 	tofuHTTPScenario(t, env)
+
+	// Import source T1 (ADR 29): local state, the http backend and
+	// client-side encryption move into OpenDustpan.
+	tofuImportScenario(t, env)
 }
 
 // checkApplyReadsStateVersion proves apply fetched the state version it
@@ -1297,6 +1306,678 @@ func checkHTTPWrites(backend *e2e.HTTPBackend) func(e2e.Result) error {
 	}
 }
 
+// importSourceConfig is a project without a backend: apply keeps local
+// state. It uses the built-in terraform_data resource, so no provider is
+// downloaded.
+const importSourceConfig = `resource "terraform_data" "smoke" {
+  input = "hello"
+}
+
+output "greeting" {
+  value = "hello"
+}
+`
+
+// importPassphrase is the test-only passphrase of the encrypted import
+// source. The destination reads the moved state with the same block.
+const importPassphrase = "correct horse battery staple"
+
+// importCloudConfig returns the same project with a cloud block on host and
+// the workspace name, so init -migrate-state copies the source state there.
+func importCloudConfig(host, workspace string) string {
+	return fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+}
+
+`, host, e2e.Namespace, workspace) + importSourceConfig
+}
+
+// importEncryptionBlock returns the client-side encryption block shared by
+// the encrypted source and its destination.
+func importEncryptionBlock() string {
+	return fmt.Sprintf(`  encryption {
+    key_provider "pbkdf2" "e2e" {
+      passphrase = %q
+    }
+    method "aes_gcm" "e2e" {
+      keys = key_provider.pbkdf2.e2e
+    }
+    state {
+      method = method.aes_gcm.e2e
+    }
+  }
+`, importPassphrase)
+}
+
+// importEncryptedSourceConfig returns the source project with client-side
+// encryption and a local backend: apply writes the encrypted envelope into
+// the state file.
+func importEncryptedSourceConfig() string {
+	return "terraform {\n" + importEncryptionBlock() + "}\n\n" + importSourceConfig
+}
+
+// importEncryptedCloudConfig returns the same encrypted project with a cloud
+// block on host and the workspace name.
+func importEncryptedCloudConfig(host, workspace string) string {
+	return fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+`, host, e2e.Namespace, workspace) + importEncryptionBlock() + "}\n\n" + importSourceConfig
+}
+
+// importStateDoc decodes the serial, lineage, outputs and resources of a
+// pulled state.
+type importStateDoc struct {
+	Serial    int64          `json:"serial"`
+	Lineage   string         `json:"lineage"`
+	Outputs   map[string]any `json:"outputs"`
+	Resources []any          `json:"resources"`
+}
+
+// decodeImportState decodes stdout as a pulled state.
+func decodeImportState(stdout string) (importStateDoc, error) {
+	var doc importStateDoc
+
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		return importStateDoc{}, fmt.Errorf("%w: decode pulled state: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// canonicalImportState returns the outputs and resources of doc as one
+// string, so a check compares state content without serial and lineage.
+func canonicalImportState(doc importStateDoc) (string, error) {
+	raw, err := json.Marshal(struct {
+		Outputs   map[string]any `json:"outputs"`
+		Resources []any          `json:"resources"`
+	}{Outputs: doc.Outputs, Resources: doc.Resources})
+	if err != nil {
+		return "", fmt.Errorf("%w: encode state content: %w", errUnexpected, err)
+	}
+
+	return string(raw), nil
+}
+
+// writeImportConfig writes content as main.tf in dir for an import move.
+func writeImportConfig(t *testing.T, dir, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write import config: %v", err)
+	}
+}
+
+// importMigrateStep returns the migrate step: plain init with input on,
+// answering yes to the copy approval. A cloud block takes no migrate flags:
+// -migrate-state and -force-copy are for state backends only, and the copy
+// into a cloud backend is an interactive prompt instead.
+func importMigrateStep(name string) e2e.StepSpec {
+	return e2e.StepSpec{
+		Check: nil,
+		Name:  name,
+		Args:  []string{"init", "-no-color"},
+		Env:   []string{"TF_INPUT=1"},
+		Stdin: "yes\n",
+		Fail:  false,
+	}
+}
+
+// importRecord renders the lineage and serial before and after a move for
+// the report.
+func importRecord(before, after importStateDoc) string {
+	return fmt.Sprintf(
+		"source serial=%d lineage=%s; destination serial=%d lineage=%s",
+		before.Serial,
+		before.Lineage,
+		after.Serial,
+		after.Lineage,
+	)
+}
+
+// checkImportBefore records the source state and proves it has a serial and
+// a lineage, then runs the extra source checks, if any.
+func checkImportBefore(before *importStateDoc, extra func() error) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		doc, err := decodeImportState(r.Stdout)
+		if err != nil {
+			return err
+		}
+
+		if doc.Serial < 1 {
+			return fmt.Errorf("%w: source serial is %d, want at least 1", errUnexpected, doc.Serial)
+		}
+
+		if doc.Lineage == "" {
+			return fmt.Errorf("%w: source state has no lineage", errUnexpected)
+		}
+
+		*before = doc
+
+		if extra != nil {
+			return extra()
+		}
+
+		return nil
+	}
+}
+
+// checkImportPreserved proves kept holds the state before: the same content
+// and the same serial.
+func checkImportPreserved(before, kept importStateDoc) error {
+	want, err := canonicalImportState(before)
+	if err != nil {
+		return err
+	}
+
+	got, err := canonicalImportState(kept)
+	if err != nil {
+		return err
+	}
+
+	if got != want {
+		return fmt.Errorf("%w: the moved state lost content", errUnexpected)
+	}
+
+	if kept.Serial != before.Serial {
+		return fmt.Errorf(
+			"%w: moved serial is %d, want the source serial %d",
+			errUnexpected,
+			kept.Serial,
+			before.Serial,
+		)
+	}
+
+	return nil
+}
+
+// checkImportAfter records the destination state and proves the move: the
+// content and the serial match the source, and the lineage is fresh, because
+// OpenTofu writes a new lineage into an empty workspace. It then proves the
+// source is unchanged, if asked.
+func checkImportAfter(
+	before, after *importStateDoc, checkSource func() error,
+) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		doc, err := decodeImportState(r.Stdout)
+		if err != nil {
+			return err
+		}
+
+		*after = doc
+
+		if err := checkImportPreserved(*before, doc); err != nil {
+			return err
+		}
+
+		if doc.Lineage == "" || doc.Lineage == before.Lineage {
+			return fmt.Errorf(
+				"%w: destination lineage is %q, want a fresh lineage unlike the source %q",
+				errUnexpected,
+				doc.Lineage,
+				before.Lineage,
+			)
+		}
+
+		if checkSource != nil {
+			return checkSource()
+		}
+
+		return nil
+	}
+}
+
+// checkImportPlan proves plan shows no changes after the move.
+func checkImportPlan(r e2e.Result) error {
+	if out := r.Stdout + r.Stderr; !strings.Contains(out, "No changes.") {
+		return fmt.Errorf("%w: plan lacks a no-changes report: %s", errUnexpected, out)
+	}
+
+	return nil
+}
+
+// checkImportBackup proves the local source is unchanged: its backup keeps
+// the state the source phase wrote, with the same serial and lineage.
+func checkImportBackup(dir string, before importStateDoc) error {
+	backup := filepath.Join(dir, "terraform.tfstate.backup")
+	raw, err := os.ReadFile(backup) //nolint:gosec // The test reads the state file it wrote.
+	if err != nil {
+		return fmt.Errorf("%w: read the local backup: %w", errUnexpected, err)
+	}
+
+	kept, err := decodeImportState(string(raw))
+	if err != nil {
+		return err
+	}
+
+	if err := checkImportPreserved(before, kept); err != nil {
+		return err
+	}
+
+	if kept.Lineage != before.Lineage {
+		return fmt.Errorf(
+			"%w: backup lineage is %q, want the source lineage %q",
+			errUnexpected,
+			kept.Lineage,
+			before.Lineage,
+		)
+	}
+
+	return nil
+}
+
+// checkHTTPBackendQuiet proves the http source got no write after the copy:
+// the write count stays and no delete arrived. Locks do not count: the move
+// locks the source where the source allows it.
+func checkHTTPBackendQuiet(backend *e2e.HTTPBackend, writes, deletes int) error {
+	if got := backend.Writes(); got != writes {
+		return fmt.Errorf("%w: http backend holds %d writes, want %d", errUnexpected, got, writes)
+	}
+
+	if got := backend.Counts().Deletes; got != deletes {
+		return fmt.Errorf("%w: http backend holds %d deletes, want %d", errUnexpected, got, deletes)
+	}
+
+	return nil
+}
+
+// checkImportEncryptedFile returns a check that proves the source state file
+// holds the encrypted envelope.
+func checkImportEncryptedFile(dir string) func() error {
+	return func() error {
+		state := filepath.Join(dir, "terraform.tfstate")
+		raw, err := os.ReadFile(state) //nolint:gosec // The test reads the state file it wrote.
+		if err != nil {
+			return fmt.Errorf("%w: read the encrypted source: %w", errUnexpected, err)
+		}
+
+		if !strings.Contains(string(raw), "encrypted_data") {
+			return fmt.Errorf("%w: the source state holds no encrypted envelope", errUnexpected)
+		}
+
+		return nil
+	}
+}
+
+// importEncryptedBackupDoc decodes the plaintext envelope fields of an
+// encrypted state file: the serial and the lineage travel outside the
+// encrypted payload.
+type importEncryptedBackupDoc struct {
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+}
+
+// decodeImportEnvelope decodes the plaintext envelope fields of an
+// encrypted state file: the serial and the lineage travel outside the
+// encrypted payload.
+func decodeImportEnvelope(raw []byte) (importEncryptedBackupDoc, error) {
+	var envelope importEncryptedBackupDoc
+
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return importEncryptedBackupDoc{}, fmt.Errorf("%w: decode the encrypted backup: %w", errUnexpected, err)
+	}
+
+	return envelope, nil
+}
+
+// checkImportEnvelopePreserved proves the backup envelope keeps the source
+// serial and lineage.
+func checkImportEnvelopePreserved(envelope importEncryptedBackupDoc, before importStateDoc) error {
+	if envelope.Serial != before.Serial {
+		return fmt.Errorf(
+			"%w: backup serial is %d, want the source serial %d",
+			errUnexpected,
+			envelope.Serial,
+			before.Serial,
+		)
+	}
+
+	if envelope.Lineage != before.Lineage {
+		return fmt.Errorf(
+			"%w: backup lineage is %q, want the source lineage %q",
+			errUnexpected,
+			envelope.Lineage,
+			before.Lineage,
+		)
+	}
+
+	return nil
+}
+
+// checkImportEncryptedBackup proves the encrypted local source is unchanged
+// after the move: the backup keeps the source serial and lineage, and its
+// envelope decrypts to the source content. The bytes always differ, because
+// every state write re-encrypts with a fresh nonce, so the check compares
+// documents, not bytes.
+func checkImportEncryptedBackup(
+	ctx context.Context,
+	t *testing.T,
+	env *e2e.Env,
+	dir string,
+	before importStateDoc,
+) func() error {
+	t.Helper()
+
+	return func() error {
+		backup := filepath.Join(dir, "terraform.tfstate.backup")
+		// The test reads the state file it wrote.
+		raw, err := os.ReadFile(backup) //nolint:gosec // Test file with a fixed name.
+		if err != nil {
+			return fmt.Errorf("%w: read the encrypted backup: %w", errUnexpected, err)
+		}
+
+		if !strings.Contains(string(raw), "encrypted_data") {
+			return fmt.Errorf("%w: the encrypted backup holds no encrypted envelope", errUnexpected)
+		}
+
+		envelope, err := decodeImportEnvelope(raw)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := checkImportEnvelopePreserved(envelope, before); checkErr != nil {
+			return checkErr
+		}
+
+		kept, err := decryptImportBackup(ctx, t, env, raw)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := checkImportPreserved(before, kept); checkErr != nil {
+			return checkErr
+		}
+
+		if kept.Lineage != before.Lineage {
+			return fmt.Errorf(
+				"%w: backup lineage is %q, want the source lineage %q",
+				errUnexpected,
+				kept.Lineage,
+				before.Lineage,
+			)
+		}
+
+		return nil
+	}
+}
+
+// decryptImportBackup decrypts the encrypted backup raw with the test
+// passphrase: it runs the CLI in a scratch directory that holds the backup
+// as its local state beside the encrypted source project, so init and state
+// pull read it through the same encryption block. It runs through RunIn, so
+// it records no extra step.
+func decryptImportBackup(
+	ctx context.Context,
+	t *testing.T,
+	env *e2e.Env,
+	raw []byte,
+) (importStateDoc, error) {
+	t.Helper()
+
+	scratch := t.TempDir()
+
+	backupCopy := filepath.Join(scratch, "terraform.tfstate")
+	if err := os.WriteFile(backupCopy, raw, 0o600); err != nil { //nolint:gosec // Temp dir with a fixed name.
+		return importStateDoc{}, fmt.Errorf("%w: write the backup copy: %w", errUnexpected, err)
+	}
+
+	writeImportConfig(t, scratch, importEncryptedSourceConfig())
+
+	init, err := env.RunIn(ctx, scratch, nil, "", "init", "-input=false", "-no-color")
+	if err != nil {
+		return importStateDoc{}, fmt.Errorf("%w: init the decrypt project: %w", errUnexpected, err)
+	}
+
+	if init.ExitCode != 0 {
+		return importStateDoc{}, fmt.Errorf(
+			"%w: init the decrypt project exits %d: %s%s",
+			errUnexpected,
+			init.ExitCode,
+			init.Stdout,
+			init.Stderr,
+		)
+	}
+
+	pulled, err := env.RunIn(ctx, scratch, nil, "", "state", "pull", "-no-color")
+	if err != nil {
+		return importStateDoc{}, fmt.Errorf("%w: pull the decrypted backup: %w", errUnexpected, err)
+	}
+
+	if pulled.ExitCode != 0 {
+		return importStateDoc{}, fmt.Errorf(
+			"%w: pull the decrypted backup exits %d: %s%s",
+			errUnexpected,
+			pulled.ExitCode,
+			pulled.Stdout,
+			pulled.Stderr,
+		)
+	}
+
+	return decodeImportState(pulled.Stdout)
+}
+
+// tofuImportScenario proves import source T1 (ADR 29): local state and the
+// http backend move into OpenDustpan with an interactive init that copies
+// the source state, each with its own run and workspace, and client-side
+// encryption stays.
+func tofuImportScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	tofuImportLocal(ctx, t, env)
+	tofuImportHTTP(ctx, t, env)
+	tofuImportEncrypted(ctx, t, env)
+}
+
+// tofuImportLocal moves local state: apply with the default backend, then a
+// cloud block and init, answering yes to the copy approval. The local
+// backup keeps the source state.
+func tofuImportLocal(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeImportConfig(t, dir, importSourceConfig)
+
+	var before, after importStateDoc
+
+	env.StepIn(ctx, t, dir, step("import local init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, step("import local apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import local state before", checkImportBefore(&before, nil), "state", "pull", "-no-color"),
+	)
+
+	writeImportConfig(t, dir, importCloudConfig(env.Host(), "import-local"))
+
+	env.StepIn(ctx, t, dir, importMigrateStep("import local migrate"))
+	env.StepIn(ctx, t, dir, step(
+		"import local state after",
+		checkImportAfter(&before, &after, func() error { return checkImportBackup(dir, before) }),
+		"state", "pull", "-no-color",
+	))
+	env.StepIn(ctx, t, dir, step("import local plan", checkImportPlan, "plan", "-input=false", "-no-color"))
+
+	env.NoteStep(t, "import local lineage and serial", importRecord(before, after))
+}
+
+// tofuImportHTTP moves the http backend: apply against the backend, then a
+// cloud block and init, answering yes to the copy approval. The backend
+// counts no write after the copy.
+func tofuImportHTTP(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	backend := e2e.NewHTTPBackend(t)
+	dir := t.TempDir()
+	writeImportConfig(t, dir, backend.Config())
+
+	var before, after importStateDoc
+
+	env.StepIn(ctx, t, dir, step("import http init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, step("import http apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+
+	writesBefore := backend.Writes()
+	deletesBefore := backend.Counts().Deletes
+
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import http state before", checkImportBefore(&before, nil), "state", "pull", "-no-color"),
+	)
+
+	writeImportConfig(t, dir, importCloudConfig(env.Host(), "import-http"))
+
+	env.StepIn(ctx, t, dir, importMigrateStep("import http migrate"))
+	env.StepIn(ctx, t, dir, step(
+		"import http state after",
+		checkImportAfter(&before, &after, func() error {
+			return checkHTTPBackendQuiet(backend, writesBefore, deletesBefore)
+		}),
+		"state", "pull", "-no-color",
+	))
+	env.StepIn(ctx, t, dir, step("import http plan", checkImportPlan, "plan", "-input=false", "-no-color"))
+
+	env.NoteStep(t, "import http lineage and serial", importRecord(before, after))
+}
+
+// tofuImportEncrypted moves client-side encrypted state: apply writes the
+// encrypted envelope into the local file, plain init answers yes to the copy
+// approval and moves it as it is, and the destination reads it with the same
+// block. The local backup keeps the source serial, lineage and content
+// behind a fresh envelope.
+func tofuImportEncrypted(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeImportConfig(t, dir, importEncryptedSourceConfig())
+
+	var before, after importStateDoc
+
+	env.StepIn(ctx, t, dir, step("import encrypted init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import encrypted apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	)
+	env.StepIn(ctx, t, dir, step(
+		"import encrypted state before",
+		checkImportBefore(&before, checkImportEncryptedFile(dir)),
+		"state", "pull", "-no-color",
+	))
+
+	writeImportConfig(t, dir, importEncryptedCloudConfig(env.Host(), "import-encrypted"))
+
+	env.StepIn(ctx, t, dir, importMigrateStep("import encrypted migrate"))
+	env.StepIn(ctx, t, dir, step(
+		"import encrypted state after",
+		checkImportAfter(&before, &after, checkImportEncryptedBackup(ctx, t, env, dir, before)),
+		"state", "pull", "-no-color",
+	))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import encrypted plan", checkImportPlan, "plan", "-input=false", "-no-color"),
+	)
+
+	env.NoteStep(t, "import encrypted lineage and serial", importRecord(before, after))
+
+	checkImportEncryptedStored(ctx, t, env)
+}
+
+// importStateVersionData holds the data object of a current-state-version
+// document.
+type importStateVersionData struct {
+	ID string `json:"id"`
+}
+
+// importStateVersionRef decodes a current-state-version document in tests.
+type importStateVersionRef struct {
+	Data importStateVersionData `json:"data"`
+}
+
+// importStateVersionID returns the id of the current-state-version document.
+func importStateVersionID(body string) (string, error) {
+	var current importStateVersionRef
+
+	if err := json.Unmarshal([]byte(body), &current); err != nil {
+		return "", fmt.Errorf("%w: decode current state: %w", errUnexpected, err)
+	}
+
+	if current.Data.ID == "" {
+		return "", fmt.Errorf("%w: current state has no id", errUnexpected)
+	}
+
+	return current.Data.ID, nil
+}
+
+// checkImportEncryptedStored proves the moved state stays encrypted on the
+// destination: the stored bytes of the encrypted workspace hold the
+// encrypted envelope. Each request is a recorded API step, so the report
+// holds the exchange and the bodies stay clipped there.
+func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	wsID := env.WorkspaceIDByName(ctx, t, "import-encrypted")
+
+	var versionID string
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			id, err := importStateVersionID(body)
+			if err != nil {
+				return err
+			}
+
+			versionID = id
+
+			return nil
+		},
+		Name:   "import encrypted current state",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	if versionID == "" {
+		return
+	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			if !strings.Contains(body, "encrypted_data") {
+				return fmt.Errorf(
+					"%w: the stored state of the encrypted workspace holds no encrypted envelope",
+					errUnexpected,
+				)
+			}
+
+			return nil
+		},
+		Name:   "import encrypted stored state",
+		Method: http.MethodGet,
+		Path:   "/api/v2/state-versions/" + versionID + "/download",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+}
+
 // checkRemoteList proves workspace list shows the short names dev and prod
 // and that the CLI listed with search[name]: the request carries the prefix.
 func checkRemoteList(env *e2e.Env) func(e2e.Result) error {
@@ -1384,6 +2065,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Name:  "plan locked by another",
 		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
 		Env:   env.TofuEnvB(),
+		Stdin: "",
 		Fail:  true,
 	})
 
@@ -1414,6 +2096,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Name:  "force-unlock by B",
 		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
 		Env:   env.TofuEnvB(),
+		Stdin: "",
 		Fail:  false,
 	})
 
@@ -1423,6 +2106,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Name:  "plan after force-unlock",
 		Args:  []string{"plan", "-input=false", "-no-color"},
 		Env:   env.TofuEnvB(),
+		Stdin: "",
 		Fail:  false,
 	})
 
@@ -2182,6 +2866,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		Name:  "force-unlock for restore",
 		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
 		Env:   env.TofuEnvB(),
+		Stdin: "",
 		Fail:  false,
 	})
 
@@ -2261,6 +2946,7 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 		Name:  "plan fails on the crashed lock",
 		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
 		Env:   nil,
+		Stdin: "",
 		Fail:  true,
 	})
 
@@ -2270,6 +2956,7 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 		Name:  "force-unlock after crash",
 		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
 		Env:   env.TofuEnvB(),
+		Stdin: "",
 		Fail:  false,
 	})
 
