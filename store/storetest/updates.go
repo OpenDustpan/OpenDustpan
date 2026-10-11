@@ -1385,6 +1385,15 @@ func seedRenameHistory(
 
 	ended := f.end(t, u, stack.StatusSucceeded)
 
+	// Reads report the byte length of the saved checkpoint with the update.
+	// Reload it so the want carries what the store reports.
+	stored, err := f.s.GetUpdate(t.Context(), ended.Ref, ended.ID)
+	if err != nil {
+		t.Fatalf("get update %s: %v", ended.ID, err)
+	}
+
+	ended = stored
+
 	return ended, wantCP, wantEvents
 }
 

@@ -82,6 +82,14 @@ func TestUpdatesConformance(t *testing.T) {
 
 		return open(t)
 	})
+
+	// History fields of ADR 28 decision 4: creator, restore source and
+	// checkpoint size.
+	storetest.RunUpdateHistory(t, func(t *testing.T) storetest.HistoryStore {
+		t.Helper()
+
+		return open(t)
+	})
 }
 
 func TestWorkspaceConformance(t *testing.T) {
@@ -1434,5 +1442,236 @@ func seed0010StateVersions(t *testing.T, conn *sql.DB) {
 
 	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
 		t.Fatalf("seed state versions: %v", err)
+	}
+}
+
+// TestMigration0012UpdateHistoryFields seeds updates before migration 0012
+// and checks every old row reads no creator and no restore source after it.
+func TestMigration0012UpdateHistoryFields(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	seedAt0011WithUpdates(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	checkMigratedUpdateDefaults(t, s, ref)
+	checkMigratedHistoryDefaults(t, s, ref)
+}
+
+// checkMigratedUpdateDefaults checks every migrated update reads the column
+// defaults: no creator and no restore source. The checkpoint join still
+// reports the size of the saved deployment.
+func checkMigratedUpdateDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) {
+	t.Helper()
+
+	for _, want := range []struct {
+		id   stack.UpdateID
+		size int64
+	}{
+		{id: "u1", size: int64(len(`{"v":1}`))},
+		{id: "u2", size: 0},
+	} {
+		got, err := s.GetUpdate(t.Context(), ref, want.id)
+		if err != nil {
+			t.Fatalf("get update %s: %v", want.id, err)
+		}
+
+		checkMigratedHistoryRow(t, got, want.size)
+	}
+}
+
+// checkMigratedHistoryRow checks one migrated update against its checkpoint size.
+func checkMigratedHistoryRow(t *testing.T, got stack.Update, size int64) {
+	t.Helper()
+
+	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
+		t.Fatalf(
+			"migrated update %s = creator %q restore source %d size %d, want empty, 0 and %d",
+			got.ID,
+			got.CreatedBy,
+			got.RestoredFrom,
+			got.CheckpointBytes,
+			size,
+		)
+	}
+}
+
+// checkMigratedHistoryDefaults checks the migrated history lists both updates
+// with no creator and no restore source.
+func checkMigratedHistoryDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) {
+	t.Helper()
+
+	history, err := s.ListUpdates(t.Context(), ref, stack.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(history) != 2 || history[0].ID != "u2" || history[1].ID != "u1" {
+		t.Fatalf("migrated history = %+v, want [u2 u1]", history)
+	}
+
+	for i := range history {
+		if history[i].CreatedBy != "" || history[i].RestoredFrom != 0 {
+			t.Fatalf(
+				"migrated history %s = creator %q restore source %d, want empty and 0",
+				history[i].ID,
+				history[i].CreatedBy,
+				history[i].RestoredFrom,
+			)
+		}
+	}
+}
+
+// seedAt0011WithUpdates creates a database at migration 0011 with a stack,
+// two updates and the checkpoint of the first.
+func seedAt0011WithUpdates(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0011(t, conn)
+	recordMigrations0011(t, conn)
+	seedHistoryNamespace0012(t, conn)
+	seedHistoryStack0012(t, conn)
+	seedHistoryUpdates0012(t, conn)
+	seedHistoryCheckpoint0012(t, conn)
+}
+
+// applyMigrations0011 applies migrations 0001 to 0011 to conn.
+func applyMigrations0011(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
+		"0011_restored_from.sql",
+	}
+
+	for _, name := range names {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+// recordMigrations0011 records migrations 0001 to 0011 as applied.
+func recordMigrations0011(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER NOT NULL PRIMARY KEY,
+		name    TEXT    NOT NULL
+	) STRICT`
+
+	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
+		"0011_restored_from.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
+			t.Fatalf("record migration: %v", err)
+		}
+	}
+}
+
+func seedHistoryNamespace0012(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+}
+
+func seedHistoryStack0012(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const seed = `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', 1, 0, 0)`
+
+	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
+		t.Fatalf("seed stack: %v", err)
+	}
+}
+
+// seedHistoryUpdates0012 seeds one finished update and one running update
+// with the columns migration 0011 knows: no creator, no restore source.
+func seedHistoryUpdates0012(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
+		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', ?, 'update', 0, ?, ?, ?, X'', 0, 1000, 2000, ?)`
+
+	for _, u := range []struct {
+		id       string
+		status   string
+		version  int64
+		revision int64
+		ended    int64
+	}{
+		{id: "u1", status: "succeeded", version: 1, revision: 3, ended: 3000},
+		{id: "u2", status: "running", version: 2, revision: 2, ended: 0},
+	} {
+		if _, err := conn.ExecContext(t.Context(), seed, u.id, u.status, u.version, u.revision, u.ended); err != nil {
+			t.Fatalf("seed update %s: %v", u.id, err)
+		}
+	}
+}
+
+func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
+	t.Helper()
+
+	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
+		digest, invalid, features_json, deployment, saved_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', X'', 3, 0,
+		X'0000000000000000000000000000000000000000000000000000000000000000', 0, '[]', X'7b2276223a317d', 4000)`
+
+	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
 	}
 }

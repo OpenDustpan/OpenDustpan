@@ -70,14 +70,21 @@ WHERE namespace = ? AND project = ? AND name = ?;
 -- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
-    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
+    created_by, restored_from
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ? AND id = ?;
+-- The checkpoint size is the byte length of the saved deployment, read
+-- without loading the document: the checkpoints table holds one row for
+-- each update, so the join finds at most one row.
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ? AND u.id = ?;
 
 -- name: SaveUpdate :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
@@ -112,19 +119,25 @@ SET version = ?, updated_at_ms = ?
 WHERE namespace = ? AND project = ? AND name = ?;
 
 -- name: ActiveUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ?
-  AND status = 'running' AND dry_run = 0 AND kind <> 'preview';
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.status = 'running' AND u.dry_run = 0 AND u.kind <> 'preview';
 
 -- name: ListUpdates :many
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ?
-  AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview'
-ORDER BY version DESC
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.status <> 'not started' AND u.dry_run = 0 AND u.kind <> 'preview'
+ORDER BY u.version DESC
 LIMIT ? OFFSET ?;
 
 -- name: GetUpdateLease :one
