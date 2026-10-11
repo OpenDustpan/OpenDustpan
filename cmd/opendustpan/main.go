@@ -34,6 +34,7 @@ import (
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/postgres"
+	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/sqlite"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -360,20 +361,33 @@ func openStore(ctx context.Context, database string) (store, error) {
 	case strings.HasPrefix(database, "sqlite:"):
 		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"))
 		if err != nil {
-			return nil, fmt.Errorf("open sqlite store: %w", err)
+			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
 		}
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
 		s, err := postgres.Open(ctx, database)
 		if err != nil {
-			return nil, fmt.Errorf("open postgres store: %w", err)
+			return nil, fmt.Errorf("open postgres store: %w", withBinaryVersion(err))
 		}
 
 		return postgresStore{s}, nil
 	default:
 		return nil, errUnknownBackend
 	}
+}
+
+// withBinaryVersion adds the version of the binary to a newer-schema refusal,
+// so the message names the schema version of the database, the schema version
+// of the binary and the version of the binary. The adapters do not know the
+// binary version, so only this command adds it.
+func withBinaryVersion(err error) error {
+	newer, ok := errors.AsType[*schema.NewerError](err)
+	if !ok {
+		return err
+	}
+
+	return fmt.Errorf("binary version is %s. %w", version, newer)
 }
 
 func env(key, fallback string) string {

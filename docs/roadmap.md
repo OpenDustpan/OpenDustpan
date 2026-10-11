@@ -74,7 +74,7 @@ Its gate:
 - [ ] A `LICENSE` in the Console repository.
 - [x] A `--version` flag that the build stamps.
 - [ ] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
-- [ ] The binary refuses to start on a database schema that is newer than it
+- [x] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
 - [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
 - [ ] The e2e suite passes for both tools on SQLite and on PostgreSQL.

@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/internal/codec"
 	"opendustpan.org/opendustpan/store/internal/migrate"
+	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/sqlite/internal/db"
 )
 
@@ -528,17 +529,69 @@ func (s *Store) migrate(ctx context.Context) error {
 		name    TEXT    NOT NULL
 	) STRICT`
 
-	if _, err := s.conn.ExecContext(ctx, createTable); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
+	if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
+		return fmt.Errorf("create schema_migrations: %w", execErr)
+	}
+
+	recorded, recordedErr := s.recordedVersions(ctx)
+	if recordedErr != nil {
+		return recordedErr
+	}
+
+	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
+		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
 	}
 
 	for _, m := range all {
-		if err := s.apply(ctx, m); err != nil {
-			return err
+		if applyErr := s.apply(ctx, m); applyErr != nil {
+			return applyErr
 		}
 	}
 
 	return nil
+}
+
+// embeddedVersions returns the versions the binary embeds, for the
+// newer-schema refusal.
+func embeddedVersions(all []migrate.Migration) []int64 {
+	out := make([]int64, 0, len(all))
+	for _, m := range all {
+		out = append(out, m.Version)
+	}
+
+	return out
+}
+
+// recordedVersions returns the versions schema_migrations records, ordered.
+func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
+	rows, err := s.conn.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema versions: %w", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	var out []int64
+
+	for rows.Next() {
+		var version int64
+
+		if scanErr := rows.Scan(&version); scanErr != nil {
+			return nil, fmt.Errorf("read schema versions: %w", scanErr)
+		}
+
+		out = append(out, version)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("read schema versions: %w", iterErr)
+	}
+
+	return out, nil
 }
 
 func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
