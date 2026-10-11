@@ -400,6 +400,30 @@ func (stubWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.Rea
 	return io.NopCloser(strings.NewReader(stubStateContent())), nil
 }
 
+// Restore makes the stub state current again as a new, forced version, so
+// the route tests prove authorization, not the state rules.
+func (stubWorkspaces) Restore(
+	ctx context.Context, id workspace.ID, from workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	src, err := stubWorkspaces{}.ReadState(ctx, from)
+	if err != nil {
+		return workspace.StateVersion{}, err
+	}
+
+	if src.Workspace != id {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	restored := src
+	restored.ID = workspace.StateVersionID("sv-restored123")
+	restored.Force = true
+	restored.RestoredFrom = from
+	restored.CreatedAt = stubWorkspaceTime()
+	restored.FinalizedAt = stubWorkspaceTime()
+
+	return restored, nil
+}
+
 // History serves the stub state of ws-test123 as a list of one, so the list
 // route test proves authorization, not the state rules.
 func (stubWorkspaces) History(
@@ -1269,6 +1293,12 @@ func (errorWorkspaces) ReadState(
 
 func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, errTestInternal
+}
+
+func (errorWorkspaces) Restore(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
 }
 
 func (errorWorkspaces) History(

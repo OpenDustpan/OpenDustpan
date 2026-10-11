@@ -740,6 +740,12 @@ func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 	return nil, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) Restore(
+	_ context.Context, _ workspace.ID, _ workspace.StateVersionID, _ string,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
 func (p pagingWorkspaces) History(
 	_ context.Context, _ workspace.ID, _ workspace.Page,
 ) ([]workspace.StateVersion, int, error) {

@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -910,6 +911,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The list route serves the two versions with the go-tfe query shape.
 	tofuStateVersionListScenario(t, env)
 
+	// A restore of the first version makes it current again: state pull
+	// matches its MD5, a new apply succeeds, and a locked restore names the
+	// holder.
+	tofuRestoreScenario(t, env)
+
 	// state push rejects a stale serial and another lineage, and accepts
 	// -force.
 	tofuStatePushScenario(t, env)
@@ -1546,6 +1552,335 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 		Name:   "list state versions second page",
 		Method: http.MethodGet,
 		Path:   base + "&page[size]=1&page[number]=2",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+}
+
+// restoreResponseAttributes holds the attributes a restore response carries:
+// the MD5 and size of the copied state, the forced flag and the version it
+// was restored from.
+type restoreResponseAttributes struct {
+	MD5          string `json:"md5"`
+	Force        bool   `json:"force"`
+	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// restoreResponseData holds the data object of a restore response in tests.
+type restoreResponseData struct {
+	ID         string                    `json:"id"`
+	Type       string                    `json:"type"`
+	Attributes restoreResponseAttributes `json:"attributes"`
+}
+
+// restoreResponseMeta holds the meta object of a restore response in tests.
+type restoreResponseMeta struct {
+	Message string `json:"message"`
+}
+
+// restoreResponseDoc decodes a restore response: the new state version and
+// the message that no infrastructure changed.
+type restoreResponseDoc struct {
+	Data restoreResponseData `json:"data"`
+	Meta restoreResponseMeta `json:"meta"`
+}
+
+// decodeRestoreResponse decodes body into a restore response.
+func decodeRestoreResponse(body string) (restoreResponseDoc, error) {
+	var doc restoreResponseDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return restoreResponseDoc{}, fmt.Errorf("%w: decode restore response: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// checkRestoreResponse proves a restore response holds a new version restored
+// from wantFrom with the forced flag and the message that no infrastructure
+// changed.
+func checkRestoreResponse(wantFrom string) func(string) error {
+	return func(body string) error {
+		doc, err := decodeRestoreResponse(body)
+		if err != nil {
+			return err
+		}
+
+		if doc.Data.ID == "" || doc.Data.ID == wantFrom {
+			return fmt.Errorf(
+				"%w: restore holds id %q, want a new version from %q",
+				errUnexpected,
+				doc.Data.ID,
+				wantFrom,
+			)
+		}
+
+		if doc.Data.Type != "state-versions" {
+			return fmt.Errorf("%w: restore type is %q, want state-versions", errUnexpected, doc.Data.Type)
+		}
+
+		if !doc.Data.Attributes.Force || doc.Data.Attributes.RestoredFrom != wantFrom {
+			return fmt.Errorf(
+				"%w: restore holds force %v restored from %q, want force true from %q",
+				errUnexpected,
+				doc.Data.Attributes.Force,
+				doc.Data.Attributes.RestoredFrom,
+				wantFrom,
+			)
+		}
+
+		if msg := strings.ToLower(doc.Meta.Message); !strings.Contains(msg, "no infrastructure") {
+			return fmt.Errorf(
+				"%w: restore message %q lacks the words that no infrastructure changed",
+				errUnexpected,
+				doc.Meta.Message,
+			)
+		}
+
+		return nil
+	}
+}
+
+// md5Hex answers the hex MD5 of s.
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+
+	return hex.EncodeToString(sum[:])
+}
+
+// downloadStateVersion fetches the stored bytes of a state version through
+// the API, failing the test when the version is missing.
+func downloadStateVersion(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, "/api/v2/state-versions/"+id+"/download", "")
+	if err != nil {
+		t.Fatalf("download state %s: %v", id, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("download state %s answers %d: %s", id, status, body)
+	}
+
+	return body
+}
+
+// pulledOutput holds one output of a pulled state in tests.
+type pulledOutput struct {
+	Value string `json:"value"`
+	Type  string `json:"type"`
+}
+
+// pulledRestoreState decodes the serial, lineage and outputs of a pulled
+// state in tests.
+type pulledRestoreState struct {
+	Serial  int64                   `json:"serial"`
+	Lineage string                  `json:"lineage"`
+	Outputs map[string]pulledOutput `json:"outputs"`
+}
+
+// checkStatePullMatchesFirst proves a state pull holds the restored state:
+// the same serial, lineage and greeting output as the first version. The CLI
+// re-serializes the document, so the test compares the parsed state, not its
+// bytes.
+func checkStatePullMatchesFirst(firstSerial int64, firstLineage string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		var got pulledRestoreState
+
+		if err := json.Unmarshal([]byte(r.Stdout), &got); err != nil {
+			return fmt.Errorf("%w: decode pulled state: %w", errUnexpected, err)
+		}
+
+		if got.Serial != firstSerial || got.Lineage != firstLineage {
+			return fmt.Errorf(
+				"%w: pulled serial %d lineage %q, want serial %d lineage %q",
+				errUnexpected,
+				got.Serial,
+				got.Lineage,
+				firstSerial,
+				firstLineage,
+			)
+		}
+
+		greeting, ok := got.Outputs["greeting"]
+		if !ok || greeting.Value != "hello" {
+			return fmt.Errorf("%w: pulled state lacks the greeting hello: %s", errUnexpected, r.Stdout)
+		}
+
+		return nil
+	}
+}
+
+// currentStateMD5Attributes holds the MD5 attribute of a current state
+// version in tests.
+type currentStateMD5Attributes struct {
+	MD5 string `json:"md5"`
+}
+
+// currentStateMD5Data holds the data object of a current state version in
+// tests.
+type currentStateMD5Data struct {
+	Attributes currentStateMD5Attributes `json:"attributes"`
+}
+
+// currentStateMD5Doc decodes a current state version in tests.
+type currentStateMD5Doc struct {
+	Data currentStateMD5Data `json:"data"`
+}
+
+// currentStateMD5 fetches the MD5 attribute of the workspace current state
+// version, failing the test when the workspace has none.
+func currentStateMD5(ctx context.Context, t *testing.T, env *e2e.Env, wsID string) string {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, "/api/v2/workspaces/"+wsID+"/current-state-version", "")
+	if err != nil {
+		t.Fatalf("get current state after restore: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("get current state after restore answers %d: %s", status, body)
+	}
+
+	var doc currentStateMD5Doc
+
+	if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
+		t.Fatalf("decode current state after restore: %v", decodeErr)
+	}
+
+	return doc.Data.Attributes.MD5
+}
+
+// checkRestoreConflict proves a restore that another principal blocks answers
+// 409 with a detail holding "is locked by User" and the holder.
+func checkRestoreConflict(body string) error {
+	if !strings.Contains(body, "is locked by User") || !strings.Contains(body, e2e.SubjectB) {
+		return fmt.Errorf(
+			"%w: restore conflict lacks %q and the holder %q: %s",
+			errUnexpected,
+			"is locked by User",
+			e2e.SubjectB,
+			body,
+		)
+	}
+
+	return nil
+}
+
+// tofuRestoreScenario proves the restore route after two applies: a restore
+// of the first version makes state pull match its MD5 with the restored-from
+// version and the message that no infrastructure changed, a new apply
+// succeeds, a restore while another principal holds the lock answers 409 with
+// the holder, and the restore works after force-unlock. A restore changes no
+// other workspace: the inventory still holds one entry for the workspace.
+func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, stateVersionListBase(), "")
+	if err != nil {
+		t.Fatalf("list state versions for restore: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list state versions for restore answers %d: %s", status, body)
+	}
+
+	doc, err := decodeStateVersionList(body)
+	if err != nil {
+		t.Fatalf("decode state versions for restore: %v", err)
+	}
+
+	if len(doc.Data) != 2 {
+		t.Fatalf("list holds %d versions, want 2 before the restore", len(doc.Data))
+	}
+
+	newest, oldest := doc.Data[0].ID, doc.Data[1].ID
+	firstDownload := downloadStateVersion(ctx, t, env, oldest)
+	firstMD5 := md5Hex(firstDownload)
+
+	var firstState pulledRestoreState
+
+	if decodeErr := json.Unmarshal([]byte(firstDownload), &firstState); decodeErr != nil {
+		t.Fatalf("decode first state for restore: %v", decodeErr)
+	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkRestoreResponse(oldest),
+		Name:   "restore first state version",
+		Method: http.MethodPost,
+		Path:   "/api/v2/state-versions/" + oldest + "/actions/restore",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	// The new current version copies the first version: its MD5 attribute
+	// equals the MD5 of the first stored bytes, and state pull holds the
+	// same serial, lineage and greeting.
+	if got := currentStateMD5(ctx, t, env, wsID); got != firstMD5 {
+		t.Fatalf("current state MD5 is %s, want the MD5 %s of the first version", got, firstMD5)
+	}
+
+	env.Step(
+		ctx,
+		t,
+		step(
+			"state pull after restore",
+			checkStatePullMatchesFirst(firstState.Serial, firstState.Lineage),
+			"state",
+			"pull",
+		),
+	)
+	env.Step(ctx, t, step("apply after restore", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+
+	entries, err := env.ListInventory(ctx, e2e.Namespace)
+	if err != nil {
+		t.Fatalf("list inventory after restore: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Fatalf("inventory holds %d entries, want one for the workspace", len(entries))
+	}
+
+	if want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace; entries[0].Reference() != want {
+		t.Fatalf("inventory entry %+v, want reference %q", entries[0], want)
+	}
+
+	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
+
+	env.APIStepB(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by B for restore",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkRestoreConflict,
+		Name:   "restore locked by another",
+		Method: http.MethodPost,
+		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
+		Body:   "",
+		Want:   http.StatusConflict,
+	})
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: nil,
+		Name:  "force-unlock for restore",
+		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:   env.TofuEnvB(),
+		Fail:  false,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkRestoreResponse(newest),
+		Name:   "restore after force-unlock",
+		Method: http.MethodPost,
+		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
 		Body:   "",
 		Want:   http.StatusOK,
 	})

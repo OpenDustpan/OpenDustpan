@@ -272,8 +272,9 @@ func (h *Handler) stateRoutes() []Route {
 	}
 }
 
-// stateWriteRoutes returns the state write routes: create a state version
-// and upload its content and its JSON rendering through capabilities.
+// stateWriteRoutes returns the state write routes: create a state version,
+// upload its content and its JSON rendering through capabilities, and
+// restore an old version as new current state.
 func (h *Handler) stateWriteRoutes() []Route {
 	return []Route{
 		{
@@ -288,6 +289,18 @@ func (h *Handler) stateWriteRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: h.resolveStateVersionWorkspace,
 			Serve:   h.createStateVersion,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/state-versions/{state_version_id}/actions/restore",
+			// A restore needs unit:write on opentofu:<namespace>/<name>.
+			// The resolver maps the version to the unit of its workspace.
+			// Unknown IDs and versions that are not finalized answer 404.
+			// A lock that another principal holds answers 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: h.resolveStateVersionID,
+			Serve:   h.restoreStateVersion,
 		},
 		{
 			Method: http.MethodPut,
