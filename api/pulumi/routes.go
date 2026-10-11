@@ -71,13 +71,14 @@ type Route struct {
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
 	routes := h.baseRoutes()
+	routes = append(routes, h.stackRoutes()...)
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
 
 	return routes
 }
 
-// baseRoutes returns the login and stack routes that predate updates.
+// baseRoutes returns the login and listing routes that predate updates.
 func (h *Handler) baseRoutes() []Route {
 	return []Route{
 		{
@@ -123,6 +124,12 @@ func (h *Handler) baseRoutes() []Route {
 			Resolve: resolveListStacks,
 			Serve:   h.listStacks,
 		},
+	}
+}
+
+// stackRoutes returns the stack management routes that predate updates.
+func (h *Handler) stackRoutes() []Route {
+	return []Route{
 		{
 			Method:  http.MethodPost,
 			Path:    "/api/stacks/{namespace}/{project}",
@@ -138,6 +145,14 @@ func (h *Handler) baseRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getStack,
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitManage},
+			Resolve: resolveGetStack,
+			Serve:   h.deleteStack,
 		},
 		{
 			Method:  http.MethodPost,

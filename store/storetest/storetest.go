@@ -53,6 +53,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "stack ID is set and returned", test: testStackID},
 		{name: "stack IDs are unique", test: testStackIDsUnique},
 		{name: "delete then create gives a new ID", test: testStackIDAfterDelete},
+		{name: "delete of a missing stack is ErrNotFound", test: testDeleteMissingStack},
+		{name: "delete with a stale fence is ErrFenced", test: testDeleteStaleFence},
+		{name: "delete removes the tags of the stack", test: testDeleteRemovesTags},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
@@ -359,10 +362,72 @@ func testStackIDsUnique(t *testing.T, s Store) {
 	}
 }
 
-func testStackIDAfterDelete(t *testing.T, _ Store) {
+func testStackIDAfterDelete(t *testing.T, s Store) {
 	t.Helper()
 
-	t.Skip("delete then create with the same name waits for issue #49")
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), first, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	if _, err := s.GetStack(t.Context(), first.Ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
+	}
+
+	second := newStack(ns.Name, "web", "prod")
+	if err := s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
+		t.Fatalf("create stack again: %v", err)
+	}
+
+	if second.ID == first.ID {
+		t.Fatalf("stack ID after delete then create = %q, want a new ID", second.ID)
+	}
+
+	got, err := s.GetStack(t.Context(), second.Ref)
+	if err != nil {
+		t.Fatalf("get recreated stack: %v", err)
+	}
+
+	if got.ID != second.ID {
+		t.Fatalf("recreated stack ID = %q, want %q", got.ID, second.ID)
+	}
+}
+
+func testDeleteMissingStack(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	ghost := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "ghost"}
+
+	if err := s.DeleteStack(t.Context(), ghost, ns.Fence()); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testDeleteStaleFence(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	if err := s.DeleteStack(t.Context(), st.Ref, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if _, err := s.GetStack(t.Context(), st.Ref); err != nil {
+		t.Fatalf("fenced delete removed the stack: %v", err)
+	}
 }
 
 // testRenameKeepsID renames a stack and checks the ID stayed, the old name is
@@ -643,5 +708,41 @@ func assertRefs(t *testing.T, stacks []stack.Stack, want ...string) {
 		if got[i] != want[i] {
 			t.Fatalf("refs = %v, want %v", got, want)
 		}
+	}
+}
+
+// testDeleteRemovesTags tags a stack, deletes it and creates a stack of the
+// same name. The new stack must hold only its own tags, not the old ones.
+func testDeleteRemovesTags(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), first, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	tags := map[string]string{"team": "e2e", "old": "only"}
+	if err := s.UpdateStackTags(t.Context(), first.Ref, tags, now(), ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	second := newStack(ns.Name, "web", "prod")
+	if err := s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
+		t.Fatalf("create stack again: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), second.Ref)
+	if err != nil {
+		t.Fatalf("get recreated stack: %v", err)
+	}
+
+	if !maps.Equal(got.Tags, second.Tags) {
+		t.Fatalf("recreated stack tags = %v, want %v", got.Tags, second.Tags)
 	}
 }

@@ -258,6 +258,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	renamePath := fmt.Sprintf("/api/stacks/%s/%s/%s/rename", org, e2e.Project, stackName)
 	stackPath := fmt.Sprintf("/api/stacks/%s/%s", org, e2e.Project)
 	scratch := fmt.Sprintf("%s/%s/scratch", org, e2e.Project)
+	resourced := fmt.Sprintf("%s/%s/resourced", org, e2e.Project)
+	resourcedPath := fmt.Sprintf("/api/stacks/%s/%s/resourced", org, e2e.Project)
 
 	for _, s := range pulumiSetupSteps(env, org, qualified, stackPath) {
 		env.Step(ctx, t, s)
@@ -299,7 +301,15 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
 
-	for _, s := range pulumiTeardownSteps(scratch) {
+	for _, s := range pulumiTeardownSteps(scratch, resourced) {
+		env.Step(ctx, t, s)
+	}
+
+	// The server cannot record resources through routes that later issues
+	// own, so the test seeds a checkpoint with one managed resource.
+	env.SeedResources(ctx, t, "resourced")
+
+	for _, s := range pulumiResourcedRemoveSteps(env, resourced, resourcedPath) {
 		env.Step(ctx, t, s)
 	}
 
@@ -369,11 +379,46 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 }
 
 // pulumiTeardownSteps returns the scenario steps after the rename: a stack of
-// its own, so the result does not depend on rename.
-func pulumiTeardownSteps(scratch string) []e2e.StepSpec {
+// its own, so the result does not depend on rename, removed with stack rm.
+// It then creates the stack that the resourced steps remove.
+func pulumiTeardownSteps(scratch, resourced string) []e2e.StepSpec {
 	return []e2e.StepSpec{
 		step("stack init scratch", nil, "stack", "init", scratch, "--no-select"),
 		step("stack rm", nil, "stack", "rm", "--yes", "--stack", scratch),
+		// A stack of its own for the delete with resources below.
+		step("stack init resourced", nil, "stack", "init", resourced, "--no-select"),
+	}
+}
+
+// pulumiResourcedRemoveSteps returns the steps that remove a stack with
+// resources: the CLI refuses without --force and removes it with --force.
+func pulumiResourcedRemoveSteps(env *e2e.Env, resourced, resourcedPath string) []e2e.StepSpec {
+	return []e2e.StepSpec{
+		{
+			Check: func(r e2e.Result) error {
+				if out := r.Stdout + r.Stderr; !strings.Contains(out, "still has resources") {
+					return fmt.Errorf("%w: output lacks the refusal: %s", errUnexpected, out)
+				}
+
+				if !env.Requested("stack rm with resources without force", http.MethodDelete, resourcedPath) {
+					return fmt.Errorf("%w: stack was not delete-requested", errUnexpected)
+				}
+
+				return nil
+			},
+			Name: "stack rm with resources without force",
+			Args: []string{"stack", "rm", "--yes", "--stack", resourced},
+			Env:  nil,
+			Fail: true,
+		},
+		step("stack rm with resources with force",
+			func(_ e2e.Result) error {
+				if !env.Requested("stack rm with resources with force", http.MethodDelete, resourcedPath) {
+					return fmt.Errorf("%w: stack was not delete-requested", errUnexpected)
+				}
+
+				return nil
+			}, "stack", "rm", "--yes", "--force", "--stack", resourced),
 	}
 }
 

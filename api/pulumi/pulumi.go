@@ -35,6 +35,13 @@ const (
 	// invalidBodyMessage is the response text for a request body that is not
 	// valid JSON.
 	invalidBodyMessage = "invalid JSON body"
+	// hasResourcesMessage is the response text when a delete without
+	// force meets a stack that still manages resources. The Pulumi CLI
+	// recognizes exactly this message and reports that removal is refused.
+	hasResourcesMessage = "Bad Request: Stack still contains resources."
+	// rootStackType is the type of the automatic stack resource. A deployment
+	// with only this resource holds no managed resources.
+	rootStackType = "pulumi:pulumi:Stack"
 	// unitTool names this API's tool in unit references.
 	unitTool = "pulumi"
 )
@@ -486,6 +493,104 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 	})
 }
 
+// deploymentResource is one entry of the resources list in a checkpoint
+// deployment, as far as the delete guard reads it.
+type deploymentResource struct {
+	Type string `json:"type"`
+}
+
+// deploymentDoc is the part of a checkpoint deployment that the delete guard
+// reads: the list of managed resources.
+type deploymentDoc struct {
+	Resources []deploymentResource `json:"resources"`
+}
+
+// deleteStack removes the stack with its history. Without force=true it
+// refuses when the stack still manages resources, as the Pulumi CLI expects.
+func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if !deleteForce(r) {
+		has, err := h.stackHasResources(ctx, ref)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		if has {
+			h.writeJSON(
+				ctx,
+				w,
+				http.StatusBadRequest,
+				errorResponse{Code: http.StatusBadRequest, Message: hasResourcesMessage},
+			)
+
+			return
+		}
+	}
+
+	if err := h.stacks.Delete(ctx, ref); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteForce reports whether the request asks to delete a stack that still
+// manages resources, as the Pulumi CLI sends it: force=true.
+func deleteForce(r *http.Request) bool {
+	v := r.URL.Query().Get("force")
+
+	return strings.EqualFold(v, "true") || v == "1"
+}
+
+// stackHasResources reports whether the latest checkpoint of ref manages
+// resources beyond the automatic stack resource. A stack without state
+// manages none.
+func (h *Handler) stackHasResources(ctx context.Context, ref stack.Ref) (bool, error) {
+	cp, err := h.updates.Export(ctx, ref)
+	if errors.Is(err, stack.ErrNoState) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return deploymentHasResources(cp.Deployment), nil
+}
+
+// deploymentHasResources reports whether deployment, the opaque JSON of a
+// checkpoint, lists resources beyond the automatic stack resource. A
+// deployment that does not parse counts as holding resources, so a delete
+// without force cannot drop state the server cannot read.
+func deploymentHasResources(deployment []byte) bool {
+	var doc deploymentDoc
+
+	if err := json.Unmarshal(deployment, &doc); err != nil {
+		return true
+	}
+
+	switch len(doc.Resources) {
+	case 0:
+		return false
+	case 1:
+		return doc.Resources[0].Type != rootStackType
+	default:
+		return true
+	}
+}
+
 // renameStackRequest is the body the Pulumi CLI sends to rename a stack: the
 // new stack name and the new project name. An empty value keeps the current
 // one.
@@ -617,8 +722,21 @@ func classify(err error) (int, string) {
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
 		errors.Is(err, stack.ErrUpdateNotFound):
 		return http.StatusNotFound, err.Error()
+	case errors.Is(err, stack.ErrHasResources):
+		return http.StatusBadRequest, hasResourcesMessage
 	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, namespace.ErrNotHome):
+		return http.StatusMisdirectedRequest, err.Error()
+	default:
+		return classifyUpdate(err)
+	}
+}
+
+// classifyUpdate maps the errors of the update cycle to an HTTP status and a
+// message safe to show callers.
+func classifyUpdate(err error) (int, string) {
+	switch {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification):
 		return http.StatusConflict, err.Error()
@@ -626,8 +744,6 @@ func classify(err error) (int, string) {
 		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, stack.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error()
-	case errors.Is(err, namespace.ErrNotHome):
-		return http.StatusMisdirectedRequest, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

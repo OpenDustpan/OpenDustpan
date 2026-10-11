@@ -92,6 +92,10 @@ func (stubStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, err
 	return zero, stack.ErrNotFound
 }
 
+func (stubStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
 func (stubStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	return nil, nil
 }
@@ -124,9 +128,11 @@ type renamedStack struct {
 // reference and records every Create and Rename. It lets the enforcement tests prove
 // that allowed requests reach the service.
 type recordingStackStore struct {
-	tags    []taggedStack
-	created []stack.Stack
-	renamed []renamedStack
+	tags      []taggedStack
+	created   []stack.Stack
+	renamed   []renamedStack
+	deleted   []stack.Ref
+	deleteErr error
 }
 
 func (s *recordingStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespace.Fence) error {
@@ -159,6 +165,12 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 	out.Tags = map[string]string{}
 
 	return out, nil
+}
+
+func (s *recordingStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+	s.deleted = append(s.deleted, ref)
+
+	return s.deleteErr
 }
 
 func (s *recordingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
@@ -258,7 +270,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
@@ -267,7 +279,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
-		Updates:       newUnusedUpdates(t, namespaces),
+		Updates:       newEnforcingUpdates(t, namespaces),
 		Namespaces:    namespaces,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
@@ -544,8 +556,8 @@ func checkRouteEnforcement(t *testing.T, route pulumi.Route) {
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allowed request answers %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != wantSuccess(route) {
+		t.Fatalf("allowed request answers %d, want %d", rec.Code, wantSuccess(route))
 	}
 
 	deny := map[identity.Action]bool{}
@@ -561,6 +573,16 @@ func checkRouteEnforcement(t *testing.T, route pulumi.Route) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
 	}
+}
+
+// wantSuccess returns the status an allowed request to route answers: the
+// final delete answers 204 with no content, every other route answers 200.
+func wantSuccess(route pulumi.Route) int {
+	if route.Method == http.MethodDelete {
+		return http.StatusNoContent
+	}
+
+	return http.StatusOK
 }
 
 // TestCreateStackThroughWrapper proves a stack create still works end to end
@@ -1065,6 +1087,246 @@ func TestResolveGetStackInvalid(t *testing.T) {
 	}
 }
 
+// deploymentCheckpointStore reports deployment as the latest checkpoint of
+// every stack, so delete tests control whether the stack manages resources.
+type deploymentCheckpointStore struct {
+	deployment []byte
+}
+
+func (deploymentCheckpointStore) PutCheckpoint(
+	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
+) error {
+	panic("PutCheckpoint is not used by the delete route")
+}
+
+func (s deploymentCheckpointStore) LatestCheckpoint(
+	_ context.Context, ref stack.Ref,
+) (stack.Checkpoint, error) {
+	var cp stack.Checkpoint
+
+	cp.Ref = ref
+	cp.Deployment = s.deployment
+
+	return cp, nil
+}
+
+func (deploymentCheckpointStore) CheckpointByVersion(
+	_ context.Context, _ stack.Ref, _ int64,
+) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+// newDeleteHandler builds a Handler whose delete removes from stores and
+// whose export reports deployment as the latest checkpoint. A nil deployment
+// reports no state. deleteErr is what the stack store answers.
+func newDeleteHandler(
+	t *testing.T, deployment []byte, deleteErr error,
+) (*pulumi.Handler, *recordingStackStore) {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: deleteErr}
+
+	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	var checkpoints stack.CheckpointStore = emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
+	if deployment != nil {
+		checkpoints = deploymentCheckpointStore{deployment: deployment}
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            emptyCheckpointStore{UpdateStore: nil, EventStore: nil},
+		Checkpoints:        checkpoints,
+		Events:             emptyCheckpointStore{UpdateStore: nil, EventStore: nil},
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("updates service: %v", err)
+	}
+
+	handler, err := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       updates,
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler, stores
+}
+
+func deleteRequest(t *testing.T, target string) *http.Request {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, target, http.NoBody)
+	req.Header.Set("Authorization", "token test-token")
+
+	return req
+}
+
+func TestDeleteStack(t *testing.T) {
+	t.Parallel()
+
+	const (
+		empty      = `{"resources":[]}`
+		onlyStack  = `{"resources":[{"type":"pulumi:pulumi:Stack"}]}`
+		withCustom = `{"resources":[{"type":"pulumi:pulumi:Stack"},{"type":"custom:resource:Type"}]}`
+	)
+
+	cases := []struct {
+		name       string
+		target     string
+		deployment []byte
+		deleteErr  error
+		want       int
+		wantDelete bool
+	}{
+		{
+			name:       "no state",
+			target:     "/api/stacks/acme/web/prod",
+			deployment: nil,
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+		},
+		{
+			name:       "no resources",
+			target:     "/api/stacks/acme/web/prod",
+			deployment: []byte(empty),
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+		},
+		{
+			name:       "only the stack resource",
+			target:     "/api/stacks/acme/web/prod",
+			deployment: []byte(onlyStack),
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+		},
+		{
+			name:       "resources without force",
+			target:     "/api/stacks/acme/web/prod",
+			deployment: []byte(withCustom),
+			deleteErr:  nil,
+			want:       http.StatusBadRequest,
+			wantDelete: false,
+		},
+		{
+			name:       "resources with force",
+			target:     "/api/stacks/acme/web/prod?force=true",
+			deployment: []byte(withCustom),
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+		},
+		{
+			name:       "resources with force=1",
+			target:     "/api/stacks/acme/web/prod?force=1",
+			deployment: []byte(withCustom),
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+		},
+		{
+			name:       "resources with force=false",
+			target:     "/api/stacks/acme/web/prod?force=false",
+			deployment: []byte(withCustom),
+			deleteErr:  nil,
+			want:       http.StatusBadRequest,
+			wantDelete: false,
+		},
+		{
+			name:       "missing stack",
+			target:     "/api/stacks/acme/web/prod",
+			deployment: nil,
+			deleteErr:  stack.ErrNotFound,
+			want:       http.StatusNotFound,
+			wantDelete: true,
+		},
+		{
+			name:       "running update",
+			target:     "/api/stacks/acme/web/prod?force=true",
+			deployment: nil,
+			deleteErr:  stack.ErrUpdateConflict,
+			want:       http.StatusConflict,
+			wantDelete: true,
+		},
+		{
+			name:       "invalid name",
+			target:     "/api/stacks/acme/web/..%2Fx",
+			deployment: nil,
+			deleteErr:  nil,
+			want:       http.StatusBadRequest,
+			wantDelete: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, stores := newDeleteHandler(t, tc.deployment, tc.deleteErr)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, deleteRequest(t, tc.target))
+
+			if rec.Code != tc.want {
+				t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+
+			if got := len(stores.deleted) == 1; got != tc.wantDelete {
+				t.Fatalf("deleted %d stacks, want delete=%t", len(stores.deleted), tc.wantDelete)
+			}
+		})
+	}
+}
+
+// TestDeleteStackWithResourcesMessage proves the refusal carries exactly the
+// message the Pulumi CLI recognizes as a stack that still manages resources.
+func TestDeleteStackWithResourcesMessage(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newDeleteHandler(
+		t,
+		[]byte(`{"resources":[{"type":"pulumi:pulumi:Stack"},{"type":"custom:resource:Type"}]}`),
+		nil,
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))
+
+	var got struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+
+	const want = "Bad Request: Stack still contains resources."
+	if got.Message != want || got.Code != http.StatusBadRequest {
+		t.Fatalf("error body = %+v, want code %d message %q", got, http.StatusBadRequest, want)
+	}
+}
+
 // TestResolveRenameStack proves the rename route resolves the unit in the
 // path: the stack being renamed, not the new name in the body.
 func TestResolveRenameStack(t *testing.T) {
@@ -1137,6 +1399,54 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 	t.Helper()
 
 	stores := unusedUpdateStores{UpdateStore: nil, CheckpointStore: nil, EventStore: nil}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            stores,
+		Checkpoints:        stores,
+		Events:             stores,
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("updates service: %v", err)
+	}
+
+	return updates
+}
+
+// emptyCheckpointStore reports no state for every stack, so the final delete
+// of a stack without resources proceeds. Any other call panics, which a test
+// would report.
+type emptyCheckpointStore struct {
+	stack.UpdateStore
+	stack.EventStore
+}
+
+func (emptyCheckpointStore) PutCheckpoint(
+	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
+) error {
+	panic("PutCheckpoint is not used by the delete route")
+}
+
+func (emptyCheckpointStore) LatestCheckpoint(
+	_ context.Context, _ stack.Ref,
+) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+func (emptyCheckpointStore) CheckpointByVersion(
+	_ context.Context, _ stack.Ref, _ int64,
+) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+// newEnforcingUpdates returns an Updates service whose export finds no state,
+// for handlers whose tested routes delete stacks without resources.
+func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Updates {
+	t.Helper()
+
+	stores := emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            stores,
