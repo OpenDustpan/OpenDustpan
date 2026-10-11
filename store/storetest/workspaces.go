@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "finalize with another lineage is ErrLineageMismatch", test: testFinalizeLineageMismatch},
 		{name: "finalize with a stale serial is ErrStaleSerial", test: testFinalizeStaleSerial},
 		{name: "force skips the lineage and serial checks but not the lock check", test: testFinalizeForce},
+		{name: "two concurrent finalizes admit exactly one", test: testConcurrentFinalize},
 		{name: "a fenced finalize leaves the old state current", test: testFencedFinalizeKeepsCurrent},
 		{
 			name: "create publishes an inventory entry for opentofu:namespace/name",
@@ -913,6 +915,80 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 	}
 
 	assertStateVersion(t, got, forced)
+}
+
+// testConcurrentFinalize finalizes two versions with one serial at once:
+// exactly one wins, the other sees a stale serial. The row lock on the
+// workspace keeps both from passing the serial check together.
+func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pendings := []workspace.StateVersion{
+		createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+		)),
+		createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v2", 1),
+		)),
+	}
+
+	finalized := make([]workspace.StateVersion, len(pendings))
+	attempts := []string{"a1", "a2"}
+
+	for i := range pendings {
+		finalized[i] = finalizedVersion(pendings[i], now().Add(time.Duration(i+2)*time.Hour), "v1")
+		finalized[i].Content = blob.Key(
+			"tofu/" + pendings[i].Workspace.String() + "/" + pendings[i].ID.String() + "/" + attempts[i],
+		)
+	}
+
+	errs := make([]error, len(finalized))
+
+	var wg sync.WaitGroup
+
+	for i := range finalized {
+		wg.Go(func() {
+			errs[i] = s.FinalizeStateVersion(t.Context(), finalized[i], ns.Fence())
+		})
+	}
+
+	wg.Wait()
+
+	var won []workspace.StateVersion
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			won = append(won, finalized[i])
+		case !errors.Is(err, workspace.ErrStaleSerial):
+			t.Errorf("finalize %d: err = %v, want nil or ErrStaleSerial", i, err)
+		default:
+		}
+	}
+
+	if len(won) != 1 {
+		t.Fatalf("%d of %d concurrent finalizes succeeded, want 1", len(won), len(finalized))
+	}
+
+	got, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state after concurrent finalizes: %v", err)
+	}
+
+	assertStateVersion(t, got, won[0])
+
+	stored, err := s.GetWorkspaceByID(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("get workspace after concurrent finalizes: %v", err)
+	}
+
+	if !stored.UpdatedAt.Equal(won[0].FinalizedAt) {
+		t.Fatalf("workspace updated at = %v, want %v", stored.UpdatedAt, won[0].FinalizedAt)
+	}
 }
 
 func testFencedFinalizeKeepsCurrent(t *testing.T, s WorkspaceStore) {
