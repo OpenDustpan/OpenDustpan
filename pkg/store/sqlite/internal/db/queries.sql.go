@@ -100,6 +100,36 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 	return count, err
 }
 
+const createBackup = `-- name: CreateBackup :execrows
+INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateBackupParams struct {
+	ID          string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Target      string
+	Error       string
+}
+
+func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createBackup,
+		arg.ID,
+		arg.State,
+		arg.StartedAtMs,
+		arg.EndedAtMs,
+		arg.Target,
+		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const createNamespace = `-- name: CreateNamespace :execrows
 INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
 VALUES (?, ?, ?, ?)
@@ -395,6 +425,24 @@ func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	return err
 }
 
+const failRunningBackups = `-- name: FailRunningBackups :exec
+UPDATE backups
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state = 'running'
+`
+
+type FailRunningBackupsParams struct {
+	Error     string
+	EndedAtMs int64
+}
+
+// Marks every running backup failed. The server calls it at start, after a
+// stop during a backup.
+func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
+	_, err := q.db.ExecContext(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
+	return err
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET status = ?1, finalized_at_ms = ?2,
@@ -424,6 +472,54 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const finishBackup = `-- name: FinishBackup :execrows
+UPDATE backups
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state = 'running'
+`
+
+type FinishBackupParams struct {
+	State     string
+	Error     string
+	EndedAtMs int64
+	ID        string
+}
+
+// Moves one running backup to its end state. A finished backup matches no
+// row, so a retry reports no change.
+func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishBackup,
+		arg.State,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getBackup = `-- name: GetBackup :one
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+WHERE id = ?
+`
+
+func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
+	row := q.db.QueryRowContext(ctx, getBackup, id)
+	var i Backup
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.Target,
+		&i.Error,
+	)
+	return i, err
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
@@ -923,6 +1019,42 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const listBackups = `-- name: ListBackups :many
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+ORDER BY started_at_ms DESC, id ASC
+`
+
+func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
+	rows, err := q.db.QueryContext(ctx, listBackups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Backup
+	for rows.Next() {
+		var i Backup
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+			&i.Target,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEvents = `-- name: ListEvents :many

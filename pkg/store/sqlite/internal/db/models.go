@@ -8,6 +8,15 @@ import (
 	"database/sql"
 )
 
+type Backup struct {
+	ID          string
+	State       string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Target      string
+	Error       string
+}
+
 type Checkpoint struct {
 	StackID       string
 	UpdateID      string

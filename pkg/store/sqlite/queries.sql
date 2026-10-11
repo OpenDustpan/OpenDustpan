@@ -335,3 +335,32 @@ SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?;
+
+-- name: CreateBackup :execrows
+INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetBackup :one
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+WHERE id = ?;
+
+-- name: ListBackups :many
+SELECT id, state, started_at_ms, ended_at_ms, target, error
+FROM backups
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishBackup :execrows
+-- Moves one running backup to its end state. A finished backup matches no
+-- row, so a retry reports no change.
+UPDATE backups
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state = 'running';
+
+-- name: FailRunningBackups :exec
+-- Marks every running backup failed. The server calls it at start, after a
+-- stop during a backup.
+UPDATE backups
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state = 'running';
