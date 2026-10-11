@@ -74,8 +74,11 @@ with its fixed list of fields, is not part of this decision.
    reveal with the unit, the version and one value path. The call answers the
    plain value of that path only. The console shows a masked value until the
    user selects reveal.
-5. **Each reveal writes an audit entry.** The entry has the fields of
-   decision 13, with the version and the value path of the reveal. The server
+5. **Each plain secret writes an audit entry.** Each response that gives a
+   secret value in plain text writes one audit entry: a reveal, each state
+   read that decrypts secrets, and each plan, apply or update that needs them
+   (decisions 9 and 13). The project owner decided this on 2026-10-11. The
+   entry has the fields of decision 13, with the kind of access. The server
    writes the entry before it answers. If the write fails, the call fails and
    answers no value. The server then writes a log line and counts the failure
    in a metric. An audit entry is a write in a namespace, so it carries the
@@ -87,7 +90,8 @@ with its fixed list of fields, is not part of this decision.
    - `unit:read-secrets`: every response that holds a secret value in plain
      text. This is the reveal call. It is also each tool route that must
      answer plain secret values to the CLI (decision 9). Each such response
-     writes an audit entry (decision 5).
+     writes an audit entry (decision 5). The Pulumi decrypt routes keep
+     `unit:decrypt` (ADR 23), and also write an audit entry.
    - `namespace:read-audit`: the list of audit entries of a namespace.
    - `unit:decrypt` and `unit:encrypt` stay as ADR 23 sets them. They are the
      protocol of the Pulumi CLI for any ciphertext of a stack.
@@ -122,8 +126,9 @@ with its fixed list of fields, is not part of this decision.
 
    The state download and the route for one sensitive output answer plain
    secret values. So they need `unit:read-secrets`, and each call writes an
-   audit entry with an empty value path for a download. A user who runs
-   `tofu plan` needs `unit:read-secrets`, as in the TFE permission model.
+   audit entry of the kind `tool-operation`, with an empty value path for a
+   download. A user who runs `tofu plan` needs `unit:read-secrets`, as in the
+   TFE permission model.
 10. **Sealed at rest.** The server seals OpenTofu state blobs and the
     `outputs` column with the data key of the workspace scope. The scope is
     the namespace and the workspace ID (ADR 19, ADR 23). The server seals a
@@ -137,16 +142,37 @@ with its fixed list of fields, is not part of this decision.
     blob into a new key and moves the pointer in a fenced transaction. A row
     records if the server sealed it. The server reads both forms until it has
     sealed every row.
-12. **A key is now needed for OpenTofu.** An OpenTofu state write without the
-    key-encryption key answers an error that names
-    `DUSTPAN_KEY_ENCRYPTION_KEY`. The upgrade check (ADR 33) reports an
-    installation that holds OpenTofu state and has no key.
+12. **The key, with no silent default.** The server needs a key-encryption key
+    to seal state. The project owner decided this on 2026-10-11:
+    - `DUSTPAN_KEY_ENCRYPTION_KEY` and `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` supply
+      the key, as ADR 23 sets.
+    - When the operator supplies no key and `serve` runs on a terminal (TTY),
+      `serve` asks before it makes a key file. The prompt says where the
+      server will write the file. It also says that an operator who loses the
+      file loses every secret that the key encrypts, and that nobody can
+      recover them.
+      The server makes the file (32 random bytes, readable by the owner only)
+      only when the operator agrees. A log line names the file. The issue
+      chooses the default path.
+    - When the operator supplies no key and no terminal is present, `serve`
+      stops with an error that names `DUSTPAN_KEY_ENCRYPTION_KEY` and
+      `DUSTPAN_KEY_ENCRYPTION_KEY_FILE`. The server never makes a key without
+      the prompt.
+    - The server does not block the single binary in a container. In a
+      container there is often no terminal, so the operator supplies the key.
+      The documents for the reference container deployment strongly recommend
+      a mounted key file or the environment variable.
+    - The upgrade check (ADR 33) reports an installation that holds OpenTofu
+      state and has no key.
 13. **The audit store.** RFC 22 stays open for the full audit log. This ADR
     adds the smallest store that decision 5 needs: append-only entries in
     SQL, with a conformance suite and a REST route to list them. No API
     changes or deletes an entry. The two audit routes of ADR 23
     (`decrypt/log-decryption` and `decrypt/log-batch-decryption`) write
-    entries to this store. This ADR fixes the entry schema now, so that RFC 22 can
+    entries of the kind `reveal` to this store. The Pulumi CLI calls them
+    when a person asks it to show secrets. The e2e suite checks which
+    commands call them. The `decrypt` and `batch-decrypt` routes write
+    entries of the kind `tool-operation`. This ADR fixes the entry schema now, so that RFC 22 can
     add events and fields without a change of meaning:
     - **Who:** the principal subject, the subject at the identity provider
       when the principal has one, and the access token ID when the principal
@@ -159,6 +185,18 @@ with its fixed list of fields, is not part of this decision.
       and the channel (API or console). The client declares the channel, so
       the entry records it as declared. A rule for trusted proxies is for
       RFC 22.
+    - **Kind of access:** a field with exactly one of two values, so that a
+      reader never confuses them:
+      - `tool-operation`: the tool needed the secrets for its own work, for
+        example a plan, an apply, an update, or a read of remote state. The
+        server gives the whole state or a batch of values to the CLI.
+      - `reveal`: a person asked to see a secret value, through the console,
+        a CLI or the API. The reveal call of decision 4 and the two audit
+        routes of ADR 23 write this kind.
+
+      The server cannot see who runs a CLI command. So a person who runs
+      `tofu state pull` makes an entry of the kind `tool-operation`. The
+      documents say this.
     - **Outcome:** `success`, `failure` or `denied`.
     - **Request ID:** the `X-Request-Id` of the request (ADR 32).
     - **Hash chain:** each entry holds the SHA-256 of its own fields and of
@@ -191,6 +229,11 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   RFC 39. A diff now needs only its own issue, with masked values.
 - **ADR 30, decision 7:** "A backup holds OpenTofu state in plain text." After
   decisions 10 and 11, a backup holds sealed OpenTofu state.
+- **ADR 23, decisions 2 and 3:** "The server never generates the key", and
+  "If the database holds no wrapped key and the operator sets no key, the
+  server starts." After decision 12, `serve` makes a key file after the
+  prompt on a terminal, and stops with an error when no key and no terminal
+  are present.
 
 ## Consequences
 
@@ -205,13 +248,18 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   5. The reveal call with its audit entry (decisions 4 and 5).
 - Before roles exist (RFC 19), only administrators pass the new actions. So
   no client loses access now.
-- Each `tofu plan` and `tofu apply` writes an audit entry for the download.
+- Each `tofu plan` and `tofu apply` writes an audit entry of the kind
+  `tool-operation` for the download. So does each Pulumi decrypt call.
   The audit store grows with each run until RFC 22 decides retention.
 - A hash chain puts the appends of one namespace in a sequence. Each append
   reads the last entry of its namespace in the same transaction.
-- An installation that stores OpenTofu state must set a key-encryption key.
-  A lost key means lost OpenTofu state, as it means lost secrets for the
-  Pulumi CLI (ADR 23). The documents must say this.
+- Every installation now needs a key-encryption key, supplied or made after
+  the prompt. A server with no key and no terminal does not start. The e2e
+  suite, the container image and its documents must supply a key.
+- A lost key means lost OpenTofu state, as it means lost secrets for the
+  Pulumi CLI (ADR 23). A key file next to the data does not protect a backup
+  of that data. A backup without the key cannot restore state. The documents
+  must say this.
 - A team that encrypts state on the client still sends plain outputs and a
   plain `json-state` rendering. The server keeps the outputs sealed and keeps
   no value from the rendering. The documents must say this.
