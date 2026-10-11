@@ -4,6 +4,9 @@
 // transaction, so a concurrent promotion (which updates that row) waits until
 // the write commits or aborts. Migrations run under a transaction-scoped
 // advisory lock, so several servers can start at once.
+//
+// Inspect opens a database read-only and reports its schema state. It is the
+// one place `opendustpan upgrade check` reads.
 package postgres
 
 import (

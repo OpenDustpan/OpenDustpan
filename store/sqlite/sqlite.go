@@ -3,6 +3,9 @@
 //
 // SQLite allows one writer at a time. Transactions start as IMMEDIATE so a
 // fenced write takes the write lock before it reads the failover version.
+//
+// Inspect opens a database read-only and reports its schema state. It is the
+// one place `opendustpan upgrade check` reads.
 package sqlite
 
 import (
