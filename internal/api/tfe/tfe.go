@@ -89,9 +89,10 @@ type StateReader interface {
 	History(ctx context.Context, id workspace.ID, page workspace.Page) ([]workspace.StateVersion, int, error)
 }
 
-// StateWriter is what the state write routes need: declare a version and
-// upload its content. The CLI uploads the state itself and its JSON
-// rendering through separate single-use capabilities minted at creation.
+// StateWriter is what the state write routes need: declare a version,
+// upload its content and restore an old version. The CLI uploads the state
+// itself and its JSON rendering through separate single-use capabilities
+// minted at creation.
 type StateWriter interface {
 	// BeginState declares a new state version for the workspace. The caller
 	// must hold the lock; holder is the subject of the calling principal.
@@ -118,6 +119,14 @@ type StateWriter interface {
 		tok token.Token,
 		content io.Reader,
 	) error
+	// Restore makes the finalized state version from current again as a new,
+	// forced version. The workspace must be unlocked or locked by holder.
+	Restore(
+		ctx context.Context,
+		id workspace.ID,
+		from workspace.StateVersionID,
+		holder string,
+	) (workspace.StateVersion, error)
 }
 
 // Config holds the dependencies of a Handler.
