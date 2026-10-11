@@ -151,4 +151,14 @@ if [ "$UID_NUM" = "0" ]; then
 fi
 echo "smoke-image: user $USER_NAME (uid $UID_NUM)"
 
+echo "smoke-image: checking the license files in /licenses"
+LICENSE_FILES="$(docker cp "$CONTAINER:/licenses" - | tar -t)"
+for want in licenses/LICENSE licenses/third_party_licenses/go/LICENSE \
+  licenses/third_party_licenses/modernc.org/sqlite/LICENSE \
+  licenses/third_party_licenses/github.com/jackc/pgx/v5/LICENSE; do
+  if ! grep -qx "$want" <<<"$LICENSE_FILES"; then
+    fail "the image has no /$want"
+  fi
+done
+
 echo "smoke-image: PASS"

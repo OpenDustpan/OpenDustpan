@@ -35,6 +35,8 @@ Consider a change done only when `make check` passes with zero findings:
 - `make trivy` reports nothing. Allow a line in `.trivyignore` only with a
   comment that gives a real reason.
 - `make trufflehog` finds no secret in the Git history.
+- `make licenses` finds a license file for each module that the binary links.
+  The release archives and the container image ship these files.
 - `go test -race ./...` passes, including the conformance suites. Each test
   package has a `leak_test.go` file. Its `TestMain` calls
   `goleak.VerifyTestMain`, which fails the package if a goroutine continues

@@ -24,6 +24,8 @@ COPY . ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
   go build -trimpath -ldflags "-X main.version=${VERSION}" \
   -o /out/opendustpan ./cmd/opendustpan
+# The license files of the code linked into the binary, for /licenses below.
+RUN ./scripts/third-party-licenses.sh linux "${TARGETARCH}" /out/third_party_licenses
 
 # Console stage: static files from a console release tarball. No Node runs
 # here: the tarball is a built release. CONSOLE_URL is https: for a release or
@@ -57,6 +59,9 @@ RUN --mount=type=secret,id=extra_ca,required=false set -eu; \
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/opendustpan /opendustpan
 COPY --from=console /console /console
+# Our license and the licenses of the linked dependencies travel with the image.
+COPY --from=build /src/LICENSE /licenses/LICENSE
+COPY --from=build /out/third_party_licenses /licenses/third_party_licenses
 VOLUME /data
 # The base image already runs as nonroot. The explicit USER keeps that true if
 # the base changes.
