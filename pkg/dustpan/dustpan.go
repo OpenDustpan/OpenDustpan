@@ -427,7 +427,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, backups, observed)
+	serverAPI, err := newServerHandler(cfg, svc, backups, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -725,13 +725,20 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 }
 
 // newServerHandler builds the tool-neutral installation API. It carries the
-// backup service when a backup target is configured, else nil, and the
-// registry that the metrics route writes.
-func newServerHandler(cfg settings, backups *backup.Service, observed *metrics.ServerMetrics) (http.Handler, error) {
+// namespace service that creates namespaces, the backup service when a
+// backup target is configured, else nil, and the registry that the metrics
+// route writes.
+func newServerHandler(
+	cfg settings,
+	svc services,
+	backups *backup.Service,
+	observed *metrics.ServerMetrics,
+) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Namespaces:    svc.namespaces,
 		Backups:       backups,
 		Metrics:       observed,
 	})

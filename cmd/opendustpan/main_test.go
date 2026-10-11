@@ -749,14 +749,6 @@ func TestNewerSchemaRefusesCommands(t *testing.T) {
 	if err := serveDatabase(t, path); !isNewerSchemaError(t, err, dbVersion, binVersion) {
 		t.Fatalf("serve newer database: err = %v, want it to name %d, %d and %q", err, dbVersion, binVersion, version)
 	}
-
-	var out bytes.Buffer
-
-	err := createNamespace(t.Context(), []string{"--database", "sqlite:" + path, "acme"}, &out, io.Discard)
-	if !isNewerSchemaError(t, err, dbVersion, binVersion) {
-		t.Fatalf("namespace create on newer database: err = %v, want it to name %d, %d and %q",
-			err, dbVersion, binVersion, version)
-	}
 }
 
 // isNewerSchemaError reports whether err wraps ErrSchemaNewer and names the

@@ -97,11 +97,6 @@ chmod 644 "$CERT_DIR/cert.pem" "$CERT_DIR/key.pem"
 export DUSTPAN_ADMIN_TOKEN
 DUSTPAN_ADMIN_TOKEN="$(openssl rand -hex 32)"
 
-echo "smoke-image: creating namespace acme"
-docker run --rm -v "$DATA_DIR:/data" "$IMAGE" \
-  namespace create --database sqlite:/data/dustpan.db acme | grep -q "created namespace acme" \
-  || fail "namespace create did not report the namespace"
-
 echo "smoke-image: starting $CONTAINER"
 docker run -d --name "$CONTAINER" -p 127.0.0.1::8080 \
   -v "$DATA_DIR:/data" -v "$CERT_DIR:/certs:ro" \
@@ -124,6 +119,11 @@ for _ in $(seq 1 60); do
   fi
   sleep 0.5
 done
+
+echo "smoke-image: creating namespace acme through the API"
+docker exec -e DUSTPAN_ADMIN_TOKEN "$CONTAINER" \
+  /opendustpan namespace create --server https://localhost:8080 --ca-file /certs/cert.pem acme | grep -q "created namespace acme" \
+  || fail "namespace create did not report the namespace"
 
 echo "smoke-image: checking GET /api/capabilities"
 CAP_OUT="$WORK/capabilities.json"

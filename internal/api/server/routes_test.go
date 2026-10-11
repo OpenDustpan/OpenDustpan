@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -90,6 +91,22 @@ func (stubMetrics) Write(w io.Writer) error {
 
 	return err //nolint:wrapcheck // Transparent writer: callers must see the original error.
 }
+
+// stubNamespaceStore keeps no namespace: it exists only to build a namespace
+// service for handler construction where no request needs it.
+type stubNamespaceStore struct{}
+
+func (stubNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Namespace) error { return nil }
+
+func (stubNamespaceStore) GetNamespace(_ context.Context, _ namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, namespace.ErrNotFound
+}
+
+func (stubNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	return nil, nil
+}
+
+func (stubNamespaceStore) Ping(_ context.Context) error { return nil }
 
 func newTestHandler(t *testing.T) *apiserver.Handler {
 	t.Helper()
@@ -188,10 +205,16 @@ func newServiceBackedHandler(
 		}
 	}
 
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator: authn,
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       service,
 		Metrics:       stubMetrics{},
 	})
@@ -343,13 +366,20 @@ func probeRoute(t *testing.T, handler *apiserver.Handler, route apiserver.Route)
 }
 
 // routeRequest builds a valid request for route: the {id} placeholder holds
-// the seeded running backup, so the GET-by-id route answers 200 when allowed.
-// token is sent as the Authorization Bearer header when not empty.
+// the seeded running backup, so the GET-by-id route answers 200 when allowed,
+// and the namespace create route carries a name, so it answers 201 when
+// allowed. token is sent as the Authorization Bearer header when not empty.
 func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Request {
 	t.Helper()
 
 	path := strings.ReplaceAll(route.Path, "{id}", string(testBackupID))
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, http.NoBody)
+
+	var body io.Reader = http.NoBody
+	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
+		body = strings.NewReader(`{"name":"acme"}`)
+	}
+
+	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, body)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -360,10 +390,15 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 
 // wantSuccessStatus answers the success status of route: POST
 // /api/server/backups starts a backup in the background and answers 202,
-// every other route answers 200.
+// POST /api/server/namespaces creates a namespace and answers 201, every
+// other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost && route.Path == "/api/server/backups" {
 		return http.StatusAccepted
+	}
+
+	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
+		return http.StatusCreated
 	}
 
 	return http.StatusOK
@@ -591,10 +626,16 @@ func TestUnknownPathAnswersJSON404(t *testing.T) {
 func TestNewHandlerRequiresDependencies(t *testing.T) {
 	t.Parallel()
 
+	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	full := apiserver.Config{
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       nil,
 		Metrics:       stubMetrics{},
 	}
@@ -606,6 +647,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		{name: "authenticator", drop: func(c *apiserver.Config) { c.Authenticator = nil }},
 		{name: "authorizer", drop: func(c *apiserver.Config) { c.Authorizer = nil }},
 		{name: "logger", drop: func(c *apiserver.Config) { c.Logger = nil }},
+		{name: "namespaces", drop: func(c *apiserver.Config) { c.Namespaces = nil }},
 		{name: "metrics", drop: func(c *apiserver.Config) { c.Metrics = nil }},
 	}
 
@@ -707,10 +749,16 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatalf("new service: %v", err)
 	}
 
+	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       service,
 		Metrics:       stubMetrics{},
 	})
@@ -726,6 +774,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       nil,
 		Metrics:       stubMetrics{},
 	})
