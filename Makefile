@@ -3,12 +3,14 @@
 #   golangci-lint v2.14.0  https://golangci-lint.run/welcome/install/
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
 #   semgrep       1.178.0  https://semgrep.dev/docs/getting-started/quickstart
+#   trivy         v0.75.0  https://trivy.dev/latest/getting-started/installation/
+#   trufflehog    v3.99.2  https://github.com/trufflesecurity/trufflehog#floppy_disk-installation
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep docs-lint test test-postgres test-s3 e2e upgrade-test generate build image-smoke
+.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog docs-lint test test-postgres test-s3 e2e upgrade-test generate build image-smoke
 
-check: lint nilaway vuln semgrep docs-lint test ## Everything CI checks.
+check: lint nilaway vuln semgrep trivy trufflehog docs-lint test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -36,6 +38,20 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
+
+# The vulnerability database and the misconfiguration checks come from
+# mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
+# line in .trivyignore with its reason.
+trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile) and secrets in the tree.
+	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
+		--disable-telemetry --skip-version-check --no-progress .
+
+# Scans the commits of every local branch, not the uncommitted files. Each
+# candidate is sent to its provider for verification. "unknown" is a candidate
+# that could not be verified (for example, the provider did not answer), so a
+# network failure can fail this target. Exit code 183 means a secret was found.
+trufflehog: ## TruffleHog: verified secrets in the Git history.
+	trufflehog git file://. --results=verified,unknown --fail --no-update
 
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
