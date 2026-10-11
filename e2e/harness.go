@@ -164,6 +164,19 @@ type Env struct {
 	// it; the Pulumi CLI needs it only on a TLS server, where it trusts
 	// the certificate through SSL_CERT_FILE.
 	tls bool
+	// binPath is the server binary newBinaryEnv built. It is empty in the
+	// in-process mode, where RunBinary, StopServer and StartServer fail.
+	binPath string
+	// backendCfg holds the database URL, blob directory, certificate and
+	// key files and tokens of the binary backend.
+	backendCfg backendConfig
+	// backendPort is the loopback port the binary backend serves. A restart
+	// reuses it, so the proxy target and the saved CLI logins stay valid.
+	backendPort string
+	// backendCmd is the running binary server process, or nil while stopped.
+	backendCmd *exec.Cmd
+	// backendLogs holds the combined output of backendCmd.
+	backendLogs *bytes.Buffer
 }
 
 // serverStore is every persistence port the server needs.
@@ -248,6 +261,11 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		remoteProject: "",
 		steps:         nil,
 		tls:           in.cli.Tool == ToolTofu,
+		binPath:       "",
+		backendCfg:    backendConfig{}, //nolint:exhaustruct_v5 // The in-process mode has no binary backend.
+		backendPort:   "",
+		backendCmd:    nil,
+		backendLogs:   nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
