@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -256,6 +257,52 @@ func (e *Env) Requested(step, method, path string) bool {
 	}
 
 	return false
+}
+
+// errNoStackID reports a stack response without an id field.
+var errNoStackID = errors.New("stack has no id")
+
+// StackID fetches the stack at ns/project/name over the Pulumi CLI API
+// and returns its id field and the response status. It authenticates with the
+// environment's token. A missing stack returns status 404 with no error.
+func (e *Env) StackID(
+	ctx context.Context, ns, project, name string,
+) (string, int, error) {
+	target := e.URL + "/api/stacks/" + ns + "/" + project + "/" + name
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return "", 0, fmt.Errorf("build stack request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "token "+e.token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("get stack %s/%s/%s: %w", ns, project, name, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", resp.StatusCode, nil
+	}
+
+	var got struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		return "", 0, fmt.Errorf("decode stack %s/%s/%s: %w", ns, project, name, err)
+	}
+
+	if got.ID == "" {
+		return "", 0, fmt.Errorf("%w: %s/%s/%s", errNoStackID, ns, project, name)
+	}
+
+	return got.ID, resp.StatusCode, nil
 }
 
 // Run executes the CLI with args and returns what it printed. extra holds

@@ -151,23 +151,18 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 	})
 }
 
-// RenameStackForTest renames a stack without moving its history, checkpoint
-// or events. It is test-only until issue #48 adds the rename port.
-func (s *Store) RenameStackForTest(
+// RenameStack implements stack.Store. It renames the stack without moving its
+// history, checkpoint or events: child rows key on the stable stack ID.
+func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		_, err := q.GetStack(ctx, db.GetStackParams{
-			Namespace: oldRef.Namespace.String(),
-			Project:   oldRef.Project.String(),
-			Name:      newName.String(),
-		})
-		if err == nil {
-			return stack.ErrAlreadyExists
+		if newName == oldRef.Stack {
+			return confirmStackPresent(ctx, q, oldRef)
 		}
 
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("check new stack name: %w", err)
+		if err := rejectTakenName(ctx, q, oldRef, newName); err != nil {
+			return err
 		}
 
 		n, err := q.RenameStack(ctx, db.RenameStackParams{
@@ -186,6 +181,48 @@ func (s *Store) RenameStackForTest(
 
 		return nil
 	})
+}
+
+// confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
+// It answers a rename that keeps the current name.
+func confirmStackPresent(ctx context.Context, q *db.Queries, ref stack.Ref) error {
+	params := db.GetStackParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	}
+
+	_, err := q.GetStack(ctx, params)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stack.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read stack: %w", err)
+	}
+
+	return nil
+}
+
+// rejectTakenName returns ErrAlreadyExists when newName already names a stack
+// of the same project.
+func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+	params := db.GetStackParams{
+		Namespace: oldRef.Namespace.String(),
+		Project:   oldRef.Project.String(),
+		Name:      newName.String(),
+	}
+
+	_, err := q.GetStack(ctx, params)
+	if err == nil {
+		return stack.ErrAlreadyExists
+	}
+
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check new stack name: %w", err)
+	}
+
+	return nil
 }
 
 // DeleteStackForTest deletes a stack and, through foreign keys, its updates,

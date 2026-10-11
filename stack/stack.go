@@ -134,6 +134,12 @@ type Store interface {
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
 	// ListStacks returns the stacks matching filter, ordered by project then name.
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
+	// RenameStack changes the stack name of oldRef to newName if fence matches
+	// the namespace's current failover version. The stack ID and every child
+	// row stay with the stack. It returns ErrNotFound for a missing stack,
+	// ErrAlreadyExists for a taken name, namespace.ErrNotFound for a missing
+	// namespace or namespace.ErrFenced for a stale fence.
+	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence) error
 }
 
 // Config holds the dependencies of a Service.
@@ -219,4 +225,29 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 	}
 
 	return stacks, nil
+}
+
+// Rename changes the stack name of oldRef to newName and returns the renamed
+// stack. The stack ID stays the same. The write is fenced on the namespace's
+// failover version and only allowed in its home region.
+func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, error) {
+	ns, err := s.namespaces.WritableHere(ctx, oldRef.Namespace)
+	if err != nil {
+		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, err)
+	}
+
+	renameErr := s.store.RenameStack(ctx, oldRef, newName, ns.Fence())
+	if renameErr != nil {
+		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, renameErr)
+	}
+
+	st, err := s.store.GetStack(
+		ctx,
+		Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: newName},
+	)
+	if err != nil {
+		return Stack{}, fmt.Errorf("rename stack %s: %w", oldRef, err)
+	}
+
+	return st, nil
 }

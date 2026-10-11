@@ -109,6 +109,14 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveGetStack,
 			Serve:   h.getStack,
 		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/rename",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitManage},
+			Resolve: resolveGetStack,
+			Serve:   h.renameStack,
+		},
 	}
 }
 

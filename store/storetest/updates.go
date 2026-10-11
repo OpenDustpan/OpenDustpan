@@ -25,12 +25,6 @@ type UpdatesStore interface {
 	stack.EventStore
 }
 
-// RenameStore renames a stack for tests until issue #48 adds the port. It
-// keeps the stack ID and moves no history, checkpoint or event rows.
-type RenameStore interface {
-	RenameStackForTest(ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence) error
-}
-
 // UpdatesFactory returns a fresh, empty store for one subtest.
 type UpdatesFactory func(t *testing.T) UpdatesStore
 
@@ -1029,17 +1023,12 @@ func testEventsLease(t *testing.T, f fixture) {
 func testRenameKeepsHistory(t *testing.T, f fixture) {
 	t.Helper()
 
-	renamer, ok := f.s.(RenameStore)
-	if !ok {
-		t.Skip("store does not implement RenameStackForTest until issue #48")
-	}
-
 	ended, wantCP, wantEvents := seedRenameHistory(t, f)
 	oldID := f.stackID(t, f.ref)
 	newRef := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "renamed"}
 
-	if renameErr := renamer.RenameStackForTest(t.Context(), f.ref, "renamed", f.fence); renameErr != nil {
-		t.Fatalf("rename stack: %v", renameErr)
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Fatalf("rename stack: %v", err)
 	}
 
 	checkRenamedStack(t, f, newRef, oldID)
