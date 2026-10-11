@@ -360,6 +360,23 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	)
 	env.Step(ctx, t, step("up after import", upHasNoChanges, "up", "--yes", "--non-interactive"))
 
+	// ADR 28 decision 4: the history carries the update ID, the requester,
+	// the checkpoint size and the restore source. The CLI still parses its
+	// history on every version, and the API shows the new fields.
+	env.Step(
+		ctx,
+		t,
+		step(
+			"stack history after two ups",
+			historyShowsKinds("update", "import"),
+			"stack",
+			"history",
+			"--json",
+		),
+	)
+	checkHistoryFields(ctx, t, env, org)
+	checkRunningHistoryFields(ctx, t, env, org)
+
 	// Version 1 keeps its checkpoint after later updates, so exporting it
 	// returns the first state. A version that does not exist has no state.
 	env.Step(ctx, t, step("stack export version 1", exportHoldsReference, "stack", "export", "--version", "1"))
@@ -706,6 +723,119 @@ func historyShowsKinds(kinds ...string) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// historyAPIEntry is one entry of the history API response as the console
+// reads it (ADR 28 decision 4).
+type historyAPIEntry struct {
+	Result          string `json:"result"`
+	Kind            string `json:"kind"`
+	Version         int    `json:"version"`
+	StartTime       int64  `json:"startTime"`
+	EndTime         int64  `json:"endTime"`
+	UpdateID        string `json:"updateID"`
+	RequestedBy     string `json:"requestedBy"`
+	CheckpointBytes int64  `json:"checkpointBytes"`
+	LeaseExpiresAt  int64  `json:"leaseExpiresAt"`
+	RestoredFrom    int64  `json:"restoredFrom"`
+}
+
+// readHistory fetches the history of the renamed stack over the API with the
+// admin token.
+func readHistory(ctx context.Context, t *testing.T, env *e2e.Env, org string) []historyAPIEntry {
+	t.Helper()
+
+	path := fmt.Sprintf("/api/stacks/%s/%s/renamed/updates", org, e2e.Project)
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET %s status %d, want %d (body %s)", path, status, http.StatusOK, body)
+	}
+
+	var decoded struct {
+		Updates []historyAPIEntry `json:"updates"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode history %s: %v (%s)", path, err, body)
+	}
+
+	return decoded.Updates
+}
+
+// checkHistoryFields proves the history shows the requester and the
+// checkpoint size: every entry names the subject, never a token, and one
+// update that saved a checkpoint reports above 0.
+func checkHistoryFields(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	updates := readHistory(ctx, t, env, org)
+
+	if len(updates) == 0 {
+		t.Fatal("history holds no updates, want the two ups and the import")
+	}
+
+	sized := false
+
+	for _, u := range updates {
+		if u.UpdateID == "" {
+			t.Fatalf("history entry %+v holds no update ID", u)
+		}
+
+		if u.RequestedBy != e2e.Subject {
+			t.Fatalf("history entry %+v requestedBy = %q, want %q", u, u.RequestedBy, e2e.Subject)
+		}
+
+		if u.CheckpointBytes > 0 {
+			sized = true
+		}
+	}
+
+	if !sized {
+		t.Fatalf("no history entry reports a checkpoint size (%+v)", updates)
+	}
+}
+
+// checkRunningHistoryFields proves the running update shows its requester and
+// lease expiry with no checkpoint yet, then releases the stack.
+func checkRunningHistoryFields(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+
+	updates := readHistory(ctx, t, env, org)
+
+	found := false
+
+	for _, u := range updates {
+		if u.UpdateID != held.ID {
+			continue
+		}
+
+		found = true
+
+		if u.RequestedBy != e2e.Subject {
+			t.Errorf("running update requestedBy = %q, want %q", u.RequestedBy, e2e.Subject)
+		}
+
+		if u.LeaseExpiresAt <= 0 {
+			t.Errorf("running update leaseExpiresAt = %d, want above 0", u.LeaseExpiresAt)
+		}
+
+		if u.CheckpointBytes != 0 {
+			t.Errorf("running update checkpointBytes = %d, want 0 before any checkpoint", u.CheckpointBytes)
+		}
+	}
+
+	if !found {
+		t.Errorf("history holds no running update %q (%+v)", held.ID, updates)
+	}
+
+	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 }
 
 // writeImportFile saves an exported deployment for a later stack import
