@@ -354,6 +354,11 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 	return cp, nil
 }
 
+// MaxCheckpointBytes returns the largest checkpoint SaveCheckpoint accepts.
+func (s *Updates) MaxCheckpointBytes() int {
+	return s.maxCheckpoints
+}
+
 // Get returns one update.
 func (s *Updates) Get(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
 	u, err := s.updates.GetUpdate(ctx, ref, id)

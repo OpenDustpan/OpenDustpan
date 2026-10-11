@@ -82,6 +82,17 @@ type completeUpdateRequest struct {
 	Status string `json:"status"`
 }
 
+// checkpointRequest is the whole checkpoint the CLI saves during an update:
+// the deployment in the schema named by version, with its features. Without
+// the delta capability the CLI sends no sequence number, so every write
+// replaces the last one.
+type checkpointRequest struct {
+	IsInvalid  bool            `json:"isInvalid"`
+	Version    int             `json:"version"`
+	Features   []string        `json:"features,omitempty"`
+	Deployment json.RawMessage `json:"deployment,omitempty"`
+}
+
 // updateResultEvent is one entry of the legacy event list. Engine events are
 // write-only in milestone 1, so the list always stays empty.
 type updateResultEvent struct{}
@@ -292,6 +303,64 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 	}
 
 	if _, err := h.updates.Complete(ctx, ref, id, tok, status); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// saveCheckpoint stores the running update's checkpoint; the last write
+// wins. The lease token in the Authorization header authorizes the write. A
+// checkpoint over the size limit answers 413. The CLI may gzip the body. The
+// limit bounds the whole wire body here; the domain bounds the deployment
+// inside it, so a body just over the limit answers 413 here even when its
+// deployment alone would fit.
+func (h *Handler) saveCheckpoint(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+
+	body, ok := h.readBody(w, r, limit)
+	if !ok {
+		return
+	}
+
+	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
+		body, ok = h.gunzipBody(w, r, body, limit)
+		if !ok {
+			return
+		}
+	}
+
+	var req checkpointRequest
+
+	if err := json.Unmarshal(body, &req); err != nil {
+		h.writeInvalidBody(ctx, w)
+
+		return
+	}
+
+	in := stack.CheckpointInput{
+		Features:      req.Features,
+		Deployment:    req.Deployment,
+		SchemaVersion: req.Version,
+		Sequence:      0,
+		Invalid:       req.IsInvalid,
+	}
+
+	if err := h.updates.SaveCheckpoint(ctx, ref, id, tok, in); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -532,7 +601,7 @@ func (h *Handler) readEvents(w http.ResponseWriter, r *http.Request) ([]stack.Ev
 	}
 
 	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-		body, ok = h.gunzipBody(w, r, body)
+		body, ok = h.gunzipBody(w, r, body, maxEventBatchBytes)
 		if !ok {
 			return nil, false
 		}
@@ -581,10 +650,9 @@ func parseEvent(raw json.RawMessage) (stack.Event, error) {
 	}, nil
 }
 
-// gunzipBody decompresses a gzipped event batch, bounded by the batch limit.
-// A batch that decompresses over the limit answers 413, like an oversized
-// plain batch.
-func (h *Handler) gunzipBody(w http.ResponseWriter, r *http.Request, body []byte) ([]byte, bool) {
+// gunzipBody decompresses a gzipped request body, bounded by limit. A body
+// that decompresses over the limit answers 413, like an oversized plain body.
+func (h *Handler) gunzipBody(w http.ResponseWriter, r *http.Request, body []byte, limit int64) ([]byte, bool) {
 	gz, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
 		h.writeInvalidBody(r.Context(), w)
@@ -596,15 +664,15 @@ func (h *Handler) gunzipBody(w http.ResponseWriter, r *http.Request, body []byte
 		_ = gz.Close() //nolint:errcheck // Close after a full read reports nothing actionable.
 	}()
 
-	out, err := io.ReadAll(io.LimitReader(gz, maxEventBatchBytes+1))
+	out, err := io.ReadAll(io.LimitReader(gz, limit+1))
 	if err != nil {
 		h.writeInvalidBody(r.Context(), w)
 
 		return nil, false
 	}
 
-	if int64(len(out)) > maxEventBatchBytes {
-		h.writeTooLarge(w, r, maxEventBatchBytes)
+	if int64(len(out)) > limit {
+		h.writeTooLarge(w, r, limit)
 
 		return nil, false
 	}

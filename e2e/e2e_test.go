@@ -299,7 +299,37 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("stack tag rm", nil, "stack", "tag", "rm", "team"))
 	env.Step(ctx, t, step("stack tag ls after rm", tagAbsent("team"), "stack", "tag", "ls"))
 
-	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
+	env.Step(ctx, t, step("up", checkCheckpointSaved(env, "up"), "up", "--yes", "--non-interactive"))
+	env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
+	env.Step(ctx, t, step("stack history after up", historyShowsKinds("update"), "stack", "history", "--json"))
+	env.Step(
+		ctx,
+		t,
+		step("refresh", checkCheckpointSaved(env, "refresh"), "refresh", "--yes", "--non-interactive"),
+	)
+	env.Step(ctx, t, step("destroy", nil, "destroy", "--yes", "--non-interactive"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"stack history after destroy",
+			historyShowsKinds("update", "refresh", "destroy"),
+			"stack",
+			"history",
+			"--json",
+		),
+	)
+
+	// A second update cannot start while one runs: hold the stack lock
+	// through the API, prove the CLI reports the conflict, then release it.
+	// The stack is the renamed one, which up, refresh and destroy ran on.
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	env.Step(ctx, t, failStep(
+		"second up while one runs",
+		outputContains("another update of this stack is in progress"),
+		"up", "--yes", "--non-interactive",
+	))
+	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
 		env.Step(ctx, t, s)
@@ -534,6 +564,59 @@ func historyHidesPreviews(r e2e.Result) error {
 	}
 
 	return nil
+}
+
+// historyShowsKinds proves that stack history lists an entry of each kind,
+// such as the update, refresh and destroy the scenario ran.
+func historyShowsKinds(kinds ...string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		var updates []struct {
+			Kind string `json:"kind"`
+		}
+
+		if err := json.Unmarshal([]byte(r.Stdout), &updates); err != nil {
+			return fmt.Errorf("%w: decode stack history: %w", errUnexpected, err)
+		}
+
+		seen := map[string]bool{}
+		for _, u := range updates {
+			seen[u.Kind] = true
+		}
+
+		for _, kind := range kinds {
+			if !seen[kind] {
+				return fmt.Errorf("%w: stack history lacks kind %q: %s", errUnexpected, kind, r.Stdout)
+			}
+		}
+
+		return nil
+	}
+}
+
+// exportHoldsReference proves that stack export after up holds the stack
+// reference resource: the checkpoint survived the round trip.
+func exportHoldsReference(r e2e.Result) error {
+	if !strings.Contains(r.Stdout, "pulumi:pulumi:StackReference") {
+		return fmt.Errorf("%w: export lacks the stack reference resource: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
+}
+
+// checkCheckpointSaved proves that the CLI stored its checkpoint through
+// PATCH .../update/{id}/checkpoint during the named step.
+func checkCheckpointSaved(env *e2e.Env, stepName string) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			if entries[i].Step == stepName && entries[i].Method == http.MethodPatch &&
+				strings.HasSuffix(entries[i].Path, "/checkpoint") && entries[i].Status == http.StatusOK {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: no PATCH checkpoint answered 200 during %q", errUnexpected, stepName)
+	}
 }
 
 // consoleURLSteps records how the CLI derives console links from the backend
