@@ -208,10 +208,35 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 	org := e2e.Namespace
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, stackName)
+	renamedQualified := fmt.Sprintf("%s/%s/renamed", org, e2e.Project)
+	renamePath := fmt.Sprintf("/api/stacks/%s/%s/%s/rename", org, e2e.Project, stackName)
 	stackPath := fmt.Sprintf("/api/stacks/%s/%s", org, e2e.Project)
 	scratch := fmt.Sprintf("%s/%s/scratch", org, e2e.Project)
 
-	for _, s := range []e2e.StepSpec{
+	for _, s := range pulumiSetupSteps(env, org, qualified, stackPath) {
+		env.Step(ctx, t, s)
+	}
+
+	beforeID := stackIDBeforeRename(t, env, org)
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: checkRenameKeptID(ctx, env, org, renamePath, beforeID),
+		Name:  "stack rename",
+		Args:  []string{"stack", "rename", renamedQualified, "--stack", qualified},
+		Env:   nil,
+	})
+
+	for _, s := range pulumiTeardownSteps(scratch) {
+		env.Step(ctx, t, s)
+	}
+
+	consoleURLSteps(t, env)
+}
+
+// pulumiSetupSteps returns the scenario steps before the rename: login
+// through a second stack init in the default organization.
+func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.StepSpec {
+	return []e2e.StepSpec{
 		step("login", contains(env.URL), "login"),
 		step("whoami", func(r e2e.Result) error {
 			if got := strings.TrimSpace(r.Stdout); got != e2e.Subject {
@@ -249,15 +274,65 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 			Args: []string{"stack", "init", "other"},
 			Env:  nil,
 		},
-		step("stack rename", nil, "stack", "rename", org+"/"+e2e.Project+"/renamed", "--stack", qualified),
-		// A stack of its own, so the result does not depend on rename.
+	}
+}
+
+// pulumiTeardownSteps returns the scenario steps after the rename: a stack of
+// its own, so the result does not depend on rename.
+func pulumiTeardownSteps(scratch string) []e2e.StepSpec {
+	return []e2e.StepSpec{
 		step("stack init scratch", nil, "stack", "init", scratch, "--no-select"),
 		step("stack rm", nil, "stack", "rm", "--yes", "--stack", scratch),
-	} {
-		env.Step(ctx, t, s)
+	}
+}
+
+// stackIDBeforeRename returns the id of the dev stack, failing the test when
+// the stack is missing.
+func stackIDBeforeRename(t *testing.T, env *e2e.Env, org string) string {
+	t.Helper()
+
+	id, status, err := env.StackID(t.Context(), org, e2e.Project, stackName)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("get stack before rename: status %d, err %v", status, err)
 	}
 
-	consoleURLSteps(t, env)
+	return id
+}
+
+// checkRenameKeptID checks that the CLI renamed through renamePath, that the
+// renamed stack keeps beforeID and that the old name is gone.
+func checkRenameKeptID(
+	ctx context.Context, env *e2e.Env, org, renamePath, beforeID string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		if !env.Requested("stack rename", http.MethodPost, renamePath) {
+			return fmt.Errorf("%w: CLI did not POST %s", errUnexpected, renamePath)
+		}
+
+		afterID, status, err := env.StackID(ctx, org, e2e.Project, "renamed")
+		if err != nil {
+			return fmt.Errorf("%w: get renamed stack: %w", errUnexpected, err)
+		}
+
+		if status != http.StatusOK {
+			return fmt.Errorf("%w: renamed stack answers %d", errUnexpected, status)
+		}
+
+		if afterID != beforeID {
+			return fmt.Errorf("%w: stack id changed from %q to %q", errUnexpected, beforeID, afterID)
+		}
+
+		oldID, status, err := env.StackID(ctx, org, e2e.Project, stackName)
+		if err != nil {
+			return fmt.Errorf("%w: get old stack name: %w", errUnexpected, err)
+		}
+
+		if status != http.StatusNotFound {
+			return fmt.Errorf("%w: old stack name still answers %d with id %q", errUnexpected, status, oldID)
+		}
+
+		return nil
+	}
 }
 
 func stackListed(r e2e.Result) error {

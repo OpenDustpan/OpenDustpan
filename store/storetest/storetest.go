@@ -52,6 +52,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "stack ID is set and returned", test: testStackID},
 		{name: "stack IDs are unique", test: testStackIDsUnique},
 		{name: "delete then create gives a new ID", test: testStackIDAfterDelete},
+		{name: "rename keeps the ID", test: testRenameKeepsID},
+		{name: "rename to a taken name is ErrAlreadyExists", test: testRenameTaken},
+		{name: "rename of a missing stack is ErrNotFound", test: testRenameMissing},
+		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
 	}
 
 	for _, tc := range cases {
@@ -311,6 +315,115 @@ func testStackIDAfterDelete(t *testing.T, _ Store) {
 	t.Helper()
 
 	t.Skip("delete then create with the same name waits for issue #49")
+}
+
+// testRenameKeepsID renames a stack and checks the ID stayed, the old name is
+// gone and the new name lists the same stack.
+func testRenameKeepsID(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	newRef := stack.Ref{Namespace: ns.Name, Project: st.Ref.Project, Stack: "renamed"}
+
+	if err := s.RenameStack(t.Context(), st.Ref, "renamed", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), newRef)
+	if err != nil {
+		t.Fatalf("get renamed stack: %v", err)
+	}
+
+	if got.ID != st.ID {
+		t.Fatalf("renamed stack ID = %q, want %q", got.ID, st.ID)
+	}
+
+	if _, getErr := s.GetStack(t.Context(), st.Ref); !errors.Is(getErr, stack.ErrNotFound) {
+		t.Fatalf("get old stack: err = %v, want ErrNotFound", getErr)
+	}
+
+	list, err := s.ListStacks(t.Context(), stack.Filter{Namespace: ns.Name, Project: ""})
+	if err != nil {
+		t.Fatalf("list stacks: %v", err)
+	}
+
+	if len(list) != 1 || list[0].Ref != newRef || list[0].ID != st.ID {
+		t.Fatalf("list stacks = %+v, want one stack %s with ID %q", list, newRef, st.ID)
+	}
+}
+
+// testRenameTaken renames onto a taken name and expects ErrAlreadyExists,
+// with both stacks unchanged.
+func testRenameTaken(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+	second := newStack(ns.Name, "web", "dev")
+
+	wants := []stack.Stack{first, second}
+	for i := range wants {
+		if err := s.CreateStack(t.Context(), wants[i], ns.Fence()); err != nil {
+			t.Fatalf("create stack %s: %v", wants[i].Ref, err)
+		}
+	}
+
+	if err := s.RenameStack(t.Context(), first.Ref, "dev", ns.Fence()); !errors.Is(err, stack.ErrAlreadyExists) {
+		t.Fatalf("rename onto a taken name: err = %v, want ErrAlreadyExists", err)
+	}
+
+	for i := range wants {
+		got, err := s.GetStack(t.Context(), wants[i].Ref)
+		if err != nil {
+			t.Fatalf("get stack %s: %v", wants[i].Ref, err)
+		}
+
+		assertStack(t, got, wants[i])
+	}
+}
+
+// testRenameMissing renames a stack that does not exist and expects ErrNotFound.
+func testRenameMissing(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	ref := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "prod"}
+
+	if err := s.RenameStack(t.Context(), ref, "renamed", ns.Fence()); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("rename missing stack: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testRenameStaleFence renames with a stale fence and expects ErrFenced,
+// with the stack unchanged.
+func testRenameStaleFence(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.RenameStack(t.Context(), st.Ref, "renamed", stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("rename with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	got, err := s.GetStack(t.Context(), st.Ref)
+	if err != nil {
+		t.Fatalf("get stack after fenced rename: %v", err)
+	}
+
+	assertStack(t, got, st)
 }
 
 func assertRefs(t *testing.T, stacks []stack.Stack, want ...string) {

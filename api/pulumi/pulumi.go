@@ -254,6 +254,92 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 	})
 }
 
+// renameStackRequest is the body the Pulumi CLI sends to rename a stack: the
+// new stack name and the new project name. An empty value keeps the current
+// one.
+type renameStackRequest struct {
+	NewName    string `json:"newName"`
+	NewProject string `json:"newProject"`
+}
+
+// parseRenameStackRequest decodes a stack rename body: the whole body must be
+// one JSON value.
+func parseRenameStackRequest(body []byte) (renameStackRequest, error) {
+	var req renameStackRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return renameStackRequest{}, errInvalidBody
+	}
+
+	return req, nil
+}
+
+type renameStackResponse struct{}
+
+func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	oldRef, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		h.writeJSON(
+			ctx,
+			w,
+			http.StatusBadRequest,
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
+		)
+
+		return
+	}
+
+	req, err := parseRenameStackRequest(body)
+	if err != nil {
+		h.writeJSON(
+			ctx,
+			w,
+			http.StatusBadRequest,
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
+		)
+
+		return
+	}
+
+	if req.NewProject != "" && req.NewProject != oldRef.Project.String() {
+		h.writeError(
+			ctx,
+			w,
+			fmt.Errorf("%w: renaming the project to %q", stack.ErrInvalidName, req.NewProject),
+		)
+
+		return
+	}
+
+	newName := req.NewName
+	if newName == "" {
+		newName = oldRef.Stack.String()
+	}
+
+	name, err := stack.ParseName(newName)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := h.stacks.Rename(ctx, oldRef, name); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, renameStackResponse{})
+}
+
 // unitObject maps a stack reference to its tool-neutral unit reference.
 func unitObject(ref stack.Ref) (identity.Object, error) {
 	return identity.UnitObject(unitTool, ref.Namespace, ref.Project.String()+"/"+ref.Stack.String())
