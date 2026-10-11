@@ -16,7 +16,8 @@ var ErrCorruptRow = errors.New("corrupt row")
 
 // UpdateRow is the column representation of an update. Unset times are 0 and
 // an absent lease digest is empty. The stack is its stable ID; the caller
-// supplies the current reference.
+// supplies the current reference. CheckpointBytes is the byte length of the
+// saved deployment, read with the row, not stored with it.
 type UpdateRow struct {
 	StackID          string
 	ID               string
@@ -30,6 +31,9 @@ type UpdateRow struct {
 	StartedAtMs      int64
 	EndedAtMs        int64
 	DryRun           bool
+	CreatedBy        string
+	RestoredFrom     int64
+	CheckpointBytes  int64
 }
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
@@ -81,6 +85,9 @@ func ToUpdateRow(u stack.Update, stackID stack.ID) UpdateRow {
 		StartedAtMs:      OptionalMillis(u.StartedAt),
 		EndedAtMs:        OptionalMillis(u.EndedAt),
 		DryRun:           u.DryRun,
+		CreatedBy:        u.CreatedBy,
+		RestoredFrom:     u.RestoredFrom,
+		CheckpointBytes:  u.CheckpointBytes,
 	}
 }
 
@@ -113,11 +120,11 @@ func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 		DryRun:    row.DryRun,
 		Version:   row.Version,
 		Revision:  row.Revision,
-		// CreatedBy, RestoredFrom and CheckpointBytes stay zero until issues
-		// #135 and #136 add the columns and the checkpoint join.
-		CreatedBy:       "",
-		RestoredFrom:    0,
-		CheckpointBytes: 0,
+		// The creator and the restore source travel on the row; the size
+		// travels with it from the checkpoint join.
+		CreatedBy:       row.CreatedBy,
+		RestoredFrom:    row.RestoredFrom,
+		CheckpointBytes: row.CheckpointBytes,
 	}, nil
 }
 
