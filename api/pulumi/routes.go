@@ -77,19 +77,34 @@ func (h *Handler) buildRoutes() []Route {
 			Method: http.MethodGet,
 			Path:   "/api/user",
 			// GET /api/user reads the caller's own record, so its object is
-			// the caller itself. It lists no namespace today; when it lists
-			// the readable namespaces (ADR 18) the list filters with the
-			// Authorizer, and this action stays the gate.
+			// the caller itself and caller:read stays the gate. The
+			// organizations list holds the readable namespaces (ADR 18): the
+			// handler filters them with the Authorizer for namespace:read,
+			// which this route declares for the filter.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead},
+			Actions: []identity.Action{identity.ActionCallerRead, identity.ActionNamespaceRead},
 			Resolve: resolveCurrentUser,
 			Serve:   h.currentUser,
 		},
 		{
-			Method:  http.MethodGet,
-			Path:    "/api/user/stacks",
+			Method: http.MethodGet,
+			Path:   "/api/user/organizations/default",
+			// The default organization is the only readable namespace, so its
+			// object is the caller itself and the handler filters with the
+			// Authorizer for namespace:read.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionCallerRead, identity.ActionNamespaceRead},
+			Resolve: resolveCurrentUser,
+			Serve:   h.defaultOrganization,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/user/stacks",
+			// With an organization the object is that namespace. Without one
+			// the object is the caller itself and the handler lists every
+			// readable namespace, filtered with the Authorizer.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionNamespaceRead},
 			Resolve: resolveListStacks,
 			Serve:   h.listStacks,
 		},
@@ -185,23 +200,28 @@ func resolveCurrentUser(_ http.ResponseWriter, _ *http.Request) (identity.Object
 	return identity.CallerObject(), nil
 }
 
-// resolveListStacks returns the namespace in the organization query value.
-// The project query value only filters the list, so the object stays the
-// namespace. It validates the project value the way listStacks does, so an
-// invalid filter fails closed before authorization.
+// resolveListStacks returns the namespace in the organization query value, or
+// the caller itself when no organization is given (list every readable
+// namespace). The project query value only filters the list, so the object
+// stays the namespace or caller. It validates the project value the way
+// listStacks does, so an invalid filter fails closed before authorization.
 func resolveListStacks(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
-	ns, err := namespace.ParseName(r.URL.Query().Get("organization"))
-	if err != nil {
-		return identity.Object{}, err
-	}
-
 	if raw := r.URL.Query().Get("project"); raw != "" {
 		if _, err := stack.ParseProjectName(raw); err != nil {
 			return identity.Object{}, err
 		}
 	}
 
-	return identity.NamespaceObject(ns), nil
+	if org := r.URL.Query().Get("organization"); org != "" {
+		ns, err := namespace.ParseName(org)
+		if err != nil {
+			return identity.Object{}, err
+		}
+
+		return identity.NamespaceObject(ns), nil
+	}
+
+	return identity.CallerObject(), nil
 }
 
 // parseCreateStackRequest decodes a stack create body. The resolver and the

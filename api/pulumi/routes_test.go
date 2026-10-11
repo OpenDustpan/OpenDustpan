@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
@@ -45,6 +46,10 @@ func (stubNamespaceStore) GetNamespace(_ context.Context, _ namespace.Name) (nam
 	return zero, namespace.ErrNotFound
 }
 
+func (stubNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	return nil, nil
+}
+
 // homedNamespaceStore answers every namespace homed in the test region, so
 // stack writes pass the home-region check.
 type homedNamespaceStore struct{}
@@ -60,6 +65,17 @@ func (homedNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) 
 	out.HomeRegion = "test-region"
 
 	return out, nil
+}
+
+func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	ns := namespace.Namespace{
+		CreatedAt:       time.Time{},
+		Name:            "acme",
+		HomeRegion:      "test-region",
+		FailoverVersion: 1,
+	}
+
+	return []namespace.Namespace{ns}, nil
 }
 
 // stubStackStore answers no stack. It exists only to build a Handler.
@@ -195,6 +211,7 @@ func newTestHandler(t *testing.T) *pulumi.Handler {
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       newUnusedUpdates(t, namespaces),
+		Namespaces:    namespaces,
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -229,6 +246,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       newUnusedUpdates(t, namespaces),
+		Namespaces:    namespaces,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
@@ -697,10 +715,9 @@ func TestResolveListStacks(t *testing.T) {
 	cases := []struct {
 		name   string
 		target string
-		want   string
 	}{
-		{"namespace only", "/api/user/stacks?organization=acme", "acme"},
-		{"namespace and project", "/api/user/stacks?organization=acme&project=web", "acme"},
+		{"namespace only", "/api/user/stacks?organization=acme"},
+		{"namespace and project", "/api/user/stacks?organization=acme&project=web"},
 	}
 
 	for _, tc := range cases {
@@ -713,8 +730,33 @@ func TestResolveListStacks(t *testing.T) {
 				t.Fatalf("resolve: %v", err)
 			}
 
-			if obj.String() != tc.want || obj.IsUnit() {
-				t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), tc.want)
+			if obj.String() != "acme" || obj.IsUnit() {
+				t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), "acme")
+			}
+		})
+	}
+}
+
+// TestResolveListStacksWithoutOrganization proves that omitting organization
+// resolves the caller itself, for the list across every readable namespace.
+func TestResolveListStacksWithoutOrganization(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	resolve := resolverFor(t, handler, "GET /api/user/stacks")
+
+	for _, target := range []string{"/api/user/stacks", "/api/user/stacks?project=web"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			obj, err := resolve(rec, listRequest(t, target))
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+
+			if obj.String() != "@caller" || obj.IsUnit() || !obj.IsCaller() {
+				t.Fatalf("object = %q (unit %v caller %v), want caller", obj.String(), obj.IsUnit(), obj.IsCaller())
 			}
 		})
 	}
@@ -731,9 +773,9 @@ func TestResolveListStacksInvalid(t *testing.T) {
 		target string
 		want   error
 	}{
-		{"missing organization", "/api/user/stacks", namespace.ErrInvalidName},
 		{"invalid organization", "/api/user/stacks?organization=../x", namespace.ErrInvalidName},
 		{"invalid project", "/api/user/stacks?organization=acme&project=../x", stack.ErrInvalidName},
+		{"invalid project without organization", "/api/user/stacks?project=../x", stack.ErrInvalidName},
 	}
 
 	for _, tc := range cases {
