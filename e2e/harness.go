@@ -177,6 +177,9 @@ type Env struct {
 	backendCmd *exec.Cmd
 	// backendLogs holds the combined output of backendCmd.
 	backendLogs *bytes.Buffer
+	// certBundle holds a PEM bundle with the certificates of both servers
+	// of a pair. Empty for a single server, which trusts server.pem.
+	certBundle string
 }
 
 // serverStore is every persistence port the server needs.
@@ -266,6 +269,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendPort:   "",
 		backendCmd:    nil,
 		backendLogs:   nil,
+		certBundle:    "",
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -1056,46 +1060,15 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 // NAME=value pairs added to the environment. A non-zero exit is reported in
 // the Result, not as an error.
 func (e *Env) RunIn(ctx context.Context, dir string, extra []string, args ...string) (Result, error) {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
+	return e.runWithEnv(ctx, dir, e.cliEnv(extra), args...)
+}
 
-	var stdout, stderr bytes.Buffer
-
-	//nolint:gosec // The binary is the CLI this suite downloaded and checksum-verified.
-	cmd := exec.CommandContext(ctx, e.cli.Binary(), args...)
-	cmd.Dir = dir
-	cmd.Env = e.cliEnv(extra)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.WaitDelay = waitDelay
-
-	start := time.Now()
-	err := cmd.Run()
-	timedOut := ctx.Err()
-	res := Result{
-		Command:  e.cli.Tool + " " + strings.Join(args, " "),
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		Duration: time.Since(start),
-		ExitCode: 0,
-	}
-
-	if timedOut != nil {
-		// The kill shows up as an exit error; name the real cause instead.
-		return res, fmt.Errorf("%s did not finish within %s: %w", res.Command, commandTimeout, timedOut)
-	}
-
-	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-		res.ExitCode = exitErr.ExitCode()
-
-		return res, nil
-	}
-
-	if err != nil {
-		return res, fmt.Errorf("run %s: %w", res.Command, err)
-	}
-
-	return res, nil
+// RunSavedLogin runs the CLI in dir with the saved logins and returns what
+// it printed. It omits PULUMI_BACKEND_URL and PULUMI_ACCESS_TOKEN, so the
+// CLI uses the saved logins in PULUMI_HOME. Extra holds NAME=value pairs
+// for one run. A non-zero exit is a Result, not an error.
+func (e *Env) RunSavedLogin(ctx context.Context, dir string, extra []string, args ...string) (Result, error) {
+	return e.runWithEnv(ctx, dir, e.savedLoginEnv(extra), args...)
 }
 
 // KillSpec describes one CLI invocation killed at a recorded request: the
@@ -1370,6 +1343,39 @@ func (e *Env) WriteRemoteProject(tb testing.TB) string {
 func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpec) Result {
 	t.Helper()
 
+	return e.stepInWith(ctx, t, dir, spec, e.RunIn)
+}
+
+// StepSavedLogin runs spec in the project directory with the saved logins
+// and records it for the report. It fails the subtest on an unexpected exit
+// or a rejected check. A failing step does not stop later steps.
+func (e *Env) StepSavedLogin(ctx context.Context, t *testing.T, spec StepSpec) Result {
+	t.Helper()
+
+	return e.StepSavedLoginIn(ctx, t, e.project, spec)
+}
+
+// StepSavedLoginIn runs spec in dir with the saved logins and records it
+// for the report. It fails the same way as StepSavedLogin.
+func (e *Env) StepSavedLoginIn(
+	ctx context.Context, t *testing.T, dir string, spec StepSpec,
+) Result {
+	t.Helper()
+
+	return e.stepInWith(ctx, t, dir, spec, e.RunSavedLogin)
+}
+
+// stepInWith runs spec in dir through run and records it for the report.
+// StepIn passes RunIn; the saved-login steps pass RunSavedLogin.
+func (e *Env) stepInWith(
+	ctx context.Context,
+	t *testing.T,
+	dir string,
+	spec StepSpec,
+	run func(context.Context, string, []string, ...string) (Result, error),
+) Result {
+	t.Helper()
+
 	var res Result
 
 	t.Run(spec.Name, func(t *testing.T) {
@@ -1379,7 +1385,7 @@ func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpe
 
 		var err error
 
-		res, err = e.RunIn(ctx, dir, spec.Env, spec.Args...)
+		res, err = run(ctx, dir, spec.Env, spec.Args...)
 
 		switch {
 		case err != nil:
@@ -1414,6 +1420,51 @@ func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpe
 	})
 
 	return res
+}
+
+// runWithEnv executes the CLI in dir with env and returns what it printed.
+// A non-zero exit is reported in the Result, not as an error.
+func (e *Env) runWithEnv(ctx context.Context, dir string, env []string, args ...string) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+
+	//nolint:gosec // The binary is the CLI this suite downloaded and checksum-verified.
+	cmd := exec.CommandContext(ctx, e.cli.Binary(), args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = waitDelay
+
+	start := time.Now()
+	err := cmd.Run()
+	timedOut := ctx.Err()
+	res := Result{
+		Command:  e.cli.Tool + " " + strings.Join(args, " "),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		Duration: time.Since(start),
+		ExitCode: 0,
+	}
+
+	if timedOut != nil {
+		// The kill shows up as an exit error; name the real cause instead.
+		return res, fmt.Errorf("%s did not finish within %s: %w", res.Command, commandTimeout, timedOut)
+	}
+
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+		res.ExitCode = exitErr.ExitCode()
+
+		return res, nil
+	}
+
+	if err != nil {
+		return res, fmt.Errorf("run %s: %w", res.Command, err)
+	}
+
+	return res, nil
 }
 
 // runAndKill starts the CLI with spec.Args, waits for the recorded request,
@@ -1569,11 +1620,55 @@ func (e *Env) cliEnv(extra []string) []string {
 	if e.tls {
 		// Go reads SSL_CERT_FILE on Linux only; see the OpenTofu test.
 		// Both CLIs are Go programs, so the Pulumi CLI trusts a TLS
-		// server the same way when they share one.
-		env = append(env, "SSL_CERT_FILE="+filepath.Join(e.home, "server.pem"))
+		// server the same way when they share one. A pair trusts both
+		// servers through a bundle file holding both certificates.
+		bundle := filepath.Join(e.home, "server.pem")
+		if e.certBundle != "" {
+			bundle = e.certBundle
+		}
+
+		env = append(env, "SSL_CERT_FILE="+bundle)
 	}
 
 	// Later entries win, so extra can override anything above.
+	return append(env, extra...)
+}
+
+// savedLoginEnv builds the CLI environment without PULUMI_BACKEND_URL and
+// without PULUMI_ACCESS_TOKEN, so the CLI uses the saved logins in
+// PULUMI_HOME. Extra holds NAME=value pairs for one run. OpenTofu has no
+// backend variables, so its environment is unchanged.
+func (e *Env) savedLoginEnv(extra []string) []string {
+	env := make([]string, 0, baseEnvEntries+len(extra))
+	env = append(env,
+		"PATH="+e.cli.Dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"HOME="+e.home,
+		"NO_COLOR=1",
+		"NO_PROXY=127.0.0.1,localhost",
+	)
+
+	if e.cli.Tool == ToolTofu {
+		env = append(env,
+			"TF_CLI_CONFIG_FILE="+filepath.Join(e.home, "tofurc"),
+			"TF_IN_AUTOMATION=1",
+			"TF_INPUT=0",
+		)
+	} else {
+		env = append(env,
+			"PULUMI_HOME="+filepath.Join(e.home, ".pulumi"),
+			"PULUMI_SKIP_UPDATE_CHECK=true",
+		)
+	}
+
+	if e.tls {
+		bundle := filepath.Join(e.home, "server.pem")
+		if e.certBundle != "" {
+			bundle = e.certBundle
+		}
+
+		env = append(env, "SSL_CERT_FILE="+bundle)
+	}
+
 	return append(env, extra...)
 }
 
