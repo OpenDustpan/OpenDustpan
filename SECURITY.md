@@ -3,12 +3,11 @@
 ## Report a vulnerability
 
 <!-- Placeholder: private vulnerability reporting must be on in the
-repository settings before this link works. The project owner turns it on. -->
+repository settings before these steps work. The project owner turns it on. -->
 
 Report a vulnerability in private, through GitHub:
 
-1. Open the [Security tab](https://github.com/OpenDustpan/OpenDustpan/security)
-   of the repository.
+1. Open the **Security** tab of this repository on GitHub.
 2. Select **Report a vulnerability**.
 3. Say what is wrong, the version or commit, and the steps that show the
    problem.
@@ -23,9 +22,8 @@ vulnerability.
 2. The project owner and you agree on whether it is a vulnerability, and on
    its severity.
 3. The fix goes into a release. The advisory names the fixed version.
-4. The project owner publishes the advisory in the
-   [GitHub advisory list](https://github.com/OpenDustpan/OpenDustpan/security/advisories)
-   of this repository when the fixed release exists. The project owner asks
+4. The project owner publishes the advisory in the advisory list of this
+   repository on GitHub when the fixed release exists. The project owner asks
    GitHub for a CVE ID through the advisory for each fixed vulnerability.
    The advisory credits you, unless you ask it not to.
 
