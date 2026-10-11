@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // The test computes the MD5 values the manifest records.
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -1384,5 +1389,192 @@ func TestBackupOptions(t *testing.T) {
 
 	if opts := f.backupOptions(target); len(opts) != 1 {
 		t.Fatalf("backup options with a target = %d options, want one", len(opts))
+	}
+}
+
+// writeCheckBackup writes a complete backup with id into dir: the SQL part,
+// one blob and the manifest last. It returns the target key of the blob, so
+// a test can delete one blob file and prove the check names it.
+func writeCheckBackup(t *testing.T, dir, id string) string {
+	t.Helper()
+
+	target, err := openBackupTarget("dir:" + dir)
+	if err != nil {
+		t.Fatalf("open check target: %v", err)
+	}
+
+	if target == nil {
+		t.Fatal("open check target = nil, want a store")
+	}
+
+	defer func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close check target: %v", closeErr)
+		}
+	}()
+
+	db := []byte("check backup database part")
+	content := []byte(`{"state":1}`)
+	blobKey := "tofu/ws1/sv1/a1"
+	md5Sum := md5.Sum(content) //nolint:gosec // The test computes the MD5 the manifest records.
+	shaSum := sha256.Sum256(db)
+
+	manifest := backup.Manifest{
+		CreatedAt:   time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		ID:          backup.ID(id),
+		Dialect:     backup.DialectSQLite,
+		HomeRegions: []string{"local"},
+		WrapperIDs:  nil,
+		RowCounts:   nil,
+		Blobs: []backup.ManifestBlob{
+			{Key: blobKey, Size: int64(len(content)), MD5: hex.EncodeToString(md5Sum[:])},
+		},
+		Version:       "test",
+		SQLSHA256:     hex.EncodeToString(shaSum[:]),
+		Format:        backup.FormatVersion,
+		SchemaVersion: 1,
+		SQLSize:       int64(len(db)),
+	}
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+
+	ctx := t.Context()
+
+	for key, body := range map[string][]byte{
+		"backups/" + id + "/db":            db,
+		"blobs/" + blobKey:                 content,
+		"backups/" + id + "/manifest.json": data,
+	} {
+		parsed, err := blob.ParseKey(key)
+		if err != nil {
+			t.Fatalf("parse key %q: %v", key, err)
+		}
+
+		if err := target.Put(ctx, parsed, bytes.NewReader(body)); err != nil {
+			t.Fatalf("put %q: %v", key, err)
+		}
+	}
+
+	return "blobs/" + blobKey
+}
+
+// runBackupCheck runs `backup check` for id against dir and returns its
+// stdout and error. A nil error means exit code 0, a non-nil error exit code 1.
+func runBackupCheck(t *testing.T, id, dir string) (string, error) {
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+
+	err := run(
+		t.Context(),
+		[]string{"backup", "check", "--backup", id, "--backup-target", "dir:" + dir},
+		&stdout,
+		&stderr,
+	)
+
+	return stdout.String(), err
+}
+
+func TestBackupCheckNeedsNoServerOrDatabase(t *testing.T) {
+	// The check reads only the target: an invalid key and no server or
+	// database change nothing.
+	t.Setenv(keyEnvVar, "not-base64!!!")
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", "")
+	t.Setenv("DUSTPAN_DATABASE", "sqlite:/nonexistent/missing.db")
+
+	dir := filepath.Join(t.TempDir(), "target")
+	id := "bkp-check-unit"
+	wantKey := writeCheckBackup(t, dir, id)
+
+	out, err := runBackupCheck(t, id, dir)
+	if err != nil {
+		t.Fatalf("backup check of a complete backup: %v", err)
+	}
+
+	if !strings.Contains(out, "backup "+id+" is complete") {
+		t.Fatalf("backup check output lacks the verdict:\n%s", out)
+	}
+
+	if removed := filepath.Join(dir, filepath.FromSlash(wantKey)); os.Remove(removed) != nil {
+		t.Fatalf("delete blob file %s", removed)
+	}
+
+	_, err = runBackupCheck(t, id, dir)
+	if err == nil {
+		t.Fatal("backup check of a backup with a deleted blob succeeded, want an error")
+	}
+
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("backup check after the delete: err = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), wantKey) {
+		t.Fatalf("backup check error = %q, want it to name %q", err, wantKey)
+	}
+}
+
+func TestBackupCheckTargetFromEnv(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "target")
+	id := "bkp-check-env"
+	writeCheckBackup(t, dir, id)
+
+	t.Setenv("DUSTPAN_BACKUP_TARGET", "dir:"+dir)
+
+	var stdout, stderr bytes.Buffer
+
+	if err := run(t.Context(), []string{"backup", "check", "--backup", id}, &stdout, &stderr); err != nil {
+		t.Fatalf("backup check with the target from the environment: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "backup "+id+" is complete") {
+		t.Fatalf("backup check output lacks the verdict:\n%s", stdout.String())
+	}
+}
+
+func TestBackupCheckUsage(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(errUsage.Error(), "backup check") {
+		t.Fatalf("usage = %q, want it to name backup check", errUsage.Error())
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want error
+	}{
+		{"backup without a subcommand waits for a later change", []string{"backup"}, errUsage},
+		{"unknown backup subcommand", []string{"backup", "no-such"}, errUsage},
+		{"check without an id", []string{"backup", "check", "--backup-target", "dir:/tmp/x"}, errBackupID},
+		{
+			"check without a target",
+			[]string{"backup", "check", "--backup", "bkp-aaa", "--backup-target", ""},
+			errBackupTarget,
+		},
+		{
+			"check with an unknown target form",
+			[]string{"backup", "check", "--backup", "bkp-aaa", "--backup-target", "file:/tmp/x"},
+			errBackupTarget,
+		},
+		{
+			"check with a positional argument",
+			[]string{"backup", "check", "--backup", "bkp-aaa", "--backup-target", "dir:/tmp/x", "extra"},
+			errUsage,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+
+			if err := run(t.Context(), tc.args, &stdout, &stderr); !errors.Is(err, tc.want) {
+				t.Fatalf("run %v: err = %v, want %v", tc.args, err, tc.want)
+			}
+		})
 	}
 }
