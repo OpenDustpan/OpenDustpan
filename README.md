@@ -13,7 +13,7 @@ speaks, so the CLI needs no plugin.
 
 | Tool | Protocol | Status |
 | --- | --- | --- |
-| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Login and creating, selecting and listing stacks work. Organizations (RFC 2), updates (`pulumi up`), secrets and state export are in progress (RFC 3). |
+| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Full deployments work on one node. Login, stacks, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm` and `stack tag set` work. |
 | OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (RFC 1), not built yet. |
 
 More tools follow the same pattern (ADR 12). An end-to-end suite that drives
@@ -23,30 +23,58 @@ OpenDustpan is an independent project, built to work with the tools above. It
 is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
 or HashiCorp.
 
-> **Status: pre-alpha.** The architecture, storage adapters and the first API
-> endpoints exist. No tool can run a full deployment against it yet.
+> **Status: pre-alpha.** The Pulumi CLI runs full deployments on one node,
+> with SQLite or PostgreSQL.
 
 ## Try it
 
-Requires Go 1.27.1+.
+Requires Go 1.27.1+ and the Pulumi CLI.
+
+Build the server. Generate the two secrets it needs. The administrator
+signs in with the admin token. The key-encryption key protects secret
+config values. Both are random values. Store them outside the database.
 
 ```sh
 go build -o bin/opendustpan ./cmd/opendustpan
 
-./bin/opendustpan namespace create acme
 export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
+export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
+```
+
+A lost key-encryption key means lost secrets. The server encrypts secret
+values with this key. Without the key, the server refuses to start once
+the database holds secret values. The server keeps no other copy of the key.
+
+Create a namespace. Then start the server. A new installation has no
+namespace. Create one before the first login (ADR 18).
+
+```sh
+./bin/opendustpan namespace create acme
 ./bin/opendustpan serve             # SQLite in ./dustpan.db, API on :8080
 ```
 
-Then, with the Pulumi CLI:
+Point the Pulumi CLI at the server. The commands below create an empty
+YAML project, create a stack and run the first update.
 
 ```sh
+mkdir demo && cd demo
 export PULUMI_ACCESS_TOKEN=$DUSTPAN_ADMIN_TOKEN
 pulumi login http://localhost:8080
 pulumi whoami
+
+printf 'name: demo\nruntime: yaml\n' > Pulumi.yaml
+pulumi stack init acme/demo/dev
+pulumi up --yes --non-interactive
 ```
 
-Inside a Pulumi project, `pulumi stack init acme/<project>/dev` creates a stack.
+The server encrypts secret config values with the key-encryption key. The
+commands below store a secret, deploy it and read it back.
+
+```sh
+pulumi config set --secret apiKey s3cr3t
+pulumi up --yes --non-interactive
+pulumi config get apiKey
+```
 
 The web console is a separate repository,
 [OpenDustpan/console](https://github.com/OpenDustpan/console). Run it in
