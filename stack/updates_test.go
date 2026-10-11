@@ -41,6 +41,9 @@ type memUpdates struct {
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	mu           sync.Mutex
+	// saves counts SaveUpdate calls, so tests prove that a retried end
+	// writes nothing.
+	saves int
 	// cancelOnPut cancels the caller's context and fails PutCheckpoint, as a
 	// client hanging up mid-upload would.
 	cancelOnPut func()
@@ -55,6 +58,7 @@ func newMemUpdates() *memUpdates {
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
 		mu:           sync.Mutex{},
+		saves:        0,
 		cancelOnPut:  nil,
 		renewFirst:   false,
 	}
@@ -143,6 +147,7 @@ func (m *memUpdates) SaveUpdate(ctx context.Context, u stack.Update, _ namespace
 	}
 
 	m.updates[u.ID] = u
+	m.saves++
 
 	return nil
 }
@@ -508,6 +513,45 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 
 	if _, err := f.svc.Start(ctx, f.ref, second.ID); err != nil {
 		t.Errorf("start after cancel: %v", err)
+	}
+}
+
+// Canceling again with the same final status succeeds without a write: the
+// CLI retries cancel when a response is lost.
+func TestCancelTwiceWritesOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+	s := f.started(t, stack.KindUpdate)
+
+	done, err := f.svc.Cancel(ctx, f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	if done.Status != stack.StatusCanceled {
+		t.Fatalf("cancel status = %q, want %q", done.Status, stack.StatusCanceled)
+	}
+
+	f.store.mu.Lock()
+	saves := f.store.saves
+	f.store.mu.Unlock()
+
+	again, err := f.svc.Cancel(ctx, f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("retried cancel: %v", err)
+	}
+
+	if again.Revision != done.Revision {
+		t.Errorf("retried cancel revision = %d, want %d", again.Revision, done.Revision)
+	}
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	if f.store.saves != saves {
+		t.Errorf("retried cancel wrote %d times, want no write after %d", f.store.saves, saves)
 	}
 }
 

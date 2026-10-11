@@ -34,6 +34,7 @@ func updatePatterns() []string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
 		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/cancel",
 		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
 		"GET /api/stacks/{namespace}/{project}/{stack}/export",
@@ -421,17 +422,18 @@ func (f updateFixture) mintStartedMutating(t *testing.T) (stack.UpdateID, string
 	return u.ID, started.Token.Reveal()
 }
 
-// updatePaths holds the lease, checkpoint and get paths for one update.
+// updatePaths holds the lease, checkpoint, cancel and get paths for one update.
 type updatePaths struct {
 	Start      string
 	Renew      string
 	Events     string
 	Checkpoint string
 	Complete   string
+	Cancel     string
 	Get        string
 }
 
-// mintedPaths returns the start, lease, checkpoint and get paths for one update.
+// mintedPaths returns the start, lease, checkpoint, cancel and get paths for one update.
 func mintedPaths(id stack.UpdateID) updatePaths {
 	base := "/api/stacks/acme/web/prod/update/" + id.String()
 
@@ -441,6 +443,7 @@ func mintedPaths(id stack.UpdateID) updatePaths {
 		Events:     base + "/events/batch",
 		Checkpoint: base + "/checkpoint",
 		Complete:   base + "/complete",
+		Cancel:     base + "/cancel",
 		Get:        base,
 	}
 }
@@ -812,7 +815,8 @@ type accessTarget struct {
 
 // accessRouteTarget builds the target and body for an access-authed update
 // route, minting the update state the route needs in f: a created update
-// for start and get, none for create, history and export.
+// for start and get, a started update for cancel, none for create, history
+// and export.
 func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarget {
 	t.Helper()
 
@@ -824,6 +828,17 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 			),
 			Body: "",
 		}
+	case strings.HasSuffix(pattern, "/cancel"):
+		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		if _, err := f.updates.Start(t.Context(), f.ref, u.ID); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+
+		return accessTarget{Target: "/api/stacks/acme/web/prod/update/" + u.ID.String() + "/cancel", Body: ""}
 	case strings.HasSuffix(pattern, "/update/{update}"):
 		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
 		if err != nil {
@@ -1143,4 +1158,144 @@ func TestEventBatchBodyLimit(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &decoded); err != nil || decoded.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("error = %q, want code 413", body)
 	}
+}
+
+// TestCancelUpdateCycle cancels a running mutating update through HTTP: the
+// stack is locked while it runs, cancel frees it, and a new update starts.
+func TestCancelUpdateCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, _ := f.mintStartedMutating(t)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Cancel, ""))
+	if status != http.StatusOK {
+		t.Fatalf("cancel answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	// A canceled update keeps its number, so the next one does not reuse it.
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.updates.Start(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("start after cancel: %v", err)
+	}
+
+	if started.Update.Version != 2 {
+		t.Fatalf("version after cancel = %d, want 2", started.Update.Version)
+	}
+}
+
+// TestCancelUpdateIdempotent proves a retried cancel with the same final
+// status succeeds: the CLI retries cancel when a response is lost.
+func TestCancelUpdateIdempotent(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, _ := f.mintStartedMutating(t)
+	paths := mintedPaths(id)
+
+	for range 2 {
+		status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Cancel, ""))
+		if status != http.StatusOK {
+			t.Fatalf("cancel answers %d, want %d (%s)", status, http.StatusOK, body)
+		}
+	}
+}
+
+// TestCancelUpdateNeedsAccessToken proves the cancel route serves the access
+// token, not the update lease: the CLI sends no lease on cancel.
+func TestCancelUpdateNeedsAccessToken(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, lease := f.mintStartedMutating(t)
+	paths := mintedPaths(id)
+
+	status, _ := f.doUpdate(t, anonymousRequest(http.MethodPost, paths.Cancel, ""))
+	if status != http.StatusUnauthorized {
+		t.Fatalf("unsigned cancel answers %d, want %d", status, http.StatusUnauthorized)
+	}
+
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPost, paths.Cancel, lease, ""))
+	if status != http.StatusUnauthorized {
+		t.Fatalf("leased cancel answers %d, want %d (%s)", status, http.StatusUnauthorized, body)
+	}
+}
+
+// TestGetStackShowsActiveUpdate proves the stack response always holds
+// activeUpdate as a string: the ID of the running mutating update, or ""
+// when none runs. A preview never shows.
+func TestGetStackShowsActiveUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	get := func() (int, string) {
+		return f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod", ""))
+	}
+
+	check := func(want string) {
+		t.Helper()
+
+		status, body := get()
+		if status != http.StatusOK {
+			t.Fatalf("get stack answers %d, want %d (%s)", status, http.StatusOK, body)
+		}
+
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(body), &raw); err != nil {
+			t.Fatalf("decode stack: %v (%s)", err, body)
+		}
+
+		active, ok := raw["activeUpdate"]
+		if !ok {
+			t.Fatalf("stack response lacks activeUpdate (%s)", body)
+		}
+
+		text, ok := active.(string)
+		if !ok {
+			t.Fatalf("activeUpdate = %v, want a string", active)
+		}
+
+		if text != want {
+			t.Fatalf("activeUpdate = %q, want %q", text, want)
+		}
+	}
+
+	check("")
+
+	// A preview alone never shows.
+	preview, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+	if err != nil {
+		t.Fatalf("create preview: %v", err)
+	}
+
+	if _, err := f.updates.Start(t.Context(), f.ref, preview.ID); err != nil {
+		t.Fatalf("start preview: %v", err)
+	}
+
+	check("")
+
+	id, _ := f.mintStartedMutating(t)
+
+	// A preview takes no lock, so the mutating update still shows.
+	check(id.String())
+
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Cancel, ""))
+	if status != http.StatusOK {
+		t.Fatalf("cancel answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	// The preview still runs, so this stays the preview-only case.
+	check("")
 }
