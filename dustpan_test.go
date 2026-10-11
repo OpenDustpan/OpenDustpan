@@ -129,6 +129,7 @@ func TestStackLifecycle(t *testing.T) {
 		OrgName     string `json:"orgName"`
 		ProjectName string `json:"projectName"`
 		StackName   string `json:"stackName"`
+		ID          string `json:"id"`
 	}
 
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
@@ -137,6 +138,10 @@ func TestStackLifecycle(t *testing.T) {
 
 	if got.OrgName != "acme" || got.ProjectName != "web" || got.StackName != "prod" {
 		t.Fatalf("get stack = %+v", got)
+	}
+
+	if !strings.HasPrefix(got.ID, "stk-") {
+		t.Fatalf("get stack ID = %q, want stk- prefix", got.ID)
 	}
 
 	status, body = f.do(t, http.MethodGet, "/api/user/stacks?organization=acme", adminToken, "")

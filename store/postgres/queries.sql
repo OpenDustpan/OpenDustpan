@@ -16,23 +16,23 @@ WHERE name = $1
 FOR SHARE;
 
 -- name: CreateStack :execrows
-INSERT INTO stacks (namespace, project, name, tags, version, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: GetStack :one
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3;
 
 -- name: ListStacksInNamespace :many
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1
 ORDER BY project, name;
 
 -- name: ListStacksInProject :many
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2
 ORDER BY name;

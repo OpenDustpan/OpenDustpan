@@ -145,12 +145,12 @@ func (h *Handler) listStacks(w http.ResponseWriter, r *http.Request, p identity.
 	}
 
 	resp := listStacksResponse{Stacks: make([]stackSummary, 0, len(stacks))}
-	for _, st := range stacks {
+	for i := range stacks {
 		resp.Stacks = append(resp.Stacks, stackSummary{
-			OrgName:       st.Ref.Namespace.String(),
-			ProjectName:   st.Ref.Project.String(),
-			StackName:     st.Ref.Stack.String(),
-			LastUpdate:    st.UpdatedAt.Unix(),
+			OrgName:       stacks[i].Ref.Namespace.String(),
+			ProjectName:   stacks[i].Ref.Project.String(),
+			StackName:     stacks[i].Ref.Stack.String(),
+			LastUpdate:    stacks[i].UpdatedAt.Unix(),
 			ResourceCount: 0,
 		})
 	}
@@ -205,6 +205,7 @@ type stackResponse struct {
 	OrgName      string            `json:"orgName"`
 	ProjectName  string            `json:"projectName"`
 	StackName    string            `json:"stackName"`
+	ID           string            `json:"id"`
 	ActiveUpdate string            `json:"activeUpdate"`
 	Version      int64             `json:"version"`
 }
@@ -235,6 +236,7 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, p identity.Pr
 		OrgName:      st.Ref.Namespace.String(),
 		ProjectName:  st.Ref.Project.String(),
 		StackName:    st.Ref.Stack.String(),
+		ID:           st.ID.String(),
 		ActiveUpdate: "",
 		Version:      st.Version,
 	})

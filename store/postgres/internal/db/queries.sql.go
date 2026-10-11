@@ -101,8 +101,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createStack = `-- name: CreateStack :execrows
-INSERT INTO stacks (namespace, project, name, tags, version, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
@@ -110,6 +110,7 @@ type CreateStackParams struct {
 	Namespace   string
 	Project     string
 	Name        string
+	ID          string
 	Tags        []byte
 	Version     int64
 	CreatedAtMs int64
@@ -121,6 +122,7 @@ func (q *Queries) CreateStack(ctx context.Context, arg CreateStackParams) (int64
 		arg.Namespace,
 		arg.Project,
 		arg.Name,
+		arg.ID,
 		arg.Tags,
 		arg.Version,
 		arg.CreatedAtMs,
@@ -243,7 +245,7 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 }
 
 const getStack = `-- name: GetStack :one
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3
 `
@@ -254,13 +256,25 @@ type GetStackParams struct {
 	Name      string
 }
 
-func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (Stack, error) {
+type GetStackRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Tags        []byte
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow, error) {
 	row := q.db.QueryRow(ctx, getStack, arg.Namespace, arg.Project, arg.Name)
-	var i Stack
+	var i GetStackRow
 	err := row.Scan(
 		&i.Namespace,
 		&i.Project,
 		&i.Name,
+		&i.ID,
 		&i.Tags,
 		&i.Version,
 		&i.CreatedAtMs,
@@ -413,25 +427,37 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 }
 
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1
 ORDER BY project, name
 `
 
-func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) ([]Stack, error) {
+type ListStacksInNamespaceRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Tags        []byte
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) ([]ListStacksInNamespaceRow, error) {
 	rows, err := q.db.Query(ctx, listStacksInNamespace, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Stack
+	var items []ListStacksInNamespaceRow
 	for rows.Next() {
-		var i Stack
+		var i ListStacksInNamespaceRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Project,
 			&i.Name,
+			&i.ID,
 			&i.Tags,
 			&i.Version,
 			&i.CreatedAtMs,
@@ -448,7 +474,7 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 }
 
 const listStacksInProject = `-- name: ListStacksInProject :many
-SELECT namespace, project, name, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2
 ORDER BY name
@@ -459,19 +485,31 @@ type ListStacksInProjectParams struct {
 	Project   string
 }
 
-func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProjectParams) ([]Stack, error) {
+type ListStacksInProjectRow struct {
+	Namespace   string
+	Project     string
+	Name        string
+	ID          string
+	Tags        []byte
+	Version     int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProjectParams) ([]ListStacksInProjectRow, error) {
 	rows, err := q.db.Query(ctx, listStacksInProject, arg.Namespace, arg.Project)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Stack
+	var items []ListStacksInProjectRow
 	for rows.Next() {
-		var i Stack
+		var i ListStacksInProjectRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Project,
 			&i.Name,
+			&i.ID,
 			&i.Tags,
 			&i.Version,
 			&i.CreatedAtMs,

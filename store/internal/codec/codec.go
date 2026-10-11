@@ -24,6 +24,7 @@ type StackRow struct {
 	Namespace   string
 	Project     string
 	Name        string
+	ID          string
 	Tags        []byte
 	Version     int64
 	CreatedAtMs int64
@@ -90,6 +91,7 @@ func FromStackRow(row StackRow) (stack.Stack, error) {
 			Project:   stack.ProjectName(row.Project),
 			Stack:     stack.Name(row.Name),
 		},
+		ID:      stack.ID(row.ID),
 		Version: row.Version,
 	}, nil
 }
@@ -105,6 +107,7 @@ func ToStackRow(st stack.Stack) (StackRow, error) {
 		Namespace:   st.Ref.Namespace.String(),
 		Project:     st.Ref.Project.String(),
 		Name:        st.Ref.Stack.String(),
+		ID:          st.ID.String(),
 		Tags:        tags,
 		Version:     st.Version,
 		CreatedAtMs: Millis(st.CreatedAt),
