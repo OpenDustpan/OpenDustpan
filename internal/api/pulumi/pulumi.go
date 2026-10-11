@@ -716,7 +716,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	status, message := classify(err)
 
 	if status == http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "request failed", slog.String("error", err.Error()))
+		// The log names the status only, never the error text: the text
+		// may hold driver detail, a token, or state (ADR 32 decision 7).
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	} else if errors.Is(err, secret.ErrDecrypt) {
 		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	}
