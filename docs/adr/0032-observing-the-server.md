@@ -1,6 +1,6 @@
 # 32. Observing the server
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · probe paths superseded by ADR 34
 
 ## Context
 

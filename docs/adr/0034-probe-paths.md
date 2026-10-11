@@ -1,6 +1,6 @@
 # 34. Probe paths
 
-Status: accepted · 2026-10-11 · amends the probe paths in ADR 32
+Status: accepted · 2026-10-11 · supersedes the probe paths in ADR 32
 
 ## Context
 

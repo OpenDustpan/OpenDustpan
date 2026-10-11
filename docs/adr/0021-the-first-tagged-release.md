@@ -1,6 +1,6 @@
 # 21. The first tagged release
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · gate extended by ADR 33
 
 ## Context
 

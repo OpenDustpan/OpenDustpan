@@ -1,7 +1,8 @@
 ---
 rfc: 42
 title: Migration from other backends and operators
-status: draft
+status: accepted
+adr: 29
 created: 2026-10-10
 ---
 
@@ -91,4 +92,7 @@ tool-native migration into a self-hosted backend for both tools.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 29](../adr/0029-importing-existing-state.md) for
+milestone 3: an import as a tested guide, for four first sources. The import
+resource, the source adapters and runner execution stay open for a later
+decision.
