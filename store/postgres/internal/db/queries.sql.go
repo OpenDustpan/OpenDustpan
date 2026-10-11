@@ -177,14 +177,35 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 	return err
 }
 
-const getCheckpoint = `-- name: GetCheckpoint :one
+const deleteStack = `-- name: DeleteStack :exec
+DELETE FROM stacks
+WHERE namespace = $1 AND project = $2 AND name = $3
+`
+
+type DeleteStackParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) error {
+	_, err := q.db.Exec(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
+	return err
+}
+
+const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features, deployment, saved_at_ms
 FROM checkpoints
-WHERE stack_id = $1
+WHERE stack_id = $1 AND update_id = $2
 `
 
-type GetCheckpointRow struct {
+type GetCheckpointByUpdateParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type GetCheckpointByUpdateRow struct {
 	StackID       string
 	UpdateID      string
 	LeaseDigest   []byte
@@ -197,9 +218,53 @@ type GetCheckpointRow struct {
 	SavedAtMs     int64
 }
 
-func (q *Queries) GetCheckpoint(ctx context.Context, stackID string) (GetCheckpointRow, error) {
-	row := q.db.QueryRow(ctx, getCheckpoint, stackID)
-	var i GetCheckpointRow
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
+	var i GetCheckpointByUpdateRow
+	err := row.Scan(
+		&i.StackID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.Features,
+		&i.Deployment,
+		&i.SavedAtMs,
+	)
+	return i, err
+}
+
+const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1 AND u.version = $2
+`
+
+type GetCheckpointByVersionParams struct {
+	StackID string
+	Version int64
+}
+
+type GetCheckpointByVersionRow struct {
+	StackID       string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	Features      []byte
+	Deployment    []byte
+	SavedAtMs     int64
+}
+
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
+	row := q.db.QueryRow(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
+	var i GetCheckpointByVersionRow
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -228,6 +293,47 @@ func (q *Queries) GetFailoverVersionForShare(ctx context.Context, name string) (
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type GetLatestCheckpointRow struct {
+	StackID       string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	Features      []byte
+	Deployment    []byte
+	SavedAtMs     int64
+}
+
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
+	row := q.db.QueryRow(ctx, getLatestCheckpoint, stackID)
+	var i GetLatestCheckpointRow
+	err := row.Scan(
+		&i.StackID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.Features,
+		&i.Deployment,
+		&i.SavedAtMs,
+	)
+	return i, err
 }
 
 const getNamespace = `-- name: GetNamespace :one
@@ -350,6 +456,31 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.StartedAtMs,
 		&i.EndedAtMs,
 	)
+	return i, err
+}
+
+const getUpdateKindForShare = `-- name: GetUpdateKindForShare :one
+SELECT kind, dry_run
+FROM updates
+WHERE stack_id = $1 AND id = $2
+FOR SHARE
+`
+
+type GetUpdateKindForShareParams struct {
+	StackID string
+	ID      string
+}
+
+type GetUpdateKindForShareRow struct {
+	Kind   string
+	DryRun bool
+}
+
+// Locks the update so a concurrent cancel waits until this write commits.
+func (q *Queries) GetUpdateKindForShare(ctx context.Context, arg GetUpdateKindForShareParams) (GetUpdateKindForShareRow, error) {
+	row := q.db.QueryRow(ctx, getUpdateKindForShare, arg.StackID, arg.ID)
+	var i GetUpdateKindForShareRow
+	err := row.Scan(&i.Kind, &i.DryRun)
 	return i, err
 }
 
@@ -633,8 +764,7 @@ INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, deployment, saved_at_ms
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (stack_id) DO UPDATE SET
-    update_id = excluded.update_id,
+ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
     sequence = excluded.sequence,
