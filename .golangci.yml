@@ -106,6 +106,8 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: github.com/jackc/pgx
               desc: SQL belongs in store/, not in the domain.
+            - pkg: opendustpan.org/opendustpan/internal/metrics
+              desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
 
     dupl:
       threshold: 120
