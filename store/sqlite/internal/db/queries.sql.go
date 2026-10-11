@@ -165,6 +165,54 @@ func (q *Queries) CreateStackTag(ctx context.Context, arg CreateStackTagParams) 
 	return err
 }
 
+const createStateVersion = `-- name: CreateStateVersion :exec
+INSERT INTO state_versions (
+    id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateStateVersionParams struct {
+	ID                string
+	WorkspaceID       string
+	Status            string
+	Serial            int64
+	Lineage           string
+	Md5               []byte
+	Size              int64
+	ContentKey        string
+	Outputs           []byte
+	Force             bool
+	UploadDigest      []byte
+	UploadExpiresAtMs int64
+	Holder            string
+	LockID            string
+	CreatedAtMs       int64
+	FinalizedAtMs     int64
+}
+
+func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
+	_, err := q.db.ExecContext(ctx, createStateVersion,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.Serial,
+		arg.Lineage,
+		arg.Md5,
+		arg.Size,
+		arg.ContentKey,
+		arg.Outputs,
+		arg.Force,
+		arg.UploadDigest,
+		arg.UploadExpiresAtMs,
+		arg.Holder,
+		arg.LockID,
+		arg.CreatedAtMs,
+		arg.FinalizedAtMs,
+	)
+	return err
+}
+
 const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
@@ -203,6 +251,48 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.EndedAtMs,
 	)
 	return err
+}
+
+const createWorkspace = `-- name: CreateWorkspace :execrows
+INSERT INTO workspaces (
+    id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateWorkspaceParams struct {
+	ID                    string
+	Namespace             string
+	Name                  string
+	Revision              int64
+	LockID                string
+	LockHolder            string
+	LockReason            string
+	LockedAtMs            int64
+	CurrentStateVersionID string
+	CreatedAtMs           int64
+	UpdatedAtMs           int64
+}
+
+func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createWorkspace,
+		arg.ID,
+		arg.Namespace,
+		arg.Name,
+		arg.Revision,
+		arg.LockID,
+		arg.LockHolder,
+		arg.LockReason,
+		arg.LockedAtMs,
+		arg.CurrentStateVersionID,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteInventory = `-- name: DeleteInventory :exec
@@ -258,6 +348,37 @@ WHERE stack_id = ?
 func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	_, err := q.db.ExecContext(ctx, deleteStackTags, stackID)
 	return err
+}
+
+const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
+UPDATE state_versions
+SET status = ?1, finalized_at_ms = ?2,
+    content_key = ?3, size = ?4
+WHERE id = ?5 AND status = 'pending'
+`
+
+type FinalizeStateVersionParams struct {
+	Status        string
+	FinalizedAtMs int64
+	ContentKey    string
+	Size          int64
+	ID            string
+}
+
+// Marks one pending version finalized with its content. A finalized version
+// matches no row, so a retry reports no change.
+func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeStateVersion,
+		arg.Status,
+		arg.FinalizedAtMs,
+		arg.ContentKey,
+		arg.Size,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
@@ -317,6 +438,41 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.FeaturesJson,
 		&i.Deployment,
 		&i.SavedAtMs,
+	)
+	return i, err
+}
+
+const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
+SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
+       sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms
+FROM state_versions AS sv
+JOIN workspaces AS w ON w.current_state_version_id = sv.id
+WHERE w.id = ?
+`
+
+// Follows the workspace pointer: a forced upload may carry a lower serial and
+// still be current, so the highest serial is not always the current state.
+func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateVersion, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentStateVersion, id)
+	var i StateVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.Serial,
+		&i.Lineage,
+		&i.Md5,
+		&i.Size,
+		&i.ContentKey,
+		&i.Outputs,
+		&i.Force,
+		&i.UploadDigest,
+		&i.UploadExpiresAtMs,
+		&i.Holder,
+		&i.LockID,
+		&i.CreatedAtMs,
+		&i.FinalizedAtMs,
 	)
 	return i, err
 }
@@ -514,6 +670,37 @@ func (q *Queries) GetStackVersion(ctx context.Context, arg GetStackVersionParams
 	return version, err
 }
 
+const getStateVersion = `-- name: GetStateVersion :one
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+FROM state_versions
+WHERE id = ?
+`
+
+func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion, error) {
+	row := q.db.QueryRowContext(ctx, getStateVersion, id)
+	var i StateVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.Serial,
+		&i.Lineage,
+		&i.Md5,
+		&i.Size,
+		&i.ContentKey,
+		&i.Outputs,
+		&i.Force,
+		&i.UploadDigest,
+		&i.UploadExpiresAtMs,
+		&i.Holder,
+		&i.LockID,
+		&i.CreatedAtMs,
+		&i.FinalizedAtMs,
+	)
+	return i, err
+}
+
 const getUpdate = `-- name: GetUpdate :one
 SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
@@ -589,6 +776,63 @@ func (q *Queries) GetUpdateLease(ctx context.Context, arg GetUpdateLeaseParams) 
 	row := q.db.QueryRowContext(ctx, getUpdateLease, arg.StackID, arg.ID)
 	var i GetUpdateLeaseRow
 	err := row.Scan(&i.Status, &i.LeaseDigest)
+	return i, err
+}
+
+const getWorkspace = `-- name: GetWorkspace :one
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE namespace = ? AND name = ?
+`
+
+type GetWorkspaceParams struct {
+	Namespace string
+	Name      string
+}
+
+func (q *Queries) GetWorkspace(ctx context.Context, arg GetWorkspaceParams) (Workspace, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspace, arg.Namespace, arg.Name)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.Revision,
+		&i.LockID,
+		&i.LockHolder,
+		&i.LockReason,
+		&i.LockedAtMs,
+		&i.CurrentStateVersionID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getWorkspaceByID = `-- name: GetWorkspaceByID :one
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE id = ?
+`
+
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceByID, id)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.Revision,
+		&i.LockID,
+		&i.LockHolder,
+		&i.LockReason,
+		&i.LockedAtMs,
+		&i.CurrentStateVersionID,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
 	return i, err
 }
 
@@ -910,6 +1154,49 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Upd
 	return items, nil
 }
 
+const listWorkspaces = `-- name: ListWorkspaces :many
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE namespace = ?
+ORDER BY name
+`
+
+func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Workspace, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaces, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Workspace
+	for rows.Next() {
+		var i Workspace
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.Revision,
+			&i.LockID,
+			&i.LockHolder,
+			&i.LockReason,
+			&i.LockedAtMs,
+			&i.CurrentStateVersionID,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -1036,6 +1323,43 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 	return result.RowsAffected()
 }
 
+const saveWorkspace = `-- name: SaveWorkspace :execrows
+UPDATE workspaces
+SET revision = ?1, lock_id = ?2, lock_holder = ?3,
+    lock_reason = ?4, locked_at_ms = ?5, updated_at_ms = ?6
+WHERE id = ?7 AND revision = ?8
+`
+
+type SaveWorkspaceParams struct {
+	Revision         int64
+	LockID           string
+	LockHolder       string
+	LockReason       string
+	LockedAtMs       int64
+	UpdatedAtMs      int64
+	ID               string
+	ExpectedRevision int64
+}
+
+// A compare-and-swap: it changes nothing unless the stored revision is the
+// one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.
+func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, saveWorkspace,
+		arg.Revision,
+		arg.LockID,
+		arg.LockHolder,
+		arg.LockReason,
+		arg.LockedAtMs,
+		arg.UpdatedAtMs,
+		arg.ID,
+		arg.ExpectedRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setStackVersion = `-- name: SetStackVersion :exec
 UPDATE stacks
 SET version = ?, updated_at_ms = ?
@@ -1058,6 +1382,23 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 		arg.Project,
 		arg.Name,
 	)
+	return err
+}
+
+const setWorkspaceCurrent = `-- name: SetWorkspaceCurrent :exec
+UPDATE workspaces
+SET current_state_version_id = ?, updated_at_ms = ?
+WHERE id = ?
+`
+
+type SetWorkspaceCurrentParams struct {
+	CurrentStateVersionID string
+	UpdatedAtMs           int64
+	ID                    string
+}
+
+func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurrentParams) error {
+	_, err := q.db.ExecContext(ctx, setWorkspaceCurrent, arg.CurrentStateVersionID, arg.UpdatedAtMs, arg.ID)
 	return err
 }
 

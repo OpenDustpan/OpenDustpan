@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 	"opendustpan.org/opendustpan/store/storetest"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 func TestConformance(t *testing.T) {
@@ -47,6 +48,134 @@ func TestUpdatesConformance(t *testing.T) {
 
 		return open(t)
 	})
+}
+
+func TestWorkspaceConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunWorkspace(t, func(t *testing.T) storetest.WorkspaceStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestMigration0010Workspaces(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty database", func(t *testing.T) {
+		t.Parallel()
+
+		s := open(t)
+
+		checkWorkspacesUsable(t, s, "acme")
+	})
+
+	t.Run("database with data from 0008", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		seedAt0008WithStacks(t, path)
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open migrated store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if closeErr := s.Close(); closeErr != nil {
+				t.Errorf("close store: %v", closeErr)
+			}
+		})
+
+		checkMigratedInventory(t, s)
+		checkWorkspacesUsable(t, s, "acme")
+	})
+}
+
+// checkWorkspacesUsable creates a namespace (unless it exists) and a
+// workspace, proving migration 0010 applied and the tables accept writes.
+func checkWorkspacesUsable(t *testing.T, s *sqlite.Store, nsName string) {
+	t.Helper()
+
+	stored := ensureWorkspaceNamespace(t, s, nsName)
+	w := createUsableWorkspace(t, s, stored)
+	checkUsableWorkspace(t, s, stored, w)
+}
+
+// ensureWorkspaceNamespace creates the namespace unless it exists, and
+// returns it.
+func ensureWorkspaceNamespace(t *testing.T, s *sqlite.Store, nsName string) namespace.Namespace {
+	t.Helper()
+
+	ctx := t.Context()
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+
+	ns := namespace.Namespace{CreatedAt: now, Name: namespace.Name(nsName), HomeRegion: "eu-west", FailoverVersion: 1}
+	if createErr := s.CreateNamespace(ctx, ns); createErr != nil &&
+		!errors.Is(createErr, namespace.ErrAlreadyExists) {
+		t.Fatalf("create namespace: %v", createErr)
+	}
+
+	stored, err := s.GetNamespace(ctx, namespace.Name(nsName))
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	return stored
+}
+
+// createUsableWorkspace creates one workspace in ns and returns it.
+func createUsableWorkspace(
+	t *testing.T, s *sqlite.Store, ns namespace.Namespace,
+) workspace.Workspace {
+	t.Helper()
+
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+
+	name, err := workspace.ParseName("network")
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID(ident.NewID("ws-")),
+		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
+		Revision:  1,
+	}
+
+	if createErr := s.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
+		t.Fatalf("create workspace: %v", createErr)
+	}
+
+	return w
+}
+
+// checkUsableWorkspace reads w back by name and in the namespace listing.
+func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace, w workspace.Workspace) {
+	t.Helper()
+
+	got, err := s.GetWorkspace(t.Context(), w.Ref)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	if got.ID != w.ID || got.Ref != w.Ref || got.Revision != w.Revision {
+		t.Fatalf("workspace = %+v, want %+v", got, w)
+	}
+
+	list, err := s.ListWorkspaces(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+
+	if len(list) != 1 || list[0].ID != w.ID {
+		t.Fatalf("listed workspaces = %+v, want one workspace %q", list, w.ID)
+	}
 }
 
 // open returns a fresh store in a temporary directory.
