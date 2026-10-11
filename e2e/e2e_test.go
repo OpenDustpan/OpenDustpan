@@ -1440,6 +1440,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// Import source T1 (ADR 29): local state, the http backend and
 	// client-side encryption move into OpenDustpan.
 	tofuImportScenario(t, env)
+
+	// Import error cases (ADR 29 exit test step 6): a move into a missing
+	// organization and a move with a wrong token fail with a clear message
+	// and leave the source unchanged.
+	tofuImportErrors(ctx, t, env)
 }
 
 // checkApplyReadsStateVersion proves apply fetched the state version it
@@ -1561,6 +1566,12 @@ const importPassphrase = "correct horse battery staple"
 // importCloudConfig returns the same project with a cloud block on host and
 // the workspace name, so init -migrate-state copies the source state there.
 func importCloudConfig(host, workspace string) string {
+	return importCloudConfigOrg(host, e2e.Namespace, workspace)
+}
+
+// importCloudConfigOrg returns the same project with a cloud block on host,
+// organization org and the workspace name.
+func importCloudConfigOrg(host, org, workspace string) string {
 	return fmt.Sprintf(`terraform {
   cloud {
     hostname     = %q
@@ -1571,7 +1582,7 @@ func importCloudConfig(host, workspace string) string {
   }
 }
 
-`, host, e2e.Namespace, workspace) + importSourceConfig
+`, host, org, workspace) + importSourceConfig
 }
 
 // importEncryptionBlock returns the client-side encryption block shared by
@@ -2135,6 +2146,155 @@ func tofuImportEncrypted(ctx context.Context, t *testing.T, env *e2e.Env) {
 	env.NoteStep(t, "import encrypted lineage and serial", importRecord(before, after))
 
 	checkImportEncryptedStored(ctx, t, env)
+}
+
+// importMissingOrg is an organization that no server creates, so a move
+// into it must fail.
+const importMissingOrg = "ghost"
+
+// tofuImportErrors proves the error cases of import source T1 (ADR 29 exit
+// test step 6): init into a cloud block with a missing organization fails and
+// names the organization, and init with a wrong token fails and names the
+// authentication failure. Each case leaves the source unchanged, and the log
+// records the text that the CLI prints in each case.
+func tofuImportErrors(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	tofuImportMissingOrg(ctx, t, env)
+	tofuImportWrongToken(ctx, t, env)
+}
+
+// tofuImportMissingOrg moves local state into a missing organization: the
+// init fails, names the organization and holds no token, and the local state
+// file keeps the source serial, lineage and content.
+func tofuImportMissingOrg(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeImportConfig(t, dir, importSourceConfig)
+
+	var before importStateDoc
+
+	env.StepIn(ctx, t, dir, step("import error init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, step("import error apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import error state before", checkImportBefore(&before, nil), "state", "pull", "-no-color"),
+	)
+
+	writeImportConfig(t, dir, importCloudConfigOrg(env.Host(), importMissingOrg, "import-missing-org"))
+
+	res := env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  checkImportErrorOneOf([]string{importMissingOrg}, env.TokenA()),
+		Name:   "import error missing organization",
+		Args:   []string{"init", "-no-color"},
+		Env:    []string{"TF_INPUT=1"},
+		Stdin:  "yes\n",
+		Fail:   true,
+		Redact: false,
+	})
+	t.Logf("import into missing organization printed:\n%s%s", res.Stdout, res.Stderr)
+
+	if err := checkImportLocalFileUnchanged(dir, before); err != nil {
+		t.Errorf("import into missing organization changed the source: %v", err)
+	}
+}
+
+// tofuImportWrongToken moves the http backend with a wrong token: the init
+// fails, names the authentication failure and holds no token, and the backend
+// counts no write after the copy attempt.
+func tofuImportWrongToken(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	backend := e2e.NewHTTPBackend(t)
+	dir := t.TempDir()
+	writeImportConfig(t, dir, backend.Config())
+
+	var before importStateDoc
+
+	env.StepIn(ctx, t, dir, step("import wrong token init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import wrong token apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	)
+
+	writesBefore := backend.Writes()
+	deletesBefore := backend.Counts().Deletes
+
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("import wrong token state before", checkImportBefore(&before, nil), "state", "pull", "-no-color"),
+	)
+
+	writeImportConfig(t, dir, importCloudConfig(env.Host(), "import-wrong-token"))
+
+	wrongRC := writeWrongTofuRC(t, env.Host())
+
+	res := env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  checkImportErrorOneOf(importWrongTokenPhrases(), env.TokenA(), importWrongToken),
+		Name:   "import error wrong token",
+		Args:   []string{"init", "-no-color"},
+		Env:    []string{"TF_INPUT=1", "TF_CLI_CONFIG_FILE=" + wrongRC},
+		Stdin:  "yes\n",
+		Fail:   true,
+		Redact: false,
+	})
+	t.Logf("import with wrong token printed:\n%s%s", res.Stdout, res.Stderr)
+
+	if err := checkHTTPBackendQuiet(backend, writesBefore, deletesBefore); err != nil {
+		t.Errorf("import with wrong token changed the source: %v", err)
+	}
+
+	if before.Serial < 1 {
+		t.Error("import with wrong token lost the source serial")
+	}
+}
+
+// writeWrongTofuRC writes a CLI configuration with a wrong token for host
+// and returns its path, so a step runs the CLI as an unauthenticated caller.
+func writeWrongTofuRC(t *testing.T, host string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "tofurc-wrong")
+	content := fmt.Sprintf("credentials %q {\n  token = %q\n}\n", host, importWrongToken)
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write wrong CLI configuration: %v", err)
+	}
+
+	return path
+}
+
+// checkImportLocalFileUnchanged proves the local state file in dir still
+// holds the source state: the same content, serial and lineage as before.
+func checkImportLocalFileUnchanged(dir string, before importStateDoc) error {
+	stateFile := filepath.Join(dir, "terraform.tfstate")
+	// The test reads the state file it wrote.
+	raw, err := os.ReadFile(stateFile) //nolint:gosec // Test file with a fixed name.
+	if err != nil {
+		return fmt.Errorf("%w: read the local source: %w", errUnexpected, err)
+	}
+
+	kept, err := decodeImportState(string(raw))
+	if err != nil {
+		return err
+	}
+
+	if err := checkImportPreserved(before, kept); err != nil {
+		return err
+	}
+
+	if kept.Lineage != before.Lineage {
+		return fmt.Errorf("%w: source lineage is %q, want %q", errUnexpected, kept.Lineage, before.Lineage)
+	}
+
+	return nil
 }
 
 // importStateVersionData holds the data object of a current-state-version
@@ -4836,6 +4996,7 @@ func runP1ImportOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	fix.checkDestination(ctx, t, before)
 	fix.secondRun(ctx, t)
 	fix.upOnDestination(ctx, t)
+	fix.importErrors(ctx, t, before)
 	fix.checkSourceUnchanged(ctx, t, before, since)
 	fix.logoutSource(ctx, t)
 }
@@ -5127,6 +5288,89 @@ func (f *p1Fixture) upOnDestination(ctx context.Context, t *testing.T) {
 		t,
 		step("up on destination shows no changes", upHasNoChanges, "up", "--yes", "--non-interactive"),
 	)
+}
+
+// importMissingNamespace is a namespace that neither server creates, so an
+// import into it must fail.
+const importMissingNamespace = "ghost"
+
+// importWrongToken is a token that neither server accepts, so an import with
+// it must fail. It is a fixed test value, never a real credential.
+const importWrongToken = "wrong-token-not-accepted"
+
+// importErrors proves the error cases of the import (ADR 29 exit test step
+// 6): a stack import on D into a namespace that D does not have fails and
+// names the namespace, and the same import with a wrong access token for D
+// fails and names the authentication failure. Each case leaves the source
+// alone: the final source check of the run proves it. The log records the
+// text that the CLI prints in each case.
+func (f *p1Fixture) importErrors(ctx context.Context, t *testing.T, before p1Snapshot) {
+	t.Helper()
+
+	src := f.pair.Src
+	tokens := []string{src.TokenA(), f.pair.Dst.TokenA(), importWrongToken}
+
+	missing := importMissingNamespace + "/" + e2e.Project + "/" + stackName
+
+	res := src.StepSavedLogin(ctx, t, e2e.StepSpec{
+		Check:  checkImportErrorOneOf([]string{importMissingNamespace}, tokens...),
+		Name:   "import to missing namespace",
+		Args:   []string{"stack", "import", "--stack", missing},
+		Env:    nil,
+		Stdin:  before.export,
+		Fail:   true,
+		Redact: false,
+	})
+	t.Logf("import to missing namespace printed:\n%s%s", res.Stdout, res.Stderr)
+
+	res = src.StepSavedLogin(ctx, t, e2e.StepSpec{
+		Check:  checkImportErrorOneOf(importWrongTokenPhrases(), tokens...),
+		Name:   "import with wrong token",
+		Args:   []string{"stack", "import", "--stack", f.dev},
+		Env:    []string{"PULUMI_ACCESS_TOKEN=" + importWrongToken},
+		Stdin:  before.export,
+		Fail:   true,
+		Redact: false,
+	})
+	t.Logf("import with wrong token printed:\n%s%s", res.Stdout, res.Stderr)
+}
+
+// importWrongTokenPhrases holds the failure phrases a wrong access token may
+// print: the wording differs by CLI version, from the client-side refusal to
+// the server detail.
+func importWrongTokenPhrases() []string {
+	return []string{"invalid access token", "Unauthorized", "unauthorized", "unauthenticated", "401"}
+}
+
+// checkImportErrorOneOf proves a failed import names one of want and holds
+// no token: the output names what failed and leaks no credential. The
+// accepted phrases cover the wording drift between CLI versions.
+func checkImportErrorOneOf(want []string, tokens ...string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		out := r.Stdout + r.Stderr
+
+		matched := false
+
+		for _, phrase := range want {
+			if strings.Contains(out, phrase) {
+				matched = true
+
+				break
+			}
+		}
+
+		if !matched {
+			return fmt.Errorf("%w: import error lacks any of %q: %s", errUnexpected, want, out)
+		}
+
+		for _, token := range tokens {
+			if token != "" && strings.Contains(out, token) {
+				return fmt.Errorf("%w: import error holds a token", errUnexpected)
+			}
+		}
+
+		return nil
+	}
 }
 
 // checkSourceUnchanged proves the import left the source alone: the latest
@@ -5581,7 +5825,7 @@ func runImportReplayOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	checkReplayedTriples(t, before, listReplayVersions(ctx, t, dst))
-	checkSourceUnchanged(t, src, before)
+	checkSourceUnchanged(ctx, t, src, before)
 	checkNoSourceWrite(t, pair, srcWS, "replay")
 
 	dst.WriteTofuConfig(t, tofuGreetingConfig(dst.Host(), "four"))
@@ -5602,8 +5846,43 @@ func runImportReplayOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Fatalf("destination holds %d versions, want 4 after the apply and the second run", len(got))
 	}
 
-	checkSourceUnchanged(t, src, before)
-	checkNoSourceWrite(t, pair, srcWS, "replay again")
+	replayErrorCases(ctx, t, pair, before, srcWS)
+}
+
+// replayErrorCases runs the error cases of the T2 replay (ADR 29 exit test
+// step 6): the replay with a missing organization and with a wrong token
+// fails with a clear message and changes neither side. The log records the
+// text that the script prints in each case.
+func replayErrorCases(
+	ctx context.Context, t *testing.T, pair *e2e.Pair, before []replayVersion, srcWS string,
+) {
+	t.Helper()
+
+	src, dst := pair.Src, pair.Dst
+
+	runReplayErrorScript(ctx, t, pair, replayErrorInput{
+		name:     "replay missing organization",
+		srcToken: pair.Src.TokenA(),
+		dstToken: pair.Dst.TokenA(),
+		want:     []string{importMissingOrg},
+		args:     replayArgsOrgs(pair, importMissingOrg, e2e.Namespace),
+	})
+
+	runReplayErrorScript(ctx, t, pair, replayErrorInput{
+		name:     "replay wrong token",
+		srcToken: importWrongToken,
+		dstToken: pair.Dst.TokenA(),
+		want:     []string{"401"},
+		args:     replayArgs(pair),
+	})
+
+	if got := listReplayVersions(ctx, t, dst); len(got) != 4 {
+		t.Fatalf("destination holds %d versions, want 4 after the error cases", len(got))
+	}
+
+	checkSourceUnchanged(ctx, t, src, before)
+	checkNoSourceWrite(t, pair, srcWS, "replay missing organization")
+	checkNoSourceWrite(t, pair, srcWS, "replay wrong token")
 }
 
 // tofuGreetingConfig is the cloud-block configuration with one greeting
@@ -5628,14 +5907,21 @@ output "greeting" {
 // replayArgs returns the replay script arguments for pair: both server URLs,
 // both namespaces and workspaces, the last ten versions and the trust bundle.
 func replayArgs(pair *e2e.Pair) []string {
+	return replayArgsOrgs(pair, e2e.Namespace, e2e.Namespace)
+}
+
+// replayArgsOrgs returns the replay script arguments for pair with the given
+// source and destination organizations, so error cases run the script against
+// a missing organization.
+func replayArgsOrgs(pair *e2e.Pair, srcOrg, dstOrg string) []string {
 	args := make([]string, 0, 16)
 
 	return append(args,
 		"--source-url", pair.Src.URL,
 		"--dest-url", pair.Dst.URL,
-		"--source-org", e2e.Namespace,
+		"--source-org", srcOrg,
 		"--source-workspace", e2e.Workspace,
-		"--dest-org", e2e.Namespace,
+		"--dest-org", dstOrg,
 		"--dest-workspace", e2e.Workspace,
 		"--count", "10",
 		"--ca-bundle", pair.Src.CABundle(),
@@ -5707,6 +5993,97 @@ func runReplayScript(
 	pair.Src.RecordExternalStep(t, name, command, res, failure)
 
 	return res
+}
+
+// replayErrorInput groups one replay error case: the step name, the tokens
+// the script runs with, the phrases the output must hold, and the script
+// arguments.
+type replayErrorInput struct {
+	name     string
+	srcToken string
+	dstToken string
+	want     []string
+	args     []string
+}
+
+// runReplayErrorScript runs the replay script for an error case, records it
+// under the input name, and fails the test when the script exits zero, names
+// none of the wanted phrases, or holds a token: neither the given tokens nor
+// the pair tokens. The tokens travel through the environment, never as
+// arguments. The log records the text that the script prints.
+func runReplayErrorScript(ctx context.Context, t *testing.T, pair *e2e.Pair, in replayErrorInput) {
+	t.Helper()
+
+	pair.Src.Recorder.SetStep(in.name)
+
+	path := replayScriptPath(t)
+	command := "import-tfe-state.sh " + strings.Join(in.args, " ")
+
+	var stdout, stderr bytes.Buffer
+
+	//nolint:gosec // The command is the repository's own replay script.
+	cmd := exec.CommandContext(ctx, path, in.args...)
+	cmd.Dir = t.TempDir()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(),
+		"IMPORT_TFE_SOURCE_TOKEN="+in.srcToken,
+		"IMPORT_TFE_DEST_TOKEN="+in.dstToken,
+	)
+
+	err := cmd.Run()
+	res := e2e.ExternalResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+
+	if err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			res.ExitCode = exitErr.ExitCode()
+		} else {
+			res.ExitCode = 1
+			res.Stderr += "\nrun import-tfe-state.sh: " + err.Error()
+		}
+	}
+
+	failure := replayErrorFailure(res, in.want, []string{
+		in.srcToken,
+		in.dstToken,
+		pair.Src.TokenA(),
+		pair.Dst.TokenA(),
+	})
+
+	pair.Src.RecordExternalStep(t, in.name, command, res, failure)
+	t.Logf("%s printed:\n%s%s", in.name, res.Stdout, res.Stderr)
+}
+
+// replayErrorFailure returns the failure of an error-case replay run, or ""
+// when the script exits non-zero, names one of want, and holds no token.
+func replayErrorFailure(res e2e.ExternalResult, want, tokens []string) string {
+	if res.ExitCode == 0 {
+		return "expected a non-zero exit"
+	}
+
+	out := res.Stdout + res.Stderr
+
+	matched := false
+
+	for _, phrase := range want {
+		if strings.Contains(out, phrase) {
+			matched = true
+
+			break
+		}
+	}
+
+	if !matched {
+		return fmt.Sprintf("output lacks any of %q", want)
+	}
+
+	for _, token := range tokens {
+		if token != "" && strings.Contains(out, token) {
+			return "output holds a token"
+		}
+	}
+
+	return ""
 }
 
 // replayListAttributes holds the serial, lineage and MD5 of one listed
@@ -5800,10 +6177,10 @@ func checkReplayedTriples(t *testing.T, want, got []replayVersion) {
 
 // checkSourceUnchanged proves the source still holds the same versions: the
 // replay never writes to S.
-func checkSourceUnchanged(t *testing.T, src *e2e.Env, want []replayVersion) {
+func checkSourceUnchanged(ctx context.Context, t *testing.T, src *e2e.Env, want []replayVersion) {
 	t.Helper()
 
-	got := listReplayVersions(t.Context(), t, src)
+	got := listReplayVersions(ctx, t, src)
 
 	if len(got) != len(want) {
 		t.Fatalf("source holds %d versions, want %d: the replay changed S", len(got), len(want))
