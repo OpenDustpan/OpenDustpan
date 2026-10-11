@@ -464,9 +464,8 @@ const (
 	// writes: the greeting output with its cty value and type, plus a
 	// sensitive output so the run also proves the single-output route the
 	// CLI uses for it.
-	seedStateOutputs = `{"outputs":{` +
-		`"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
-		`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}}`
+	seedStateOutputs = `{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
+		`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}`
 )
 
 // seedStateDocument returns a minimal tfstate document with lineage, serial

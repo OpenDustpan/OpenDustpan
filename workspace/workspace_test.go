@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/inventory"
@@ -350,6 +351,32 @@ type fixture struct {
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 
+	return newFixtureWithBlobs(t, openFixtureBlobs(t))
+}
+
+// openFixtureBlobs opens a blob store in a temporary directory for one test.
+func openFixtureBlobs(t *testing.T) *fs.Store {
+	t.Helper()
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs
+}
+
+// newFixtureWithBlobs returns a fixture over blobs, so tests prove what an
+// upload leaves behind.
+func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
+	t.Helper()
+
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
 	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
@@ -362,17 +389,6 @@ func newFixture(t *testing.T) fixture {
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
-
-	blobs, err := fs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("blob store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := blobs.Close(); closeErr != nil {
-			t.Errorf("close blob store: %v", closeErr)
-		}
-	})
 
 	svc, err := workspace.NewService(workspace.Config{
 		Workspaces:    store,
@@ -759,5 +775,151 @@ func TestParseName(t *testing.T) {
 		if _, err := workspace.ParseName(bad); !errors.Is(err, workspace.ErrInvalidName) {
 			t.Errorf("ParseName(%q): %v, want ErrInvalidName", bad, err)
 		}
+	}
+}
+
+// recordingBlobs wraps a blob store and records every deleted key, so tests
+// prove a failed upload leaves no blob behind.
+type recordingBlobs struct {
+	blob.Store
+
+	mu      sync.Mutex
+	deleted []blob.Key
+}
+
+// Delete removes the object and records its key.
+func (r *recordingBlobs) Delete(ctx context.Context, key blob.Key) error {
+	err := r.Store.Delete(ctx, key)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.deleted = append(r.deleted, key)
+
+	return err
+}
+
+// deletedKeys returns every deleted key.
+func (r *recordingBlobs) deletedKeys() []blob.Key {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]blob.Key(nil), r.deleted...)
+}
+
+// TestChecksumMismatchDeletesBlob proves an upload whose bytes differ from
+// the declared MD5 fails and leaves no blob behind: the attempt key is
+// deleted and the version stays pending.
+func TestChecksumMismatchDeletesBlob(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, deleted: nil}
+	f := newFixtureWithBlobs(t, rec)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("tampered"))
+	if !errors.Is(uploadErr, workspace.ErrChecksumMismatch) {
+		t.Fatalf("upload: %v, want ErrChecksumMismatch", uploadErr)
+	}
+
+	deleted := rec.deletedKeys()
+	if len(deleted) == 0 {
+		t.Fatal("no blob deleted after the checksum mismatch")
+	}
+
+	for _, key := range deleted {
+		_, getErr := rec.Get(ctx, key)
+		if !errors.Is(getErr, blob.ErrNotFound) {
+			t.Errorf("get of deleted blob %q: %v, want ErrNotFound", key, getErr)
+		}
+	}
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Errorf("state version status = %q, want pending", stored.Status)
+	}
+}
+
+// TestDiscardJSONRendering proves the JSON rendering upload: a wrong
+// capability is denied, a pending version with the capability succeeds
+// without consuming it, a retry after finalize with the same capability and
+// other content still succeeds, and an expired capability is denied.
+func TestDiscardJSONRendering(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	other, tokenErr := token.New()
+	if tokenErr != nil {
+		t.Fatalf("token: %v", tokenErr)
+	}
+
+	discardErr := f.svc.DiscardJSONRendering(ctx, pending.Version.ID, other, strings.NewReader(`{"rendering":1}`))
+	if !errors.Is(discardErr, workspace.ErrUploadDenied) {
+		t.Errorf("foreign capability: %v, want ErrUploadDenied", discardErr)
+	}
+
+	discardErr = f.svc.DiscardJSONRendering(
+		ctx,
+		pending.Version.ID,
+		pending.Upload,
+		strings.NewReader(`{"rendering":1}`),
+	)
+	if discardErr != nil {
+		t.Fatalf("discard: %v", discardErr)
+	}
+
+	// The rendering never consumes the capability: the state upload with the
+	// same capability still finalizes.
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if uploadErr != nil {
+		t.Fatalf("upload after discard: %v", uploadErr)
+	}
+
+	// A retry after finalize with the same capability and other rendering
+	// still succeeds: the two PUTs of one upload carry other content.
+	discardErr = f.svc.DiscardJSONRendering(
+		ctx,
+		pending.Version.ID,
+		pending.Upload,
+		strings.NewReader(`{"rendering":2}`),
+	)
+	if discardErr != nil {
+		t.Errorf("discard after finalize: %v", discardErr)
+	}
+
+	late, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	if beginErr != nil {
+		t.Fatalf("begin: %v", beginErr)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow)
+
+	discardErr = f.svc.DiscardJSONRendering(ctx, late.Version.ID, late.Upload, strings.NewReader(`{"rendering":3}`))
+	if !errors.Is(discardErr, workspace.ErrUploadDenied) {
+		t.Errorf("expired capability: %v, want ErrUploadDenied", discardErr)
 	}
 }

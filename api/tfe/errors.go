@@ -124,7 +124,7 @@ func classify(err error) errorClass {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
-	case errors.Is(err, identity.ErrDenied):
+	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
 		return errorClass{status: http.StatusForbidden, title: "forbidden", detail: "forbidden"}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound):
@@ -136,11 +136,16 @@ func classify(err error) errorClass {
 		errors.Is(err, workspace.ErrConcurrentModification),
 		errors.Is(err, namespace.ErrFenced):
 		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
+	case errors.Is(err, workspace.ErrTooLarge):
+		return errorClass{status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error()}
 	case errors.Is(err, errInvalidBody),
 		errors.Is(err, workspace.ErrInvalidName),
 		errors.Is(err, namespace.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject),
-		errors.Is(err, workspace.ErrInvalidState):
+		errors.Is(err, workspace.ErrInvalidState),
+		errors.Is(err, workspace.ErrStaleSerial),
+		errors.Is(err, workspace.ErrLineageMismatch),
+		errors.Is(err, workspace.ErrChecksumMismatch):
 		return errorClass{status: http.StatusUnprocessableEntity, title: "unprocessable", detail: err.Error()}
 	default:
 		return errorClass{status: http.StatusInternalServerError, title: "internal error", detail: "internal error"}

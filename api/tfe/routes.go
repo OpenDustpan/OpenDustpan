@@ -23,6 +23,12 @@ const (
 	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
 	// every declared action on the resolved object before the handler runs.
 	ScopeAuthorized
+	// ScopeUpload serves without sign-in: the random token in the path is
+	// the credential, like the update-lease scope of the other tool adapter.
+	// The capability stands in for the declared action: creating the state
+	// version already authorized it, and it scopes to one upload alone. The
+	// Authorizer does not run. Only the state upload routes may use it.
+	ScopeUpload
 )
 
 // ObjectResolver returns the authorization object for a request: the unit
@@ -64,7 +70,13 @@ type Route struct {
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return slices.Concat(h.discoveryRoutes(), h.workspaceRoutes(), h.lockRoutes(), h.stateRoutes())
+	return slices.Concat(
+		h.discoveryRoutes(),
+		h.workspaceRoutes(),
+		h.lockRoutes(),
+		h.stateRoutes(),
+		h.stateWriteRoutes(),
+	)
 }
 
 // discoveryRoutes returns service discovery, ping and the entitlement set.
@@ -244,6 +256,51 @@ func (h *Handler) stateRoutes() []Route {
 	}
 }
 
+// stateWriteRoutes returns the state write routes: create a state version
+// and upload its content and its JSON rendering through capabilities.
+func (h *Handler) stateWriteRoutes() []Route {
+	return []Route{
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/workspaces/{id}/state-versions",
+			// A state version creation needs unit:write on
+			// opentofu:<namespace>/<name>. The resolver maps the ID to the
+			// unit without reading the body: the create body holds the
+			// base64 outputs document and is far larger than the shared
+			// resolver limit. A caller without the lock gets 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: h.resolveStateVersionWorkspace,
+			Serve:   h.createStateVersion,
+		},
+		{
+			Method: http.MethodPut,
+			Path:   "/api/v2/state-uploads/{id}/{token}",
+			// A state upload needs unit:write, granted when the capability
+			// was minted at creation. The token in the path is the
+			// credential, so the route serves without sign-in under the
+			// upload scope. The PUT carries no Authorization header.
+			Scope:   ScopeUpload,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: nil,
+			Serve:   h.uploadState,
+		},
+		{
+			Method: http.MethodPut,
+			Path:   "/api/v2/json-state-uploads/{id}/{token}",
+			// The JSON rendering upload needs unit:write, granted when the
+			// capability was minted at creation. The token in the path is
+			// the credential, so the route serves without sign-in under the
+			// upload scope. The server accepts the rendering and discards
+			// it: it keeps the state itself and the outputs of the create.
+			Scope:   ScopeUpload,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: nil,
+			Serve:   h.uploadJSONState,
+		},
+	}
+}
+
 // Routes returns a copy of the route table. The Actions lists are copied
 // too, so callers cannot mutate handler state through the result.
 func (h *Handler) Routes() []Route {
@@ -350,12 +407,29 @@ func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (id
 	return unitObject(ws.Ref)
 }
 
-// enforce wraps one route table row. Public routes run unwrapped. Every
-// other route authenticates, resolves the object, authorizes every declared
-// action on it, and only then runs the handler.
+// resolveStateVersionWorkspace returns the unit for the workspace ID in the
+// path value, without reading the body: the state version create body holds
+// the base64 outputs document and is far larger than the shared resolver
+// limit, so the create handler reads it.
+func (h *Handler) resolveStateVersionWorkspace(
+	_ http.ResponseWriter, r *http.Request,
+) (identity.Object, error) {
+	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return unitObject(ws.Ref)
+}
+
+// enforce wraps one route table row. Public and upload routes run
+// unwrapped: public routes need no credential and upload routes carry their
+// capability in the path. Every other route authenticates, resolves the
+// object, authorizes every declared action on it, and only then runs the
+// handler.
 func (h *Handler) enforce(route Route) http.HandlerFunc {
 	switch route.Scope {
-	case ScopePublic:
+	case ScopePublic, ScopeUpload:
 		return h.enforcePublic(route)
 	case ScopeAuthorized:
 		return h.enforceAuthorized(route)
