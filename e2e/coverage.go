@@ -529,6 +529,12 @@ func CoverageAllowlist() []AllowEntry {
 			Reason:       "Fast e2e updates finish before the CLI renews its lease.",
 		},
 		{
+			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/restore/{version}",
+			CoveringTest: "TestCLIs (pulumiRestoreScenario)",
+			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
+				"The harness step restores version 1 and checks it with stack export.",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/v2/state-versions",
 			CoveringTest: "TestCLIs (tofuStateVersionListScenario)",
 			Reason: "Operator and console route (ADR 28): the CLI never lists " +

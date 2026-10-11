@@ -154,6 +154,48 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity
 	h.writeJSON(ctx, w, http.StatusOK, importStackResponse{UpdateID: u.ID.String()})
 }
 
+// restoreStackResponse answers a restore with the ID of the restore update.
+// The server already ended the update; the caller reads it from history.
+type restoreStackResponse struct {
+	UpdateID string `json:"updateId"` //nolint:tagliatelle // The Pulumi CLI's wire name; it must not change.
+}
+
+// restoreStack copies the checkpoint of one stack version into a new update
+// of kind restore, as the restore route does. It follows the rules of
+// importStack: the restore update shows in history with RestoredFrom set and
+// respects the stack lock, answering 409 while another update runs. A version
+// with no checkpoint answers 404. The version is a positive integer: any
+// other value answers 400. The update records the subject of the caller as
+// its creator (ADR 28 decision 5).
+func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	ref, ok := h.updateRef(w, r)
+	if !ok {
+		return
+	}
+
+	version, err := stack.ParseStackVersion(r.PathValue("version"))
+	if err != nil || version <= 0 {
+		if err == nil {
+			err = fmt.Errorf("%w: stack version %d", stack.ErrInvalidUpdate, version)
+		}
+
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	u, err := h.updates.Restore(ctx, ref, version, p.Subject)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, restoreStackResponse{UpdateID: u.ID.String()})
+}
+
 // updateResults answers a get of one update. Engine events are write-only in
 // milestone 1: the legacy shape cannot carry them, so the list stays empty.
 type updateResults struct {
