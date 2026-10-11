@@ -354,8 +354,14 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 
 // requireEmpty reports ErrNotEmpty when the destination holds any row. The
 // port loads into an empty store only, so a failed load can leave it empty.
+// The seeded installation row is bookkeeping, not data, so a fresh database
+// still counts as empty.
 func (s *Store) requireEmpty(ctx context.Context) error {
 	for _, table := range backup.Tables {
+		if table == "installation" {
+			continue
+		}
+
 		n, err := countRows(ctx, s.conn, table)
 		if err != nil {
 			return err

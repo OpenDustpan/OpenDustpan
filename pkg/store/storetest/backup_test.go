@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -64,6 +65,9 @@ type fakeData struct {
 	states       map[string]workspace.StateVersion
 	current      map[string]string
 	backups      map[string]backup.Record
+	// installation is the installation state. It starts normal, as the
+	// seeded row of the SQL adapters does.
+	installation maintenance.State
 }
 
 // newFakeData returns empty tables.
@@ -82,6 +86,7 @@ func newFakeData() *fakeData {
 		states:       map[string]workspace.StateVersion{},
 		current:      map[string]string{},
 		backups:      map[string]backup.Record{},
+		installation: maintenance.StateNormal,
 	}
 }
 
@@ -1413,6 +1418,64 @@ func (s *fakeBackupStore) Ping(_ context.Context) error {
 	return nil
 }
 
+// GetState implements maintenance.Store.
+func (s *fakeBackupStore) GetState(context.Context) (maintenance.State, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return "", errFakeClosed
+	}
+
+	return s.data.installation, nil
+}
+
+// SetState implements maintenance.Store.
+func (s *fakeBackupStore) SetState(_ context.Context, state maintenance.State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if state != maintenance.StateNormal && state != maintenance.StateMaintenance {
+		return maintenance.ErrInvalidState
+	}
+
+	s.data.installation = state
+
+	return nil
+}
+
+// SetStateIf implements maintenance.Store.
+func (s *fakeBackupStore) SetStateIf(
+	_ context.Context, expected, next maintenance.State,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
+		return maintenance.ErrInvalidState
+	}
+
+	if next != maintenance.StateNormal && next != maintenance.StateMaintenance {
+		return maintenance.ErrInvalidState
+	}
+
+	if s.data.installation != expected {
+		return maintenance.ErrStateChanged
+	}
+
+	s.data.installation = next
+
+	return nil
+}
+
 // CreateBackup implements backup.Registry.
 func (s *fakeBackupStore) CreateBackup(_ context.Context, r backup.Record) error {
 	s.mu.Lock()
@@ -1716,6 +1779,9 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 		"workspaces":     int64(len(data.workspaces)),
 		"state_versions": int64(len(data.states)),
 		"backups":        int64(len(data.backups)),
+		// The installation table holds its one seeded row in every store,
+		// as in the SQL adapters.
+		"installation": 1,
 	}
 }
 
@@ -2009,7 +2075,12 @@ func (s *fakeBackupStore) swapLoaded(loaded *fakeData) (backup.Summary, error) {
 	}
 
 	if !s.skipEmptyCheck {
-		for _, n := range rowCountsOf(s.data) {
+		for table, n := range rowCountsOf(s.data) {
+			// The seeded installation row is bookkeeping, not data.
+			if table == "installation" {
+				continue
+			}
+
 			if n != 0 {
 				return backup.Summary{}, backup.ErrNotEmpty
 			}
@@ -2054,6 +2125,7 @@ func (s *fakeBackupStore) snapshotTables() map[string]any {
 		"workspaces":     fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
 		"state_versions": s.data.states,
 		"backups":        s.data.backups,
+		"installation":   s.data.installation,
 	}
 }
 
@@ -2240,12 +2312,17 @@ func (s *fakeBackupStore) isClosed() bool {
 	return s.closed
 }
 
-// empty reports whether the store holds no row.
+// empty reports whether the store holds no row. The seeded installation row
+// is bookkeeping, not data, so it never counts: a fresh store is empty.
 func (s *fakeBackupStore) empty() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, n := range rowCountsOf(s.data) {
+	for table, n := range rowCountsOf(s.data) {
+		if table == "installation" {
+			continue
+		}
+
 		if n != 0 {
 			return false
 		}
@@ -2323,6 +2400,7 @@ func backupDecodeTargets(loaded *fakeData) map[string]any {
 		"inventory":      &loaded.entries,
 		"state_versions": &loaded.states,
 		"backups":        &loaded.backups,
+		"installation":   &loaded.installation,
 	}
 }
 

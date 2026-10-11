@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -38,25 +39,29 @@ type Config struct {
 	// means no backup target is configured. The target comes only from this
 	// service: no request field, header or query value sets it.
 	Backups *backup.Service
+	// Maintenance enters, leaves and reads maintenance mode (ADR 38).
+	// Required: the installation state lives in the database.
+	Maintenance Maintenance
 	// Metrics writes the registry for the metrics route.
 	Metrics MetricsWriter
 }
 
 // Handler serves the installation API under /api/server/.
 type Handler struct {
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	logger     *slog.Logger
-	namespaces *namespace.Service
-	backups    *backup.Service
-	metrics    MetricsWriter
-	mux        *patternMux
-	routes     []Route
+	authn       identity.Authenticator
+	authz       identity.Authorizer
+	logger      *slog.Logger
+	namespaces  *namespace.Service
+	backups     *backup.Service
+	maintenance Maintenance
+	metrics     MetricsWriter
+	mux         *patternMux
+	routes      []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
-// Namespaces and Metrics are required. Backups is optional: nil means no
-// backup target is configured.
+// Namespaces, Maintenance and Metrics are required. Backups is optional: nil
+// means no backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Authenticator == nil:
@@ -67,19 +72,22 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Maintenance == nil:
+		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
 	case cfg.Metrics == nil:
 		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
 	}
 
 	h := &Handler{
-		authn:      cfg.Authenticator,
-		authz:      cfg.Authorizer,
-		logger:     cfg.Logger,
-		namespaces: cfg.Namespaces,
-		backups:    cfg.Backups,
-		metrics:    cfg.Metrics,
-		mux:        newPatternMux(),
-		routes:     nil,
+		authn:       cfg.Authenticator,
+		authz:       cfg.Authorizer,
+		logger:      cfg.Logger,
+		namespaces:  cfg.Namespaces,
+		backups:     cfg.Backups,
+		maintenance: cfg.Maintenance,
+		metrics:     cfg.Metrics,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -183,9 +191,19 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // callers. Backup errors carry fixed messages: registry and target failures
 // may hold driver text, so only the sentinel decides the status and the
 // message. A missing backup answers 404, a second start 409, and a server
-// with no backup target 500 that names the setting. A duplicate namespace
-// answers 409, a bad namespace name or body answers 400.
+// with no backup target 500 that names the setting. Namespace errors map in
+// classifyNamespace. Maintenance errors map in classifyMaintenance: active work answers 409 naming each update and
+// run, and an unreadable installation state answers 500 without driver
+// text.
 func classify(err error) (int, string) {
+	if status, message, ok := classifyMaintenance(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyNamespace(err); ok {
+		return status, message
+	}
+
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated"
@@ -193,12 +211,8 @@ func classify(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
-		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrAlreadyExists):
-		return http.StatusConflict, err.Error()
-	case errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, err.Error()
+	case errors.Is(err, errInvalidBody):
+		return http.StatusBadRequest, errInvalidBody.Error()
 	case errors.Is(err, backup.ErrAlreadyRunning):
 		return http.StatusConflict, "a backup is already running"
 	case errors.Is(err, backup.ErrAlreadyExists):
@@ -210,6 +224,39 @@ func classify(err error) (int, string) {
 		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target"
 	default:
 		return http.StatusInternalServerError, "internal error"
+	}
+}
+
+// classifyNamespace maps the namespace errors to their status and message: a
+// bad namespace name or body answers 400, a duplicate namespace 409 and an
+// unknown namespace 404.
+func classifyNamespace(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
+		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, namespace.ErrAlreadyExists):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, namespace.ErrNotFound):
+		return http.StatusNotFound, err.Error(), true
+	default:
+		return 0, "", false
+	}
+}
+
+// classifyMaintenance maps the maintenance errors to their status and
+// message: an invalid state value answers 400, active work answers 409
+// naming each update and run, and an unreadable or unknown stored state
+// answers 500 without driver text.
+func classifyMaintenance(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, maintenance.ErrInvalidState):
+		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, maintenance.ErrActiveWork):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, maintenance.ErrUnavailable):
+		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
+	default:
+		return 0, "", false
 	}
 }
 

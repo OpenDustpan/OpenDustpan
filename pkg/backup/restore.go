@@ -158,6 +158,12 @@ func (j restoreJob) verifyPre(ctx context.Context, plan restorePlan, key secret.
 	}
 
 	for _, table := range Tables {
+		// The migration seeds the installation row: it is bookkeeping, not
+		// data, so a fresh destination still counts as empty.
+		if table == "installation" {
+			continue
+		}
+
 		if plan.dst.RowCounts[table] > 0 {
 			return fmt.Errorf("restore destination holds %d rows of %s: %w",
 				plan.dst.RowCounts[table], table, ErrNotEmpty)

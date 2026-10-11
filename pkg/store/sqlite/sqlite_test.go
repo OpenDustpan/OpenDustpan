@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -66,6 +67,61 @@ func TestPingClosed(t *testing.T) {
 
 	if want := "ping sqlite database: database unavailable"; err.Error() != want {
 		t.Fatalf("ping closed store error = %q, want %q", err, want)
+	}
+}
+
+// TestUnknownStoredStateIsUnavailable plants a stored installation state
+// outside the known set and proves GetState answers ErrUnavailable without
+// the value, never ErrInvalidState: an unknown stored value is a server
+// fault, not a bad request.
+func TestUnknownStoredStateIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, openErr := sqlite.Open(t.Context(), path)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := sql.Open("sqlite", "file:"+path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	ctx := t.Context()
+
+	if _, execErr := conn.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); execErr != nil {
+		t.Fatalf("ignore check constraints: %v", execErr)
+	}
+
+	if _, execErr := conn.ExecContext(ctx, `UPDATE installation SET state = 'offline'`); execErr != nil {
+		t.Fatalf("plant unknown installation state: %v", execErr)
+	}
+
+	_, stateErr := s.GetState(ctx)
+	if !errors.Is(stateErr, maintenance.ErrUnavailable) {
+		t.Fatalf("get unknown installation state: err = %v, want ErrUnavailable", stateErr)
+	}
+
+	if errors.Is(stateErr, maintenance.ErrInvalidState) {
+		t.Fatalf("get unknown installation state: err = %v, must not report ErrInvalidState", stateErr)
+	}
+
+	if strings.Contains(stateErr.Error(), "offline") {
+		t.Fatalf("get unknown installation state error %q holds the stored value", stateErr)
 	}
 }
 

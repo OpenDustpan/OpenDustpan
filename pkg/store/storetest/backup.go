@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -40,6 +41,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.KeyPeeker
 	backup.Registry
 	backup.Inspector
+	maintenance.Store
 }
 
 // BackupFactory returns a fresh, empty store for one subtest.
@@ -563,12 +565,19 @@ func mustFailRunningBackups(t *testing.T, s BackupStore, endedAt time.Time, errT
 }
 
 // testBackupRoundTrip fills a store through the real ports, exports it,
-// imports it into an empty store, and compares every table row by row.
+// imports it into an empty store, and compares every table row by row. It
+// enters maintenance mode before the export, so the round trip also proves
+// the installation state travels with the backup.
 func testBackupRoundTrip(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
 	src := newStore(t)
 	seed := seedBackupStore(t, src)
+
+	if err := src.SetState(t.Context(), maintenance.StateMaintenance); err != nil {
+		t.Fatalf("enter maintenance mode: %v", err)
+	}
+
 	sum, data := exportBackup(t, src)
 	assertExportGroundTruth(t, src, newStore, &seed, sum)
 
@@ -711,7 +720,7 @@ func assertExportDialect(t *testing.T, newStore BackupFactory, sum backup.Summar
 // export counts meet values the exporter did not produce. The hardcoded
 // numbers document the seed shape: two namespaces, three stacks with one tag
 // each, two updates, one checkpoint, two secret keys, two workspaces, two
-// state versions and one backup row.
+// state versions, one backup row and the one seeded installation row.
 func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string]int64 {
 	t.Helper()
 
@@ -749,6 +758,9 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     int64(len(acmeWorkspaces) + len(otherWorkspaces)),
 		"state_versions": 2,
 		"backups":        int64(len(mustListBackups(t, s))),
+		// The installation table holds its one seeded row in every store:
+		// no port lists it, so the count is the schema constant.
+		"installation": 1,
 	}
 
 	want := map[string]int64{
@@ -763,6 +775,7 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     2,
 		"state_versions": 2,
 		"backups":        1,
+		"installation":   1,
 	}
 
 	if !maps.Equal(got, want) {
@@ -787,6 +800,7 @@ func compareBackupStores(t *testing.T, dst, want BackupStore, seed *backupSeed) 
 	compareBackupWorkspaces(t, dst, want, seed)
 	compareBackupStates(t, dst, want, seed)
 	compareBackupRecord(t, dst, seed)
+	compareBackupInstallation(t, dst, want)
 }
 
 // compareBackupNamespaces compares the namespaces after import.
@@ -927,6 +941,27 @@ func compareBackupRecord(t *testing.T, dst BackupStore, seed *backupSeed) {
 
 	if got := mustGetBackup(t, dst, seed.backedUp.ID); got != seed.backedUp {
 		t.Fatalf("backup after import = %+v, want %+v", got, seed.backedUp)
+	}
+}
+
+// compareBackupInstallation compares the installation state after import: the
+// round trip carries the maintenance mode the source entered, not just its
+// row count.
+func compareBackupInstallation(t *testing.T, dst, want BackupStore) {
+	t.Helper()
+
+	got, err := dst.GetState(t.Context())
+	if err != nil {
+		t.Fatalf("get installation state after import: %v", err)
+	}
+
+	all, err := want.GetState(t.Context())
+	if err != nil {
+		t.Fatalf("get installation state of the source: %v", err)
+	}
+
+	if got != all {
+		t.Fatalf("installation state after import = %q, want %q", got, all)
 	}
 }
 

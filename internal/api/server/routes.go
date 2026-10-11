@@ -102,6 +102,30 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveServer,
 			Serve:   h.getBackup,
 		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/maintenance",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerMaintenance},
+			Resolve: resolveServer,
+			Serve:   h.getMaintenance,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/server/maintenance/enter",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerMaintenance},
+			Resolve: resolveServer,
+			Serve:   h.enterMaintenance,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/server/maintenance/leave",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerMaintenance},
+			Resolve: resolveServer,
+			Serve:   h.leaveMaintenance,
+		},
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -424,9 +425,24 @@ func (coverageMetrics) Write(_ io.Writer) error {
 	return nil
 }
 
+// coverageMaintenance answers normal state and cancels nothing: the route
+// table needs a maintenance service, and the coverage gate never serves a
+// request.
+type coverageMaintenance struct{}
+
+func (coverageMaintenance) Get(_ context.Context) (maintenance.State, error) {
+	return maintenance.StateNormal, nil
+}
+
+func (coverageMaintenance) Enter(_ context.Context, _ bool) (maintenance.EnterResult, error) {
+	return maintenance.EnterResult{Canceled: nil}, nil
+}
+
+func (coverageMaintenance) Leave(context.Context) error { return nil }
+
 // coverageServerRoutes returns the installation adapter's route table: the
-// namespace route (ADR 39), the backup routes (ADR 30) and the metrics route
-// (ADR 32).
+// namespace route (ADR 39), the backup routes (ADR 30), the metrics route
+// (ADR 32) and the maintenance routes (ADR 38).
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -436,6 +452,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    coverageNamespaces(tb),
 		Backups:       nil,
+		Maintenance:   coverageMaintenance{},
 		Metrics:       coverageMetrics{},
 	})
 	if err != nil {
@@ -579,7 +596,7 @@ func CoverageAllowlist() []AllowEntry {
 		},
 	}
 
-	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries())
+	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries(), maintenanceAllowEntries())
 }
 
 // namespaceCoveringTest names the test that proves the namespace create route
@@ -627,6 +644,36 @@ func backupAllowEntries() []AllowEntry {
 			CoveringTest: backupCoveringTest,
 			Reason: "Operator route: no CLI reads a backup. The harness step " +
 				"polls it until it succeeds and checks the manifest.",
+		},
+	}
+}
+
+// maintenanceCoveringTest names the test that proves the maintenance routes
+// instead of a CLI: no CLI version in the matrix calls them.
+const maintenanceCoveringTest = "TestMaintenance"
+
+// maintenanceAllowEntries returns the operator maintenance routes that no
+// CLI calls. The harness steps of maintenanceCoveringTest drive them
+// directly: entering, refusing active work, force-canceling it, and leaving.
+func maintenanceAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/maintenance",
+			CoveringTest: maintenanceCoveringTest,
+			Reason: "Operator route: no CLI reads the installation state. " +
+				"The harness step reads it before and after the enter.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/maintenance/enter",
+			CoveringTest: maintenanceCoveringTest,
+			Reason: "Operator route: no CLI enters maintenance mode. The " +
+				"harness step refuses active work, then force-cancels it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/maintenance/leave",
+			CoveringTest: maintenanceCoveringTest,
+			Reason: "Operator route: no CLI leaves maintenance mode. The " +
+				"harness step leaves after the 503 checks.",
 		},
 	}
 }
