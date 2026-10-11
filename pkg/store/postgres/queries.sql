@@ -340,6 +340,49 @@ SELECT COUNT(*)
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized';
 
+-- name: CountPendingStateVersions :one
+SELECT COUNT(*)
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'pending';
+
+-- name: LockWorkspaceForDeclare :one
+-- Locks the workspace row so concurrent declares cannot both pass the
+-- pending cap.
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE id = $1
+FOR UPDATE;
+
+-- name: ListStateContentKeys :many
+-- Every blob key the versions of one workspace name, without the empty ones.
+SELECT content_key
+FROM state_versions
+WHERE workspace_id = $1 AND content_key <> '';
+
+-- name: ListExpiredPendingStateVersions :many
+-- Expired pending versions of one workspace, oldest expiry first. Ties on
+-- expiry break by ID, as the port comment promises.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
+ORDER BY upload_expires_at_ms ASC, id ASC;
+
+-- name: DeleteStateVersion :execrows
+-- Deletes one pending version. A finalized version matches no row, so a
+-- concurrent finalize wins over a sweep: the sweep then skips the version.
+DELETE FROM state_versions
+WHERE id = $1 AND status = 'pending';
+
+-- name: SetPendingContentKey :execrows
+-- Notes one upload attempt on a pending version. A finalized version
+-- matches no row, so a late attempt reports no change.
+UPDATE state_versions
+SET content_key = $1
+WHERE id = $2 AND status = 'pending';
+
 -- name: GetCurrentStateVersion :one
 -- Follows the workspace pointer: a forced upload may carry a lower serial and
 -- still be current, so the highest serial is not always the current state.
@@ -351,12 +394,13 @@ JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
 
 -- name: FinalizeStateVersion :execrows
--- Marks one pending version finalized with its content. A finalized version
+-- Marks one pending version finalized with its recorded attempt. The write
+-- matches only the recorded content key, so a superseded attempt reports no
+-- change instead of finalizing over a newer one; a finalized version also
 -- matches no row, so a retry reports no change.
 UPDATE state_versions
-SET status = 'finalized', finalized_at_ms = @finalized_at_ms,
-    content_key = @content_key, size = @size
-WHERE id = @id AND status = 'pending';
+SET status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size
+WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec
 UPDATE workspaces

@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -136,8 +138,10 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 
 // CreateStateVersion implements workspace.StateStore with a fenced insert. A
 // pending version changes no current state, so it writes no inventory entry.
+// The pending count and the insert run in one write transaction, so
+// concurrent declares never pass the cap together.
 func (s *Store) CreateStateVersion(
-	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence,
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
 ) error {
 	row := codec.ToStateVersionRow(sv)
 
@@ -150,7 +154,21 @@ func (s *Store) CreateStateVersion(
 			return fmt.Errorf("read workspace: %w", err)
 		}
 
-		err := q.CreateStateVersion(ctx, db.CreateStateVersionParams{
+		pending, err := q.CountPendingStateVersions(ctx, row.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("count pending state versions: %w", err)
+		}
+
+		if pending >= int64(maxPending) {
+			return fmt.Errorf(
+				"%w: %d pending, limit %d",
+				workspace.ErrTooManyPending,
+				pending,
+				maxPending,
+			)
+		}
+
+		err = q.CreateStateVersion(ctx, db.CreateStateVersionParams{
 			ID:                row.ID,
 			WorkspaceID:       row.WorkspaceID,
 			Status:            row.Status,
@@ -261,6 +279,143 @@ func normalizeStatePage(page workspace.Page) workspace.Page {
 	return page
 }
 
+// CountPendingStateVersions implements workspace.StateStore: how many
+// pending versions the workspace holds. A workspace that does not exist
+// holds none.
+func (s *Store) CountPendingStateVersions(ctx context.Context, id workspace.ID) (int, error) {
+	n, err := s.queries.CountPendingStateVersions(ctx, id.String())
+	if err != nil {
+		return 0, fmt.Errorf("count pending state versions: %w", err)
+	}
+
+	return int(n), nil
+}
+
+// ReferencedContentKeys implements workspace.StateStore: every blob key the
+// versions of the workspace name, pending and finalized, without the empty
+// ones. A workspace without versions, or one that does not exist, yields an
+// empty list.
+func (s *Store) ReferencedContentKeys(ctx context.Context, id workspace.ID) ([]blob.Key, error) {
+	keys, err := s.queries.ListStateContentKeys(ctx, id.String())
+	if err != nil {
+		return nil, fmt.Errorf("select state content keys: %w", err)
+	}
+
+	out := make([]blob.Key, 0, len(keys))
+
+	for _, key := range keys {
+		parsed, err := blob.ParseKey(key)
+		if err != nil {
+			return nil, fmt.Errorf("parse state content key: %w", err)
+		}
+
+		out = append(out, parsed)
+	}
+
+	return out, nil
+}
+
+// RecordUploadAttempt implements workspace.StateStore: it notes the blob
+// key of one upload attempt on a pending version, so a later sweep finds
+// the content even when the finalize outcome stays unknown. It returns the
+// key the attempt supersedes, so the caller deletes the earlier blob.
+func (s *Store) RecordUploadAttempt(
+	ctx context.Context, id workspace.StateVersionID, key blob.Key, fence namespace.Fence,
+) (blob.Key, error) {
+	var superseded blob.Key
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		stored, err := q.GetStateVersion(ctx, id.String())
+		if errors.Is(err, sql.ErrNoRows) {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("read state version: %w", err)
+		}
+
+		sv, err := stateFromRow(stored)
+		if err != nil {
+			return err
+		}
+
+		if sv.Status != workspace.StatusPending {
+			return workspace.ErrUploadDenied
+		}
+
+		superseded = sv.Content
+
+		n, err := q.SetPendingContentKey(ctx, db.SetPendingContentKeyParams{
+			ContentKey: key.String(),
+			ID:         id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("record upload attempt: %w", err)
+		}
+
+		if n == 0 {
+			return workspace.ErrUploadDenied
+		}
+
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return superseded, nil
+}
+
+// DeleteExpiredPendingStateVersions implements workspace.StateStore: it
+// deletes the expired pending versions of the workspace in one fenced
+// transaction and returns them, oldest expiry first, with their attempted
+// content keys.
+func (s *Store) DeleteExpiredPendingStateVersions(
+	ctx context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	var out []workspace.StateVersion
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		rows, err := q.ListExpiredPendingStateVersions(ctx, db.ListExpiredPendingStateVersionsParams{
+			WorkspaceID:       id.String(),
+			UploadExpiresAtMs: codec.Millis(before),
+		})
+		if err != nil {
+			return fmt.Errorf("select expired pending state: %w", err)
+		}
+
+		out = make([]workspace.StateVersion, 0, len(rows))
+
+		for i := range rows {
+			sv, err := stateFromRow(rows[i])
+			if err != nil {
+				return err
+			}
+
+			n, err := q.DeleteStateVersion(ctx, sv.ID.String())
+			if err != nil {
+				return fmt.Errorf("delete expired pending state: %w", err)
+			}
+
+			// The version finalized after the listing: the conditional
+			// delete matched no row, so it stays out of the result and
+			// keeps its content.
+			if n == 0 {
+				continue
+			}
+
+			out = append(out, sv)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // FinalizeStateVersion implements workspace.StateStore. Every check of the
 // port comment runs in one transaction with the fence: the stored version is
 // still pending, the workspace is held by the lock the version was declared
@@ -316,7 +471,9 @@ func checkFinalizeGuards(
 }
 
 // writeFinalize marks the version finalized, moves the workspace pointer and
-// publishes the inventory entry.
+// publishes the inventory entry. The write matches only the recorded attempt
+// key, so a superseded attempt reports ErrUploadDenied instead of
+// finalizing over a newer one.
 func writeFinalize(
 	ctx context.Context, q *db.Queries, wrow db.Workspace, row codec.StateVersionRow,
 ) error {

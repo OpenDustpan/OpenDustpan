@@ -403,12 +403,14 @@ func newWorkspaceService(
 	tb.Helper()
 
 	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:    st,
-		States:        st,
-		Blobs:         blobs,
-		Namespaces:    namespaces,
-		Now:           nil,
-		MaxStateBytes: 0,
+		Workspaces:         st,
+		States:             st,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Logger:             nil,
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
 	})
 	if err != nil {
 		tb.Fatalf("workspace service: %v", err)

@@ -39,6 +39,9 @@ type memStore struct {
 	// lostAck makes the next finalize commit and then report an error, as a
 	// dropped connection after COMMIT would.
 	lostAck bool
+	// failFinalize makes the next finalize report err without writing, as a
+	// store failure with an unknown outcome would.
+	failFinalize error
 }
 
 type memInventoryKey struct {
@@ -51,13 +54,14 @@ var _ storetest.WorkspaceStore = (*memStore)(nil)
 
 func newMemStore() *memStore {
 	return &memStore{
-		namespaces: map[namespace.Name]namespace.Namespace{},
-		workspaces: map[workspace.ID]workspace.Workspace{},
-		versions:   map[workspace.StateVersionID]workspace.StateVersion{},
-		current:    map[workspace.ID]workspace.StateVersionID{},
-		entries:    map[memInventoryKey]inventory.Entry{},
-		mu:         sync.Mutex{},
-		lostAck:    false,
+		namespaces:   map[namespace.Name]namespace.Namespace{},
+		workspaces:   map[workspace.ID]workspace.Workspace{},
+		versions:     map[workspace.StateVersionID]workspace.StateVersion{},
+		current:      map[workspace.ID]workspace.StateVersionID{},
+		entries:      map[memInventoryKey]inventory.Entry{},
+		mu:           sync.Mutex{},
+		lostAck:      false,
+		failFinalize: nil,
 	}
 }
 
@@ -217,7 +221,7 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 }
 
 func (m *memStore) CreateStateVersion(
-	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -228,6 +232,23 @@ func (m *memStore) CreateStateVersion(
 
 	if _, ok := m.workspaces[sv.Workspace]; !ok {
 		return workspace.ErrNotFound
+	}
+
+	pending := 0
+
+	for vid := range m.versions {
+		if v := m.versions[vid]; v.Workspace == sv.Workspace && v.Status == workspace.StatusPending {
+			pending++
+		}
+	}
+
+	if pending >= maxPending {
+		return fmt.Errorf(
+			"%w: %d pending, limit %d",
+			workspace.ErrTooManyPending,
+			pending,
+			maxPending,
+		)
 	}
 
 	m.versions[sv.ID] = sv
@@ -253,6 +274,13 @@ func (m *memStore) FinalizeStateVersion(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.failFinalize != nil {
+		err := m.failFinalize
+		m.failFinalize = nil
+
+		return err
+	}
+
 	if err := m.checkFence(fence); err != nil {
 		return err
 	}
@@ -266,25 +294,19 @@ func (m *memStore) FinalizeStateVersion(
 		return workspace.ErrUploadDenied
 	}
 
+	// The write matches only the recorded attempt key: a superseded
+	// attempt never finalizes over a newer one.
+	if stored.Content != sv.Content {
+		return workspace.ErrUploadDenied
+	}
+
 	w, ok := m.workspaces[sv.Workspace]
 	if !ok {
 		return workspace.ErrNotFound
 	}
 
-	switch {
-	case !w.Lock.Locked():
-		return workspace.ErrNotLocked
-	case w.Lock.ID != sv.LockID:
-		return workspace.ErrLockedByOther
-	}
-
-	if cur, ok := m.current[sv.Workspace]; ok && !sv.Force {
-		switch current := m.versions[cur]; {
-		case current.Lineage != sv.Lineage:
-			return workspace.ErrLineageMismatch
-		case current.Serial >= sv.Serial:
-			return workspace.ErrStaleSerial
-		}
+	if err := checkMemFinalize(m, w, sv); err != nil {
+		return err
 	}
 
 	m.versions[sv.ID] = sv
@@ -303,6 +325,28 @@ func (m *memStore) FinalizeStateVersion(
 	return nil
 }
 
+// checkMemFinalize runs the lock, lineage and serial checks of a finalize.
+// The caller holds mu.
+func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVersion) error {
+	switch {
+	case !w.Lock.Locked():
+		return workspace.ErrNotLocked
+	case w.Lock.ID != sv.LockID:
+		return workspace.ErrLockedByOther
+	}
+
+	if cur, ok := m.current[sv.Workspace]; ok && !sv.Force {
+		switch current := m.versions[cur]; {
+		case current.Lineage != sv.Lineage:
+			return workspace.ErrLineageMismatch
+		case current.Serial >= sv.Serial:
+			return workspace.ErrStaleSerial
+		}
+	}
+
+	return nil
+}
+
 var errConnectionLost = errors.New("connection lost after commit")
 
 func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (workspace.StateVersion, error) {
@@ -315,6 +359,107 @@ func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (work
 	}
 
 	return m.versions[cur], nil
+}
+
+// CountPendingStateVersions implements workspace.StateStore: how many
+// pending versions the workspace holds. A workspace that does not exist
+// holds none.
+func (m *memStore) CountPendingStateVersions(_ context.Context, id workspace.ID) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	n := 0
+
+	for vid := range m.versions {
+		if sv := m.versions[vid]; sv.Workspace == id && sv.Status == workspace.StatusPending {
+			n++
+		}
+	}
+
+	return n, nil
+}
+
+// ReferencedContentKeys implements workspace.StateStore: every blob key the
+// versions of the workspace name, without the empty ones.
+func (m *memStore) ReferencedContentKeys(_ context.Context, id workspace.ID) ([]blob.Key, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []blob.Key
+
+	for vid := range m.versions {
+		if sv := m.versions[vid]; sv.Workspace == id && sv.Content != "" {
+			out = append(out, sv.Content)
+		}
+	}
+
+	return out, nil
+}
+
+// RecordUploadAttempt implements workspace.StateStore: it notes the blob
+// key of one upload attempt on a pending version, and returns the
+// superseded key.
+func (m *memStore) RecordUploadAttempt(
+	_ context.Context, id workspace.StateVersionID, key blob.Key, fence namespace.Fence,
+) (blob.Key, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return "", err
+	}
+
+	sv, ok := m.versions[id]
+	if !ok {
+		return "", workspace.ErrStateVersionNotFound
+	}
+
+	if sv.Status != workspace.StatusPending {
+		return "", workspace.ErrUploadDenied
+	}
+
+	superseded := sv.Content
+	sv.Content = key
+	m.versions[id] = sv
+
+	return superseded, nil
+}
+
+// DeleteExpiredPendingStateVersions implements workspace.StateStore: it
+// deletes the pending versions of the workspace whose capability expired
+// before before, oldest expiry first, and returns them.
+func (m *memStore) DeleteExpiredPendingStateVersions(
+	_ context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return nil, err
+	}
+
+	var out []workspace.StateVersion
+
+	for vid := range m.versions {
+		sv := m.versions[vid]
+		if sv.Workspace != id || sv.Status != workspace.StatusPending || !sv.UploadExpiresAt.Before(before) {
+			continue
+		}
+
+		delete(m.versions, vid)
+
+		out = append(out, sv)
+	}
+
+	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
+		if c := a.UploadExpiresAt.Compare(b.UploadExpiresAt); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+
+	return out, nil
 }
 
 // ListStateVersions implements workspace.StateStore: finalized versions of
@@ -391,10 +536,12 @@ func (m *memStore) publish(w workspace.Workspace) {
 }
 
 type fixture struct {
-	svc   *workspace.Service
-	store *memStore
-	now   *time.Time
-	ws    workspace.Workspace
+	svc        *workspace.Service
+	store      *memStore
+	namespaces *namespace.Service
+	blobs      blob.Store
+	now        *time.Time
+	ws         workspace.Workspace
 }
 
 func newFixture(t *testing.T) fixture {
@@ -440,12 +587,14 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	}
 
 	svc, err := workspace.NewService(workspace.Config{
-		Workspaces:    store,
-		States:        store,
-		Blobs:         blobs,
-		Namespaces:    namespaces,
-		Now:           func() time.Time { return now },
-		MaxStateBytes: 64,
+		Workspaces:         store,
+		States:             store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Logger:             nil,
+		Now:                func() time.Time { return now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -461,7 +610,29 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+}
+
+// cappedService returns a service over the fixture stores holding at most
+// limit pending versions per workspace.
+func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
+	t.Helper()
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: limit,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
 }
 
 func sum(content string) string {
@@ -987,6 +1158,16 @@ func listBlobDir(t *testing.T, dir string) []string {
 	return out
 }
 
+// chtimesBlob sets the modification time of the blob key to at, so sweep
+// tests control the grace period without waiting for it.
+func chtimesBlob(t *testing.T, dir string, key blob.Key, at time.Time) {
+	t.Helper()
+
+	if err := os.Chtimes(filepath.Join(dir, filepath.FromSlash(key.String())), at, at); err != nil {
+		t.Fatalf("chtimes %s: %v", key, err)
+	}
+}
+
 // TestTooLargeUploadDeletesBlob proves a too-large upload fails with
 // ErrTooLarge and leaves no blob behind: the blob directory lists the same
 // objects before and after the rejection, and the version stays pending.
@@ -1109,6 +1290,1000 @@ func TestDiscardJSONRendering(t *testing.T) {
 	discardErr = f.svc.DiscardJSONRendering(ctx, late.Version.ID, late.Upload, strings.NewReader(`{"rendering":3}`))
 	if !errors.Is(discardErr, workspace.ErrUploadDenied) {
 		t.Errorf("expired capability: %v, want ErrUploadDenied", discardErr)
+	}
+}
+
+// errFinalizeFailed is a store failure without a commit: the finalize
+// outcome stays unknown and the attempt blob must survive.
+var errFinalizeFailed = errors.New("finalize failed")
+
+// TestPendingCap proves BeginState sweeps expired pendings first, then
+// refuses past the cap with ErrTooManyPending: with at most two pendings,
+// two declares work, a third fails, and past the sweep grace period a
+// declare sweeps the old ones and works.
+func TestPendingCap(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	svc := f.cappedService(t, 2)
+
+	if _, err := svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	for _, serial := range []int64{1, 2} {
+		if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", serial, "v1")); err != nil {
+			t.Fatalf("begin serial %d: %v", serial, err)
+		}
+	}
+
+	if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); !errors.Is(
+		err, workspace.ErrTooManyPending,
+	) {
+		t.Fatalf("begin past the cap: %v, want ErrTooManyPending", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+		t.Fatalf("begin after expiry: %v", err)
+	}
+
+	n, err := f.store.CountPendingStateVersions(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+
+	if n != 1 {
+		t.Fatalf("pending state versions = %d, want 1 after the sweep", n)
+	}
+}
+
+// openSweepBlobs opens a blob store in a temporary directory and returns
+// both, so sweep tests prove what an upload leaves behind.
+func openSweepBlobs(t *testing.T) (*fs.Store, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	blobs, err := fs.Open(dir)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs, dir
+}
+
+// unknownUpload declares and uploads content with a finalize that writes
+// nothing and reports errFinalizeFailed, and returns the pending version:
+// the row stays pending with the attempted content and the blob stays.
+func unknownUpload(t *testing.T, f fixture, in workspace.NewState) workspace.PendingState {
+	t.Helper()
+
+	ctx := t.Context()
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	f.store.mu.Lock()
+	f.store.failFinalize = errFinalizeFailed
+	f.store.mu.Unlock()
+
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if !errors.Is(uploadErr, errFinalizeFailed) {
+		t.Fatalf("upload: %v, want the unknown outcome", uploadErr)
+	}
+
+	return pending
+}
+
+// TestUnknownOutcomeKeepsAttempt proves an upload whose finalize outcome
+// stays unknown keeps its blob: the version stays pending with the
+// attempted content and the blob directory holds one object.
+func TestUnknownOutcomeKeepsAttempt(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+
+	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	stored, err := f.store.GetStateVersion(t.Context(), pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get state version after unknown finalize: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending || stored.Content == "" {
+		t.Fatalf("pending version = %+v, want pending with attempted content", stored)
+	}
+
+	if before := listBlobDir(t, dir); len(before) != 1 {
+		t.Fatalf("blob dir = %v, want the one attempted blob", before)
+	}
+}
+
+// TestSweepExpiredPendingDeletesBlobs proves a declare sweeps expired
+// pending versions with their attempted content: within the grace period
+// it keeps both, past it the old row and its blob are gone and only the
+// kept pendings stay.
+func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	*f.now = f.now.Add(workspace.UploadWindow + time.Second)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+		t.Fatalf("begin within grace: %v", err)
+	}
+
+	if n := countPending(t, f); n != 2 {
+		t.Fatalf("pending state versions = %d, want 2 within the grace period", n)
+	}
+
+	if before := listBlobDir(t, dir); len(before) != 1 {
+		t.Fatalf("blob dir = %v, want the one attempted blob within the grace period", before)
+	}
+
+	*f.now = f.now.Add(workspace.SweepGracePeriod)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+		t.Fatalf("begin past grace: %v", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+
+	if after := listBlobDir(t, dir); len(after) != 0 {
+		t.Fatalf("blob dir = %v, want empty after the sweep", after)
+	}
+
+	if n := countPending(t, f); n != 2 {
+		t.Fatalf("pending state versions = %d, want the kept version and the new one", n)
+	}
+}
+
+// countPending returns how many pending versions the fixture workspace holds.
+func countPending(t *testing.T, f fixture) int {
+	t.Helper()
+
+	n, err := f.store.CountPendingStateVersions(t.Context(), f.ws.ID)
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+
+	return n
+}
+
+// TestRetryAfterUnknownDeletesSupersededBlob proves a second upload of one
+// version with an unknown finalize outcome deletes the first attempt's
+// blob: after two unknown uploads only the latest attempt stays, and the
+// declare past the grace period sweeps it too, leaving no blob behind.
+func TestRetryAfterUnknownDeletesSupersededBlob(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	f.store.mu.Lock()
+	f.store.failFinalize = errFinalizeFailed
+	f.store.mu.Unlock()
+
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); !errors.Is(
+		err, errFinalizeFailed,
+	) {
+		t.Fatalf("second upload: %v, want the unknown outcome", err)
+	}
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending || stored.Content == "" {
+		t.Fatalf("pending version = %+v, want pending with attempted content", stored)
+	}
+
+	if blobs := listBlobDir(t, dir); !slices.Equal(blobs, []string{stored.Content.String()}) {
+		t.Fatalf("blob dir = %v, want only the latest attempt %q", blobs, stored.Content)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+		t.Fatalf("begin past grace: %v", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+
+	if after := listBlobDir(t, dir); len(after) != 0 {
+		t.Fatalf("blob dir = %v, want empty after the sweep", after)
+	}
+}
+
+// TestSupersededDeleteFailureKeepsReference proves an upload whose
+// superseded blob delete fails still records the new attempt: the row names
+// the new attempt, the old blob stays unreferenced until a later sweep, and
+// a retry after healing finalizes, leaving the current blob with the old
+// orphan for the next sweep to collect.
+func TestSupersededDeleteFailureKeepsReference(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	flaky := &flakyBlobs{Store: blobs, mu: sync.Mutex{}, fails: 100}
+	f := newFixtureWithBlobs(t, flaky)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	first := stored.Content
+	if first == "" {
+		t.Fatal("pending version names no attempted content")
+	}
+
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if !errors.Is(uploadErr, errFlakyBlob) {
+		t.Fatalf("second upload: %v, want the blob failure", uploadErr)
+	}
+
+	assertDanglingAttempt(t, f, dir, pending.Version.ID, first)
+
+	flaky.mu.Lock()
+	flaky.fails = 0
+	flaky.mu.Unlock()
+
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("retry upload: %v", err)
+	}
+
+	assertSweepCollectsOrphan(t, f, dir, first, sv)
+}
+
+// assertDanglingAttempt proves the failed upload recorded its new attempt
+// while the old blob stays orphaned on disk: the new blob was never written.
+func assertDanglingAttempt(
+	t *testing.T, f fixture, dir string, id workspace.StateVersionID, first blob.Key,
+) {
+	t.Helper()
+
+	stored, err := f.store.GetStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	if stored.Content == "" || stored.Content == first {
+		t.Fatalf("pending content = %q, want the newly recorded attempt", stored.Content)
+	}
+
+	if blobs := listBlobDir(t, dir); !slices.Equal(blobs, []string{first.String()}) {
+		t.Fatalf("blob dir = %v, want only the orphaned attempt", blobs)
+	}
+}
+
+// assertSweepCollectsOrphan proves the retry after healing finalizes with
+// the old orphan beside it, and the next sweep past the grace period
+// collects the orphan, leaving only the current blob.
+func assertSweepCollectsOrphan(
+	t *testing.T, f fixture, dir string, first blob.Key, sv workspace.StateVersion,
+) {
+	t.Helper()
+
+	ctx := t.Context()
+	want := []string{first.String(), sv.Content.String()}
+	slices.Sort(want)
+
+	if blobs := listBlobDir(t, dir); !slices.Equal(blobs, want) {
+		t.Fatalf("blob dir = %v, want the current blob with the orphan %v", blobs, want)
+	}
+
+	chtimesBlob(t, dir, first, f.now.Add(-2*workspace.SweepGracePeriod))
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+		t.Fatalf("begin past grace: %v", err)
+	}
+
+	if blobs := listBlobDir(t, dir); !slices.Equal(blobs, []string{sv.Content.String()}) {
+		t.Fatalf("blob dir = %v, want only the current blob %q after the sweep", blobs, sv.Content)
+	}
+}
+
+// TestRetryAfterUnknownSuccessKeepsOneBlob proves an upload that succeeds
+// after an unknown outcome leaves exactly the current blob: the superseded
+// attempt is gone, and the current state opens with the uploaded content.
+func TestRetryAfterUnknownSuccessKeepsOneBlob(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("retry upload: %v", err)
+	}
+
+	if blobs := listBlobDir(t, dir); !slices.Equal(blobs, []string{sv.Content.String()}) {
+		t.Fatalf("blob dir = %v, want only the current blob %q", blobs, sv.Content)
+	}
+
+	current, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	if current.ID != sv.ID || current.Content != sv.Content {
+		t.Fatalf("current state = %+v, want version %s", current, sv.ID)
+	}
+
+	r, err := f.svc.Open(ctx, current)
+	if err != nil {
+		t.Fatalf("open current state: %v", err)
+	}
+
+	content, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read current state: %v", err)
+	}
+
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("close current state: %v", closeErr)
+	}
+
+	if string(content) != "v1" {
+		t.Fatalf("current content = %q, want %q", content, "v1")
+	}
+}
+
+// errFlakyBlob is a transient object store failure the sweep retries.
+var errFlakyBlob = errors.New("blob store unavailable")
+
+// flakyBlobs fails the first fails Delete calls, then delegates to the
+// wrapped store.
+type flakyBlobs struct {
+	blob.Store
+
+	mu    sync.Mutex
+	fails int
+}
+
+// Delete fails while fails holds, then deletes the object.
+func (f *flakyBlobs) Delete(ctx context.Context, key blob.Key) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.fails > 0 {
+		f.fails--
+
+		return errFlakyBlob
+	}
+
+	return f.Store.Delete(ctx, key)
+}
+
+// TestSweepRetriesBlobDeletes proves a transient blob failure never leaves
+// an orphan and never fails the declare: the sweep retries the delete,
+// removes the expired row with its blob, and the declare succeeds.
+func TestSweepRetriesBlobDeletes(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	flaky := &flakyBlobs{Store: blobs, mu: sync.Mutex{}, fails: 1}
+	f := newFixtureWithBlobs(t, flaky)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+		t.Fatalf("begin past grace: %v", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+
+	if after := listBlobDir(t, dir); len(after) != 0 {
+		t.Fatalf("blob dir = %v, want empty after the retried sweep", after)
+	}
+}
+
+// TestSweepDeletesUnreferencedBlobs proves a declare deletes the blobs under
+// the workspace prefix that no version references once they are older than
+// the grace period, and keeps the referenced and the fresh ones: a stray
+// object from a superseded attempt or a committed row delete never stays.
+func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	// A finalized version names its blob for ever.
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	current, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	stray, err := blob.ParseKey("tofu/" + f.ws.ID.String() + "/sv-stray/a1")
+	if err != nil {
+		t.Fatalf("stray key: %v", err)
+	}
+
+	fresh, err := blob.ParseKey("tofu/" + f.ws.ID.String() + "/sv-stray/a2")
+	if err != nil {
+		t.Fatalf("fresh key: %v", err)
+	}
+
+	for _, key := range []blob.Key{stray, fresh} {
+		if err := blobs.Put(ctx, key, strings.NewReader(key.String())); err != nil {
+			t.Fatalf("put %s: %v", key, err)
+		}
+	}
+
+	// Everything but the fresh stray is older than the grace period.
+	old := f.now.Add(-2 * workspace.SweepGracePeriod)
+	chtimesBlob(t, dir, current.Content, old)
+	chtimesBlob(t, dir, stray, old)
+	chtimesBlob(t, dir, fresh, *f.now)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	want := []string{current.Content.String(), fresh.String()}
+	slices.Sort(want)
+
+	if after := listBlobDir(t, dir); !slices.Equal(after, want) {
+		t.Fatalf("blob dir = %v, want the current and the fresh blob %v", after, want)
+	}
+}
+
+// TestSweepBlobFailureKeepsDeclare proves a persistent blob failure never
+// fails the declare: the expired row is gone and the new version declares,
+// so cleanup trouble blocks no apply. The blob stays unreferenced until a
+// later sweep past the grace period removes it, which the test drives by
+// healing the store and aging the orphan.
+func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openSweepBlobs(t)
+	flaky := &flakyBlobs{Store: blobs, mu: sync.Mutex{}, fails: 100}
+	f := newFixtureWithBlobs(t, flaky)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	next, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	if err != nil {
+		t.Fatalf("begin past grace with failing blobs: %v", err)
+	}
+
+	if _, getErr := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(
+		getErr, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", getErr)
+	}
+
+	if _, getErr := f.store.GetStateVersion(ctx, next.Version.ID); getErr != nil {
+		t.Fatalf("get declared version: %v", getErr)
+	}
+
+	orphans := listBlobDir(t, dir)
+	if len(orphans) != 1 {
+		t.Fatalf("blob dir = %v, want the one orphaned blob", orphans)
+	}
+
+	orphan, err := blob.ParseKey(orphans[0])
+	if err != nil {
+		t.Fatalf("orphan key: %v", err)
+	}
+
+	// Heal the store and age the orphan past the grace period: the next
+	// declare retries it through the unreferenced-blob sweep.
+	flaky.mu.Lock()
+	flaky.fails = 0
+	flaky.mu.Unlock()
+
+	chtimesBlob(t, dir, orphan, *f.now)
+
+	*f.now = f.now.Add(workspace.SweepGracePeriod + time.Second)
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+		t.Fatalf("begin after healing: %v", err)
+	}
+
+	if after := listBlobDir(t, dir); len(after) != 0 {
+		t.Fatalf("blob dir = %v, want empty after the retry", after)
+	}
+}
+
+// TestConcurrentBeginStateKeepsCap proves concurrent declares never exceed
+// the pending cap: exactly the cap succeeds, the rest report
+// ErrTooManyPending.
+func TestConcurrentBeginStateKeepsCap(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	svc := f.cappedService(t, 2)
+
+	if _, err := svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	const declares = 8
+
+	errs := make([]error, declares)
+
+	var wg sync.WaitGroup
+
+	for i := range declares {
+		wg.Go(func() {
+			_, errs[i] = svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", int64(i+1), "v1"))
+		})
+	}
+
+	wg.Wait()
+
+	succeeded := 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, workspace.ErrTooManyPending):
+		default:
+			t.Fatalf("begin: %v, want nil or ErrTooManyPending", err)
+		}
+	}
+
+	if succeeded != 2 {
+		t.Fatalf("successful declares = %d, want 2: the cap", succeeded)
+	}
+
+	if n := countPending(t, f); n != 2 {
+		t.Fatalf("pending state versions = %d, want 2: the cap", n)
+	}
+}
+
+// TestConcurrentBeginStateAcrossInstancesKeepsCap proves the cap holds
+// across services over one store: two services declaring at once never
+// exceed it. The barrier holds both declares through the cap check, so
+// both count together: with per-service stripes alone both would pass the
+// check together and the workspace would end over the cap. The store
+// counts and inserts in one transaction, so exactly one declare wins the
+// last slot.
+func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	gated := newGateCounter(f.store)
+
+	defer gated.openOne()
+	defer gated.openTwo()
+
+	first, second := newGatedService(t, f, gated), newGatedService(t, f, gated)
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	// One pending of the two the cap allows, so the two racing declares
+	// contend for the last slot.
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1")); err != nil {
+		t.Fatalf("prefill: %v", err)
+	}
+
+	errs := make([]error, 2)
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		_, errs[0] = first.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v1"))
+	})
+	wg.Go(func() {
+		_, errs[1] = second.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v1"))
+	})
+
+	gated.awaitCounts(t)
+	wg.Wait()
+	assertCapResult(t, f, errs, 1, 2)
+}
+
+// newGatedService returns a service over the gated store holding at most
+// two pending versions per workspace.
+func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Service {
+	t.Helper()
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         gated,
+		States:             gated,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 2,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
+}
+
+// assertCapResult checks that exactly won declares succeeded with
+// ErrTooManyPending for the rest, and that the workspace holds total
+// pendings.
+func assertCapResult(t *testing.T, f fixture, errs []error, won, total int) {
+	t.Helper()
+
+	succeeded := 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, workspace.ErrTooManyPending):
+		default:
+			t.Fatalf("begin: %v, want nil or ErrTooManyPending", err)
+		}
+	}
+
+	if succeeded != won {
+		t.Fatalf("successful declares = %d, want %d", succeeded, won)
+	}
+
+	if n := countPending(t, f); n != total {
+		t.Fatalf("pending state versions = %d, want %d", n, total)
+	}
+}
+
+// gateCounter wraps a store and funnels every CountPendingStateVersions
+// call through a two-phase barrier: both declares count before either
+// proceeds, so both count together whatever the scheduling.
+type gateCounter struct {
+	*memStore
+
+	arrived chan struct{}
+	counted chan struct{}
+	passOne chan struct{}
+	passTwo chan struct{}
+
+	onceOne sync.Once
+	onceTwo sync.Once
+}
+
+// newGateCounter returns a barrier over store for two racing declares.
+func newGateCounter(store *memStore) *gateCounter {
+	return &gateCounter{
+		memStore: store,
+		arrived:  make(chan struct{}, 2),
+		counted:  make(chan struct{}, 2),
+		passOne:  make(chan struct{}),
+		passTwo:  make(chan struct{}),
+		onceOne:  sync.Once{},
+		onceTwo:  sync.Once{},
+	}
+}
+
+// CountPendingStateVersions implements workspace.StateStore: it waits at
+// the barrier, then delegates.
+func (g *gateCounter) CountPendingStateVersions(
+	ctx context.Context, id workspace.ID,
+) (int, error) {
+	select {
+	case g.arrived <- struct{}{}:
+	default:
+	}
+
+	<-g.passOne
+
+	n, countErr := g.memStore.CountPendingStateVersions(ctx, id)
+
+	select {
+	case g.counted <- struct{}{}:
+	default:
+	}
+
+	<-g.passTwo
+
+	return n, countErr
+}
+
+// openOne releases the first barrier phase. It is idempotent, so a
+// timeout path releases waiters too.
+func (g *gateCounter) openOne() {
+	g.onceOne.Do(func() { close(g.passOne) })
+}
+
+// openTwo releases the second barrier phase. It is idempotent, so a
+// timeout path releases waiters too.
+func (g *gateCounter) openTwo() {
+	g.onceTwo.Do(func() { close(g.passTwo) })
+}
+
+// awaitCounts drives the barrier: it lets both declares reach the cap
+// check, then lets both count, then lets both proceed.
+func (g *gateCounter) awaitCounts(t *testing.T) {
+	t.Helper()
+
+	timeout := time.After(30 * time.Second)
+
+	for range 2 {
+		select {
+		case <-g.arrived:
+		case <-timeout:
+			t.Fatal("declares did not reach the cap check together")
+		}
+	}
+
+	g.openOne()
+
+	for range 2 {
+		select {
+		case <-g.counted:
+		case <-timeout:
+			t.Fatal("declares did not count together")
+		}
+	}
+
+	g.openTwo()
+}
+
+// TestConcurrentUploadAcrossServicesKeepsCurrent proves parallel uploads of
+// one version from two services keep the current state: each writes its own
+// blob and records its own attempt, exactly one finalize wins, and the loser
+// deletes only its own blob, so the current content always opens and the
+// blob directory holds only it.
+func TestConcurrentUploadAcrossServicesKeepsCurrent(t *testing.T) {
+	t.Parallel()
+
+	for range 20 {
+		concurrentUploadAcrossServicesOnce(t)
+	}
+}
+
+func concurrentUploadAcrossServicesOnce(t *testing.T) {
+	t.Helper()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+	second := newSecondService(t, f, blobs)
+
+	if _, lockErr := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); lockErr != nil {
+		t.Fatalf("lock: %v", lockErr)
+	}
+
+	pending, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if beginErr != nil {
+		t.Fatalf("begin: %v", beginErr)
+	}
+
+	assertOneUploadWins(t, f.svc, second, pending)
+	assertCurrentHoldsOnlyBlob(t, f, dir)
+}
+
+// newSecondService returns a service over the fixture stores with its own
+// lock stripes, so parallel uploads share nothing in memory.
+func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Service {
+	t.Helper()
+
+	second, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              blobs,
+		Namespaces:         f.namespaces,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("second service: %v", err)
+	}
+
+	return second
+}
+
+// assertOneUploadWins uploads one version from two services at once and
+// proves at least one succeeds with no unexpected error.
+func assertOneUploadWins(
+	t *testing.T, first, second *workspace.Service, pending workspace.PendingState,
+) {
+	t.Helper()
+
+	ctx := t.Context()
+	errs := make([]error, 2)
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		_, errs[0] = first.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	})
+
+	wg.Go(func() {
+		_, errs[1] = second.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	})
+
+	wg.Wait()
+
+	succeeded := 0
+
+	for _, uploadErr := range errs {
+		switch {
+		case uploadErr == nil:
+			succeeded++
+		case errors.Is(uploadErr, workspace.ErrUploadDenied):
+		default:
+			t.Fatalf("upload: %v, want nil or ErrUploadDenied", uploadErr)
+		}
+	}
+
+	if succeeded == 0 {
+		t.Fatal("no upload succeeded, want at least one")
+	}
+}
+
+// assertCurrentHoldsOnlyBlob proves the current state opens with the
+// uploaded content and the blob directory holds only its blob.
+func assertCurrentHoldsOnlyBlob(t *testing.T, f fixture, dir string) {
+	t.Helper()
+
+	ctx := t.Context()
+	current, currentErr := f.svc.Current(ctx, f.ws.ID)
+	if currentErr != nil {
+		t.Fatalf("current: %v", currentErr)
+	}
+
+	r, openErr := f.svc.Open(ctx, current)
+	if openErr != nil {
+		t.Fatalf("open current state: %v", openErr)
+	}
+
+	content, readErr := io.ReadAll(r)
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("close current state: %v", closeErr)
+	}
+
+	if readErr != nil {
+		t.Fatalf("read current state: %v", readErr)
+	}
+
+	if string(content) != "v1" {
+		t.Fatalf("current content = %q, want %q", content, "v1")
+	}
+
+	if listed := listBlobDir(t, dir); !slices.Equal(listed, []string{current.Content.String()}) {
+		t.Fatalf("blob dir = %v, want only the current blob %q", listed, current.Content)
+	}
+}
+
+// TestRejectedFinalizeDeletesBlob proves an upload whose finalize reports
+// nothing was written leaves no blob behind, for every rejected sentinel:
+// the attempt blob is deleted and the error keeps the sentinel.
+func TestRejectedFinalizeDeletesBlob(t *testing.T) {
+	t.Parallel()
+
+	for _, sentinel := range []error{
+		workspace.ErrUploadDenied,
+		workspace.ErrNotLocked,
+		workspace.ErrLockedByOther,
+		workspace.ErrLineageMismatch,
+		workspace.ErrStaleSerial,
+		workspace.ErrNotFound,
+		workspace.ErrStateVersionNotFound,
+		namespace.ErrNotFound,
+		namespace.ErrFenced,
+	} {
+		t.Run(sentinel.Error(), func(t *testing.T) {
+			t.Parallel()
+			checkRejectedFinalizeDeletesBlob(t, sentinel)
+		})
+	}
+}
+
+// checkRejectedFinalizeDeletesBlob uploads with a finalize failure holding
+// sentinel and proves the attempt blob is deleted with the sentinel kept:
+// the blob directory holds no object afterwards.
+func checkRejectedFinalizeDeletesBlob(t *testing.T, sentinel error) {
+	t.Helper()
+
+	blobs, dir := openSweepBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	f.store.mu.Lock()
+	f.store.failFinalize = sentinel
+	f.store.mu.Unlock()
+
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	if !errors.Is(uploadErr, sentinel) {
+		t.Fatalf("upload: %v, want %v", uploadErr, sentinel)
+	}
+
+	if after := listBlobDir(t, dir); len(after) != 0 {
+		t.Fatalf("blob dir = %v, want empty: the rejected upload left an orphan blob", after)
 	}
 }
 
@@ -1701,7 +2876,7 @@ type fencedStates struct {
 
 // CreateStateVersion rejects the write with namespace.ErrFenced.
 func (f fencedStates) CreateStateVersion(
-	_ context.Context, _ workspace.StateVersion, _ namespace.Fence,
+	_ context.Context, _ workspace.StateVersion, _ namespace.Fence, _ int,
 ) error {
 	return namespace.ErrFenced
 }
@@ -1735,12 +2910,14 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 	}
 
 	fenced, err := workspace.NewService(workspace.Config{
-		Workspaces:    fencedWorkspaces{memStore: f.store},
-		States:        fencedStates{memStore: f.store},
-		Blobs:         blobs,
-		Namespaces:    namespaces,
-		Now:           func() time.Time { return *f.now },
-		MaxStateBytes: 64,
+		Workspaces:         fencedWorkspaces{memStore: f.store},
+		States:             fencedStates{memStore: f.store},
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		Logger:             nil,
+		MaxPendingVersions: 0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -1891,12 +3068,14 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 	}
 
 	raced, err := workspace.NewService(workspace.Config{
-		Workspaces:    &raceWorkspaces{memStore: f.store, raced: false},
-		States:        f.store,
-		Blobs:         blobs,
-		Namespaces:    namespaces,
-		Now:           func() time.Time { return *f.now },
-		MaxStateBytes: 64,
+		Workspaces:         &raceWorkspaces{memStore: f.store, raced: false},
+		States:             f.store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		Logger:             nil,
+		MaxPendingVersions: 0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
