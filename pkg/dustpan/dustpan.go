@@ -565,7 +565,10 @@ func newServices(cfg settings) (services, error) {
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,
+		Stacks:             stacks,
+		Blobs:              cfg.blobStore,
 		Now:                cfg.now,
+		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 	})
 	if err != nil {

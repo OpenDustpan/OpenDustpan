@@ -7240,11 +7240,18 @@ func insertFuturePostgres(ctx context.Context, t *testing.T, schemaURL string) {
 	}
 }
 
-// backupPadBytes grows the database with one padded checkpoint, so a backup
+// backupPadBytes grows the backup with one padded checkpoint, so a backup
 // holds still running while the test starts another one or stops the server.
+// Checkpoints live in blobs, so the pad lands in the blob copy, not in SQL.
 // The pad stays below the default 32 MiB checkpoint limit, and no test hook
 // is needed: the data set itself holds the backup.
 const backupPadBytes = 24 << 20
+
+// backupPadMinBlob is the smallest gzipped blob the padded checkpoint may
+// hold. Blobs are gzipped and uniform letters gzip to about two thirds of
+// their size, so half the pad proves the blob holds the padding: the small
+// deployment alone gzips to kilobytes.
+const backupPadMinBlob = backupPadBytes / 2
 
 // backupPollTimeout bounds a backup poll: a test backup ends well before it,
 // even with the padded checkpoint.
@@ -7348,9 +7355,38 @@ func writeBackupData(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, stackName)
 	env.SaveHeldPaddedCheckpoint(ctx, t, held, exported.Stdout, map[string]string{
-		"e2ePad": strings.Repeat("x", backupPadBytes),
+		"e2ePad": backupPad(),
 	})
 	env.EndHeldUpdate(ctx, t, held, "succeeded")
+}
+
+// backupPad returns backupPadBytes of deterministic high-entropy letters.
+// Uniform letters gzip to about two thirds of their size, so the padded
+// checkpoint blob still holds the backup running while the test starts
+// another backup or stops the server. A fixed seed keeps the run
+// reproducible. The manifest checks compare the gzipped blob against
+// backupPadMinBlob, not the full pad, because blobs are gzipped.
+func backupPad() string {
+	letters := make([]byte, backupPadBytes)
+
+	offset := 0
+	var counter uint64
+
+	for offset < len(letters) {
+		sum := sha256.Sum256([]byte("backup-pad-v1:" + strconv.FormatUint(counter, 10)))
+		counter++
+
+		for _, b := range sum {
+			if offset >= len(letters) {
+				break
+			}
+
+			letters[offset] = 'a' + b%26
+			offset++
+		}
+	}
+
+	return string(letters)
 }
 
 // backupDoc decodes one backup in tests.
@@ -7366,14 +7402,22 @@ type backupDoc struct {
 
 // backupManifestDoc holds the manifest fields the backup steps check.
 type backupManifestDoc struct {
-	ID            string   `json:"id"`
-	Format        int      `json:"format"`
-	Dialect       string   `json:"dialect"`
-	HomeRegions   []string `json:"homeRegions"`
-	WrapperIDs    []string `json:"wrapperIds"`
-	SQLSize       int64    `json:"sqlSize"`
-	SQLSHA256     string   `json:"sqlSha256"`
-	SchemaVersion int      `json:"schemaVersion"`
+	ID            string               `json:"id"`
+	Format        int                  `json:"format"`
+	Dialect       string               `json:"dialect"`
+	HomeRegions   []string             `json:"homeRegions"`
+	WrapperIDs    []string             `json:"wrapperIds"`
+	Blobs         []backupManifestBlob `json:"blobs"`
+	SQLSize       int64                `json:"sqlSize"`
+	SQLSHA256     string               `json:"sqlSha256"`
+	SchemaVersion int                  `json:"schemaVersion"`
+}
+
+// backupManifestBlob holds one copied blob of the manifest.
+type backupManifestBlob struct {
+	Key  string `json:"key"`
+	Size int64  `json:"size"`
+	MD5  string `json:"md5"`
 }
 
 // startBackupAndConflict starts a backup and proves a second start while it
@@ -7474,8 +7518,8 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want s
 }
 
 // checkBackupManifest proves the manifest of a succeeded backup holds the
-// Pulumi data: the store dialect, the padded SQL part, the wrapper of the
-// config secret and the home region.
+// Pulumi data: the store dialect, the SQL part, the padded checkpoint blob,
+// the wrapper of the config secret and the home region.
 func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 	t.Helper()
 
@@ -7493,8 +7537,12 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatalf("manifest dialect = %q, want %q", manifest.Dialect, store)
 	}
 
-	if manifest.SQLSize <= backupPadBytes {
-		t.Fatalf("manifest SQL size = %d, want above the %d pad bytes", manifest.SQLSize, backupPadBytes)
+	if manifest.SQLSize <= 0 {
+		t.Fatalf("manifest SQL size = %d, want above 0", manifest.SQLSize)
+	}
+
+	if got := backupCheckpointBlobSize(manifest); got < backupPadMinBlob {
+		t.Fatalf("manifest checkpoint blob size = %d, want at least the %d pad bytes gzipped", got, backupPadMinBlob)
 	}
 
 	if manifest.SQLSHA256 == "" {
@@ -7674,10 +7722,26 @@ func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, f
 
 	t.Logf("backup %s failed after the restart: %q", started.ID, doc.Error)
 
-	if again := pollBackupState(ctx, t, env, firstID, "succeeded"); again.Manifest.SQLSize <= backupPadBytes {
-		t.Fatalf("backup %s after the restart holds SQL size %d, want above the pad bytes",
-			firstID, again.Manifest.SQLSize)
+	again := pollBackupState(ctx, t, env, firstID, "succeeded")
+	if backupCheckpointBlobSize(again.Manifest) < backupPadMinBlob {
+		t.Fatalf("backup %s after the restart holds no checkpoint blob of %d pad bytes gzipped",
+			firstID, backupPadMinBlob)
 	}
+}
+
+// backupCheckpointBlobSize returns the largest checkpoint blob of the
+// manifest: the padded checkpoint the backup data set writes. Checkpoints
+// live in blobs under the pulumi/ prefix.
+func backupCheckpointBlobSize(manifest backupManifestDoc) int64 {
+	var largest int64
+
+	for i := range manifest.Blobs {
+		if strings.HasPrefix(manifest.Blobs[i].Key, "pulumi/") {
+			largest = max(largest, manifest.Blobs[i].Size)
+		}
+	}
+
+	return largest
 }
 
 // restoreRegion is the region the restore test passes. It matches the region

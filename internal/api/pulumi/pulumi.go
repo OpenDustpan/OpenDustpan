@@ -545,11 +545,20 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 // deleteStack removes the stack with its history. Without force=true the
 // store refuses when the stack still manages resources, as the Pulumi CLI
 // expects. The check runs inside the delete transaction, so an update that
-// finishes between the check and the delete cannot drop resources.
+// finishes between the check and the delete cannot drop resources. After the
+// rows are gone, the checkpoint blobs of the stack go too, so a deleted stack
+// leaves no orphan blob behind.
 func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	st, err := h.stacks.Get(ctx, ref)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -567,6 +576,8 @@ func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity
 
 		return
 	}
+
+	h.updates.DeleteStackBlobs(ctx, ref, st.ID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

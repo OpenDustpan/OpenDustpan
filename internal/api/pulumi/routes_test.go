@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -1344,11 +1345,34 @@ func (exportPanicsStore) PutCheckpoint(
 	panic("delete must not write a checkpoint")
 }
 
+// CheckpointByUpdate panics: the delete route must not read state.
+func (exportPanicsStore) CheckpointByUpdate(
+	_ context.Context, _ stack.Ref, _ stack.UpdateID,
+) (stack.Checkpoint, error) {
+	panic("delete must not read a checkpoint")
+}
+
+// ReferencedCheckpointKeys panics: the delete route must not read state.
+func (exportPanicsStore) ReferencedCheckpointKeys(
+	_ context.Context, _ stack.Ref,
+) ([]blob.Key, error) {
+	panic("delete must not read checkpoint keys")
+}
+
+// unusedStackResolver panics: routes that never save checkpoints never
+// resolve stacks.
+type unusedStackResolver struct{}
+
+func (unusedStackResolver) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, error) {
+	panic("GetStack is not used by this route")
+}
+
 // newDeleteHandler builds a Handler whose delete removes from stores.
-// deleteErr is what the stack store answers.
+// deleteErr is what the stack store answers. It returns the blob store too,
+// so tests prove what a delete leaves behind.
 func newDeleteHandler(
 	t *testing.T, deleteErr error,
-) (*pulumi.Handler, *recordingStackStore) {
+) (*pulumi.Handler, *recordingStackStore, *memBlob) {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -1372,12 +1396,17 @@ func newDeleteHandler(
 		t.Fatalf("stack service: %v", err)
 	}
 
+	blobs := newMemBlob()
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Checkpoints:        exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Events:             exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
+		Stacks:             unusedStackResolver{},
+		Blobs:              blobs,
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {
@@ -1399,7 +1428,7 @@ func newDeleteHandler(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler, stores
+	return handler, stores, blobs
 }
 
 func deleteRequest(t *testing.T, target string) *http.Request {
@@ -1508,7 +1537,7 @@ func TestDeleteStack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler, stores := newDeleteHandler(t, tc.deleteErr)
+			handler, stores, _ := newDeleteHandler(t, tc.deleteErr)
 
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, deleteRequest(t, tc.target))
@@ -1534,7 +1563,7 @@ func TestDeleteStack(t *testing.T) {
 func TestDeleteStackWithResourcesMessage(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := newDeleteHandler(t, stack.ErrHasResources)
+	handler, _, _ := newDeleteHandler(t, stack.ErrHasResources)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))
@@ -1551,6 +1580,34 @@ func TestDeleteStackWithResourcesMessage(t *testing.T) {
 	const want = "Bad Request: Stack still contains resources."
 	if got.Message != want || got.Code != http.StatusBadRequest {
 		t.Fatalf("error body = %+v, want code %d message %q", got, http.StatusBadRequest, want)
+	}
+}
+
+// TestDeleteStackRemovesCheckpointBlobs proves a stack delete removes the
+// checkpoint blobs of the stack, so a deleted stack leaves no orphan blob.
+func TestDeleteStackRemovesCheckpointBlobs(t *testing.T) {
+	t.Parallel()
+
+	handler, _, blobs := newDeleteHandler(t, nil)
+
+	key, err := blob.ParseKey("pulumi/stk-test/upd-test/3")
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	if err := blobs.Put(t.Context(), key, strings.NewReader("checkpoint")); err != nil {
+		t.Fatalf("write checkpoint blob: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	if _, err := blobs.Get(t.Context(), key); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("checkpoint blob after delete: %v, want it removed", err)
 	}
 }
 
@@ -1639,7 +1696,10 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,
+		Stacks:             unusedStackResolver{},
+		Blobs:              newMemBlob(),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {
@@ -1681,6 +1741,18 @@ func (emptyCheckpointStore) CheckpointByVersion(
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
+func (emptyCheckpointStore) CheckpointByUpdate(
+	_ context.Context, _ stack.Ref, _ stack.UpdateID,
+) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+func (emptyCheckpointStore) ReferencedCheckpointKeys(
+	_ context.Context, _ stack.Ref,
+) ([]blob.Key, error) {
+	return nil, nil
+}
+
 // newEnforcingUpdates returns an Updates service whose export finds no state,
 // for handlers whose tested routes delete stacks without resources.
 func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Updates {
@@ -1693,7 +1765,10 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,
+		Stacks:             unusedStackResolver{},
+		Blobs:              newMemBlob(),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {

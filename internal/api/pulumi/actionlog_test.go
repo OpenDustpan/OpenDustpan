@@ -50,7 +50,10 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
+		Stacks:             stacks,
+		Blobs:              newMemBlob(),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {

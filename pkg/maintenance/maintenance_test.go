@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -212,6 +213,33 @@ func (fakeCheckpoints) CheckpointByVersion(context.Context, stack.Ref, int64) (s
 	return stack.Checkpoint{}, stack.ErrNoState
 }
 
+func (fakeCheckpoints) CheckpointByUpdate(context.Context, stack.Ref, stack.UpdateID) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+func (fakeCheckpoints) ReferencedCheckpointKeys(context.Context, stack.Ref) ([]blob.Key, error) {
+	return nil, nil
+}
+
+// newTestBlobs opens a blob store in a fresh directory that the test closes
+// at cleanup. The cancel path writes no checkpoint, so it stays empty.
+func newTestBlobs(t *testing.T) *fs.Store {
+	t.Helper()
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs
+}
+
 // fakeEvents answers no events. The cancel path writes none.
 type fakeEvents struct{}
 
@@ -389,7 +417,10 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		Checkpoints:        fakeCheckpoints{},
 		Events:             fakeEvents{},
 		Namespaces:         namespaces,
+		Stacks:             f.stacks,
+		Blobs:              newTestBlobs(t),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {
@@ -523,7 +554,10 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Checkpoints:        fakeCheckpoints{},
 		Events:             fakeEvents{},
 		Namespaces:         namespaces,
+		Stacks:             f.stacks,
+		Blobs:              newTestBlobs(t),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {
