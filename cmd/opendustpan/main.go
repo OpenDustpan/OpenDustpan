@@ -5,6 +5,7 @@
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
 //	opendustpan backup check [flags]
+//	opendustpan backup [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
@@ -46,7 +47,7 @@ import (
 var (
 	errUsage = errors.New(
 		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name> | " +
-			"opendustpan upgrade check | opendustpan backup check",
+			"opendustpan upgrade check | opendustpan backup check | opendustpan backup",
 	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
@@ -726,7 +727,7 @@ func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return backupCheck(ctx, args[1:], stdout, stderr)
 	}
 
-	return errUsage
+	return backupCommand(ctx, args, stdout, stderr)
 }
 
 // backupCheckFlags holds the settings of the backup check subcommand. It

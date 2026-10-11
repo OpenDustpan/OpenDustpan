@@ -275,12 +275,18 @@ func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
 
 // finish completes a backup that Start began: it exports the SQL part, copies
 // the named blobs, writes the manifest last, and records the result in the
-// registry row. It releases the slot when done. Errors land in the row, where
-// Get shows them to the operator.
+// registry row. It releases the slot when the work ends. Errors land in the
+// row, where Get shows them to the operator.
 func (s *Service) finish(ctx context.Context, id ID, started startedBackup) {
-	defer s.release()
+	backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey)
 
-	if backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey); backupErr != nil {
+	// The slot goes free before the row records the result, so a client
+	// that reads the final state can start the next backup at once. The
+	// slot only guards the work above; the row write touches no object of
+	// this backup.
+	s.release()
+
+	if backupErr != nil {
 		// Background result: the registry row records the outcome, and a
 		// finish failure leaves the row running for the next server start
 		// to mark failed.
