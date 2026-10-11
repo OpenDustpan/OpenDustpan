@@ -1,6 +1,6 @@
-// Package secrettest is the conformance suite for secret.KeyStore
-// implementations. Every built-in adapter runs it, and custom adapters should
-// too:
+// Package secrettest is the conformance suite for secret.KeyStore and
+// secret.Wrapper implementations. Every built-in adapter runs it, and custom
+// adapters should too:
 //
 //	func TestConformance(t *testing.T) {
 //		t.Parallel()

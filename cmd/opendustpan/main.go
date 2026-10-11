@@ -5,11 +5,15 @@
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
-// never from a flag, so it does not appear in process listings.
+// never from a flag, so it does not appear in process listings. The
+// key-encryption key comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
+// DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag, and the server
+// never generates it.
 package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,14 +27,27 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/postgres"
 	"opendustpan.org/opendustpan/store/sqlite"
 )
 
 var (
-	errUsage          = errors.New("usage: opendustpan serve | opendustpan namespace create <name>")
-	errUnknownBackend = errors.New("database must start with sqlite: or postgres://")
+	errUsage              = errors.New("usage: opendustpan serve | opendustpan namespace create <name>")
+	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
+	errKeyFilePermissions = errors.New("key file allows group or other access")
+)
+
+const (
+	// keyEnvVar holds the base64 key-encryption key. It wins when both key
+	// settings are present.
+	keyEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY"
+	// keyFileEnvVar names a file holding the base64 key-encryption key.
+	keyFileEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY_FILE"
+	// keyFilePrivateBits are the permission bits the key file must not set:
+	// group or other access of any kind.
+	keyFilePrivateBits = 0o077
 )
 
 func main() {
@@ -102,11 +119,22 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return fmt.Errorf("DUSTPAN_ADMIN_TOKEN: %w", err)
 	}
 
+	wrapper, err := keyWrapper()
+	if err != nil {
+		return err
+	}
+
 	st, err := openStore(ctx, c.database)
 	if err != nil {
 		return err
 	}
 	defer st.close()
+
+	// The start-up check refuses a key-encryption key that matches none of
+	// the wrapped keys in the database (ADR 23).
+	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
+		return checkErr
+	}
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(namespace.Region(c.region)),
@@ -115,6 +143,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		dustpan.WithUpdateStore(st),
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(listen),
@@ -182,6 +212,7 @@ type store interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	secret.KeyStore
 	close()
 }
 
@@ -237,4 +268,93 @@ func splitList(s string) []string {
 	}
 
 	return out
+}
+
+// loadKeyEncryptionKey reads the key-encryption key from DUSTPAN_KEY_ENCRYPTION_KEY
+// (base64) or from the file in DUSTPAN_KEY_ENCRYPTION_KEY_FILE. The direct
+// value wins when both settings are present. It returns nil without an error
+// when neither setting is present: the server may start without a key while
+// the database holds no wrapped key.
+func loadKeyEncryptionKey() ([]byte, error) {
+	return loadKeyEncryptionKeyFrom(os.LookupEnv)
+}
+
+// loadKeyEncryptionKeyFrom reads the key-encryption key with lookup instead
+// of the process environment, so tests stay hermetic.
+func loadKeyEncryptionKeyFrom(lookup func(key string) (string, bool)) ([]byte, error) {
+	if raw, ok := lookup(keyEnvVar); ok && strings.TrimSpace(raw) != "" {
+		return decodeKey(keyEnvVar, raw)
+	}
+
+	if path, ok := lookup(keyFileEnvVar); ok && strings.TrimSpace(path) != "" {
+		return readKeyFile(strings.TrimSpace(path))
+	}
+
+	return nil, nil
+}
+
+// keyWrapper loads the key-encryption key and returns its wrapper, or nil
+// when no key is configured.
+//
+//nolint:ireturn // No key is a valid state, so the result must stay an interface to hold nil.
+func keyWrapper() (secret.Wrapper, error) {
+	key, err := loadKeyEncryptionKey()
+	if err != nil {
+		return nil, err
+	}
+
+	if key == nil {
+		//nolint:nilnil // A nil wrapper without an error means no key is configured.
+		return nil, nil
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper(key)
+	if err != nil {
+		// Unreachable: loadKeyEncryptionKey already checked the size.
+		return nil, fmt.Errorf("key-encryption key: %w", err)
+	}
+
+	return wrapper, nil
+}
+
+// decodeKey decodes a base64 key-encryption key from setting source and
+// checks its size.
+func decodeKey(source, raw string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, fmt.Errorf("%s: not valid base64: %w", source, err)
+	}
+
+	if _, err := secret.NewBuiltinWrapper(key); err != nil {
+		return nil, fmt.Errorf("%s: %w", source, err)
+	}
+
+	return key, nil
+}
+
+// readKeyFile reads a base64 key-encryption key from the file at path. The
+// file must not be readable by group or others, so the key does not leak
+// through shared directories or backups.
+func readKeyFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: stat file: %w", keyFileEnvVar, err)
+	}
+
+	if perm := info.Mode().Perm(); perm&keyFilePrivateBits != 0 {
+		return nil, fmt.Errorf(
+			"%s: %w %q (mode %04o): run chmod 600 on the file",
+			keyFileEnvVar,
+			errKeyFilePermissions,
+			path,
+			perm,
+		)
+	}
+
+	raw, err := os.ReadFile(path) //nolint:gosec // The operator names the key file through the environment.
+	if err != nil {
+		return nil, fmt.Errorf("%s: read file: %w", keyFileEnvVar, err)
+	}
+
+	return decodeKey(keyFileEnvVar, string(raw))
 }

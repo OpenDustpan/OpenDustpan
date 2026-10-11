@@ -12,6 +12,8 @@
 //		dustpan.WithUpdateStore(myStore),
 //		dustpan.WithCheckpointStore(myStore),
 //		dustpan.WithEventStore(myStore),
+//		dustpan.WithSecretKeyStore(myStore),
+//		dustpan.WithSecretWrapper(myWrapper),
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
@@ -30,6 +32,7 @@ import (
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 )
 
@@ -50,6 +53,8 @@ type settings struct {
 	updateStore     stack.UpdateStore
 	checkpointStore stack.CheckpointStore
 	eventStore      stack.EventStore
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
 	authenticator   identity.Authenticator
 	authorizer      identity.Authorizer
 	logger          *slog.Logger
@@ -86,6 +91,19 @@ func WithCheckpointStore(s stack.CheckpointStore) Option {
 // WithEventStore sets the engine event persistence port. Required.
 func WithEventStore(s stack.EventStore) Option {
 	return func(o *settings) { o.eventStore = s }
+}
+
+// WithSecretKeyStore sets the wrapped-data-key persistence port. Required.
+func WithSecretKeyStore(s secret.KeyStore) Option {
+	return func(o *settings) { o.secretKeys = s }
+}
+
+// WithSecretWrapper sets the key-encryption key holder. Optional: nil means
+// no key-encryption key is configured. Every main calls secret.CheckWrapper
+// during start-up: the server starts without a key only while the database
+// holds no wrapped key (ADR 23).
+func WithSecretWrapper(w secret.Wrapper) Option {
+	return func(o *settings) { o.secretWrapper = w }
 }
 
 // WithAuthenticator sets how access tokens are resolved to principals. Required.
@@ -135,6 +153,15 @@ type Server struct {
 	handler    http.Handler
 	logger     *slog.Logger
 	listenAddr string
+	secrets    *secret.Service
+}
+
+// services holds the domain services that NewServer wires together.
+type services struct {
+	namespaces *namespace.Service
+	stacks     *stack.Service
+	updates    *stack.Updates
+	secrets    *secret.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -145,6 +172,8 @@ func NewServer(opts ...Option) (*Server, error) {
 		updateStore:     nil,
 		checkpointStore: nil,
 		eventStore:      nil,
+		secretKeys:      nil,
+		secretWrapper:   nil,
 		authenticator:   nil,
 		authorizer:      identity.AdminOnly{},
 		logger:          slog.New(slog.DiscardHandler),
@@ -163,34 +192,19 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("%w: WithAuthenticator", ErrMissingOption)
 	}
 
-	namespaces, err := namespace.NewService(
-		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("namespace service: %w", err)
+	if cfg.secretKeys == nil {
+		return nil, fmt.Errorf("%w: WithSecretKeyStore", ErrMissingOption)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now})
+	svc, err := newServices(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("stack service: %w", err)
-	}
-
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            cfg.updateStore,
-		Checkpoints:        cfg.checkpointStore,
-		Events:             cfg.eventStore,
-		Namespaces:         namespaces,
-		Now:                cfg.now,
-		MaxCheckpointBytes: 0,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("update service: %w", err)
+		return nil, err
 	}
 
 	api, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:        stacks,
-		Updates:       updates,
-		Namespaces:    namespaces,
+		Stacks:        svc.stacks,
+		Updates:       svc.updates,
+		Namespaces:    svc.namespaces,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
@@ -204,7 +218,54 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{handler: handler, logger: cfg.logger, listenAddr: cfg.listenAddr}, nil
+	return &Server{
+		handler:    handler,
+		logger:     cfg.logger,
+		listenAddr: cfg.listenAddr,
+		secrets:    svc.secrets,
+	}, nil
+}
+
+// newServices builds the domain services from validated settings. It reads
+// no database: mains run the start-up checks (such as secret.CheckWrapper)
+// with their own context before or after it.
+func newServices(cfg settings) (services, error) {
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
+	)
+	if err != nil {
+		return services{}, fmt.Errorf("namespace service: %w", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now})
+	if err != nil {
+		return services{}, fmt.Errorf("stack service: %w", err)
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Now:                cfg.now,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		return services{}, fmt.Errorf("update service: %w", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys:          cfg.secretKeys,
+		Wrapper:       cfg.secretWrapper,
+		Namespaces:    namespaces,
+		Now:           cfg.now,
+		MaxBatchBytes: 0,
+	})
+	if err != nil {
+		return services{}, fmt.Errorf("secret service: %w", err)
+	}
+
+	return services{namespaces: namespaces, stacks: stacks, updates: updates, secrets: secrets}, nil
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
