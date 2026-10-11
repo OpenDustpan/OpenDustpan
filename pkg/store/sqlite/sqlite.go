@@ -31,6 +31,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
+// fileScheme is the URL scheme of a SQLite database file DSN.
+const fileScheme = "file"
+
 //go:embed migrations/*.sql
 var migrations embed.FS
 
@@ -39,6 +42,7 @@ var migrations embed.FS
 type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
+	path    string
 }
 
 var (
@@ -47,12 +51,31 @@ var (
 )
 
 // Open opens (creating if needed) the database file at path and migrates it.
+//
+// Open leaves running backup rows alone: crash recovery inspects them before
+// the server marks them failed with FailRunningBackups at start, and offline
+// commands open stores that no server owns.
 func Open(ctx context.Context, path string) (*Store, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
+	conn, err := openDatabase(ctx, abs)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Store{conn: conn, queries: db.New(conn), path: abs}
+	if err := s.migrate(ctx); err != nil {
+		return nil, errors.Join(err, conn.Close())
+	}
+
+	return s, nil
+}
+
+// openDatabase opens the database file at abs with the store pragmas.
+func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 	query := url.Values{}
 	query.Set("_txlock", "immediate")
 	query.Add("_pragma", "busy_timeout(10000)")
@@ -60,7 +83,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	query.Add("_pragma", "synchronous(normal)")
 	query.Add("_pragma", "foreign_keys(on)")
 
-	dsn := (&url.URL{Scheme: "file", Path: abs, RawQuery: query.Encode()}).String()
+	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -71,12 +94,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, errors.Join(fmt.Errorf("connect to sqlite database: %w", err), conn.Close())
 	}
 
-	s := &Store{conn: conn, queries: db.New(conn)}
-	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close())
-	}
-
-	return s, nil
+	return conn, nil
 }
 
 // Close closes the database.

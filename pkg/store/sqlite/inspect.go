@@ -29,7 +29,7 @@ func Inspect(ctx context.Context, path string) (schema.Inspection, error) {
 	query.Add("_pragma", "busy_timeout(10000)")
 	query.Add("_pragma", "foreign_keys(on)")
 
-	dsn := (&url.URL{Scheme: "file", Path: abs, RawQuery: query.Encode()}).String()
+	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
 	conn, err := sql.Open("sqlite3", dsn)
 	if err != nil {
