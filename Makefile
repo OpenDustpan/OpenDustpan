@@ -32,7 +32,7 @@ test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
 	go test -race -count=1 ./store/postgres/...
 
-e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check.
+e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case while no v* tag exists). Not part of check.
