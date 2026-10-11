@@ -332,3 +332,108 @@ func TestNewScopeValidates(t *testing.T) {
 		}
 	}
 }
+
+// recordingWrapper wraps a gcmWrapper and records the associated data of
+// every Unwrap, so the OpenKey test proves which scope the call binds to.
+type recordingWrapper struct {
+	inner *gcmWrapper
+	mu    sync.Mutex
+	aads  [][]byte
+}
+
+func (w *recordingWrapper) ID() string { return w.inner.id }
+
+func (w *recordingWrapper) Wrap(ctx context.Context, key, aad []byte) ([]byte, error) {
+	return w.inner.Wrap(ctx, key, aad)
+}
+
+func (w *recordingWrapper) Unwrap(ctx context.Context, c, aad []byte) ([]byte, error) {
+	w.mu.Lock()
+	w.aads = append(w.aads, bytes.Clone(aad))
+	w.mu.Unlock()
+
+	return w.inner.Unwrap(ctx, c, aad)
+}
+
+// lastAAD returns the associated data of the latest Unwrap.
+func (w *recordingWrapper) lastAAD() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if len(w.aads) == 0 {
+		return nil
+	}
+
+	return bytes.Clone(w.aads[len(w.aads)-1])
+}
+
+// TestOpenKeyBindsScope proves that OpenKey binds the ciphertext to the scope
+// of k: the wrapper receives the scope's associated data, so the key of one
+// scope does not open as another's. An OpenKey that passes empty or wrong
+// associated data fails this test: the correct scope stops opening, or the
+// swapped scope starts opening.
+func TestOpenKeyBindsScope(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	wrapper := &recordingWrapper{mu: sync.Mutex{}, inner: newWrapper(t, "kek-1"), aads: nil}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: oneNamespace{}, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	keys := &memKeys{keys: map[secret.Scope]secret.WrappedKey{}, mu: sync.Mutex{}}
+
+	svc, err := secret.NewService(secret.Config{
+		Keys: keys, Wrapper: wrapper, Namespaces: namespaces, Now: nil, MaxBatchBytes: 4 << 20,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	first := scope(t, "stack-1")
+	second := scope(t, "stack-2")
+
+	if _, encryptErr := svc.Encrypt(ctx, first, [][]byte{[]byte("s3cr3t")}); encryptErr != nil {
+		t.Fatalf("encrypt: %v", encryptErr)
+	}
+
+	stored, err := keys.GetKey(ctx, first)
+	if err != nil {
+		t.Fatalf("get key: %v", err)
+	}
+
+	opened, err := secret.OpenKey(ctx, wrapper, stored)
+	if err != nil {
+		t.Fatalf("open key of %s: %v", first, err)
+	}
+
+	if len(opened) != 32 {
+		t.Fatalf("opened key has %d bytes, want 32", len(opened))
+	}
+
+	firstAAD := wrapper.lastAAD()
+	if len(firstAAD) == 0 {
+		t.Fatal("wrapper received empty associated data, want the scope binding")
+	}
+
+	swapped := stored
+	swapped.Scope = second
+
+	if _, err := secret.OpenKey(ctx, wrapper, swapped); !errors.Is(err, secret.ErrDecrypt) {
+		t.Fatalf("open key of %s with the ciphertext of %s: err = %v, want ErrDecrypt", second, first, err)
+	}
+
+	if secondAAD := wrapper.lastAAD(); bytes.Equal(firstAAD, secondAAD) {
+		t.Fatal("wrapper received the same associated data for two scopes, want one binding per scope")
+	}
+
+	if _, err := wrapper.inner.Unwrap(ctx, stored.Ciphertext, nil); !errors.Is(err, secret.ErrDecrypt) {
+		t.Fatalf("unwrap with empty associated data: err = %v, want ErrDecrypt", err)
+	}
+
+	if _, err := secret.OpenKey(ctx, nil, stored); !errors.Is(err, secret.ErrKeyNotConfigured) {
+		t.Fatalf("open key without a wrapper: err = %v, want ErrKeyNotConfigured", err)
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -24,6 +25,7 @@ var (
 	_ backup.Importer  = (*Store)(nil)
 	_ backup.Registry  = (*Store)(nil)
 	_ backup.Inspector = (*Store)(nil)
+	_ backup.KeyPeeker = (*Store)(nil)
 )
 
 // CreateBackup implements backup.Registry: it stores r as a running backup.
@@ -256,6 +258,78 @@ func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (b
 	}
 
 	return sum, nil
+}
+
+// PeekKey implements backup.KeyPeeker: it stages the export stream in a
+// temporary file and reads one wrapped data key of wrapperID from its
+// secret_keys table, without loading the destination. The caller streams the
+// SQL part, so the bytes never sit in memory whole.
+func (s *Store) PeekKey(ctx context.Context, r io.Reader, wrapperID string) (secret.WrappedKey, error) {
+	temp, err := stagePeekFile(r)
+	if err != nil {
+		return secret.WrappedKey{}, err
+	}
+
+	defer removeSnapshot(temp)
+
+	conn, err := openSnapshot(ctx, temp)
+	if err != nil {
+		return secret.WrappedKey{}, fmt.Errorf("check staged backup: %w", corrupt(err))
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	const query = `SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
+		FROM secret_keys WHERE wrapper_id = ? ORDER BY namespace, stack_id LIMIT 1`
+
+	var row codec.SecretKeyRow
+
+	scanErr := conn.QueryRowContext(ctx, query, wrapperID).Scan(
+		&row.Namespace, &row.StackID, &row.WrapperID, &row.Ciphertext, &row.CreatedAtMs,
+	)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return secret.WrappedKey{}, fmt.Errorf(
+			"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
+		)
+	}
+
+	if scanErr != nil {
+		return secret.WrappedKey{}, fmt.Errorf("read backup data key: %w", corrupt(scanErr))
+	}
+
+	return codec.FromSecretKeyRow(row), nil
+}
+
+// stagePeekFile writes the export stream to a temporary file and returns its
+// path. The caller removes it.
+func stagePeekFile(r io.Reader) (string, error) {
+	f, err := os.CreateTemp("", ".dustpan-peek-*.db")
+	if err != nil {
+		return "", fmt.Errorf("stage peek file: %w", err)
+	}
+
+	temp := f.Name()
+
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+
+	if copyErr != nil {
+		removeErr := os.Remove(temp)
+
+		return "", fmt.Errorf("stage peek file: %w", errors.Join(copyErr, closeErr, removeErr))
+	}
+
+	if closeErr != nil {
+		removeErr := os.Remove(temp)
+
+		return "", fmt.Errorf("stage peek file: %w", errors.Join(closeErr, removeErr))
+	}
+
+	return temp, nil
 }
 
 // capture copies the database into a new file with VACUUM INTO and returns

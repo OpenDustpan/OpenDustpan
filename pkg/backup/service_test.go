@@ -475,6 +475,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		Format:        backup.FormatVersion,
 		SchemaVersion: 7,
 		SQLSize:       int64(len(sql)),
+		RowCounts:     map[string]int64{"namespaces": 1},
 	}
 }
 
@@ -520,6 +521,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"format",
 		"homeRegions",
 		"id",
+		"rowCounts",
 		"schemaVersion",
 		"sqlSha256",
 		"sqlSize",

@@ -2,9 +2,9 @@
 // suite. The SQL adapters run the suite once they implement the ports (issues
 // #143 and #144); until then this fake runs it. Its knobs (tear, dropTable,
 // extraSchemaTable, omitSchemaTable, skipEmptyCheck, ignoreManifest,
-// allowDuplicate, allowRefinish, oldestFirst, noopFailRunning, dropOnClose)
-// break the store on purpose, so the tests below prove that each suite case
-// can fail.
+// allowDuplicate, allowRefinish, oldestFirst, noopFailRunning, dropOnClose,
+// peekTampered, peekAnyWrapper, peekNoCorrupt) break the store on purpose, so
+// the tests below prove that each suite case can fail.
 package storetest_test
 
 import (
@@ -105,12 +105,17 @@ type fakeBackupStore struct {
 	oldestFirst      bool
 	noopFailRunning  bool
 	dropOnClose      bool
+	peekTampered     bool
+	peekAnyWrapper   bool
+	peekNoCorrupt    bool
 	closed           bool
 }
 
 var (
 	_ storetest.BackupStore = (*fakeBackupStore)(nil)
 	_ storetest.Reopener    = (*fakeBackupStore)(nil)
+	_ backup.KeyPeeker      = (*fakeBackupStore)(nil)
+	_ backup.RestoreStore   = (*fakeBackupStore)(nil)
 )
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
@@ -133,6 +138,9 @@ func newFakeBackupStore() *fakeBackupStore {
 		oldestFirst:      false,
 		noopFailRunning:  false,
 		dropOnClose:      false,
+		peekTampered:     false,
+		peekAnyWrapper:   false,
+		peekNoCorrupt:    false,
 		closed:           false,
 	}
 }
@@ -1602,6 +1610,9 @@ func (s *fakeBackupStore) Reopen() storetest.BackupStore { //nolint:ireturn // R
 		oldestFirst:      s.oldestFirst,
 		noopFailRunning:  s.noopFailRunning,
 		dropOnClose:      s.dropOnClose,
+		peekTampered:     s.peekTampered,
+		peekAnyWrapper:   s.peekAnyWrapper,
+		peekNoCorrupt:    s.peekNoCorrupt,
 		closed:           false,
 	}
 }
@@ -1764,6 +1775,42 @@ func (s *fakeBackupStore) Import(
 	return s.swapLoaded(loaded)
 }
 
+// PeekKey implements backup.KeyPeeker: it decodes the export stream frame by
+// frame and returns one data key of wrapperID from secret_keys. The
+// peekTampered knob returns the key with a tampered ciphertext on purpose.
+// The peekAnyWrapper knob returns the first key whatever wrapperID holds on
+// purpose. The peekNoCorrupt knob returns no error on a corrupt stream on
+// purpose.
+func (s *fakeBackupStore) PeekKey(_ context.Context, r io.Reader, wrapperID string) (secret.WrappedKey, error) {
+	var none secret.WrappedKey
+
+	keys, err := decodePeekKeys(r)
+	switch {
+	case err != nil && s.peekNoCorrupt:
+		return none, nil
+	case err != nil:
+		return none, err
+	case s.peekAnyWrapper:
+		if first, ok := firstPeekKey(keys); ok {
+			return s.peekResult(first), nil
+		}
+
+		return none, fmt.Errorf(
+			"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
+		)
+	default:
+		for _, scope := range slices.Sorted(maps.Keys(keys)) {
+			if keys[scope].WrapperID == wrapperID {
+				return s.peekResult(keys[scope]), nil
+			}
+		}
+
+		return none, fmt.Errorf(
+			"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
+		)
+	}
+}
+
 // latestResourceCount returns the managed resource count of the latest
 // checkpoint of the stack with stackID, or 0 when it has none. Callers hold
 // the write lock, so the check runs in the same step as the delete.
@@ -1804,6 +1851,61 @@ func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
 			delete(s.data.keys, scope)
 		}
 	}
+}
+
+// decodePeekKeys decodes the export stream frame by frame and returns the
+// secret_keys rows, or an empty map when the stream holds no secret_keys
+// frame. A corrupt stream reports ErrCorrupt.
+func decodePeekKeys(r io.Reader) (map[string]secret.WrappedKey, error) {
+	dec := gob.NewDecoder(r)
+
+	for {
+		var frame fakeTableFrame
+
+		if err := dec.Decode(&frame); err != nil {
+			if errors.Is(err, io.EOF) {
+				return map[string]secret.WrappedKey{}, nil
+			}
+
+			return nil, fmt.Errorf("decode backup stream: %w", backup.ErrCorrupt)
+		}
+
+		if frame.Table != "secret_keys" {
+			continue
+		}
+
+		var keys map[string]secret.WrappedKey
+
+		if err := gob.NewDecoder(bytes.NewReader(frame.Rows)).Decode(&keys); err != nil {
+			return nil, fmt.Errorf("decode backup table %q: %w", frame.Table, backup.ErrCorrupt)
+		}
+
+		return keys, nil
+	}
+}
+
+// firstPeekKey returns the first key by scope, for the knob that ignores the
+// wrapper on purpose.
+func firstPeekKey(keys map[string]secret.WrappedKey) (secret.WrappedKey, bool) {
+	for _, scope := range slices.Sorted(maps.Keys(keys)) {
+		return keys[scope], true
+	}
+
+	var none secret.WrappedKey
+
+	return none, false
+}
+
+// peekResult returns k, tampering its ciphertext when the peekTampered knob
+// breaks the peek on purpose.
+func (s *fakeBackupStore) peekResult(k secret.WrappedKey) secret.WrappedKey {
+	if !s.peekTampered {
+		return k
+	}
+
+	k.Ciphertext = append(bytes.Clone(k.Ciphertext), 0x00)
+
+	return k
 }
 
 // checkManifest refuses a manifest of another dialect or schema version,
@@ -2765,5 +2867,85 @@ func TestBackupDetectsDropOnClose(t *testing.T) {
 
 	if _, err := reopened.GetBackup(t.Context(), r.ID); !errors.Is(err, backup.ErrNotFound) {
 		t.Fatalf("get backup after a dropping close: err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestBackupDetectsPeekTamper breaks the peek so it returns the key with a
+// tampered ciphertext. The peeked bytes differ from the stored row, so the
+// "peek returns one key of the wrapper without loading" case of RunBackup
+// fails on this fake.
+func TestBackupDetectsPeekTamper(t *testing.T) {
+	t.Parallel()
+
+	src := newFakeBackupStore()
+	ns := fakeNamespace(t, src, "acme", "eu-west")
+	st := fakeStack(t, src, ns, "prod", map[string]string{})
+	fakeKey(t, src, ns, st, "kek-1")
+
+	_, data := fakeExport(t, src)
+
+	dst := newFakeBackupStore()
+	dst.peekTampered = true
+
+	got, err := dst.PeekKey(t.Context(), bytes.NewReader(data), "kek-1")
+	if err != nil {
+		t.Fatalf("peek key with a tampering peek: %v", err)
+	}
+
+	want, err := src.GetKey(t.Context(), fakeScope(t, ns, st))
+	if err != nil {
+		t.Fatalf("get key: %v", err)
+	}
+
+	if bytes.Equal(got.Ciphertext, want.Ciphertext) {
+		t.Fatal("peeked ciphertext equals the stored row, want the tampered bytes")
+	}
+}
+
+// TestBackupDetectsPeekAnyWrapper breaks the peek so it returns the first
+// key whatever wrapperID holds. Peeking an unknown wrapper succeeds instead
+// of reporting ErrCorrupt, so the "peek refuses an unknown wrapper" case of
+// RunBackup fails on this fake.
+func TestBackupDetectsPeekAnyWrapper(t *testing.T) {
+	t.Parallel()
+
+	src := newFakeBackupStore()
+	ns := fakeNamespace(t, src, "acme", "eu-west")
+	st := fakeStack(t, src, ns, "prod", map[string]string{})
+	fakeKey(t, src, ns, st, "kek-1")
+
+	_, data := fakeExport(t, src)
+
+	dst := newFakeBackupStore()
+	dst.peekAnyWrapper = true
+
+	broken, err := dst.PeekKey(t.Context(), bytes.NewReader(data), "kek-unknown")
+	if err != nil {
+		t.Fatalf("peek key of an unknown wrapper with the knob: err = %v, want a key", err)
+	}
+
+	if broken.WrapperID == "kek-unknown" {
+		t.Fatalf("peeked wrapper = %q, want the wrong row", broken.WrapperID)
+	}
+}
+
+// TestBackupDetectsPeekNoCorrupt breaks the peek so it returns no error on a
+// corrupt stream. Peeking truncated bytes succeeds instead of reporting
+// ErrCorrupt, so the "peek refuses a corrupt stream" case of RunBackup fails
+// on this fake.
+func TestBackupDetectsPeekNoCorrupt(t *testing.T) {
+	t.Parallel()
+
+	src := newFakeBackupStore()
+	ns := fakeNamespace(t, src, "acme", "eu-west")
+	fakeStack(t, src, ns, "prod", map[string]string{})
+
+	_, data := fakeExport(t, src)
+
+	dst := newFakeBackupStore()
+	dst.peekNoCorrupt = true
+
+	if _, err := dst.PeekKey(t.Context(), bytes.NewReader(data[:len(data)/2]), "kek-1"); err != nil {
+		t.Fatalf("peek key of truncated data with the knob: err = %v, want no error", err)
 	}
 }
