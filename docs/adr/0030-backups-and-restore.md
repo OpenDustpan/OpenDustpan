@@ -36,7 +36,7 @@ This ADR accepts RFC 8 with the scope below.
 2. **Consistency.** A backup reads the SQL data in one read transaction. It
    then copies each blob that the SQL data names. Blobs are immutable and keys
    are never reused, so the copy is consistent while the server writes. The
-   backup skips blobs that the SQL view does not name. Retention (ADR 28) must
+   backup skips blobs that the SQL view does not name. Retention (RFC 18) must
    not delete a blob that a running backup can still copy.
 3. **SQLite capture.** The backup runs `VACUUM INTO` on a new file. It adds no
    dependency.

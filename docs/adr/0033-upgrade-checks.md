@@ -1,6 +1,6 @@
 # 33. Upgrade checks
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · supersedes the gate of ADR 21 in part
 
 ## Context
 
@@ -30,7 +30,7 @@ This ADR accepts RFC 38 with the scope below.
    This applies to every command that opens the store. The error names the
    schema version of the database, the schema version of the binary and the
    version of the binary. No flag turns the check off.
-2. **Amendment to ADR 21.** The check of decision 1 joins the gate of ADR 21
+2. **Superseding addition to the gate of ADR 21.** The check of decision 1 joins the gate of ADR 21
    for `v0.1.0`. The gate gets this line: "The binary refuses to start on a
    database schema that is newer than it knows." ADR 21 stays as it is, because
    ADR 1 forbids edits to an accepted ADR. `docs/roadmap.md` gets a new item

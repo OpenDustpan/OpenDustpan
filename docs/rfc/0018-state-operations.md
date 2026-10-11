@@ -1,7 +1,8 @@
 ---
 rfc: 18
 title: State operations: history, restore, locks and leases
-status: draft
+status: accepted
+adr: 28
 created: 2026-10-10
 ---
 
@@ -42,4 +43,6 @@ keeps only the latest Pulumi checkpoint today and has no unlock action.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 28](../adr/0028-state-operations.md) for
+milestone 3: history, restore and unlock, for both tools. Retention, content
+diff and the manual lock stay open for a later decision.

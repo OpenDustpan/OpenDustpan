@@ -1,7 +1,8 @@
 ---
 rfc: 38
 title: Upgrade checks
-status: draft
+status: accepted
+adr: 33
 created: 2026-10-10
 ---
 
@@ -31,4 +32,7 @@ operators need to know what an upgrade will break.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 33](../adr/0033-upgrade-checks.md) for
+milestone 3: the refusal of a newer schema, the `upgrade check` command and
+the upgrade test. The usage ledger for deprecated features stays open for a
+later decision.
