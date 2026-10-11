@@ -56,7 +56,7 @@ Source: the `LICENSE` file of each module in the Go module cache, and the
 `license` field of each package in the Console `package-lock.json` (no
 `node_modules` is installed). Not checked: npm license texts themselves.
 
-### Go (`go.mod`, 10 modules, all compiled into the binary)
+### Go (`go.mod`, 16 modules, all compiled into the binary)
 
 | Module | License | Constraint |
 | --- | --- | --- |
@@ -64,9 +64,15 @@ Source: the `LICENSE` file of each module in the Go module cache, and the
 | github.com/jackc/pgpassfile v1.0.0 | MIT | Same. |
 | github.com/jackc/pgservicefile v0.0.0-20240606... | MIT | Same. |
 | github.com/jackc/puddle/v2 v2.2.2 | MIT | Same. |
-| github.com/ncruces/go-sqlite3 v0.35.6 | MIT | Same. |
-| github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304 | MIT-0 for its own code. Its README says the machine-translated parts keep "the original licenses". | MIT-0 has no conditions. The translated code is SQLite, which "is in the public domain" (https://sqlite.org/copyright.html). The `sqlite3.dat` build may include other libraries; their licenses were not checked. |
-| github.com/ncruces/julianday v1.0.0 | MIT | Keep notice. |
+| modernc.org/sqlite v1.60.1 | BSD-3-Clause. The translated code is SQLite, which is in the public domain (`LICENSE-SQLITE`). | Keep notice. Its `LICENSE-3RD-PARTY.md` lists each component that it links into a program; all of them are MIT, BSD-3-Clause or public domain. The `vec` package (sqlite-vec, MIT) is not linked into our binary. |
+| modernc.org/libc v1.77.1 | BSD-3-Clause. Its `LICENSE-3RD-PARTY.md` adds Go (BSD-3-Clause), musl libc, go-netdb and NixOS/nixpkgs (MIT). | Keep the notices. |
+| modernc.org/memory v1.12.1 | BSD-3-Clause, plus `LICENSE-GO` and `LICENSE-MMAP-GO` (BSD-3-Clause) | Keep the notices. |
+| modernc.org/mathutil v1.7.1 | BSD-3-Clause | Keep notice. |
+| github.com/dustin/go-humanize v1.0.1 | MIT | Keep notice. |
+| github.com/google/uuid v1.6.0 | BSD-3-Clause | Keep notice. |
+| github.com/mattn/go-isatty v0.0.24 | MIT | Keep notice. |
+| github.com/ncruces/go-strftime v1.0.0 | MIT | Keep notice. |
+| github.com/remyoudompheng/bigfft v0.0.0-20230129... | BSD-3-Clause | Keep notice. |
 | golang.org/x/sync v0.23.0 | BSD-3-Clause, plus a Go `PATENTS` file | Keep notice. The PATENTS grant ends if you sue Google over the software for patent infringement. |
 | golang.org/x/sys v0.48.0 | Same | Same. |
 | golang.org/x/text v0.42.0 | Same | Same. |
@@ -151,6 +157,5 @@ Decide the CLA or DCO policy together with the license.
 - Find the first-release dates and any stated reasons for Pulumi, OTF,
   Terrakube, Atlantis and Spacelift.
 - Check the OpenTaco license history in its repository.
-- Check which libraries sit inside `sqlite3.dat` in go-sqlite3-wasm.
 - Check dev tools outside `go.mod` (golangci-lint, sqlc) if they are
   redistributed.
