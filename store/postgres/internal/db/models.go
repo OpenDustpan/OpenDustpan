@@ -80,6 +80,7 @@ type StateVersion struct {
 	LockID            string
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
+	RestoredFrom      string
 }
 
 type Update struct {

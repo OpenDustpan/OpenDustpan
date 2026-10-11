@@ -167,6 +167,7 @@ func (s *Store) CreateStateVersion(
 			LockID:            row.LockID,
 			CreatedAtMs:       row.CreatedAtMs,
 			FinalizedAtMs:     row.FinalizedAtMs,
+			RestoredFrom:      row.RestoredFrom,
 		})
 		if err != nil {
 			return fmt.Errorf("insert state version: %w", err)
@@ -207,6 +208,57 @@ func (s *Store) CurrentStateVersion(
 	}
 
 	return stateFromRow(row)
+}
+
+// ListStateVersions implements workspace.StateStore: the finalized versions
+// of workspace, newest first, with the total count. A workspace without
+// finalized versions, or one that does not exist, yields an empty list and a
+// zero total.
+func (s *Store) ListStateVersions(
+	ctx context.Context, id workspace.ID, page workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	page = normalizeStatePage(page)
+
+	total, err := s.queries.CountStateVersions(ctx, id.String())
+	if err != nil {
+		return nil, 0, fmt.Errorf("count state versions: %w", err)
+	}
+
+	rows, err := s.queries.ListStateVersions(ctx, db.ListStateVersionsParams{
+		WorkspaceID: id.String(),
+		Limit:       int64(page.Limit),
+		Offset:      int64(page.Offset),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("select state versions: %w", err)
+	}
+
+	out := make([]workspace.StateVersion, 0, len(rows))
+
+	for i := range rows {
+		sv, err := stateFromRow(rows[i])
+		if err != nil {
+			return nil, 0, err
+		}
+
+		out = append(out, sv)
+	}
+
+	return out, int(total), nil
+}
+
+// normalizeStatePage applies the paging rules of the port: a non-positive
+// limit reads as the default page size, a limit above the maximum is capped,
+// and a negative offset reads as zero.
+func normalizeStatePage(page workspace.Page) workspace.Page {
+	if page.Limit <= 0 {
+		page.Limit = workspace.DefaultStatePageSize
+	}
+
+	page.Limit = min(page.Limit, workspace.MaxStatePageSize)
+	page.Offset = max(page.Offset, 0)
+
+	return page
 }
 
 // FinalizeStateVersion implements workspace.StateStore. Every check of the
@@ -401,6 +453,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Serial:            row.Serial,
 		Size:              row.Size,
 		Force:             row.Force,
+		RestoredFrom:      row.RestoredFrom,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
 		UploadExpiresAtMs: row.UploadExpiresAtMs,

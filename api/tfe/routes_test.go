@@ -246,6 +246,7 @@ func (stubWorkspaces) BeginState(
 			Serial:          in.Serial,
 			Size:            0,
 			Force:           in.Force,
+			RestoredFrom:    "",
 		},
 	}, nil
 }
@@ -303,6 +304,7 @@ func stubStateVersion() workspace.StateVersion {
 		Serial:          3,
 		Size:            int64(len(content)),
 		Force:           false,
+		RestoredFrom:    "",
 	}
 }
 
