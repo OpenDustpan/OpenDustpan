@@ -30,6 +30,37 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestPingClosed checks Ping answers on an open store and returns exactly the
+// sentinel text, with no driver text, after Close.
+func TestPingClosed(t *testing.T) {
+	t.Parallel()
+
+	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	if err = s.Ping(t.Context()); err != nil {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+
+		t.Fatalf("ping open store: %v", err)
+	}
+
+	if err = s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	if err = s.Ping(t.Context()); !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("ping closed store: err = %v, want ErrUnavailable", err)
+	}
+
+	if want := "ping sqlite database: database unavailable"; err.Error() != want {
+		t.Fatalf("ping closed store error = %q, want %q", err, want)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 

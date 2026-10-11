@@ -55,6 +55,10 @@ func (m *memNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Names
 	return out, nil
 }
 
+func (m *memNamespaceStore) Ping(_ context.Context) error {
+	return nil
+}
+
 // seedNamespace creates one namespace homed in the test region.
 func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
 	t.Helper()

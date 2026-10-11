@@ -56,6 +56,10 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 	return []namespace.Namespace{ns}, nil
 }
 
+func (homedNamespaceStore) Ping(_ context.Context) error {
+	return nil
+}
+
 func newTestHandler(t *testing.T) *apiinventory.Handler {
 	t.Helper()
 

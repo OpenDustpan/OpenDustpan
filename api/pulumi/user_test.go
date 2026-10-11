@@ -58,6 +58,10 @@ func (m *memNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Names
 	return out, nil
 }
 
+func (m *memNamespaceStore) Ping(_ context.Context) error {
+	return nil
+}
+
 // errNotUsed reports a call to a stub method that these tests never make.
 var errNotUsed = errors.New("not used by this test")
 

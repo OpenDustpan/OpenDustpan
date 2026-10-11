@@ -71,6 +71,16 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// Ping implements namespace.Store. It maps any driver failure to
+// ErrUnavailable without driver text.
+func (s *Store) Ping(ctx context.Context) error {
+	if err := s.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping postgres database: %w", namespace.ErrUnavailable)
+	}
+
+	return nil
+}
+
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
 	row := codec.ToNamespaceRow(ns)
