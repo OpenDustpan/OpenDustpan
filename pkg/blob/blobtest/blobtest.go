@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 )
@@ -78,6 +79,16 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("failed put leaves no object", func(t *testing.T) {
 		t.Parallel()
 		testFailedPut(t, newStore(t))
+	})
+
+	t.Run("list returns the objects under a prefix ordered by key", func(t *testing.T) {
+		t.Parallel()
+		testList(t, newStore(t))
+	})
+
+	t.Run("list of a missing prefix is empty", func(t *testing.T) {
+		t.Parallel()
+		testListMissing(t, newStore(t))
 	})
 
 	t.Run("ping answers on a healthy store and fails on a canceled context", func(t *testing.T) {
@@ -267,6 +278,79 @@ func testFailedPut(t *testing.T, s blob.Store) {
 	if got := get(t, s, key); string(got) != "second" {
 		t.Fatalf("get after second put = %q, want %q", got, "second")
 	}
+}
+
+// testList puts objects under two prefixes and proves List returns exactly
+// the objects under the wanted prefix, ordered by key, with modification
+// times between the puts. A prefix without a trailing slash lists the same
+// directory.
+func testList(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	before := time.Now().UTC().Add(-time.Minute)
+	put(t, s, mustKey(t, "tofu/ws-1/sv-2/a1"), []byte("newer"))
+	put(t, s, mustKey(t, "tofu/ws-1/sv-1/a1"), []byte("older"))
+	put(t, s, mustKey(t, "tofu/ws-1/sv-1/a2"), []byte("other"))
+	put(t, s, mustKey(t, "tofu/ws-2/sv-1/a1"), []byte("elsewhere"))
+	after := time.Now().UTC().Add(time.Minute)
+
+	for _, prefix := range []string{"tofu/ws-1/", "tofu/ws-1"} {
+		got, err := s.List(t.Context(), prefix)
+		if err != nil {
+			t.Fatalf("list %q: %v", prefix, err)
+		}
+
+		want := []string{"tofu/ws-1/sv-1/a1", "tofu/ws-1/sv-1/a2", "tofu/ws-1/sv-2/a1"}
+
+		if len(got) != len(want) {
+			t.Fatalf("list %q = %v, want %v", prefix, objectKeys(got), want)
+		}
+
+		for i := range want {
+			if got[i].Key.String() != want[i] {
+				t.Fatalf("list %q = %v, want %v", prefix, objectKeys(got), want)
+			}
+
+			if got[i].ModifiedAt.Before(before) || got[i].ModifiedAt.After(after) {
+				t.Fatalf(
+					"modification time of %q = %v, want between %v and %v",
+					got[i].Key,
+					got[i].ModifiedAt,
+					before,
+					after,
+				)
+			}
+		}
+	}
+}
+
+// testListMissing proves a prefix that names nothing lists empty, and a
+// canceled context fails the list.
+func testListMissing(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	put(t, s, mustKey(t, "tofu/ws-1/sv-1/a1"), []byte("x"))
+
+	if got, err := s.List(t.Context(), "tofu/ghost/"); err != nil || len(got) != 0 {
+		t.Fatalf("list of a missing prefix = %v, %v; want empty", objectKeys(got), err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := s.List(ctx, "tofu/ws-1/"); err == nil {
+		t.Fatal("list with canceled context = nil, want error")
+	}
+}
+
+// objectKeys returns the key strings of objects in order.
+func objectKeys(objects []blob.Object) []string {
+	keys := make([]string, 0, len(objects))
+	for i := range objects {
+		keys = append(keys, objects[i].Key.String())
+	}
+
+	return keys
 }
 
 func testPing(t *testing.T, s blob.Store) {

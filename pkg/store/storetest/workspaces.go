@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -63,6 +64,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "two concurrent finalizes admit exactly one", test: testConcurrentFinalize},
 		{name: "a fenced finalize leaves the old state current", test: testFencedFinalizeKeepsCurrent},
 		{
+			name: "a superseded attempt never finalizes over a newer one",
+			test: testFinalizeStaleAttemptDenied,
+		},
+		{
 			name: "create publishes an inventory entry for opentofu:namespace/name",
 			test: testWorkspaceInventoryAfterCreate,
 		},
@@ -96,6 +101,46 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{
 			name: "a stale fence on a failed write leaves the list unchanged",
 			test: testListStateVersionsFencedWrite,
+		},
+		{
+			name: "count pending counts only pending versions of one workspace",
+			test: testCountPendingStateVersions,
+		},
+		{
+			name: "record upload attempt notes the content key of a pending version",
+			test: testRecordUploadAttempt,
+		},
+		{
+			name: "record upload attempt rejects a missing, finalized or fenced version",
+			test: testRecordUploadAttemptErrors,
+		},
+		{
+			name: "delete expired pending removes only expired pendings of one workspace",
+			test: testDeleteExpiredPending,
+		},
+		{
+			name: "delete expired pending of a missing workspace or stale fence writes nothing",
+			test: testDeleteExpiredPendingFence,
+		},
+		{
+			name: "delete expired pending skips a version that finalized first",
+			test: testDeleteExpiredPendingSkipsFinalized,
+		},
+		{
+			name: "a finalize racing the sweep never lands in the sweep result",
+			test: testFinalizeRacesSweep,
+		},
+		{
+			name: "create refuses past the pending cap with ErrTooManyPending",
+			test: testCreateStateVersionCap,
+		},
+		{
+			name: "concurrent creates keep the pending cap",
+			test: testCreateStateVersionConcurrentCap,
+		},
+		{
+			name: "referenced content keys lists every named blob of one workspace",
+			test: testReferencedContentKeys,
 		},
 	}
 
@@ -239,12 +284,16 @@ func newPendingVersion(
 	}
 }
 
+// generousPendingCap binds no test that does not probe the cap: those pass
+// their own limit to CreateStateVersion.
+const generousPendingCap = 1 << 30
+
 func createPendingVersion(
 	t *testing.T, s WorkspaceStore, ns namespace.Namespace, sv workspace.StateVersion,
 ) workspace.StateVersion {
 	t.Helper()
 
-	if err := s.CreateStateVersion(t.Context(), sv, ns.Fence()); err != nil {
+	if err := s.CreateStateVersion(t.Context(), sv, ns.Fence(), generousPendingCap); err != nil {
 		t.Fatalf("create state version %s: %v", sv.ID, err)
 	}
 
@@ -260,6 +309,23 @@ func finalizedVersion(sv workspace.StateVersion, at time.Time, content string) w
 	sv.Size = int64(len(content))
 
 	return sv
+}
+
+// finalizeRecorded records the attempt key of sv and finalizes it, returning
+// the error of either step. The finalize matches only the recorded key, so
+// every test records before it finalizes, as Upload does. A record with a
+// stale fence or on a finalized version returns that step's error without
+// reaching the finalize.
+func finalizeRecorded(
+	t *testing.T, s WorkspaceStore, fence namespace.Fence, sv workspace.StateVersion,
+) error {
+	t.Helper()
+
+	if _, err := s.RecordUploadAttempt(t.Context(), sv.ID, sv.Content, fence); err != nil {
+		return err
+	}
+
+	return s.FinalizeStateVersion(t.Context(), sv, fence)
 }
 
 func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
@@ -375,7 +441,9 @@ func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 
 	sv := newPendingVersion(t, w, "lock-alice", stateInput("l1", "v1", 1))
 
-	if err := s.CreateStateVersion(t.Context(), sv, ghost.Fence()); !errors.Is(err, namespace.ErrNotFound) {
+	if err := s.CreateStateVersion(t.Context(), sv, ghost.Fence(), generousPendingCap); !errors.Is(
+		err, namespace.ErrNotFound,
+	) {
 		t.Fatalf("create state version in a missing namespace: err = %v, want namespace.ErrNotFound", err)
 	}
 }
@@ -471,12 +539,14 @@ func testWorkspaceWritesFenced(t *testing.T, s WorkspaceStore) {
 	stalePending := newPendingVersion(
 		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
 	)
-	if err := s.CreateStateVersion(t.Context(), stalePending, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := s.CreateStateVersion(t.Context(), stalePending, stale, generousPendingCap); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
 		t.Errorf("create state version with a stale fence: err = %v, want ErrFenced", err)
 	}
 
 	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
-	if err := s.FinalizeStateVersion(t.Context(), finalized, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := finalizeRecorded(t, s, stale, finalized); !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("finalize with a stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -617,7 +687,7 @@ func testFinalizeWithoutLock(t *testing.T, s WorkspaceStore) {
 	}
 
 	finalized := finalizedVersion(pending, now().Add(3*time.Hour), "v1")
-	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); !errors.Is(err, workspace.ErrNotLocked) {
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("finalize without a lock: err = %v, want ErrNotLocked", err)
 	}
 
@@ -626,7 +696,11 @@ func testFinalizeWithoutLock(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("get state version after a refused finalize: %v", err)
 	}
 
-	assertStateVersion(t, stored, pending)
+	// The attempt was recorded before the finalize was refused, so the row
+	// stays pending with the attempted content and no current state.
+	want := pending
+	want.Content = finalized.Content
+	assertStateVersion(t, stored, want)
 
 	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
 		t.Errorf("refused finalize wrote a current state: err = %v, want ErrNoState", err)
@@ -653,7 +727,7 @@ func testFinalizeLockedByOther(t *testing.T, s WorkspaceStore) {
 	}
 
 	finalized := finalizedVersion(pending, now().Add(3*time.Hour), "v1")
-	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); !errors.Is(
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(
 		err, workspace.ErrLockedByOther,
 	) {
 		t.Errorf("finalize under another lock: err = %v, want ErrLockedByOther", err)
@@ -664,7 +738,11 @@ func testFinalizeLockedByOther(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("get state version after a refused finalize: %v", err)
 	}
 
-	assertStateVersion(t, stored, pending)
+	// The attempt was recorded before the finalize was refused, so the row
+	// stays pending with the attempted content and no current state.
+	want := pending
+	want.Content = finalized.Content
+	assertStateVersion(t, stored, want)
 
 	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
 		t.Errorf("refused finalize wrote a current state: err = %v, want ErrNoState", err)
@@ -712,7 +790,9 @@ func testCreateStateVersionMissing(t *testing.T, s WorkspaceStore) {
 	w := newTestWorkspace(ns, mustWorkspaceName(t, "network"))
 	sv := newPendingVersion(t, w, "lock-alice", stateInput("l1", "v1", 1))
 
-	if err := s.CreateStateVersion(t.Context(), sv, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+	if err := s.CreateStateVersion(t.Context(), sv, ns.Fence(), generousPendingCap); !errors.Is(
+		err, workspace.ErrNotFound,
+	) {
 		t.Fatalf("create state version for a missing workspace: err = %v, want ErrNotFound", err)
 	}
 }
@@ -732,7 +812,7 @@ func testFinalizeMakesCurrent(t *testing.T, s WorkspaceStore) {
 		))
 		finalized := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
 			t.Fatalf("finalize serial %d: %v", serial, err)
 		}
 
@@ -771,10 +851,12 @@ func testFinalizeRetry(t *testing.T, s WorkspaceStore) {
 	))
 	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
 		t.Fatalf("finalize state version: %v", err)
 	}
 
+	// A retry calls the finalize itself: the version is finalized, so the
+	// conditional write matches no row.
 	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); !errors.Is(
 		err, workspace.ErrUploadDenied,
 	) {
@@ -806,7 +888,7 @@ func testFinalizeLineageMismatch(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
 	)), now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -815,7 +897,7 @@ func testFinalizeLineageMismatch(t *testing.T, s WorkspaceStore) {
 	))
 	finalized := finalizedVersion(other, now().Add(3*time.Hour), "v2")
 
-	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); !errors.Is(
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(
 		err, workspace.ErrLineageMismatch,
 	) {
 		t.Errorf("finalize with another lineage: err = %v, want ErrLineageMismatch", err)
@@ -826,7 +908,11 @@ func testFinalizeLineageMismatch(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("get state version after a refused finalize: %v", err)
 	}
 
-	assertStateVersion(t, stored, other)
+	// The attempt was recorded before the finalize was refused, so the row
+	// stays pending with the attempted content.
+	wantOther := other
+	wantOther.Content = finalized.Content
+	assertStateVersion(t, stored, wantOther)
 
 	got, err := s.CurrentStateVersion(t.Context(), w.ID)
 	if err != nil {
@@ -846,7 +932,7 @@ func testFinalizeStaleSerial(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
 	)), now().Add(2*time.Hour), "v2")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -856,7 +942,7 @@ func testFinalizeStaleSerial(t *testing.T, s WorkspaceStore) {
 		))
 		finalized := finalizedVersion(pending, now().Add(3*time.Hour), "old")
 
-		if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); !errors.Is(
+		if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(
 			err, workspace.ErrStaleSerial,
 		) {
 			t.Errorf("finalize with serial %d: err = %v, want ErrStaleSerial", serial, err)
@@ -867,7 +953,11 @@ func testFinalizeStaleSerial(t *testing.T, s WorkspaceStore) {
 			t.Fatalf("get state version after a refused finalize: %v", err)
 		}
 
-		assertStateVersion(t, stored, pending)
+		// The attempt was recorded before the finalize was refused, so the
+		// row stays pending with the attempted content.
+		wantPending := pending
+		wantPending.Content = finalized.Content
+		assertStateVersion(t, stored, wantPending)
 	}
 
 	got, err := s.CurrentStateVersion(t.Context(), w.ID)
@@ -888,7 +978,7 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "v5", 5),
 	)), now().Add(2*time.Hour), "v5")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -897,7 +987,7 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, forcedInput("l9", "v1", 1),
 	)), now().Add(3*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), forced, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), forced); err != nil {
 		t.Fatalf("finalize with force: %v", err)
 	}
 
@@ -922,7 +1012,7 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 		t, released, locked.Lock.ID, forcedInput("l9", "v2", 2),
 	)), now().Add(5*time.Hour), "v2")
 
-	if finalErr := s.FinalizeStateVersion(t.Context(), unlocked, ns.Fence()); !errors.Is(
+	if finalErr := finalizeRecorded(t, s, ns.Fence(), unlocked); !errors.Is(
 		finalErr, workspace.ErrNotLocked,
 	) {
 		t.Errorf("forced finalize without a lock: err = %v, want ErrNotLocked", finalErr)
@@ -934,7 +1024,7 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 		t, retaken, locked.Lock.ID, forcedInput("l9", "v3", 3),
 	)), now().Add(6*time.Hour), "v3")
 
-	if foreignErr := s.FinalizeStateVersion(t.Context(), foreign, ns.Fence()); !errors.Is(
+	if foreignErr := finalizeRecorded(t, s, ns.Fence(), foreign); !errors.Is(
 		foreignErr, workspace.ErrLockedByOther,
 	) {
 		t.Errorf("forced finalize under another lock: err = %v, want ErrLockedByOther", foreignErr)
@@ -975,6 +1065,10 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 		finalized[i].Content = blob.Key(
 			"tofu/" + pendings[i].Workspace.String() + "/" + pendings[i].ID.String() + "/" + attempts[i],
 		)
+
+		if _, err := s.RecordUploadAttempt(t.Context(), finalized[i].ID, finalized[i].Content, ns.Fence()); err != nil {
+			t.Fatalf("record upload attempt: %v", err)
+		}
 	}
 
 	errs := make([]error, len(finalized))
@@ -1032,7 +1126,7 @@ func testFencedFinalizeKeepsCurrent(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
 	)), now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -1042,7 +1136,7 @@ func testFencedFinalizeKeepsCurrent(t *testing.T, s WorkspaceStore) {
 	finalized := finalizedVersion(next, now().Add(3*time.Hour), "v2")
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
-	if err := s.FinalizeStateVersion(t.Context(), finalized, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := finalizeRecorded(t, s, stale, finalized); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -1068,6 +1162,68 @@ func testFencedFinalizeKeepsCurrent(t *testing.T, s WorkspaceStore) {
 	if !stamped.UpdatedAt.Equal(first.FinalizedAt) {
 		t.Fatalf("workspace updated at = %v, want %v", stamped.UpdatedAt, first.FinalizedAt)
 	}
+}
+
+// testFinalizeStaleAttemptDenied proves a superseded upload attempt never
+// finalizes over a newer one: after two attempts the stale key reports
+// ErrUploadDenied with the row still naming the latest attempt and no
+// current state, and the latest attempt still finalizes.
+func testFinalizeStaleAttemptDenied(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	first := attemptKeyOf(pending, "a1")
+	second := attemptKeyOf(pending, "a2")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), pending.ID, first, ns.Fence()); err != nil {
+		t.Fatalf("record first attempt: %v", err)
+	}
+
+	superseded, err := s.RecordUploadAttempt(t.Context(), pending.ID, second, ns.Fence())
+	if err != nil {
+		t.Fatalf("record second attempt: %v", err)
+	}
+
+	if superseded != first {
+		t.Fatalf("superseded key = %q, want %q", superseded, first)
+	}
+
+	stale := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+	stale.Content = first
+	stale.Size = 2
+
+	if staleErr := s.FinalizeStateVersion(t.Context(), stale, ns.Fence()); !errors.Is(
+		staleErr, workspace.ErrUploadDenied,
+	) {
+		t.Fatalf("finalize with a superseded attempt: err = %v, want ErrUploadDenied", staleErr)
+	}
+
+	assertAttemptContent(t, s, pending.ID, second)
+
+	if _, currentErr := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(currentErr, workspace.ErrNoState) {
+		t.Fatalf("current state after a denied stale finalize: err = %v, want ErrNoState", currentErr)
+	}
+
+	latest := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+	latest.Content = second
+	latest.Size = 2
+
+	if latestErr := s.FinalizeStateVersion(t.Context(), latest, ns.Fence()); latestErr != nil {
+		t.Fatalf("finalize with the latest attempt: %v", latestErr)
+	}
+
+	got, gotErr := s.CurrentStateVersion(t.Context(), w.ID)
+	if gotErr != nil {
+		t.Fatalf("current state after the latest finalize: %v", gotErr)
+	}
+
+	assertStateVersion(t, got, latest)
 }
 
 func testWorkspaceInventoryAfterCreate(t *testing.T, s WorkspaceStore) {
@@ -1125,7 +1281,7 @@ func testInventoryFollowsWrites(t *testing.T, s WorkspaceStore) {
 	))
 	finalized := finalizedVersion(pending, now().Add(3*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), finalized, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
 		t.Fatalf("finalize state version: %v", err)
 	}
 
@@ -1152,7 +1308,7 @@ func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
 	)), now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -1180,7 +1336,7 @@ func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {
 		t, locked, locked.Lock.ID, stateInput("l1", "old", 1),
 	)), now().Add(4*time.Hour), "old")
 
-	if err := s.FinalizeStateVersion(t.Context(), staleSerial, ns.Fence()); !errors.Is(
+	if err := finalizeRecorded(t, s, ns.Fence(), staleSerial); !errors.Is(
 		err, workspace.ErrStaleSerial,
 	) {
 		t.Fatalf("finalize with a stale serial: err = %v, want ErrStaleSerial", err)
@@ -1191,7 +1347,7 @@ func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {
 	))
 	fenced := finalizedVersion(next, now().Add(4*time.Hour), "v2")
 
-	if err := s.FinalizeStateVersion(t.Context(), fenced, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := finalizeRecorded(t, s, stale, fenced); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -1278,7 +1434,7 @@ func testListStateVersionsNewestFirst(t *testing.T, s WorkspaceStore) {
 		))
 		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), done); err != nil {
 			t.Fatalf("finalize serial %d: %v", serial, err)
 		}
 
@@ -1364,7 +1520,7 @@ func finalizeSerials(
 		))
 		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), done); err != nil {
 			t.Fatalf("finalize serial %d: %v", i+1, err)
 		}
 
@@ -1420,7 +1576,7 @@ func testListStateVersionsPages(t *testing.T, s WorkspaceStore) {
 		))
 		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), done); err != nil {
 			t.Fatalf("finalize serial %d: %v", serial, err)
 		}
 
@@ -1481,7 +1637,7 @@ func testListStateVersionsForcedLowerSerial(t *testing.T, s WorkspaceStore) {
 	))
 	first := finalizedVersion(firstPending, now().Add(2*time.Hour), "v5")
 
-	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), first); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -1490,7 +1646,7 @@ func testListStateVersionsForcedLowerSerial(t *testing.T, s WorkspaceStore) {
 	))
 	forced := finalizedVersion(forcedPending, now().Add(3*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), forced, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), forced); err != nil {
 		t.Fatalf("finalize forced state: %v", err)
 	}
 
@@ -1514,7 +1670,7 @@ func testListStateVersionsRestoredFrom(t *testing.T, s WorkspaceStore) {
 	))
 	old := finalizedVersion(oldPending, now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), old, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), old); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -1528,7 +1684,7 @@ func testListStateVersionsRestoredFrom(t *testing.T, s WorkspaceStore) {
 
 	restored := finalizedVersion(restoredPending, now().Add(3*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), restored, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), restored); err != nil {
 		t.Fatalf("finalize restored state: %v", err)
 	}
 
@@ -1571,7 +1727,7 @@ func testListStateVersionsRestoredLineage(t *testing.T, s WorkspaceStore) {
 	))
 	old := finalizedVersion(oldPending, now().Add(2*time.Hour), "state-bytes")
 
-	if err := s.FinalizeStateVersion(t.Context(), old, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), old); err != nil {
 		t.Fatalf("finalize first state: %v", err)
 	}
 
@@ -1581,7 +1737,7 @@ func testListStateVersionsRestoredLineage(t *testing.T, s WorkspaceStore) {
 
 	restored := finalizedVersion(restoredPending, now().Add(3*time.Hour), "state-bytes")
 
-	if err := s.FinalizeStateVersion(t.Context(), restored, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), restored); err != nil {
 		t.Fatalf("finalize restored state: %v", err)
 	}
 
@@ -1641,7 +1797,7 @@ func testListStateVersionsIsolatesWorkspaces(t *testing.T, s WorkspaceStore) {
 		))
 		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), done); err != nil {
 			t.Fatalf("finalize serial %d: %v", serial, err)
 		}
 
@@ -1653,7 +1809,7 @@ func testListStateVersionsIsolatesWorkspaces(t *testing.T, s WorkspaceStore) {
 	))
 	other := finalizedVersion(otherPending, now().Add(2*time.Hour), "v1")
 
-	if err := s.FinalizeStateVersion(t.Context(), other, ns.Fence()); err != nil {
+	if err := finalizeRecorded(t, s, ns.Fence(), other); err != nil {
 		t.Fatalf("finalize state of the second workspace: %v", err)
 	}
 
@@ -1693,7 +1849,7 @@ func testListStateVersionsFencedWrite(t *testing.T, s WorkspaceStore) {
 		))
 		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
 
-		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+		if err := finalizeRecorded(t, s, ns.Fence(), done); err != nil {
 			t.Fatalf("finalize serial %d: %v", serial, err)
 		}
 	}
@@ -1710,7 +1866,8 @@ func testListStateVersionsFencedWrite(t *testing.T, s WorkspaceStore) {
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
 	stalePending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v3", 3))
-	if createErr := s.CreateStateVersion(t.Context(), stalePending, stale); !errors.Is(createErr, namespace.ErrFenced) {
+	createErr := s.CreateStateVersion(t.Context(), stalePending, stale, generousPendingCap)
+	if !errors.Is(createErr, namespace.ErrFenced) {
 		t.Fatalf("create state version with a stale fence: err = %v, want ErrFenced", createErr)
 	}
 
@@ -1719,7 +1876,7 @@ func testListStateVersionsFencedWrite(t *testing.T, s WorkspaceStore) {
 	))
 	fenced := finalizedVersion(next, now().Add(4*time.Hour), "v3")
 
-	if finalizeErr := s.FinalizeStateVersion(t.Context(), fenced, stale); !errors.Is(finalizeErr, namespace.ErrFenced) {
+	if finalizeErr := finalizeRecorded(t, s, stale, fenced); !errors.Is(finalizeErr, namespace.ErrFenced) {
 		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", finalizeErr)
 	}
 
@@ -1736,4 +1893,648 @@ func testListStateVersionsFencedWrite(t *testing.T, s WorkspaceStore) {
 	}
 
 	assertStateVersion(t, stored, next)
+}
+
+// assertPendingCount checks that workspace holds n pending versions.
+func assertPendingCount(t *testing.T, s WorkspaceStore, id workspace.ID, n int) {
+	t.Helper()
+
+	got, err := s.CountPendingStateVersions(t.Context(), id)
+	if err != nil {
+		t.Fatalf("count pending state of %s: %v", id, err)
+	}
+
+	if got != n {
+		t.Fatalf("pending state versions of %s = %d, want %d", id, got, n)
+	}
+}
+
+// testCountPendingStateVersions proves the pending count holds only pending
+// versions of one workspace: a finalized version and another workspace stay
+// out, and a missing workspace counts none.
+func testCountPendingStateVersions(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	other := createTestWorkspace(t, s, ns, "other")
+	lockedOther := lockTestWorkspace(t, s, ns, other, "alice")
+
+	assertPendingCount(t, s, w.ID, 0)
+	assertPendingCount(t, s, workspace.ID(ident.NewID("ws-")), 0)
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
+	))
+	createPendingVersion(t, s, ns, newPendingVersion(
+		t, lockedOther, lockedOther.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	assertPendingCount(t, s, w.ID, 2)
+	assertPendingCount(t, s, other.ID, 1)
+
+	finalized := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	assertPendingCount(t, s, w.ID, 1)
+	assertPendingCount(t, s, other.ID, 1)
+}
+
+// attemptKeyOf returns the blob key of one upload attempt of sv.
+func attemptKeyOf(sv workspace.StateVersion, attempt string) blob.Key {
+	return blob.Key("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/" + attempt)
+}
+
+// assertAttemptContent checks that id is pending with content.
+func assertAttemptContent(t *testing.T, s WorkspaceStore, id workspace.StateVersionID, content blob.Key) {
+	t.Helper()
+
+	stored, err := s.GetStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get state version %s: %v", id, err)
+	}
+
+	if stored.Content != content || stored.Status != workspace.StatusPending {
+		t.Fatalf(
+			"attempt %s = content %q status %q, want content %q pending",
+			id,
+			stored.Content,
+			stored.Status,
+			content,
+		)
+	}
+}
+
+// testRecordUploadAttempt proves an attempt notes its blob key on a pending
+// version and reads back, returns no superseded key for the first attempt,
+// and returns the earlier key when a later attempt overwrites it: the row
+// names the latest content, and the caller deletes the superseded blob.
+func testRecordUploadAttempt(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	key := attemptKeyOf(pending, "a1")
+
+	superseded, recordErr := s.RecordUploadAttempt(t.Context(), pending.ID, key, ns.Fence())
+	if recordErr != nil {
+		t.Fatalf("record upload attempt: %v", recordErr)
+	}
+
+	if superseded != "" {
+		t.Fatalf("superseded key = %q, want empty for the first attempt", superseded)
+	}
+
+	assertAttemptContent(t, s, pending.ID, key)
+
+	later := attemptKeyOf(pending, "a2")
+
+	superseded, recordErr = s.RecordUploadAttempt(t.Context(), pending.ID, later, ns.Fence())
+	if recordErr != nil {
+		t.Fatalf("record second attempt: %v", recordErr)
+	}
+
+	if superseded != key {
+		t.Fatalf("superseded key = %q, want %q", superseded, key)
+	}
+
+	assertAttemptContent(t, s, pending.ID, later)
+}
+
+// testRecordUploadAttemptErrors proves a record on a missing version reports
+// ErrStateVersionNotFound, on a finalized version ErrUploadDenied, and with
+// a stale fence ErrFenced with nothing written.
+func testRecordUploadAttemptErrors(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	key := attemptKeyOf(pending, "a1")
+	missing := workspace.StateVersionID(ident.NewID("sv-"))
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), missing, key, ns.Fence()); !errors.Is(
+		recordErr, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("record on a missing version: err = %v, want ErrStateVersionNotFound", recordErr)
+	}
+
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	if finalizeErr := finalizeRecorded(t, s, ns.Fence(), finalized); finalizeErr != nil {
+		t.Fatalf("finalize state version: %v", finalizeErr)
+	}
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), pending.ID, key, ns.Fence()); !errors.Is(
+		recordErr, workspace.ErrUploadDenied,
+	) {
+		t.Fatalf("record on a finalized version: err = %v, want ErrUploadDenied", recordErr)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	fresh := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v9", 9),
+	))
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), fresh.ID, key, stale); !errors.Is(
+		recordErr, namespace.ErrFenced,
+	) {
+		t.Fatalf("record with a stale fence: err = %v, want ErrFenced", recordErr)
+	}
+
+	assertAttemptContent(t, s, fresh.ID, "")
+}
+
+// expiredPendingVersion returns a pending version whose capability
+// expired at expiry.
+func expiredPendingVersion(
+	t *testing.T, w workspace.Workspace, lockID string, in pendingInput, expiry time.Time,
+) workspace.StateVersion {
+	t.Helper()
+
+	sv := newPendingVersion(t, w, lockID, in)
+	sv.UploadExpiresAt = expiry
+
+	return sv
+}
+
+// testDeleteExpiredPending proves the sweep deletes only the expired pending
+// versions of one workspace, oldest expiry first, with their attempted
+// content: a fresh pending, a finalized version with an old expiry and
+// another workspace stay.
+func testDeleteExpiredPending(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	other := createTestWorkspace(t, s, ns, "other")
+	lockedOther := lockTestWorkspace(t, s, ns, other, "alice")
+
+	older := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "old", 1), now().Add(-2*time.Hour),
+	))
+	newer := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "new", 2), now().Add(-time.Hour),
+	))
+	content := attemptKeyOf(newer, "a1")
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), newer.ID, content, ns.Fence()); recordErr != nil {
+		t.Fatalf("record upload attempt: %v", recordErr)
+	}
+
+	fresh := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v9", 9),
+	))
+	otherExpired := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, lockedOther, lockedOther.Lock.ID, stateInput("l1", "v1", 1), now().Add(-2*time.Hour),
+	))
+
+	// A finalized version keeps its old capability expiry: the sweep only
+	// reads pending versions.
+	oldPending := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v3", 3), now().Add(-3*time.Hour),
+	))
+	old := finalizedVersion(oldPending, now().Add(2*time.Hour), "v3")
+
+	if finalizeErr := finalizeRecorded(t, s, ns.Fence(), old); finalizeErr != nil {
+		t.Fatalf("finalize old state: %v", finalizeErr)
+	}
+
+	swept, sweepErr := s.DeleteExpiredPendingStateVersions(t.Context(), w.ID, now(), ns.Fence())
+	if sweepErr != nil {
+		t.Fatalf("delete expired pending: %v", sweepErr)
+	}
+
+	if len(swept) != 2 || swept[0].ID != older.ID || swept[1].ID != newer.ID {
+		t.Fatalf("swept versions = %v, want [%s %s]", stateVersionIDs(swept), older.ID, newer.ID)
+	}
+
+	if swept[1].Content != content {
+		t.Fatalf("swept content = %q, want %q", swept[1].Content, content)
+	}
+
+	assertSweptGone(t, s, older.ID, newer.ID)
+	assertPendingCount(t, s, w.ID, 1)
+	assertPendingCount(t, s, other.ID, 1)
+
+	if _, getErr := s.GetStateVersion(t.Context(), fresh.ID); getErr != nil {
+		t.Fatalf("get fresh pending after sweep: %v", getErr)
+	}
+
+	if _, getErr := s.GetStateVersion(t.Context(), otherExpired.ID); getErr != nil {
+		t.Fatalf("get other workspace pending after sweep: %v", getErr)
+	}
+
+	if _, getErr := s.CurrentStateVersion(t.Context(), w.ID); getErr != nil {
+		t.Fatalf("current state after sweep: %v", getErr)
+	}
+}
+
+// assertSweptGone checks that every id reads as ErrStateVersionNotFound.
+func assertSweptGone(t *testing.T, s WorkspaceStore, ids ...workspace.StateVersionID) {
+	t.Helper()
+
+	for _, id := range ids {
+		if _, err := s.GetStateVersion(t.Context(), id); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+			t.Fatalf("get swept version %s: err = %v, want ErrStateVersionNotFound", id, err)
+		}
+	}
+}
+
+// testDeleteExpiredPendingFence proves a sweep of a missing workspace yields
+// an empty list, and with a stale fence reports ErrFenced with nothing
+// written.
+func testDeleteExpiredPendingFence(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	expired := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1), now().Add(-time.Hour),
+	))
+
+	empty, sweepErr := s.DeleteExpiredPendingStateVersions(
+		t.Context(), workspace.ID(ident.NewID("ws-")), now(), ns.Fence(),
+	)
+	if sweepErr != nil {
+		t.Fatalf("delete expired of a missing workspace: %v", sweepErr)
+	}
+
+	if len(empty) != 0 {
+		t.Fatalf("swept of a missing workspace = %v, want empty", stateVersionIDs(empty))
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if _, sweepErr := s.DeleteExpiredPendingStateVersions(t.Context(), w.ID, now(), stale); !errors.Is(
+		sweepErr, namespace.ErrFenced,
+	) {
+		t.Fatalf("delete expired with a stale fence: err = %v, want ErrFenced", sweepErr)
+	}
+
+	assertPendingCount(t, s, w.ID, 1)
+
+	if _, getErr := s.GetStateVersion(t.Context(), expired.ID); getErr != nil {
+		t.Fatalf("get pending after a fenced sweep: %v", getErr)
+	}
+}
+
+// testDeleteExpiredPendingSkipsFinalized proves a version that finalized
+// before the sweep stays out of the result with its content untouched, even
+// when its capability expired: the conditional delete matches only versions
+// that are still pending.
+func testDeleteExpiredPendingSkipsFinalized(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1), now().Add(-2*time.Hour),
+	))
+	content := attemptKeyOf(pending, "a1")
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), pending.ID, content, ns.Fence()); recordErr != nil {
+		t.Fatalf("record upload attempt: %v", recordErr)
+	}
+
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	swept, sweepErr := s.DeleteExpiredPendingStateVersions(t.Context(), w.ID, now(), ns.Fence())
+	if sweepErr != nil {
+		t.Fatalf("delete expired pending: %v", sweepErr)
+	}
+
+	if len(swept) != 0 {
+		t.Fatalf("swept versions = %v, want none: the finalized version stays", stateVersionIDs(swept))
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get finalized version after sweep: %v", err)
+	}
+
+	assertStateVersion(t, stored, finalized)
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state after sweep: %v", err)
+	}
+
+	assertStateVersion(t, current, finalized)
+}
+
+// testFinalizeRacesSweep finalizes an expired pending version while the
+// sweep runs: the finalized version never lands in the sweep result, so a
+// caller that deletes the swept content keys can never remove the current
+// state. The conditional delete decides the winner inside the store: either
+// the finalize commits first and the sweep skips the version, or the sweep
+// deletes first and the finalize reports the version as gone.
+func testFinalizeRacesSweep(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+
+	for i := range 20 {
+		finalizeRacesSweepOnce(t, s, ns, i)
+	}
+}
+
+func finalizeRacesSweepOnce(t *testing.T, s WorkspaceStore, ns namespace.Namespace, i int) {
+	t.Helper()
+
+	w := createTestWorkspace(t, s, ns, fmt.Sprintf("race-%d", i))
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, expiredPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1), now().Add(-2*time.Hour),
+	))
+	content := attemptKeyOf(pending, "a1")
+
+	if _, recordErr := s.RecordUploadAttempt(t.Context(), pending.ID, content, ns.Fence()); recordErr != nil {
+		t.Fatalf("record upload attempt: %v", recordErr)
+	}
+
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	var wg sync.WaitGroup
+
+	var finalizeErr error
+
+	var swept []workspace.StateVersion
+
+	var sweepErr error
+
+	wg.Go(func() {
+		finalizeErr = s.FinalizeStateVersion(t.Context(), finalized, ns.Fence())
+	})
+
+	wg.Go(func() {
+		swept, sweepErr = s.DeleteExpiredPendingStateVersions(t.Context(), w.ID, now(), ns.Fence())
+	})
+
+	wg.Wait()
+
+	if sweepErr != nil {
+		t.Fatalf("delete expired pending: %v", sweepErr)
+	}
+
+	switch {
+	case finalizeErr == nil:
+		for i := range swept {
+			if swept[i].ID == pending.ID {
+				t.Fatalf("swept versions = %v, want without %s", stateVersionIDs(swept), pending.ID)
+			}
+		}
+
+		stored, err := s.GetStateVersion(t.Context(), pending.ID)
+		if err != nil {
+			t.Fatalf("get finalized version after the race: %v", err)
+		}
+
+		assertStateVersion(t, stored, finalized)
+	case errors.Is(finalizeErr, workspace.ErrStateVersionNotFound) ||
+		errors.Is(finalizeErr, workspace.ErrUploadDenied):
+		// The sweep deleted first: either before the finalize read the
+		// version, or between its guard check and its conditional write.
+		if len(swept) != 1 || swept[0].ID != pending.ID {
+			t.Fatalf("swept versions = %v, want [%s]: the sweep won the race", stateVersionIDs(swept), pending.ID)
+		}
+
+		assertSweptGone(t, s, pending.ID)
+	default:
+		t.Fatalf(
+			"finalize during sweep: err = %v, want nil, ErrStateVersionNotFound or ErrUploadDenied",
+			finalizeErr,
+		)
+	}
+}
+
+// testCreateStateVersionCap proves the pending cap binds one workspace: at
+// most limit pending versions declare, the next reports ErrTooManyPending,
+// another workspace is unaffected, a finalize frees a slot, a missing
+// workspace reports ErrNotFound, and a non-positive limit refuses every
+// version.
+func testCreateStateVersionCap(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	other := createTestWorkspace(t, s, ns, "other")
+	lockedOther := lockTestWorkspace(t, s, ns, other, "alice")
+
+	create := func(w workspace.Workspace, serial int64, limit int) (workspace.StateVersion, error) {
+		sv := newPendingVersion(t, w, w.Lock.ID, stateInput("l1", "v1", serial))
+
+		return sv, s.CreateStateVersion(t.Context(), sv, ns.Fence(), limit)
+	}
+
+	first, err := create(locked, 1, 2)
+	if err != nil {
+		t.Fatalf("create first pending: %v", err)
+	}
+
+	if _, err := create(locked, 2, 2); err != nil {
+		t.Fatalf("create second pending: %v", err)
+	}
+
+	if _, err := create(locked, 3, 2); !errors.Is(err, workspace.ErrTooManyPending) {
+		t.Fatalf("create past the cap: err = %v, want ErrTooManyPending", err)
+	}
+
+	if _, err := create(lockedOther, 1, 1); err != nil {
+		t.Fatalf("create in another workspace: %v", err)
+	}
+
+	finalized := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	if _, err := create(locked, 3, 2); err != nil {
+		t.Fatalf("create after a finalize freed a slot: %v", err)
+	}
+
+	ghost := newTestWorkspace(ns, mustWorkspaceName(t, "ghost"))
+	ghostSV := newPendingVersion(t, ghost, "lock-alice", stateInput("l1", "v1", 1))
+
+	if err := s.CreateStateVersion(t.Context(), ghostSV, ns.Fence(), 2); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("create for a missing workspace: err = %v, want ErrNotFound", err)
+	}
+
+	for _, limit := range []int{0, -1} {
+		sv := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v9", 9))
+
+		if err := s.CreateStateVersion(t.Context(), sv, ns.Fence(), limit); !errors.Is(
+			err, workspace.ErrTooManyPending,
+		) {
+			t.Fatalf("create with limit %d: err = %v, want ErrTooManyPending", limit, err)
+		}
+	}
+}
+
+// testCreateStateVersionConcurrentCap declares several versions at once with
+// a low cap: exactly the cap succeeds and the rest report ErrTooManyPending.
+// The count and the insert run in one store transaction, so no two declares
+// pass the cap together whatever service fronts them.
+func testCreateStateVersionConcurrentCap(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	const declares = 8
+
+	const limit = 3
+
+	pendings := make([]workspace.StateVersion, declares)
+
+	for i := range pendings {
+		pendings[i] = newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", int64(i+1)))
+	}
+
+	errs := make([]error, declares)
+
+	var wg sync.WaitGroup
+
+	for i := range pendings {
+		wg.Go(func() {
+			errs[i] = s.CreateStateVersion(t.Context(), pendings[i], ns.Fence(), limit)
+		})
+	}
+
+	wg.Wait()
+
+	succeeded := 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, workspace.ErrTooManyPending):
+		default:
+			t.Fatalf("concurrent create: err = %v, want nil or ErrTooManyPending", err)
+		}
+	}
+
+	if succeeded != limit {
+		t.Fatalf("successful concurrent creates = %d, want %d: the cap", succeeded, limit)
+	}
+
+	assertPendingCount(t, s, w.ID, limit)
+}
+
+// testReferencedContentKeys proves the referenced set holds every blob key
+// the versions of one workspace name, pending and finalized, without the
+// empty ones: another workspace stays out, and a workspace without versions,
+// or one that does not exist, yields an empty list.
+func testReferencedContentKeys(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	other := createTestWorkspace(t, s, ns, "other")
+	lockedOther := lockTestWorkspace(t, s, ns, other, "alice")
+
+	assertReferencedContentKeys(t, s, w.ID)
+	assertReferencedContentKeys(t, s, workspace.ID(ident.NewID("ws-")))
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	// A version without an attempt names nothing.
+	assertReferencedContentKeys(t, s, w.ID)
+
+	firstKey := attemptKeyOf(first, "a1")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), first.ID, firstKey, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	assertReferencedContentKeys(t, s, w.ID, firstKey)
+
+	second := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
+	))
+	secondKey := attemptKeyOf(second, "a2")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), second.ID, secondKey, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	assertReferencedContentKeys(t, s, w.ID, firstKey, secondKey)
+
+	// A finalize keeps its content in the set.
+	finalized := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	assertReferencedContentKeys(t, s, w.ID, firstKey, secondKey)
+
+	foreign := createPendingVersion(t, s, ns, newPendingVersion(
+		t, lockedOther, lockedOther.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	foreignKey := attemptKeyOf(foreign, "a1")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), foreign.ID, foreignKey, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	assertReferencedContentKeys(t, s, w.ID, firstKey, secondKey)
+	assertReferencedContentKeys(t, s, other.ID, foreignKey)
+}
+
+// assertReferencedContentKeys checks the referenced set of id against want,
+// order aside.
+func assertReferencedContentKeys(t *testing.T, s WorkspaceStore, id workspace.ID, want ...blob.Key) {
+	t.Helper()
+
+	got, err := s.ReferencedContentKeys(t.Context(), id)
+	if err != nil {
+		t.Fatalf("referenced content keys of %s: %v", id, err)
+	}
+
+	gotKeys := make([]string, 0, len(got))
+	for i := range got {
+		gotKeys = append(gotKeys, got[i].String())
+	}
+
+	wantKeys := make([]string, 0, len(want))
+	for i := range want {
+		wantKeys = append(wantKeys, want[i].String())
+	}
+
+	slices.Sort(gotKeys)
+	slices.Sort(wantKeys)
+
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Fatalf("referenced content keys of %s = %v, want %v", id, gotKeys, wantKeys)
+	}
 }

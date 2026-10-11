@@ -334,6 +334,7 @@ func TestCreateStateVersionErrors(t *testing.T) {
 	}{
 		{name: "without the lock", begin: workspace.ErrNotLocked, want: http.StatusConflict},
 		{name: "held by another", begin: workspace.ErrLockedByOther, want: http.StatusConflict},
+		{name: "too many pending", begin: workspace.ErrTooManyPending, want: http.StatusConflict},
 		{name: "stale serial", begin: workspace.ErrStaleSerial, want: http.StatusUnprocessableEntity},
 		{name: "lineage mismatch", begin: workspace.ErrLineageMismatch, want: http.StatusUnprocessableEntity},
 		{name: "invalid state", begin: workspace.ErrInvalidState, want: http.StatusUnprocessableEntity},

@@ -23,6 +23,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -1060,7 +1061,7 @@ func (s *fakeBackupStore) SaveWorkspace(
 
 // CreateStateVersion implements workspace.StateStore.
 func (s *fakeBackupStore) CreateStateVersion(
-	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
+	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1079,6 +1080,23 @@ func (s *fakeBackupStore) CreateStateVersion(
 
 	if _, ok := s.data.states[sv.ID.String()]; ok {
 		return fmt.Errorf("create state version %s: %w", sv.ID, errFakeStateExists)
+	}
+
+	pending := 0
+
+	for key := range s.data.states {
+		if v := s.data.states[key]; v.Workspace == sv.Workspace && v.Status == workspace.StatusPending {
+			pending++
+		}
+	}
+
+	if pending >= maxPending {
+		return fmt.Errorf(
+			"%w: %d pending, limit %d",
+			workspace.ErrTooManyPending,
+			pending,
+			maxPending,
+		)
 	}
 
 	s.data.states[sv.ID.String()] = sv
@@ -1130,11 +1148,33 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 		return workspace.ErrUploadDenied
 	}
 
+	// The write matches only the recorded attempt key: a superseded
+	// attempt never finalizes over a newer one.
+	if stored.Content != sv.Content {
+		return workspace.ErrUploadDenied
+	}
+
 	w, ok := s.data.workspaces[sv.Workspace.String()]
 	if !ok {
 		return workspace.ErrNotFound
 	}
 
+	if err := checkBackupFinalize(s.data, w, sv); err != nil {
+		return err
+	}
+
+	s.data.states[sv.ID.String()] = sv
+	s.data.current[w.ID.String()] = sv.ID.String()
+	w.UpdatedAt = sv.FinalizedAt
+	s.data.workspaces[w.ID.String()] = w
+	s.publishWorkspace(w.Ref, w.ID.String(), sv.FinalizedAt)
+
+	return nil
+}
+
+// checkBackupFinalize runs the lock, lineage and serial checks of a
+// finalize. The caller holds the store lock.
+func checkBackupFinalize(data *fakeData, w workspace.Workspace, sv workspace.StateVersion) error {
 	switch {
 	case !w.Lock.Locked():
 		return workspace.ErrNotLocked
@@ -1142,8 +1182,8 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 		return workspace.ErrLockedByOther
 	}
 
-	if currentID, ok := s.data.current[w.ID.String()]; ok && !sv.Force {
-		current := s.data.states[currentID]
+	if currentID, ok := data.current[w.ID.String()]; ok && !sv.Force {
+		current := data.states[currentID]
 
 		switch {
 		case sv.Lineage != current.Lineage:
@@ -1152,12 +1192,6 @@ func (s *fakeBackupStore) FinalizeStateVersion(
 			return workspace.ErrStaleSerial
 		}
 	}
-
-	s.data.states[sv.ID.String()] = sv
-	s.data.current[w.ID.String()] = sv.ID.String()
-	w.UpdatedAt = sv.FinalizedAt
-	s.data.workspaces[w.ID.String()] = w
-	s.publishWorkspace(w.Ref, w.ID.String(), sv.FinalizedAt)
 
 	return nil
 }
@@ -1218,6 +1252,119 @@ func (s *fakeBackupStore) ListStateVersions(
 	end := min(start+page.Limit, len(all))
 
 	return all[start:end], len(all), nil
+}
+
+// CountPendingStateVersions implements workspace.StateStore.
+func (s *fakeBackupStore) CountPendingStateVersions(
+	_ context.Context, id workspace.ID,
+) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return 0, errFakeClosed
+	}
+
+	n := 0
+
+	for key := range s.data.states {
+		if sv := s.data.states[key]; sv.Workspace == id && sv.Status == workspace.StatusPending {
+			n++
+		}
+	}
+
+	return n, nil
+}
+
+// ReferencedContentKeys implements workspace.StateStore.
+func (s *fakeBackupStore) ReferencedContentKeys(
+	_ context.Context, id workspace.ID,
+) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	var out []blob.Key
+
+	for key := range s.data.states {
+		if sv := s.data.states[key]; sv.Workspace == id && sv.Content != "" {
+			out = append(out, sv.Content)
+		}
+	}
+
+	return out, nil
+}
+
+// RecordUploadAttempt implements workspace.StateStore.
+func (s *fakeBackupStore) RecordUploadAttempt(
+	_ context.Context, id workspace.StateVersionID, key blob.Key, fence namespace.Fence,
+) (blob.Key, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return "", errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return "", err
+	}
+
+	sv, ok := s.data.states[id.String()]
+	if !ok {
+		return "", workspace.ErrStateVersionNotFound
+	}
+
+	if sv.Status != workspace.StatusPending {
+		return "", workspace.ErrUploadDenied
+	}
+
+	superseded := sv.Content
+	sv.Content = key
+	s.data.states[id.String()] = sv
+
+	return superseded, nil
+}
+
+// DeleteExpiredPendingStateVersions implements workspace.StateStore: it
+// deletes the expired pending versions of id, oldest expiry first.
+func (s *fakeBackupStore) DeleteExpiredPendingStateVersions(
+	_ context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return nil, err
+	}
+
+	var out []workspace.StateVersion
+
+	for key := range s.data.states {
+		if sv := s.data.states[key]; sv.Workspace == id && sv.Status == workspace.StatusPending &&
+			sv.UploadExpiresAt.Before(before) {
+			delete(s.data.states, key)
+
+			out = append(out, sv)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
+		if c := a.UploadExpiresAt.Compare(b.UploadExpiresAt); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+
+	return out, nil
 }
 
 // Ping implements namespace.Store: it returns namespace.ErrUnavailable once
@@ -1465,7 +1612,7 @@ func fakeSummaryOf(
 
 	for id := range data.states {
 		sv := data.states[id]
-		if sv.Content == "" {
+		if sv.Content == "" || sv.Status != workspace.StatusFinalized {
 			continue
 		}
 
