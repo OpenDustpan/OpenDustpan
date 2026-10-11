@@ -120,19 +120,41 @@ FROM updates
 WHERE stack_id = $1 AND id = $2
 FOR SHARE;
 
--- name: GetCheckpoint :one
+-- name: GetUpdateKindForShare :one
+-- Locks the update so a concurrent cancel waits until this write commits.
+SELECT kind, dry_run
+FROM updates
+WHERE stack_id = $1 AND id = $2
+FOR SHARE;
+
+-- name: GetLatestCheckpoint :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1
+ORDER BY u.version DESC
+LIMIT 1;
+
+-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features, deployment, saved_at_ms
 FROM checkpoints
-WHERE stack_id = $1;
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: GetCheckpointByVersion :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1 AND u.version = $2;
 
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, deployment, saved_at_ms
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (stack_id) DO UPDATE SET
-    update_id = excluded.update_id,
+ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
     sequence = excluded.sequence,
@@ -141,6 +163,10 @@ ON CONFLICT (stack_id) DO UPDATE SET
     features = excluded.features,
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms;
+
+-- name: DeleteStack :exec
+DELETE FROM stacks
+WHERE namespace = $1 AND project = $2 AND name = $3;
 
 -- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)

@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -198,6 +199,173 @@ func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
 
 	if len(events) != 2 {
 		t.Fatalf("migrated events = %d, want 2", len(events))
+	}
+}
+
+func TestMigration0006KeepsOneRowData(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+	seedAt0005WithOneRow(t, migrated)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	cp, err := s.LatestCheckpoint(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("latest checkpoint: %v", err)
+	}
+
+	if string(cp.Deployment) != `{"v":1}` || cp.Update != "u1" {
+		t.Fatalf("migrated checkpoint = deployment %q update %q, want {\"v\":1} u1", cp.Deployment, cp.Update)
+	}
+
+	byVersion, err := s.CheckpointByVersion(t.Context(), ref, 1)
+	if err != nil {
+		t.Fatalf("checkpoint of version 1: %v", err)
+	}
+
+	if string(byVersion.Deployment) != `{"v":1}` || byVersion.Update != "u1" {
+		t.Fatalf(
+			"migrated checkpoint of version 1 = deployment %q update %q, want {\"v\":1} u1",
+			byVersion.Deployment,
+			byVersion.Update,
+		)
+	}
+
+	if _, err := s.CheckpointByVersion(t.Context(), ref, 2); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint of missing version 2: err = %v, want ErrNoState", err)
+	}
+}
+
+// seedAt0005WithOneRow creates a database at migration 0005 with a stack, one
+// finished update and its checkpoint: the one-row-per-stack layout.
+func seedAt0005WithOneRow(t *testing.T, migrated string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0005(t, conn)
+	recordMigrations0005(t, conn)
+	seedOneRowNamespace(t, conn)
+	seedOneRowStack(t, conn)
+	seedOneRowUpdate(t, conn)
+	seedOneRowCheckpoint(t, conn)
+}
+
+func applyMigrations0005(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	for _, name := range []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
+	} {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+func recordMigrations0005(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
+			t.Fatalf("record migration %s: %v", name, err)
+		}
+	}
+}
+
+func seedOneRowNamespace(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+}
+
+func seedOneRowStack(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed stack: %v", err)
+	}
+}
+
+func seedOneRowUpdate(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
+		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', 'update', false, 'succeeded', 1, 3, ''::bytea, 0, 1000, 2000, 3000)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+}
+
+func seedOneRowCheckpoint(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
+		digest, invalid, features, deployment, saved_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', ''::bytea, 3, 0,
+		'\x0000000000000000000000000000000000000000000000000000000000000000', false, '[]', '{"v":1}', 4000)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
 	}
 }
 

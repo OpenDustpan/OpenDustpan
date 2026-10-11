@@ -162,15 +162,67 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 	return err
 }
 
-const getCheckpoint = `-- name: GetCheckpoint :one
+const deleteStack = `-- name: DeleteStack :exec
+DELETE FROM stacks
+WHERE namespace = ? AND project = ? AND name = ?
+`
+
+type DeleteStackParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) error {
+	_, err := q.db.ExecContext(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
+	return err
+}
+
+const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features_json, deployment, saved_at_ms
 FROM checkpoints
-WHERE stack_id = ?
+WHERE stack_id = ? AND update_id = ?
 `
 
-func (q *Queries) GetCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
-	row := q.db.QueryRowContext(ctx, getCheckpoint, stackID)
+type GetCheckpointByUpdateParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
+	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
+	var i Checkpoint
+	err := row.Scan(
+		&i.StackID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.FeaturesJson,
+		&i.Deployment,
+		&i.SavedAtMs,
+	)
+	return i, err
+}
+
+const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = ? AND u.version = ?
+`
+
+type GetCheckpointByVersionParams struct {
+	StackID string
+	Version int64
+}
+
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
+	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
 	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
@@ -198,6 +250,34 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
+}
+
+const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
+SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = ?
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
+	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
+	var i Checkpoint
+	err := row.Scan(
+		&i.StackID,
+		&i.UpdateID,
+		&i.LeaseDigest,
+		&i.SchemaVersion,
+		&i.Sequence,
+		&i.Digest,
+		&i.Invalid,
+		&i.FeaturesJson,
+		&i.Deployment,
+		&i.SavedAtMs,
+	)
+	return i, err
 }
 
 const getNamespace = `-- name: GetNamespace :one
@@ -324,6 +404,29 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (Update, e
 		&i.StartedAtMs,
 		&i.EndedAtMs,
 	)
+	return i, err
+}
+
+const getUpdateKind = `-- name: GetUpdateKind :one
+SELECT kind, dry_run
+FROM updates
+WHERE stack_id = ? AND id = ?
+`
+
+type GetUpdateKindParams struct {
+	StackID string
+	ID      string
+}
+
+type GetUpdateKindRow struct {
+	Kind   string
+	DryRun bool
+}
+
+func (q *Queries) GetUpdateKind(ctx context.Context, arg GetUpdateKindParams) (GetUpdateKindRow, error) {
+	row := q.db.QueryRowContext(ctx, getUpdateKind, arg.StackID, arg.ID)
+	var i GetUpdateKindRow
+	err := row.Scan(&i.Kind, &i.DryRun)
 	return i, err
 }
 
@@ -575,8 +678,7 @@ INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, deployment, saved_at_ms
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (stack_id) DO UPDATE SET
-    update_id = excluded.update_id,
+ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
     sequence = excluded.sequence,

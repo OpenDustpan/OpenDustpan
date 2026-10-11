@@ -225,7 +225,8 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 }
 
 // PutCheckpoint implements stack.CheckpointStore. The deployment is stored in
-// the row; only the stack's latest checkpoint is kept.
+// the row, one row for each mutating update; each write of the running
+// update overwrites the row of that update.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
@@ -246,12 +247,17 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 	})
 }
 
-// writeCheckpoint checks the lease and sequence, then upserts the checkpoint.
+// writeCheckpoint checks the lease, rejects previews, checks the sequence,
+// then upserts the checkpoint of its update.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) error {
 	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
 		return leaseErr
+	}
+
+	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
+		return previewErr
 	}
 
 	if cp.Sequence > 0 {
@@ -280,7 +286,8 @@ func writeCheckpoint(
 	return nil
 }
 
-// LatestCheckpoint implements stack.CheckpointStore.
+// LatestCheckpoint implements stack.CheckpointStore. It returns the
+// checkpoint of the stack's highest version that has one.
 func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
@@ -291,7 +298,46 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, err
 	}
 
-	row, err := s.queries.GetCheckpoint(ctx, stackID)
+	row, err := s.queries.GetLatestCheckpoint(ctx, stackID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
+	}
+
+	return codec.FromCheckpointRow(codec.CheckpointRow{
+		StackID:       row.StackID,
+		UpdateID:      row.UpdateID,
+		LeaseDigest:   row.LeaseDigest,
+		Digest:        row.Digest,
+		Features:      row.Features,
+		Deployment:    row.Deployment,
+		SchemaVersion: row.SchemaVersion,
+		Sequence:      row.Sequence,
+		SavedAtMs:     row.SavedAtMs,
+		Invalid:       row.Invalid,
+	}, ref)
+}
+
+// CheckpointByVersion implements stack.CheckpointStore.
+func (s *Store) CheckpointByVersion(
+	ctx context.Context, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
+	row, err := s.queries.GetCheckpointByVersion(ctx, db.GetCheckpointByVersionParams{
+		StackID: stackID,
+		Version: version,
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -527,22 +573,43 @@ func checkLease(ctx context.Context, q *db.Queries, stackID string, id stack.Upd
 	return nil
 }
 
+// checkMutates locks the update FOR SHARE and returns ErrWrongUpdateState
+// when it is a preview or a dry run, which never saves state.
+func checkMutates(ctx context.Context, q *db.Queries, stackID string, id stack.UpdateID) error {
+	row, err := q.GetUpdateKindForShare(ctx, db.GetUpdateKindForShareParams{
+		StackID: stackID,
+		ID:      id.String(),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stack.ErrWrongUpdateState
+	}
+
+	if err != nil {
+		return fmt.Errorf("read update kind: %w", err)
+	}
+
+	if row.DryRun || stack.UpdateKind(row.Kind) == stack.KindPreview {
+		return stack.ErrWrongUpdateState
+	}
+
+	return nil
+}
+
 // checkSequence compares cp with the last checkpoint of its update and
 // reports whether cp repeats it. The caller holds the update FOR SHARE and
 // the update runs, so no other checkpoint of the stack can be written
 // concurrently: one mutating update runs per stack.
 func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
-	last, err := q.GetCheckpoint(ctx, stackID)
+	last, err := q.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
+		StackID:  stackID,
+		UpdateID: cp.Update.String(),
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 
 	if err != nil {
 		return false, fmt.Errorf("read last checkpoint: %w", err)
-	}
-
-	if last.UpdateID != cp.Update.String() {
-		return false, nil
 	}
 
 	switch {

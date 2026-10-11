@@ -34,6 +34,12 @@ type RenameStore interface {
 // UpdatesFactory returns a fresh, empty store for one subtest.
 type UpdatesFactory func(t *testing.T) UpdatesStore
 
+// DeleteStore deletes a stack for tests until issue #49 adds the port. The
+// delete removes its updates, checkpoints and events.
+type DeleteStore interface {
+	DeleteStackForTest(ctx context.Context, ref stack.Ref, fence namespace.Fence) error
+}
+
 // RunUpdates executes the conformance suite of the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) against stores
 // produced by newStore.
@@ -59,6 +65,11 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
+		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
+		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
+		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
+		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
+		{name: "delete of the stack deletes its checkpoints", test: testDeleteStackDeletesCheckpoints},
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
@@ -741,6 +752,172 @@ func testCheckpointAcrossUpdates(t *testing.T, f fixture) {
 	assertCheckpoint(t, f, f.ref, want)
 }
 
+// testCheckpointLatestIsHighest checks that the latest checkpoint is the one
+// with the highest version, and that an update without a checkpoint does not
+// hide the one before it.
+func testCheckpointLatestIsHighest(t *testing.T, f fixture) {
+	t.Helper()
+
+	first := f.run(t, f.ref, "u1", mutating())
+	firstCP := newCheckpoint(first, 0, `{"v":1}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u1: %v", err)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+
+	second := f.run(t, f.ref, "u2", mutating())
+	secondCP := newCheckpoint(second, 0, `{"v":2}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u2: %v", err)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+
+	assertCheckpoint(t, f, f.ref, secondCP)
+
+	// An update that saves no checkpoint leaves the latest one in place.
+	third := f.run(t, f.ref, "u3", mutating())
+	f.end(t, third, stack.StatusSucceeded)
+
+	assertCheckpoint(t, f, f.ref, secondCP)
+}
+
+// testCheckpointByVersion checks that version N returns only N: no fallback
+// to an older checkpoint, and ErrNoState for a missing or empty version.
+func testCheckpointByVersion(t *testing.T, f fixture) {
+	t.Helper()
+
+	first := f.run(t, f.ref, "u1", mutating())
+	firstCP := newCheckpoint(first, 0, `{"v":1}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), firstCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u1: %v", err)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+
+	second := f.run(t, f.ref, "u2", mutating())
+	secondCP := newCheckpoint(second, 0, `{"v":2}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), secondCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u2: %v", err)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+
+	assertCheckpointVersion(t, f, f.ref, 1, firstCP)
+	assertCheckpointVersion(t, f, f.ref, 2, secondCP)
+
+	for _, version := range []int64{0, 3, 99} {
+		if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, version); !errors.Is(err, stack.ErrNoState) {
+			t.Errorf("checkpoint of missing version %d: err = %v, want ErrNoState", version, err)
+		}
+	}
+
+	// An update without a checkpoint is empty, not a fallback.
+	third := f.run(t, f.ref, "u3", mutating())
+	f.end(t, third, stack.StatusSucceeded)
+
+	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, third.Version); !errors.Is(
+		err, stack.ErrNoState,
+	) {
+		t.Errorf("checkpoint of empty version %d: err = %v, want ErrNoState", third.Version, err)
+	}
+
+	assertCheckpointVersion(t, f, f.ref, 1, firstCP)
+	assertCheckpointVersion(t, f, f.ref, 2, secondCP)
+
+	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
+	if _, err := f.s.CheckpointByVersion(t.Context(), ghost, 1); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("checkpoint of a missing stack: err = %v, want ErrNoState", err)
+	}
+}
+
+// testCheckpointPreviewRejected checks that a preview or a dry run saves no
+// checkpoint.
+func testCheckpointPreviewRejected(t *testing.T, f fixture) {
+	t.Helper()
+
+	for name, plan := range map[string]stack.Plan{
+		"preview": preview(),
+		"dry run": dryRun(),
+	} {
+		u := f.run(t, f.ref, name, plan)
+		if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{}`), f.fence); !errors.Is(
+			err, stack.ErrWrongUpdateState,
+		) {
+			t.Errorf("%s checkpoint: err = %v, want ErrWrongUpdateState", name, err)
+		}
+
+		f.end(t, u, stack.StatusSucceeded)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("latest checkpoint after rejected previews: err = %v, want ErrNoState", err)
+	}
+}
+
+// testCheckpointKeepsAfterEnd checks that a canceled or failed update keeps
+// the last checkpoint it saved.
+func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
+	t.Helper()
+
+	failed := f.run(t, f.ref, "u1", mutating())
+	failedCP := newCheckpoint(failed, 0, `{"v":1}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), failedCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u1: %v", err)
+	}
+
+	f.end(t, failed, stack.StatusFailed)
+	assertCheckpoint(t, f, f.ref, failedCP)
+	assertCheckpointVersion(t, f, f.ref, failed.Version, failedCP)
+
+	canceled := f.run(t, f.ref, "u2", mutating())
+	canceledCP := newCheckpoint(canceled, 0, `{"v":2}`)
+
+	if err := f.s.PutCheckpoint(t.Context(), canceledCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint of u2: %v", err)
+	}
+
+	f.end(t, canceled, stack.StatusCanceled)
+	assertCheckpoint(t, f, f.ref, canceledCP)
+	assertCheckpointVersion(t, f, f.ref, canceled.Version, canceledCP)
+}
+
+// testDeleteStackDeletesCheckpoints checks that the final delete of a stack
+// removes its checkpoints.
+func testDeleteStackDeletesCheckpoints(t *testing.T, f fixture) {
+	t.Helper()
+
+	deleter, ok := f.s.(DeleteStore)
+	if !ok {
+		t.Skip("store does not implement DeleteStackForTest until issue #49")
+	}
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if err := deleter.DeleteStackForTest(t.Context(), f.ref, f.fence); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("latest checkpoint after delete: err = %v, want ErrNoState", err)
+	}
+
+	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, u.Version); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("checkpoint of version %d after delete: err = %v, want ErrNoState", u.Version, err)
+	}
+}
+
 // newEvents returns a batch for u under its current lease, one event per
 // sequence number, with the payload naming the number and the given round.
 func newEvents(u stack.Update, round int, seqs ...int64) stack.EventBatch {
@@ -1042,13 +1219,31 @@ func assertCheckpoint(t *testing.T, f fixture, ref stack.Ref, want stack.Checkpo
 		t.Fatalf("latest checkpoint of %s: %v", ref, err)
 	}
 
+	assertSameCheckpoint(t, got, want, "latest checkpoint")
+}
+
+// assertCheckpointVersion checks the checkpoint of one version.
+func assertCheckpointVersion(t *testing.T, f fixture, ref stack.Ref, version int64, want stack.Checkpoint) {
+	t.Helper()
+
+	got, err := f.s.CheckpointByVersion(t.Context(), ref, version)
+	if err != nil {
+		t.Fatalf("checkpoint of version %d of %s: %v", version, ref, err)
+	}
+
+	assertSameCheckpoint(t, got, want, "checkpoint of version")
+}
+
+func assertSameCheckpoint(t *testing.T, got, want stack.Checkpoint, what string) {
+	t.Helper()
+
 	same := got.Ref == want.Ref && got.Update == want.Update && got.Lease == want.Lease &&
 		got.SchemaVersion == want.SchemaVersion && got.Sequence == want.Sequence &&
 		got.Digest == want.Digest && got.Invalid == want.Invalid && sameTime(got.SavedAt, want.SavedAt) &&
 		bytes.Equal(got.Deployment, want.Deployment) && slices.Equal(got.Features, want.Features)
 	if !same {
-		t.Fatalf("latest checkpoint = %+v (deployment %q), want %+v (deployment %q)",
-			got, got.Deployment, want, want.Deployment)
+		t.Fatalf("%s = %+v (deployment %q), want %+v (deployment %q)",
+			what, got, got.Deployment, want, want.Deployment)
 	}
 }
 

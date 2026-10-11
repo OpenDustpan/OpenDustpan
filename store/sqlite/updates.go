@@ -192,7 +192,8 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 }
 
 // PutCheckpoint implements stack.CheckpointStore. The deployment is stored in
-// the row; only the stack's latest checkpoint is kept.
+// the row, one row for each mutating update; each write of the running
+// update overwrites the row of that update.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
@@ -213,12 +214,17 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 	})
 }
 
-// writeCheckpoint checks the lease and sequence, then upserts the checkpoint.
+// writeCheckpoint checks the lease, rejects previews, checks the sequence,
+// then upserts the checkpoint of its update.
 func writeCheckpoint(
 	ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string, row codec.CheckpointRow,
 ) error {
 	if leaseErr := checkLease(ctx, q, stackID, cp.Update, row.LeaseDigest); leaseErr != nil {
 		return leaseErr
+	}
+
+	if previewErr := checkMutates(ctx, q, stackID, cp.Update); previewErr != nil {
+		return previewErr
 	}
 
 	if cp.Sequence > 0 {
@@ -247,7 +253,8 @@ func writeCheckpoint(
 	return nil
 }
 
-// LatestCheckpoint implements stack.CheckpointStore.
+// LatestCheckpoint implements stack.CheckpointStore. It returns the
+// checkpoint of the stack's highest version that has one.
 func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
@@ -258,7 +265,35 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, err
 	}
 
-	row, err := s.queries.GetCheckpoint(ctx, stackID)
+	row, err := s.queries.GetLatestCheckpoint(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
+	}
+
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
+}
+
+// CheckpointByVersion implements stack.CheckpointStore.
+func (s *Store) CheckpointByVersion(
+	ctx context.Context, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if err != nil {
+		return stack.Checkpoint{}, err
+	}
+
+	row, err := s.queries.GetCheckpointByVersion(ctx, db.GetCheckpointByVersionParams{
+		StackID: stackID,
+		Version: version,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return stack.Checkpoint{}, stack.ErrNoState
 	}
@@ -459,20 +494,38 @@ func checkLease(ctx context.Context, q *db.Queries, stackID string, id stack.Upd
 	return nil
 }
 
+// checkMutates returns ErrWrongUpdateState when the update is a preview or a
+// dry run, which never saves state.
+func checkMutates(ctx context.Context, q *db.Queries, stackID string, id stack.UpdateID) error {
+	row, err := q.GetUpdateKind(ctx, db.GetUpdateKindParams{StackID: stackID, ID: id.String()})
+	if errors.Is(err, sql.ErrNoRows) {
+		return stack.ErrWrongUpdateState
+	}
+
+	if err != nil {
+		return fmt.Errorf("read update kind: %w", err)
+	}
+
+	if row.DryRun || stack.UpdateKind(row.Kind) == stack.KindPreview {
+		return stack.ErrWrongUpdateState
+	}
+
+	return nil
+}
+
 // checkSequence compares cp with the last checkpoint of its update and
 // reports whether cp repeats it.
 func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stackID string) (bool, error) {
-	last, err := q.GetCheckpoint(ctx, stackID)
+	last, err := q.GetCheckpointByUpdate(ctx, db.GetCheckpointByUpdateParams{
+		StackID:  stackID,
+		UpdateID: cp.Update.String(),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 
 	if err != nil {
 		return false, fmt.Errorf("read last checkpoint: %w", err)
-	}
-
-	if last.UpdateID != cp.Update.String() {
-		return false, nil
 	}
 
 	switch {
