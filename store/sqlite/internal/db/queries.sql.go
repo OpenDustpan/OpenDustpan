@@ -11,16 +11,37 @@ import (
 )
 
 const activeUpdate = `-- name: ActiveUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ?
-  AND status = 'running' AND dry_run = 0 AND kind <> 'preview'
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.status = 'running' AND u.dry_run = 0 AND u.kind <> 'preview'
 `
 
-func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (Update, error) {
+type ActiveUpdateRow struct {
+	StackID          string
+	ID               string
+	Kind             string
+	DryRun           bool
+	Status           string
+	Version          int64
+	Revision         int64
+	LeaseDigest      []byte
+	LeaseExpiresAtMs int64
+	CreatedAtMs      int64
+	StartedAtMs      int64
+	EndedAtMs        int64
+	CreatedBy        string
+	RestoredFrom     int64
+	CheckpointBytes  int64
+}
+
+func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, activeUpdate, stackID)
-	var i Update
+	var i ActiveUpdateRow
 	err := row.Scan(
 		&i.StackID,
 		&i.ID,
@@ -34,6 +55,9 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (Update, err
 		&i.CreatedAtMs,
 		&i.StartedAtMs,
 		&i.EndedAtMs,
+		&i.CreatedBy,
+		&i.RestoredFrom,
+		&i.CheckpointBytes,
 	)
 	return i, err
 }
@@ -232,8 +256,9 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
-    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
+    created_by, restored_from
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateUpdateParams struct {
@@ -249,6 +274,8 @@ type CreateUpdateParams struct {
 	CreatedAtMs      int64
 	StartedAtMs      int64
 	EndedAtMs        int64
+	CreatedBy        string
+	RestoredFrom     int64
 }
 
 func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) error {
@@ -265,6 +292,8 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.CreatedAtMs,
 		arg.StartedAtMs,
 		arg.EndedAtMs,
+		arg.CreatedBy,
+		arg.RestoredFrom,
 	)
 	return err
 }
@@ -721,10 +750,13 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 }
 
 const getUpdate = `-- name: GetUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ? AND id = ?
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ? AND u.id = ?
 `
 
 type GetUpdateParams struct {
@@ -732,9 +764,30 @@ type GetUpdateParams struct {
 	ID      string
 }
 
-func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (Update, error) {
+type GetUpdateRow struct {
+	StackID          string
+	ID               string
+	Kind             string
+	DryRun           bool
+	Status           string
+	Version          int64
+	Revision         int64
+	LeaseDigest      []byte
+	LeaseExpiresAtMs int64
+	CreatedAtMs      int64
+	StartedAtMs      int64
+	EndedAtMs        int64
+	CreatedBy        string
+	RestoredFrom     int64
+	CheckpointBytes  int64
+}
+
+// The checkpoint size is the byte length of the saved deployment, read
+// without loading the document: the checkpoints table holds one row for
+// each update, so the join finds at most one row.
+func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getUpdate, arg.StackID, arg.ID)
-	var i Update
+	var i GetUpdateRow
 	err := row.Scan(
 		&i.StackID,
 		&i.ID,
@@ -748,6 +801,9 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (Update, e
 		&i.CreatedAtMs,
 		&i.StartedAtMs,
 		&i.EndedAtMs,
+		&i.CreatedBy,
+		&i.RestoredFrom,
+		&i.CheckpointBytes,
 	)
 	return i, err
 }
@@ -1181,12 +1237,15 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 }
 
 const listUpdates = `-- name: ListUpdates :many
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = ?
-  AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview'
-ORDER BY version DESC
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       CAST(COALESCE(LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = ?
+  AND u.status <> 'not started' AND u.dry_run = 0 AND u.kind <> 'preview'
+ORDER BY u.version DESC
 LIMIT ? OFFSET ?
 `
 
@@ -1196,15 +1255,33 @@ type ListUpdatesParams struct {
 	Offset  int64
 }
 
-func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Update, error) {
+type ListUpdatesRow struct {
+	StackID          string
+	ID               string
+	Kind             string
+	DryRun           bool
+	Status           string
+	Version          int64
+	Revision         int64
+	LeaseDigest      []byte
+	LeaseExpiresAtMs int64
+	CreatedAtMs      int64
+	StartedAtMs      int64
+	EndedAtMs        int64
+	CreatedBy        string
+	RestoredFrom     int64
+	CheckpointBytes  int64
+}
+
+func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]ListUpdatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listUpdates, arg.StackID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Update
+	var items []ListUpdatesRow
 	for rows.Next() {
-		var i Update
+		var i ListUpdatesRow
 		if err := rows.Scan(
 			&i.StackID,
 			&i.ID,
@@ -1218,6 +1295,9 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Upd
 			&i.CreatedAtMs,
 			&i.StartedAtMs,
 			&i.EndedAtMs,
+			&i.CreatedBy,
+			&i.RestoredFrom,
+			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
 		}

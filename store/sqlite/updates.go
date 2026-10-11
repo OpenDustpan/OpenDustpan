@@ -42,6 +42,8 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			CreatedAtMs:      row.CreatedAtMs,
 			StartedAtMs:      row.StartedAtMs,
 			EndedAtMs:        row.EndedAtMs,
+			CreatedBy:        row.CreatedBy,
+			RestoredFrom:     row.RestoredFrom,
 		})
 		if err != nil {
 			return fmt.Errorf("insert update: %w", err)
@@ -67,7 +69,7 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		return stack.Update{}, fmt.Errorf("select update: %w", err)
 	}
 
-	return codec.FromUpdateRow(fromUpdateRow(&row), ref)
+	return codec.FromUpdateRow(fromGetUpdateRow(row), ref)
 }
 
 // StartUpdate implements stack.UpdateStore. The write lock taken when the
@@ -162,7 +164,7 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		return stack.Update{}, fmt.Errorf("select active update: %w", err)
 	}
 
-	return codec.FromUpdateRow(fromUpdateRow(&row), ref)
+	return codec.FromUpdateRow(fromActiveUpdateRow(row), ref)
 }
 
 // ListUpdates implements stack.UpdateStore.
@@ -187,7 +189,7 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 
 	converted := make([]codec.UpdateRow, 0, len(rows))
 	for i := range rows {
-		converted = append(converted, fromUpdateRow(&rows[i]))
+		converted = append(converted, fromListUpdateRow(rows[i]))
 	}
 
 	return codec.FromUpdateRows(converted, ref)
@@ -542,7 +544,9 @@ func checkSequence(ctx context.Context, q *db.Queries, cp stack.Checkpoint, stac
 	}
 }
 
-func fromUpdateRow(row *db.Update) codec.UpdateRow {
+// fromGetUpdateRow converts a GetUpdate join row, with its history fields
+// and checkpoint size, into a codec row.
+func fromGetUpdateRow(row db.GetUpdateRow) codec.UpdateRow {
 	return codec.UpdateRow{
 		StackID:          row.StackID,
 		ID:               row.ID,
@@ -556,6 +560,53 @@ func fromUpdateRow(row *db.Update) codec.UpdateRow {
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
 		DryRun:           row.DryRun,
+		CreatedBy:        row.CreatedBy,
+		RestoredFrom:     row.RestoredFrom,
+		CheckpointBytes:  row.CheckpointBytes,
+	}
+}
+
+// fromActiveUpdateRow converts an ActiveUpdate join row, with its history
+// fields and checkpoint size, into a codec row.
+func fromActiveUpdateRow(row db.ActiveUpdateRow) codec.UpdateRow {
+	return codec.UpdateRow{
+		StackID:          row.StackID,
+		ID:               row.ID,
+		Kind:             row.Kind,
+		Status:           row.Status,
+		LeaseDigest:      row.LeaseDigest,
+		Version:          row.Version,
+		Revision:         row.Revision,
+		LeaseExpiresAtMs: row.LeaseExpiresAtMs,
+		CreatedAtMs:      row.CreatedAtMs,
+		StartedAtMs:      row.StartedAtMs,
+		EndedAtMs:        row.EndedAtMs,
+		DryRun:           row.DryRun,
+		CreatedBy:        row.CreatedBy,
+		RestoredFrom:     row.RestoredFrom,
+		CheckpointBytes:  row.CheckpointBytes,
+	}
+}
+
+// fromListUpdateRow converts a ListUpdates join row, with its history fields
+// and checkpoint size, into a codec row.
+func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
+	return codec.UpdateRow{
+		StackID:          row.StackID,
+		ID:               row.ID,
+		Kind:             row.Kind,
+		Status:           row.Status,
+		LeaseDigest:      row.LeaseDigest,
+		Version:          row.Version,
+		Revision:         row.Revision,
+		LeaseExpiresAtMs: row.LeaseExpiresAtMs,
+		CreatedAtMs:      row.CreatedAtMs,
+		StartedAtMs:      row.StartedAtMs,
+		EndedAtMs:        row.EndedAtMs,
+		DryRun:           row.DryRun,
+		CreatedBy:        row.CreatedBy,
+		RestoredFrom:     row.RestoredFrom,
+		CheckpointBytes:  row.CheckpointBytes,
 	}
 }
 
