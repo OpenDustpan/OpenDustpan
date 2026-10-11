@@ -5,20 +5,41 @@
 //		t.Parallel()
 //		blobtest.Run(t, func(t *testing.T) blob.Store { return newMyStore(t) })
 //	}
+//
+// The suite includes concurrent cases; see Factory for what a store must
+// support.
 package blobtest
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/blob"
 )
 
-// Factory returns a fresh, empty store for one subtest.
+// Factory returns a fresh, empty store for one subtest. Each case gets its
+// own store, but the parallel-put case shares that store across goroutines:
+// the store must stay correct under concurrent use, with a Put that writes a
+// key only once even when puts race on it. An adapter without atomic
+// write-once semantics fails that case.
 type Factory func(t *testing.T) blob.Store
+
+// largeObjectSize is the payload of the large-object case: 4 MiB. It is
+// larger than the copy buffer and one filesystem block, so it exercises the
+// streaming path, yet small enough that a run with -race stays fast.
+const largeObjectSize = 4 << 20
+
+// parallelPuts is the number of goroutines that race one key in the
+// parallel-put case. Eight overlaps on a multicore runner while the case
+// stays fast.
+const parallelPuts = 8
 
 // Run executes the conformance suite against stores produced by newStore.
 func Run(t *testing.T, newStore Factory) {
@@ -42,6 +63,21 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("delete removes and is idempotent", func(t *testing.T) {
 		t.Parallel()
 		testDelete(t, newStore(t))
+	})
+
+	t.Run("parallel put on one key gives one success", func(t *testing.T) {
+		t.Parallel()
+		testParallelPut(t, newStore(t))
+	})
+
+	t.Run("large object round-trips", func(t *testing.T) {
+		t.Parallel()
+		testLargeObject(t, newStore(t))
+	})
+
+	t.Run("failed put leaves no object", func(t *testing.T) {
+		t.Parallel()
+		testFailedPut(t, newStore(t))
 	})
 
 	t.Run("ping answers on a healthy store and fails on a canceled context", func(t *testing.T) {
@@ -100,6 +136,136 @@ func testDelete(t *testing.T, s blob.Store) {
 
 	if _, err := s.Get(t.Context(), key); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testParallelPut races parallelPuts goroutines on one key. Exactly one Put
+// succeeds, the rest fail with ErrExists, and Get returns the bytes of the
+// winner whole.
+func testParallelPut(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	key := mustKey(t, "parallel/race")
+	payloads := make([][]byte, parallelPuts)
+
+	for i := range payloads {
+		payloads[i] = []byte(fmt.Sprintf("winner-%02d-%s", i, strings.Repeat("x", 1024)))
+	}
+
+	ctx := t.Context()
+	errs := make([]error, parallelPuts)
+
+	var wg sync.WaitGroup
+
+	for i := range payloads {
+		wg.Go(func() {
+			errs[i] = s.Put(ctx, key, bytes.NewReader(payloads[i]))
+		})
+	}
+
+	wg.Wait()
+
+	var winner []byte
+
+	successes := 0
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+			winner = payloads[i]
+		case errors.Is(err, blob.ErrExists):
+		default:
+			t.Fatalf("parallel put %d: err = %v, want nil or ErrExists", i, err)
+		}
+	}
+
+	if successes != 1 {
+		t.Fatalf("parallel put: %d successes, want exactly one", successes)
+	}
+
+	if got := get(t, s, key); !bytes.Equal(got, winner) {
+		t.Fatalf("get after parallel put = %d bytes, want the %d bytes of the winner whole", len(got), len(winner))
+	}
+}
+
+// testLargeObject writes largeObjectSize bytes of a fixed pattern and checks
+// the read back matches in length and SHA-256 digest.
+func testLargeObject(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	key := mustKey(t, "large/object")
+	data := make([]byte, largeObjectSize)
+
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+
+	want := sha256.Sum256(data)
+
+	put(t, s, key, data)
+
+	got := get(t, s, key)
+
+	if len(got) != len(data) {
+		t.Fatalf("get large object = %d bytes, want %d", len(got), len(data))
+	}
+
+	if digest := sha256.Sum256(got); digest != want {
+		t.Fatalf("get large object digest = %x, want %x", digest, want)
+	}
+}
+
+// failReader returns data until failAfter bytes, then fails, as a reader the
+// test closes early would.
+type failReader struct {
+	data      []byte
+	failAfter int
+	off       int
+}
+
+// errReadFailed is the failure failReader reports once it passes failAfter.
+var errReadFailed = errors.New("simulated read failure")
+
+func newFailReader(data []byte, failAfter int) *failReader {
+	return &failReader{data: data, failAfter: failAfter, off: 0}
+}
+
+func (r *failReader) Read(p []byte) (int, error) {
+	if r.off >= r.failAfter {
+		return 0, errReadFailed
+	}
+
+	if r.off >= len(r.data) {
+		return 0, io.EOF
+	}
+
+	n := copy(p, r.data[r.off:min(r.failAfter, len(r.data))])
+	r.off += n
+
+	return n, nil
+}
+
+// testFailedPut stores a reader that fails after some bytes. The Put fails,
+// the key stays absent and a second Put of the same key works.
+func testFailedPut(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	key := mustKey(t, "failed/put")
+	data := []byte(strings.Repeat("partial-", 256))
+
+	if err := s.Put(t.Context(), key, newFailReader(data, 16)); err == nil {
+		t.Fatal("put with a failing reader = nil, want an error")
+	}
+
+	if _, err := s.Get(t.Context(), key); !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("get after failed put: err = %v, want ErrNotFound", err)
+	}
+
+	put(t, s, key, []byte("second"))
+
+	if got := get(t, s, key); string(got) != "second" {
+		t.Fatalf("get after second put = %q, want %q", got, "second")
 	}
 }
 
