@@ -902,6 +902,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	tofuDestroyScenario(t, env)
 
 	tofuRemoteScenario(t, env)
+
+	// The stdlib http backend is the T1 import source (ADR 29): init, apply
+	// of a built-in resource and state pull pass against it.
+	tofuHTTPScenario(t, env)
 }
 
 // tofuRemoteScenario drives the remote backend with a workspace prefix in its
@@ -926,6 +930,36 @@ func tofuRemoteScenario(t *testing.T, env *e2e.Env) {
 		step("remote state pull prod", statePullLacksGreeting, "state", "pull", "-no-color"),
 	} {
 		env.RemoteStep(ctx, t, s)
+	}
+}
+
+// tofuHTTPScenario drives the stdlib http backend in its own directory: init,
+// apply of a built-in resource and state pull pass, and the backend counts
+// the apply write.
+func tofuHTTPScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	backend := e2e.NewHTTPBackend(t)
+	dir := backend.WriteProject(t)
+
+	for _, s := range []e2e.StepSpec{
+		step("http init", nil, "init", "-input=false", "-no-color"),
+		step("http apply", checkHTTPWrites(backend), "apply", "-input=false", "-auto-approve", "-no-color"),
+		step("http state pull", contains(`"greeting"`), "state", "pull", "-no-color"),
+	} {
+		env.StepIn(ctx, t, dir, s)
+	}
+}
+
+// checkHTTPWrites proves the apply wrote state through the http backend.
+func checkHTTPWrites(backend *e2e.HTTPBackend) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		if got := backend.Writes(); got == 0 {
+			return fmt.Errorf("%w: http backend holds no write after apply", errUnexpected)
+		}
+
+		return nil
 	}
 }
 
