@@ -72,6 +72,7 @@ type Route struct {
 func (h *Handler) buildRoutes() []Route {
 	routes := h.baseRoutes()
 	routes = append(routes, h.stackRoutes()...)
+	routes = append(routes, h.secretRoutes()...)
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
 	routes = append(routes, h.updateImportExportRoutes()...)
@@ -174,6 +175,64 @@ func (h *Handler) stackRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.updateStackTags,
+		},
+	}
+}
+
+// secretRoutes returns the encryption routes of the service secrets
+// provider. Encrypt routes need unit:encrypt; decrypt routes need
+// unit:decrypt, so reading a stack alone never reveals its plaintext secrets
+// (ADR 23). The audit routes always answer 204 and store nothing until the
+// audit log exists.
+func (h *Handler) secretRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/encrypt",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitEncrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.encryptValue,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitEncrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.batchEncrypt,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/decrypt",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitDecrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.decryptValue,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/batch-decrypt",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitDecrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.batchDecrypt,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/decrypt/log-decryption",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitDecrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.logDecryption,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/decrypt/log-batch-decryption",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitDecrypt},
+			Resolve: resolveGetStack,
+			Serve:   h.logBatchDecryption,
 		},
 	}
 }
