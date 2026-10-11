@@ -553,7 +553,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, deployment, saved_at_ms
+       digest, invalid, features_json, deployment, saved_at_ms, resource_count
 FROM checkpoints
 WHERE stack_id = ? AND update_id = ?
 `
@@ -577,13 +577,14 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 		&i.FeaturesJson,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = ? AND u.version = ?
@@ -608,6 +609,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.FeaturesJson,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
@@ -663,7 +665,7 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = ?
@@ -685,6 +687,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 		&i.FeaturesJson,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
@@ -1048,6 +1051,46 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const latestDeployment = `-- name: LatestDeployment :one
+SELECT c.deployment
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = ?
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+// The deployment of the stack's latest checkpoint, for the delete guard of a
+// checkpoint that predates the stored count. It loads one deployment only.
+func (q *Queries) LatestDeployment(ctx context.Context, stackID string) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, latestDeployment, stackID)
+	var deployment []byte
+	err := row.Scan(&deployment)
+	return deployment, err
+}
+
+const latestResourceCount = `-- name: LatestResourceCount :one
+SELECT (
+    SELECT c.resource_count
+    FROM checkpoints AS c
+    JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+    WHERE c.stack_id = ?
+    ORDER BY u.version DESC
+    LIMIT 1
+)
+`
+
+// The stored managed resource count of the stack's latest checkpoint. It is
+// NULL when the stack has no checkpoint or when the checkpoint predates the
+// count: the caller then counts that one deployment. It reads only the count
+// column, never the deployment.
+func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (sql.NullInt64, error) {
+	row := q.db.QueryRowContext(ctx, latestResourceCount, stackID)
+	var resource_count sql.NullInt64
+	err := row.Scan(&resource_count)
+	return resource_count, err
 }
 
 const listBackups = `-- name: ListBackups :many
@@ -1637,8 +1680,8 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    digest, invalid, features_json, deployment, saved_at_ms, resource_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -1647,7 +1690,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     invalid = excluded.invalid,
     features_json = excluded.features_json,
     deployment = excluded.deployment,
-    saved_at_ms = excluded.saved_at_ms
+    saved_at_ms = excluded.saved_at_ms,
+    resource_count = excluded.resource_count
 `
 
 type PutCheckpointParams struct {
@@ -1661,6 +1705,7 @@ type PutCheckpointParams struct {
 	FeaturesJson  string
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount sql.NullInt64
 }
 
 func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) error {
@@ -1675,6 +1720,7 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.FeaturesJson,
 		arg.Deployment,
 		arg.SavedAtMs,
+		arg.ResourceCount,
 	)
 	return err
 }

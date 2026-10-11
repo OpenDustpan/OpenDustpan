@@ -139,11 +139,21 @@ type Store interface {
 	// ListStacks returns the stacks matching filter, ordered by project then name.
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
 	// DeleteStack removes the stack identified by ref with its updates, events
-	// and checkpoints in one fenced transaction. It returns ErrNotFound if the
-	// stack does not exist, ErrUpdateConflict while a mutating update of the
-	// stack runs, namespace.ErrNotFound if the namespace does not exist, or
-	// namespace.ErrFenced if fence is stale.
+	// and checkpoints in one fenced transaction. When the latest checkpoint
+	// manages resources, it returns ErrHasResources and removes nothing. The
+	// check runs in the same transaction as the delete, so an update that
+	// finishes concurrently cannot drop resources. It returns ErrNotFound if
+	// the stack does not exist, ErrUpdateConflict while a mutating update of
+	// the stack runs, namespace.ErrNotFound if the namespace does not exist,
+	// or namespace.ErrFenced if fence is stale.
 	DeleteStack(ctx context.Context, ref Ref, fence namespace.Fence) error
+	// ForceDeleteStack removes the stack identified by ref with its updates,
+	// events and checkpoints in one fenced transaction, even when the latest
+	// checkpoint manages resources. It returns ErrNotFound if the stack does
+	// not exist, ErrUpdateConflict while a mutating update of the stack runs,
+	// namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale.
+	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence) error
 	// UpdateStackTags replaces the tags of the stack identified by ref with
 	// tags, keyed by its stable ID, and stamps updatedAt. It returns
 	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
@@ -244,9 +254,11 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 }
 
 // Delete removes the stack identified by ref with its updates, events and
-// checkpoints. The write is fenced on the namespace's failover version and
-// only allowed in its home region. It returns ErrNotFound if the stack does
-// not exist, and ErrUpdateConflict while a mutating update of the stack runs.
+// checkpoints. When the stack still manages resources, it returns
+// ErrHasResources and removes nothing. The write is fenced on the
+// namespace's failover version and only allowed in its home region. It
+// returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
+// while a mutating update of the stack runs.
 func (s *Service) Delete(ctx context.Context, ref Ref) error {
 	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
 	if err != nil {
@@ -254,6 +266,24 @@ func (s *Service) Delete(ctx context.Context, ref Ref) error {
 	}
 
 	if err := s.store.DeleteStack(ctx, ref, ns.Fence()); err != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	return nil
+}
+
+// ForceDelete removes the stack identified by ref with its updates, events
+// and checkpoints, even when the stack still manages resources. The write is
+// fenced on the namespace's failover version and only allowed in its home
+// region. It returns ErrNotFound if the stack does not exist, and
+// ErrUpdateConflict while a mutating update of the stack runs.
+func (s *Service) ForceDelete(ctx context.Context, ref Ref) error {
+	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
+	if err != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	if err := s.store.ForceDeleteStack(ctx, ref, ns.Fence()); err != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 

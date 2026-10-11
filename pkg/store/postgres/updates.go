@@ -8,6 +8,8 @@ import (
 	"math"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -59,11 +61,29 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			RestoredFrom:     row.RestoredFrom,
 		})
 		if err != nil {
+			if isForeignKeyViolation(err) {
+				// A concurrent DeleteStack removed the stack after the
+				// resolve above. CreateUpdate takes no stack lock, so the
+				// insert meets the missing stack here.
+				return stack.ErrNotFound
+			}
+
 			return fmt.Errorf("insert update: %w", err)
 		}
 
 		return nil
 	})
+}
+
+// foreignKeyViolation is the SQLSTATE of a PostgreSQL foreign-key violation.
+const foreignKeyViolation = "23503"
+
+// isForeignKeyViolation reports whether err wraps a PostgreSQL foreign-key
+// violation.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation
 }
 
 // GetUpdate implements stack.UpdateStore.
@@ -291,6 +311,7 @@ func writeCheckpoint(
 		Features:      row.Features,
 		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
+		ResourceCount: pgtype.Int8{Int64: row.ResourceCount, Valid: true},
 	})
 	if putErr != nil {
 		return fmt.Errorf("upsert checkpoint: %w", putErr)
@@ -331,6 +352,9 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
+		// A NULL count predates the count column; the domain checkpoint
+		// holds no count, and the delete guard handles NULL itself.
+		ResourceCount: row.ResourceCount.Int64,
 	}, ref)
 }
 
@@ -370,6 +394,9 @@ func (s *Store) CheckpointByVersion(
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
+		// A NULL count predates the count column; the domain checkpoint
+		// holds no count, and the delete guard handles NULL itself.
+		ResourceCount: row.ResourceCount.Int64,
 	}, ref)
 }
 

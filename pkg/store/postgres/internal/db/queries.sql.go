@@ -635,7 +635,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features, deployment, saved_at_ms
+       digest, invalid, features, deployment, saved_at_ms, resource_count
 FROM checkpoints
 WHERE stack_id = $1 AND update_id = $2
 `
@@ -656,6 +656,7 @@ type GetCheckpointByUpdateRow struct {
 	Features      []byte
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount pgtype.Int8
 }
 
 func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
@@ -672,13 +673,14 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 		&i.Features,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1 AND u.version = $2
@@ -700,6 +702,7 @@ type GetCheckpointByVersionRow struct {
 	Features      []byte
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount pgtype.Int8
 }
 
 func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
@@ -716,6 +719,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.Features,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
@@ -773,7 +777,7 @@ func (q *Queries) GetFailoverVersionForShare(ctx context.Context, name string) (
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1
@@ -792,6 +796,7 @@ type GetLatestCheckpointRow struct {
 	Features      []byte
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount pgtype.Int8
 }
 
 func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
@@ -808,6 +813,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 		&i.Features,
 		&i.Deployment,
 		&i.SavedAtMs,
+		&i.ResourceCount,
 	)
 	return i, err
 }
@@ -1150,6 +1156,46 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const latestDeployment = `-- name: LatestDeployment :one
+SELECT c.deployment
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+// The deployment of the stack's latest checkpoint, for the delete guard of a
+// checkpoint that predates the stored count. It loads one deployment only.
+func (q *Queries) LatestDeployment(ctx context.Context, stackID string) ([]byte, error) {
+	row := q.db.QueryRow(ctx, latestDeployment, stackID)
+	var deployment []byte
+	err := row.Scan(&deployment)
+	return deployment, err
+}
+
+const latestResourceCount = `-- name: LatestResourceCount :one
+SELECT (
+    SELECT c.resource_count
+    FROM checkpoints AS c
+    JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+    WHERE c.stack_id = $1
+    ORDER BY u.version DESC
+    LIMIT 1
+)
+`
+
+// The stored managed resource count of the stack's latest checkpoint. It is
+// NULL when the stack has no checkpoint or when the checkpoint predates the
+// count: the caller then counts that one deployment. It reads only the count
+// column, never the deployment.
+func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgtype.Int8, error) {
+	row := q.db.QueryRow(ctx, latestResourceCount, stackID)
+	var resource_count pgtype.Int8
+	err := row.Scan(&resource_count)
+	return resource_count, err
 }
 
 const listBackups = `-- name: ListBackups :many
@@ -1785,8 +1831,8 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    digest, invalid, features, deployment, saved_at_ms, resource_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -1795,7 +1841,8 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     invalid = excluded.invalid,
     features = excluded.features,
     deployment = excluded.deployment,
-    saved_at_ms = excluded.saved_at_ms
+    saved_at_ms = excluded.saved_at_ms,
+    resource_count = excluded.resource_count
 `
 
 type PutCheckpointParams struct {
@@ -1809,6 +1856,7 @@ type PutCheckpointParams struct {
 	Features      []byte
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount pgtype.Int8
 }
 
 func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) error {
@@ -1823,6 +1871,7 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.Features,
 		arg.Deployment,
 		arg.SavedAtMs,
+		arg.ResourceCount,
 	)
 	return err
 }

@@ -28,6 +28,16 @@ type UpdatesStore interface {
 // UpdatesFactory returns a fresh, empty store for one subtest.
 type UpdatesFactory func(t *testing.T) UpdatesStore
 
+// CountNullifier is an optional UpdatesStore capability for the uncounted
+// checkpoint case: it sets every stored checkpoint count to NULL, as rows
+// written before the count column hold. SQL adapters seed it with a direct
+// SQL update, as the port always writes the count.
+type CountNullifier interface {
+	UpdatesStore
+	// NullifyResourceCount sets every stored checkpoint count to NULL.
+	NullifyResourceCount(ctx context.Context) error
+}
+
 // RunUpdates executes the conformance suite of the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) against stores
 // produced by newStore.
@@ -59,6 +69,12 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "delete of the stack deletes its children", test: testDeleteStackDeletesChildren},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
+		{name: "delete without force refuses a stack with resources", test: testDeleteRefusesResources},
+		{name: "delete with force removes a stack with resources", test: testDeleteWithForceRemovesResources},
+		{name: "delete without force follows the latest checkpoint", test: testDeleteFollowsLatestCheckpoint},
+		{name: "delete with an uncounted checkpoint counts its deployment", test: testDeleteWithUncountedCheckpoint},
+		{name: "delete races a finishing update without dropping resources", test: testDeleteRaceWithFinishingUpdate},
+		{name: "delete races a new update without dropping resources", test: testDeleteRaceWithNewUpdate},
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
@@ -1264,6 +1280,283 @@ func testDeleteDuringRunningUpdate(t *testing.T, f fixture) {
 
 	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); err != nil {
 		t.Errorf("delete after the update ended: %v", err)
+	}
+}
+
+// resourcedDeployment holds the automatic stack resource and one managed
+// resource, so the stack counts as having resources.
+const resourcedDeployment = `{"resources":[` +
+	`{"type":"pulumi:pulumi:Stack"},` +
+	`{"type":"custom:resource:Type"}]}`
+
+// emptyDeployment holds no managed resources: only the automatic stack
+// resource.
+const emptyDeployment = `{"resources":[{"type":"pulumi:pulumi:Stack"}]}`
+
+// finishWithDeployment runs one mutating update of f.ref with deployment as
+// its checkpoint and ends it succeeded.
+func finishWithDeployment(t *testing.T, f fixture, id, deployment string) stack.Update {
+	t.Helper()
+
+	u := f.run(t, f.ref, id, mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, deployment), f.fence); err != nil {
+		t.Fatalf("put checkpoint of %s: %v", id, err)
+	}
+
+	return f.end(t, u, stack.StatusSucceeded)
+}
+
+// testDeleteRefusesResources finishes an update with one managed resource
+// and checks that the final delete without force refuses with
+// ErrHasResources and removes nothing, without loading the deployment: the
+// count travels on the checkpoint row.
+func testDeleteRefusesResources(t *testing.T, f fixture) {
+	t.Helper()
+
+	finishWithDeployment(t, f, "u1", resourcedDeployment)
+
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); !errors.Is(err, stack.ErrHasResources) {
+		t.Fatalf("delete a stack with resources: err = %v, want ErrHasResources", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Fatalf("get stack after a refused delete: %v", err)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); err != nil {
+		t.Fatalf("latest checkpoint after a refused delete: %v", err)
+	}
+}
+
+// testDeleteWithForceRemovesResources finishes an update with one managed
+// resource and checks that the final delete with force removes the stack
+// with its children.
+func testDeleteWithForceRemovesResources(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := finishWithDeployment(t, f, "u1", resourcedDeployment)
+
+	if err := f.s.ForceDeleteStack(t.Context(), f.ref, f.fence); err != nil {
+		t.Fatalf("delete a stack with resources and force: %v", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("latest checkpoint after delete: err = %v, want ErrNoState", err)
+	}
+
+	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, u.Version); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint of version %d after delete: err = %v, want ErrNoState", u.Version, err)
+	}
+}
+
+// testDeleteFollowsLatestCheckpoint checks that the delete guard reads the
+// latest checkpoint: resources in an older version do not block a delete
+// when the latest version holds none, and the reverse refuses.
+func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
+	t.Helper()
+
+	finishWithDeployment(t, f, "u1", resourcedDeployment)
+	finishWithDeployment(t, f, "u2", emptyDeployment)
+
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); err != nil {
+		t.Fatalf("delete after the latest checkpoint dropped resources: %v", err)
+	}
+
+	other := f.other(t)
+	g := fixture{s: f.s, ref: other, fence: f.fence}
+	finishWithDeployment(t, g, "u1", emptyDeployment)
+	finishWithDeployment(t, g, "u2", resourcedDeployment)
+
+	if err := f.s.DeleteStack(t.Context(), other, f.fence); !errors.Is(err, stack.ErrHasResources) {
+		t.Fatalf("delete while the latest checkpoint manages resources: err = %v, want ErrHasResources", err)
+	}
+}
+
+// testDeleteWithUncountedCheckpoint covers rows written before the count
+// column: with a NULL count the delete guard counts the one latest
+// deployment. A checkpoint with only the root stack resource deletes without
+// force; one with a managed resource is refused with ErrHasResources.
+func testDeleteWithUncountedCheckpoint(t *testing.T, f fixture) {
+	t.Helper()
+
+	nullify, ok := f.s.(CountNullifier)
+	if !ok {
+		t.Skip("store cannot leave the checkpoint count uncounted")
+	}
+
+	finishWithDeployment(t, f, "u1", emptyDeployment)
+
+	other := f.other(t)
+	g := fixture{s: f.s, ref: other, fence: f.fence}
+	finishWithDeployment(t, g, "u1", resourcedDeployment)
+
+	if err := nullify.NullifyResourceCount(t.Context()); err != nil {
+		t.Fatalf("nullify the checkpoint count: %v", err)
+	}
+
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); err != nil {
+		t.Fatalf("delete a stack whose uncounted checkpoint holds no resources: %v", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
+	}
+
+	if err := f.s.DeleteStack(t.Context(), other, f.fence); !errors.Is(err, stack.ErrHasResources) {
+		t.Fatalf(
+			"delete a stack whose uncounted checkpoint manages resources: err = %v, want ErrHasResources",
+			err,
+		)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), other); err != nil {
+		t.Fatalf("get stack after a refused delete: %v", err)
+	}
+}
+
+// testDeleteRaceWithFinishingUpdate reproduces the race of issue #207: a
+// delete without force runs while an update that adds resources finishes.
+// The check runs inside the delete transaction, so the delete never drops
+// the stack: it fails with ErrUpdateConflict while the update runs and with
+// ErrHasResources once it finished.
+func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "racer", mutating())
+	want := newCheckpoint(u, 0, resourcedDeployment)
+
+	var (
+		completeErr error
+		deleteErr   error
+	)
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		if err := f.s.PutCheckpoint(t.Context(), want, f.fence); err != nil {
+			completeErr = err
+
+			return
+		}
+
+		completeErr = f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence)
+	})
+	wg.Go(func() {
+		deleteErr = f.s.DeleteStack(t.Context(), f.ref, f.fence)
+	})
+
+	wg.Wait()
+
+	if completeErr != nil {
+		t.Fatalf("complete the update: %v", completeErr)
+	}
+
+	if deleteErr == nil {
+		t.Fatal("delete during a finishing update succeeded, want ErrUpdateConflict or ErrHasResources")
+	}
+
+	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrHasResources) {
+		t.Fatalf("delete during a finishing update: err = %v, want ErrUpdateConflict or ErrHasResources", deleteErr)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Fatalf("get stack after a refused delete: %v", err)
+	}
+}
+
+// testDeleteRaceWithNewUpdate reproduces the window of issue #207 at the
+// store: a delete without force runs while a whole update starts and ends
+// with resources. The delete and the update serialize on the stack, so they
+// never both succeed: either the update wins and the delete refuses, or the
+// delete wins and the update finds no stack.
+func testDeleteRaceWithNewUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	var (
+		updateErr error
+		deleteErr error
+	)
+
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		updateErr = runResourcedUpdate(t, f)
+	})
+	wg.Go(func() {
+		deleteErr = f.s.DeleteStack(t.Context(), f.ref, f.fence)
+	})
+
+	wg.Wait()
+	checkDeleteRace(t, f, updateErr, deleteErr)
+}
+
+// runResourcedUpdate creates, starts, checkpoints and ends one update with
+// resources, returning the first error it meets.
+func runResourcedUpdate(t *testing.T, f fixture) error {
+	t.Helper()
+
+	u := newUpdate(f.ref, "racer", mutating(), "", 0)
+	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+		return err
+	}
+
+	startedUpdate, err := f.s.StartUpdate(t.Context(), started(t, u), f.fence)
+	if err != nil {
+		return err
+	}
+
+	cp := newCheckpoint(startedUpdate, 0, resourcedDeployment)
+	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); err != nil {
+		return err
+	}
+
+	return f.s.SaveUpdate(t.Context(), ended(startedUpdate, stack.StatusSucceeded), f.fence)
+}
+
+// checkDeleteRace proves that a delete without force and a concurrent update
+// with resources never both succeed: either the update wins and the delete
+// refuses, or the delete wins and the update finds no stack.
+func checkDeleteRace(t *testing.T, f fixture, updateErr, deleteErr error) {
+	t.Helper()
+
+	switch {
+	case updateErr == nil && deleteErr == nil:
+		t.Fatal("delete and update both succeeded: the delete dropped resources")
+	case updateErr == nil:
+		checkDeleteLost(t, f, deleteErr)
+	case deleteErr == nil:
+		checkUpdateLost(t, updateErr)
+	default:
+		t.Fatalf("update err = %v, delete err = %v; want one side to win", updateErr, deleteErr)
+	}
+}
+
+// checkDeleteLost proves a delete that lost to the update refused with the
+// lock or the resource guard, and removed nothing.
+func checkDeleteLost(t *testing.T, f fixture, deleteErr error) {
+	t.Helper()
+
+	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrHasResources) {
+		t.Fatalf("delete lost to the update: err = %v, want ErrUpdateConflict or ErrHasResources", deleteErr)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Fatalf("get stack after a refused delete: %v", err)
+	}
+}
+
+// checkUpdateLost proves an update that lost to the delete found no stack.
+func checkUpdateLost(t *testing.T, updateErr error) {
+	t.Helper()
+
+	if !errors.Is(updateErr, stack.ErrNotFound) && !errors.Is(updateErr, stack.ErrUpdateNotFound) &&
+		!errors.Is(updateErr, stack.ErrUpdateConflict) {
+		t.Fatalf("update lost to the delete: err = %v, want ErrNotFound, ErrUpdateNotFound or ErrUpdateConflict",
+			updateErr)
 	}
 }
 

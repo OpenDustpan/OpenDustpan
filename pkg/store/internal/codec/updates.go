@@ -38,7 +38,10 @@ type UpdateRow struct {
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
 // JSON array of strings. The stack is its stable ID; the caller supplies the
-// current reference.
+// current reference. ResourceCount holds the number of managed resources
+// beyond the automatic stack resource, so the final delete checks it without
+// loading the deployment. Rows written before the count hold NULL, which
+// means not counted; new checkpoints always store the count.
 type CheckpointRow struct {
 	StackID       string
 	UpdateID      string
@@ -50,6 +53,7 @@ type CheckpointRow struct {
 	Sequence      int64
 	SavedAtMs     int64
 	Invalid       bool
+	ResourceCount int64
 }
 
 // OptionalMillis encodes t as Unix milliseconds, and the zero time as 0.
@@ -173,6 +177,7 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 		Sequence:      cp.Sequence,
 		SavedAtMs:     Millis(cp.SavedAt),
 		Invalid:       cp.Invalid,
+		ResourceCount: stack.CountManagedResources(cp.Deployment),
 	}, nil
 }
 

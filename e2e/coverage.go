@@ -215,6 +215,10 @@ func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespac
 	return stack.ErrNotFound
 }
 
+func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
 func (coverageStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	return nil, nil
 }

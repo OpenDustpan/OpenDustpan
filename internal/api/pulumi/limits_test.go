@@ -32,7 +32,7 @@ func newUpdateFixtureWithGate(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
