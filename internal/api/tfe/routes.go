@@ -2,6 +2,8 @@ package tfe
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -149,8 +151,9 @@ func (h *Handler) workspaceRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/organizations/{organization}/workspaces",
-			// A list reads the organization, so namespace:read stays the
-			// gate. The handler answers 404 for an unknown organization.
+			// A list needs namespace:read on the organization. The handler
+			// then keeps only the workspaces the caller may unit:read and
+			// answers 404 for an unknown organization.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,
@@ -390,7 +393,8 @@ func resolveWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 // value. It reads the body once with http.MaxBytesReader and restores r.Body
 // before returning, so the handler can read it again. The current GET handler
 // reads no body; the restore keeps the shared shape for future lock POSTs on
-// the same ID.
+// the same ID. An unknown ID fails with absence, which the wrapper answers as
+// 403 for a caller without rights and 404 otherwise.
 func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
@@ -410,7 +414,9 @@ func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (id
 // resolveStateVersionWorkspace returns the unit for the workspace ID in the
 // path value, without reading the body: the state version create body holds
 // the base64 outputs document and is far larger than the shared resolver
-// limit, so the create handler reads it.
+// limit, so the create handler reads it. An unknown ID fails with absence,
+// which the wrapper answers as 403 for a caller without rights and 404
+// otherwise.
 func (h *Handler) resolveStateVersionWorkspace(
 	_ http.ResponseWriter, r *http.Request,
 ) (identity.Object, error) {
@@ -450,7 +456,12 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 }
 
 // enforceAuthorized serves a route that needs a signed-in principal and the
-// Authorizer to allow every declared action on the resolved object.
+// Authorizer to allow every declared action on the resolved object. A resolver
+// that reads the database runs before authorization, so an unknown ID would
+// answer 404 and leak that it does not exist. When the resolver reports
+// absence, the wrapper authorizes the declared actions on a synthetic unit no
+// caller may read: a caller without rights answers 403 for unknown IDs too,
+// while an allowed caller still answers 404.
 func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -464,7 +475,11 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {
-			h.writeError(ctx, w, err)
+			if isAbsence(err) {
+				h.writeAbsence(ctx, w, p, route, err)
+			} else {
+				h.writeError(ctx, w, err)
+			}
 
 			return
 		}
@@ -479,4 +494,55 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		route.Serve(w, r, p, obj)
 	}
+}
+
+// isAbsence reports whether err means the resolver found nothing: an unknown
+// workspace, state version or namespace. Only these errors hide behind the
+// fallback authorization; every other resolver error answers as before.
+func isAbsence(err error) bool {
+	return errors.Is(err, workspace.ErrNotFound) ||
+		errors.Is(err, workspace.ErrStateVersionNotFound) ||
+		errors.Is(err, namespace.ErrNotFound)
+}
+
+// writeAbsence answers a resolver absence without leaking it: it authorizes
+// every declared action on a synthetic unit that only administrators may
+// read. A denied caller answers 403 for unknown IDs too, while an allowed
+// caller answers the original 404.
+func (h *Handler) writeAbsence(
+	ctx context.Context, w http.ResponseWriter, p identity.Principal, route Route, err error,
+) {
+	unknown, objErr := unknownUnitObject()
+	if objErr != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	for _, action := range route.Actions {
+		if authErr := h.authz.Authorize(ctx, p, action, unknown); authErr != nil {
+			h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, authErr))
+
+			return
+		}
+	}
+
+	h.writeError(ctx, w, err)
+}
+
+// unknownUnitObject returns a synthetic unit no caller may read except through
+// the administrator bypass: the Authorizer denies it for every other caller,
+// so unknown IDs answer 403 for them. It never names a real workspace.
+func unknownUnitObject() (identity.Object, error) {
+	ns, err := namespace.ParseName("unknown")
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	name, err := workspace.ParseName("unknown")
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return unitObject(workspace.Ref{Namespace: ns, Name: name})
 }
