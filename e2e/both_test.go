@@ -82,6 +82,7 @@ func runBothOnStore(
 	pulumiScenario(t, env)
 
 	checkServerMetrics(t, env)
+	checkReadyWithoutDatabase(t.Context(), t, env)
 }
 
 // checkServerMetrics proves the metrics route counts both tools: GET

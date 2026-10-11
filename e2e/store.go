@@ -92,16 +92,6 @@ func PostgresURL() string {
 	return os.Getenv(postgresURLEnv)
 }
 
-// openPostgresStore opens the PostgreSQL server at base in a fresh schema, so
-// parallel runs never share state. The schema is dropped when the test ends.
-func openPostgresStore(ctx context.Context, tb testing.TB, base string) *postgres.Store {
-	tb.Helper()
-
-	st, _ := openPostgresStoreWithURL(ctx, tb, base)
-
-	return st
-}
-
 // openPostgresStoreWithURL opens the PostgreSQL server at base in a fresh
 // schema and returns the store with the schema URL, so a server binary can
 // serve the same schema. The schema is dropped when the test ends.
