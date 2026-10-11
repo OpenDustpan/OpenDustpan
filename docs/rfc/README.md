@@ -109,3 +109,4 @@ both together.
 | [58](0058-large-request-limits.md) | Bound memory of large request bodies | draft |
 | [59](0059-installation-api.md) | Shape of the installation API served by api/server | draft |
 | [60](0060-maintenance-mode-visibility-wait.md) | Wait until every instance sees maintenance mode before a restore applies | draft |
+| [62](0062-pulumi-journaling.md) | Pulumi journaling | draft |
