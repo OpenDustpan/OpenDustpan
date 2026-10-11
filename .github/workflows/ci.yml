@@ -56,6 +56,41 @@ jobs:
       - name: Build
         run: go build ./cmd/opendustpan
 
+  # Trivy and TruffleHog (make trivy, make trufflehog). The binaries come from
+  # the upstream releases, and each archive is checked against the SHA-256
+  # pinned here. Change a version together with its checksum and the Makefile.
+  scan:
+    runs-on: ubuntu-latest
+    env:
+      TRIVY_VERSION: 0.75.0
+      TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+      TRUFFLEHOG_VERSION: 3.99.2
+      TRUFFLEHOG_SHA256: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+    steps:
+      # TruffleHog scans the Git history, so fetch all of it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Trivy and TruffleHog
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/scan" "$HOME/.local/bin"
+          cd "$RUNNER_TEMP/scan"
+          curl -fsSL --retry 3 -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 -o trufflehog.tar.gz \
+            "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
+          echo "${TRUFFLEHOG_SHA256}  trufflehog.tar.gz" | sha256sum -c -
+          tar -xzf trivy.tar.gz -C "$HOME/.local/bin" trivy
+          tar -xzf trufflehog.tar.gz -C "$HOME/.local/bin" trufflehog
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Trivy scan
+        run: make trivy
+      - name: TruffleHog scan
+        run: make trufflehog
+
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
