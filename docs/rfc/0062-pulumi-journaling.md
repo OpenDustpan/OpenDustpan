@@ -15,7 +15,7 @@ The Pulumi CLI can send small per-operation journal entries instead of whole
 checkpoints. ADR 37 (decision 9) keeps journaling off: `StartUpdate` answers
 `journalVersion` 0, so the CLI saves full or delta checkpoints. This RFC
 collects the spike evidence for issue #275 and makes the call. It refers to
-ADR 37 and RFC 39 and changes neither.
+ADR 37 and ADR 41 and changes neither.
 
 A throwaway prototype answers the journal protocol behind an opt-in setting
 on the branch `spike/pulumi-journaling`
@@ -205,11 +205,16 @@ every resource (URN, type, inputs, outputs, dependencies, parent,
 provider), pending operations, the secrets manager state, snippets,
 extension parameterization, and rebuilt base state. State migration entries
 are refused. The parse stays limited to replay in the prototype: nothing is
-indexed, searched, or shown, and no other feature reads the parsed form. But
-the glossary rule ("OpenDustpan stores state but never reads its contents")
-still breaks at the parse step, so adopting journaling needs RFC 39
-(reading state contents) to move first, as the issue states. Journaling
-pulls in only the replay half of RFC 39, not a general index or browser.
+indexed, searched, or shown, and no other feature reads the parsed form.
+
+ADR 41 (decision 1) already lets the server read the state that it stores,
+so reading is not the blocker that the issue expected. The blocker is ADR 37.
+Replay makes the server build the checkpoint bytes itself from the entries.
+That breaks ADR 37 decision 4 (the server keeps the deployment exactly as the
+CLI sent it) and decision 8 (the server changes bytes only and does not parse
+resources) for a journaled update. Adopting journaling therefore needs a new
+ADR that replaces ADR 37 decisions 4, 8 and 9 for journaled updates. Full and
+delta saves keep the ADR 37 rules.
 
 ## Options
 
@@ -249,7 +254,9 @@ The honest cost:
 - The port of the replayer (about 920 lines, Apache-2.0 attribution) and
   its upkeep at each CLI upgrade (the journal format changed about 30 times
   in a year, see question 5).
-- The RFC 39 decision first: replay reads state (see question 6).
+- A new ADR that replaces ADR 37 decisions 4, 8 and 9 for journaled
+  updates, because the server builds the checkpoint bytes from the entries
+  (see question 6). ADR 41 already allows the read.
 - The production work list below.
 - Journal version 2: version 2 needs migration-entry replay first (see
   question 5). The spike measured version 1 only.
@@ -284,7 +291,8 @@ should be mistaken for production support.
   question.)
 - Which replayer source does the project accept, and who owns it at each
   CLI upgrade?
-- How does RFC 39 move so that replay has a decided basis?
+- Which ADR 37 rules does a journaled update replace, and do full and delta
+  saves keep exact bytes in the same stack?
 - What does migration-entry replay for journal version 2 look like?
 
 ## Outcome
