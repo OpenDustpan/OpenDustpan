@@ -296,15 +296,14 @@ func NewServer(opts ...Option) (*Server, error) {
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. Workspace ID routes are not served yet, so it carries no workspace
-// lookup.
+// to.
 func newTFEHandler(cfg settings, svc services) (*tfe.Handler, error) {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
-		Workspaces:    nil,
+		Workspaces:    svc.workspaces,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
