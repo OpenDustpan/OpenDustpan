@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -825,6 +826,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	consoleURLSteps(t, env)
 
 	pulumiChangeSecretsProviderScenario(t, env, org)
+
+	pulumiMaskedStateScenario(t, env, org)
 }
 
 // changeSecretsProviderProgram is the scratch YAML program for the
@@ -938,6 +941,596 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 		step("up after default change", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified),
 	)
 	env.Step(ctx, t, step("stack rm secrets", nil, "stack", "rm", "--yes", "--stack", qualified))
+}
+
+// maskedStateSecret is the secret value the masked state scenario sets. It
+// is a test value only; no masked route may ever return it.
+const maskedStateSecret = "s3cr3t-masked-state"
+
+// maskedStateSigKey is the Pulumi secret signature key: no masked route may
+// ever return it or a ciphertext field.
+const maskedStateSigKey = "4dabf18193072939515e22adb298388d"
+
+// maskedStateProgram returns the Pulumi.yaml of the masked state scenario:
+// a secret output from config and a stack reference whose outputs are
+// secrets. The reference name stays plain: the engine admits no secret
+// input on any usable built-in resource, it rejects a secret name with
+// "'name' property must be a string", so the unit tests cover input
+// masking while this scenario covers real service secrets in outputs.
+// greeting renders only in the second version, which is the one change
+// between the two ups.
+func maskedStateProgram(org, greeting string) string {
+	program := "name: " + e2e.Project + "\nruntime: yaml\n" +
+		"config:\n" +
+		"  apiKey:\n" +
+		"    type: string\n" +
+		"    secret: true\n" +
+		"outputs:\n" +
+		"  apiKeyOut:\n" +
+		"    fn::secret: ${apiKey}\n"
+
+	if greeting != "" {
+		program += "  greeting: " + greeting + "\n"
+	}
+
+	return program + "resources:\n" +
+		"  ref:\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + org + "/" + e2e.Project + "/other\n" +
+		"    options:\n" +
+		"      additionalSecretOutputs:\n" +
+		"      - outputs\n"
+}
+
+// pulumiMaskedStateScenario proves the masked state read (ADR 41 decisions
+// 1 to 3 and 7) on a stack with a secret output and secrets in resource
+// outputs: two ups with one change, then the resource list, the stack and
+// reference details and the outputs. It runs last, on a stack of its own
+// that it removes, so the earlier history checks keep their shape.
+func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	qualified := fmt.Sprintf("%s/%s/masked", org, e2e.Project)
+
+	env.WritePulumiProject(t, maskedStateProgram(org, ""))
+	env.Step(ctx, t, step("stack init masked", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for masked state",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
+		),
+	)
+	env.Step(ctx, t, step("up masked 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
+	env.Step(ctx, t, step("up masked 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.Step(ctx, t, step(
+		"masked state read",
+		checkMaskedState(ctx, env, org, maskedStateSecret),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// maskedStateItem is one entry of the masked resource list in e2e checks.
+type maskedStateItem struct {
+	URN     string `json:"urn"`
+	Type    string `json:"type"`
+	Changed bool   `json:"changed"`
+}
+
+// maskedStateList is the resource list body in e2e checks.
+type maskedStateList struct {
+	Resources []maskedStateItem `json:"resources"`
+}
+
+// checkMaskedState proves the masked routes on the masked stack: no body
+// holds the secret plain text, a ciphertext field or the secret signature;
+// each marker path is in masked; the outputs hold the secret output masked;
+// the stack and reference details hold their secret outputs masked while
+// the plain reference input reads back verbatim; and changed is true only
+// on the stack resource, which the greeting changed in version 2.
+func checkMaskedState(
+	ctx context.Context, env *e2e.Env, org, secret string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
+
+		lists, err := fetchMaskedLists(ctx, env, base)
+		if err != nil {
+			return err
+		}
+
+		if changedErr := checkMaskedChanged(lists.latest, lists.first, lists.second); changedErr != nil {
+			return changedErr
+		}
+
+		stackURN, refURNs, err := maskedStateURNs(lists.latest)
+		if err != nil {
+			return err
+		}
+
+		stackDetail, err := maskedStateGet(ctx, env, base+"/state/latest/resources/"+url.PathEscape(stackURN))
+		if err != nil {
+			return err
+		}
+
+		refDetails := make([]string, 0, len(refURNs))
+
+		for _, urn := range refURNs {
+			detail, fetchErr := maskedStateGet(ctx, env, base+"/state/latest/resources/"+url.PathEscape(urn))
+			if fetchErr != nil {
+				return fetchErr
+			}
+
+			refDetails = append(refDetails, detail)
+		}
+
+		outputs, err := maskedStateGet(ctx, env, base+"/state/latest/outputs")
+		if err != nil {
+			return err
+		}
+
+		bodies := maskedStateBodies{
+			latest: lists.latest, first: lists.first, second: lists.second,
+			stack: stackDetail, refs: refDetails, outputs: outputs,
+			refName: org + "/" + e2e.Project + "/other",
+		}
+
+		return assertMaskedBodies(ctx, env, base, bodies, secret)
+	}
+}
+
+// maskedStateLists are the three resource list bodies the masked check
+// reads.
+type maskedStateLists struct {
+	latest string
+	first  string
+	second string
+}
+
+// fetchMaskedLists reads the latest and the two versioned resource lists.
+func fetchMaskedLists(ctx context.Context, env *e2e.Env, base string) (maskedStateLists, error) {
+	var lists maskedStateLists
+
+	var err error
+
+	if lists.latest, err = maskedStateGet(ctx, env, base+"/state/latest/resources"); err != nil {
+		return maskedStateLists{}, err
+	}
+
+	if lists.first, err = maskedStateGet(ctx, env, base+"/state/1/resources"); err != nil {
+		return maskedStateLists{}, err
+	}
+
+	if lists.second, err = maskedStateGet(ctx, env, base+"/state/2/resources"); err != nil {
+		return maskedStateLists{}, err
+	}
+
+	return lists, nil
+}
+
+// maskedStateBodies are the masked bodies the masked check asserts on: the
+// three resource lists, the stack resource detail, one detail per stack
+// reference and the stack outputs. refName is the plain name input each
+// reference detail must carry verbatim.
+type maskedStateBodies struct {
+	latest  string
+	first   string
+	second  string
+	stack   string
+	refs    []string
+	outputs string
+	refName string
+}
+
+// assertMaskedBodies proves the masked bodies: no leaks, authoritative
+// markers, a masked secret in the outputs and in the stack and reference
+// details, plain reference inputs with no false-positive masking, and real
+// secrets in the export.
+func assertMaskedBodies(
+	ctx context.Context, env *e2e.Env, base string, bodies maskedStateBodies, secret string,
+) error {
+	checked := make([]string, 0, len(bodies.refs)+5)
+	checked = append(checked, bodies.latest, bodies.first, bodies.second, bodies.stack, bodies.outputs)
+	checked = append(checked, bodies.refs...)
+
+	for _, body := range checked {
+		if err := maskedStateCheckLeaks(body, secret); err != nil {
+			return err
+		}
+	}
+
+	marked := make([]string, 0, len(bodies.refs)+2)
+	marked = append(marked, bodies.stack)
+	marked = append(marked, bodies.refs...)
+	marked = append(marked, bodies.outputs)
+
+	for _, body := range marked {
+		if err := maskedStateCheckMarkers(body); err != nil {
+			return err
+		}
+	}
+
+	if !maskedStateHasSecret(bodies.outputs) {
+		return fmt.Errorf("%w: outputs hold no masked secret", errUnexpected)
+	}
+
+	if !maskedStateHasMaskedWith(bodies.stack, "/outputs/") {
+		return fmt.Errorf("%w: stack detail holds no masked secret in outputs", errUnexpected)
+	}
+
+	for _, detail := range bodies.refs {
+		if !maskedStateHasMaskedWith(detail, "/outputs/") {
+			return fmt.Errorf("%w: reference detail holds no masked secret in outputs", errUnexpected)
+		}
+
+		if err := maskedStateCheckRefInputs(detail, bodies.refName); err != nil {
+			return err
+		}
+	}
+
+	return maskedStateCheckExportSecret(ctx, env, base)
+}
+
+// maskedStateCheckRefInputs proves the reference detail carries its plain
+// name input verbatim: masking leaves non-secret inputs alone, so no
+// false-positive marker rewrites them.
+func maskedStateCheckRefInputs(detail, refName string) error {
+	var doc struct {
+		Inputs map[string]any `json:"inputs"`
+	}
+
+	if err := json.Unmarshal([]byte(detail), &doc); err != nil {
+		return fmt.Errorf("%w: decode reference detail: %w", errUnexpected, err)
+	}
+
+	if doc.Inputs["name"] != refName {
+		return fmt.Errorf(
+			"%w: reference inputs name = %v, want the plain name %q",
+			errUnexpected,
+			doc.Inputs["name"],
+			refName,
+		)
+	}
+
+	return nil
+}
+
+// maskedStateGet fetches path with the admin token: the status and the body
+// on success, or an error that names the path.
+func maskedStateGet(ctx context.Context, env *e2e.Env, path string) (string, error) {
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil {
+		return "", fmt.Errorf("%w: GET %s: %w", errUnexpected, path, err)
+	}
+
+	if status != http.StatusOK {
+		return "", fmt.Errorf("%w: GET %s answers %d, want %d (%s)", errUnexpected, path, status, http.StatusOK, body)
+	}
+
+	return body, nil
+}
+
+// checkMaskedChanged proves the changed markers: every resource of version
+// 1 is new, while version 2 and latest changed only the stack resource,
+// which carries the greeting of version 2. The deployment also holds the
+// default provider resource, which never changes.
+func checkMaskedChanged(latest, first, second string) error {
+	var firstList maskedStateList
+
+	if err := json.Unmarshal([]byte(first), &firstList); err != nil {
+		return fmt.Errorf("%w: decode version 1 list: %w", errUnexpected, err)
+	}
+
+	if len(firstList.Resources) < 2 {
+		return fmt.Errorf(
+			"%w: version 1 list holds %d resources, want at least the stack and a reference",
+			errUnexpected,
+			len(firstList.Resources),
+		)
+	}
+
+	for _, res := range firstList.Resources {
+		if !res.Changed {
+			return fmt.Errorf(
+				"%w: version 1 resource %q changed = false, want true for a new resource",
+				errUnexpected,
+				res.URN,
+			)
+		}
+	}
+
+	for _, version := range []struct {
+		name string
+		body string
+	}{{"version 2", second}, {"latest", latest}} {
+		if err := checkMaskedLatestChanged(version.name, version.body); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedLatestChanged proves the changed markers of one list of the
+// second version: only the stack resource changed.
+func checkMaskedLatestChanged(name, body string) error {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		return fmt.Errorf("%w: decode %s list: %w", errUnexpected, name, err)
+	}
+
+	if len(list.Resources) < 2 {
+		return fmt.Errorf(
+			"%w: %s list holds %d resources, want at least the stack and a reference",
+			errUnexpected,
+			name,
+			len(list.Resources),
+		)
+	}
+
+	changed := 0
+
+	for _, res := range list.Resources {
+		wantChanged := res.Type == "pulumi:pulumi:Stack"
+		if res.Changed != wantChanged {
+			return fmt.Errorf(
+				"%w: %s resource %q of type %q changed = %t, want %t",
+				errUnexpected,
+				name,
+				res.URN,
+				res.Type,
+				res.Changed,
+				wantChanged,
+			)
+		}
+
+		if res.Changed {
+			changed++
+		}
+	}
+
+	if changed != 1 {
+		return fmt.Errorf("%w: %s list changed %d resources, want only the stack", errUnexpected, name, changed)
+	}
+
+	return nil
+}
+
+// maskedStateURNs returns the URN of the stack resource and of every stack
+// reference in the list.
+func maskedStateURNs(latest string) (string, []string, error) {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(latest), &list); err != nil {
+		return "", nil, fmt.Errorf("%w: decode latest list: %w", errUnexpected, err)
+	}
+
+	var stackURN string
+
+	var refURNs []string
+
+	for _, res := range list.Resources {
+		switch res.Type {
+		case "pulumi:pulumi:Stack":
+			stackURN = res.URN
+		case "pulumi:pulumi:StackReference":
+			refURNs = append(refURNs, res.URN)
+		default:
+		}
+	}
+
+	if stackURN == "" {
+		return "", nil, fmt.Errorf("%w: latest list holds no stack resource", errUnexpected)
+	}
+
+	if len(refURNs) == 0 {
+		return "", nil, fmt.Errorf("%w: latest list holds no reference resource", errUnexpected)
+	}
+
+	return stackURN, refURNs, nil
+}
+
+// maskedStateCheckLeaks fails when body holds the secret plain text, a
+// ciphertext field or the secret signature key.
+func maskedStateCheckLeaks(body, secret string) error {
+	for _, leaked := range []string{secret, "ciphertext", maskedStateSigKey} {
+		if strings.Contains(body, leaked) {
+			return fmt.Errorf("%w: masked body holds %q", errUnexpected, leaked)
+		}
+	}
+
+	return nil
+}
+
+// maskedStateCheckMarkers proves each secret marker in body names a path in
+// its masked list: masked is authoritative.
+func maskedStateCheckMarkers(body string) error {
+	var doc struct {
+		Masked []string `json:"masked"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode masked body: %w", errUnexpected, err)
+	}
+
+	var raw any
+
+	if err := json.Unmarshal([]byte(body), &raw); err != nil {
+		return fmt.Errorf("%w: decode masked body: %w", errUnexpected, err)
+	}
+
+	return maskedStateWalkMarkers(raw, doc.Masked)
+}
+
+// maskedStateWalkMarkers proves each secret marker in v names a path in
+// masked.
+func maskedStateWalkMarkers(v any, masked []string) error {
+	switch typed := v.(type) {
+	case map[string]any:
+		return maskedStateWalkObject(typed, masked)
+	case []any:
+		for _, elem := range typed {
+			if err := maskedStateWalkMarkers(elem, masked); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	default:
+		return nil
+	}
+}
+
+// maskedStateWalkObject proves each secret marker in obj names a path in
+// masked.
+func maskedStateWalkObject(obj map[string]any, masked []string) error {
+	secret, ok := obj["secret"].(bool)
+	if ok && secret {
+		path, ok := obj["path"].(string)
+		if !ok || path == "" {
+			return nil
+		}
+
+		if !slices.Contains(masked, path) {
+			return fmt.Errorf("%w: marker for %q is not in masked %q", errUnexpected, path, masked)
+		}
+
+		return nil
+	}
+
+	for _, elem := range obj {
+		if err := maskedStateWalkMarkers(elem, masked); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// maskedStateHasSecret reports whether the outputs body masks at least one
+// secret value.
+func maskedStateHasSecret(outputs string) bool {
+	var doc struct {
+		Masked []string `json:"masked"`
+	}
+
+	if err := json.Unmarshal([]byte(outputs), &doc); err != nil {
+		return false
+	}
+
+	return len(doc.Masked) > 0
+}
+
+// maskedStateHasMaskedWith reports whether the masked list of body holds a
+// value path with infix, for example "/inputs/" for a masked resource
+// input or "/outputs/" for a masked output.
+func maskedStateHasMaskedWith(body, infix string) bool {
+	var doc struct {
+		Masked []string `json:"masked"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return false
+	}
+
+	return slices.ContainsFunc(doc.Masked, func(path string) bool {
+		return strings.Contains(path, infix)
+	})
+}
+
+// maskedStateCheckExportSecret proves the checkpoint really holds secrets
+// from the CLI: the export of the masked stack carries the secret signature
+// in the outputs of the stack resource and of the reference resource. The
+// masked routes above proved none of it leaks.
+func maskedStateCheckExportSecret(ctx context.Context, env *e2e.Env, base string) error {
+	status, body, err := env.APIStatus(ctx, http.MethodGet, base+"/export", "")
+	if err != nil {
+		return fmt.Errorf("%w: GET %s/export: %w", errUnexpected, base, err)
+	}
+
+	if status != http.StatusOK {
+		return fmt.Errorf("%w: GET %s/export answers %d, want %d", errUnexpected, base, status, http.StatusOK)
+	}
+
+	var exported struct {
+		Deployment map[string]any `json:"deployment"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &exported); err != nil {
+		return fmt.Errorf("%w: decode export: %w", errUnexpected, err)
+	}
+
+	resources, ok := exported.Deployment["resources"].([]any)
+	if !ok {
+		return fmt.Errorf("%w: export holds no resources array", errUnexpected)
+	}
+
+	stackSecret := false
+	refSecret := false
+
+	for _, elem := range resources {
+		if maskedStateOutputsSecret(elem, "pulumi:pulumi:Stack") {
+			stackSecret = true
+		}
+
+		if maskedStateOutputsSecret(elem, "pulumi:pulumi:StackReference") {
+			refSecret = true
+		}
+	}
+
+	if !stackSecret {
+		return fmt.Errorf(
+			"%w: export holds no secret in the stack outputs, want the secret output",
+			errUnexpected,
+		)
+	}
+
+	if !refSecret {
+		return fmt.Errorf(
+			"%w: export holds no secret in the reference outputs, want the secret resource output",
+			errUnexpected,
+		)
+	}
+
+	return nil
+}
+
+// maskedStateOutputsSecret reports whether elem is a resource of type typ
+// whose outputs hold the secret signature key.
+func maskedStateOutputsSecret(elem any, typ string) bool {
+	obj, ok := elem.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	if obj["type"] != typ {
+		return false
+	}
+
+	return maskedStateHoldsSigKey(obj["outputs"])
+}
+
+// maskedStateHoldsSigKey reports whether v holds the secret signature key.
+func maskedStateHoldsSigKey(v any) bool {
+	switch typed := v.(type) {
+	case map[string]any:
+		if _, ok := typed[maskedStateSigKey]; ok {
+			return true
+		}
+
+		return slices.ContainsFunc(slices.Collect(maps.Values(typed)), maskedStateHoldsSigKey)
+	case []any:
+		return slices.ContainsFunc(typed, maskedStateHoldsSigKey)
+	default:
+		return false
+	}
 }
 
 // pulumiSetupSteps returns the scenario steps before the rename: login

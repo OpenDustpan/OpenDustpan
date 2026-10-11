@@ -554,6 +554,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{stack}", "prod",
 		"{update}", "update0123456789abcdef",
 		"{version}", "1",
+		"{urn}", "urn:pulumi:dev::web::custom:resource:Type::res1",
 	).Replace(route.Path)
 
 	target := path
@@ -605,6 +606,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 		}
 
 		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(statePatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
@@ -686,6 +691,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 		}
 
 		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(statePatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 

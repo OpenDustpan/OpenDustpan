@@ -76,6 +76,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
 	routes = append(routes, h.updateImportExportRoutes()...)
+	routes = append(routes, h.stateRoutes()...)
 	routes = append(routes, h.updateCancelRoute(), h.updateRestoreRoute())
 
 	return routes
