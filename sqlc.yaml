@@ -19,6 +19,8 @@ sql:
             go_type: bool
           - column: checkpoints.invalid
             go_type: bool
+          - column: state_versions.force
+            go_type: bool
   - engine: postgresql
     schema: store/postgres/migrations
     queries: store/postgres/queries.sql

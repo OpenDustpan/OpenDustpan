@@ -228,3 +228,72 @@ SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, re
 FROM inventory
 WHERE namespace = ?
 ORDER BY tool, name;
+
+-- name: CreateWorkspace :execrows
+INSERT INTO workspaces (
+    id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetWorkspace :one
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE namespace = ? AND name = ?;
+
+-- name: GetWorkspaceByID :one
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE id = ?;
+
+-- name: ListWorkspaces :many
+SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+FROM workspaces
+WHERE namespace = ?
+ORDER BY name;
+
+-- name: SaveWorkspace :execrows
+-- A compare-and-swap: it changes nothing unless the stored revision is the
+-- one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.
+UPDATE workspaces
+SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
+    lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms
+WHERE id = @id AND revision = @expected_revision;
+
+-- name: CreateStateVersion :exec
+INSERT INTO state_versions (
+    id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetStateVersion :one
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+FROM state_versions
+WHERE id = ?;
+
+-- name: FinalizeStateVersion :execrows
+-- Marks one pending version finalized with its content. A finalized version
+-- matches no row, so a retry reports no change.
+UPDATE state_versions
+SET status = @status, finalized_at_ms = @finalized_at_ms,
+    content_key = @content_key, size = @size
+WHERE id = @id AND status = 'pending';
+
+-- name: SetWorkspaceCurrent :exec
+UPDATE workspaces
+SET current_state_version_id = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: GetCurrentStateVersion :one
+-- Follows the workspace pointer: a forced upload may carry a lower serial and
+-- still be current, so the highest serial is not always the current state.
+SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
+       sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms
+FROM state_versions AS sv
+JOIN workspaces AS w ON w.current_state_version_id = sv.id
+WHERE w.id = ?;
