@@ -2743,6 +2743,58 @@ func TestRestoreWhileCallerHoldsLock(t *testing.T) {
 	}
 }
 
+// TestRestoreConcurrentSameHolderWritesOnce proves that concurrent restores
+// of one version by the holder of the lock write one restored version: every
+// caller gets that version, and the history grows by one.
+func TestRestoreConcurrentSameHolderWritesOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+	pushVersion(t, f, 2, "v2")
+
+	*f.now = f.now.Add(time.Second)
+
+	const callers = 8
+
+	var wg sync.WaitGroup
+
+	ids := make([]workspace.StateVersionID, callers)
+	errs := make([]error, callers)
+
+	for i := range callers {
+		wg.Go(func() {
+			restored, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+			ids[i], errs[i] = restored.ID, err
+		})
+	}
+
+	wg.Wait()
+
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("restore %d: %v", i, errs[i])
+		}
+
+		if ids[i] != ids[0] {
+			t.Fatalf("restore %d answered %s, restore 0 answered %s: want one restored version", i, ids[i], ids[0])
+		}
+	}
+
+	_, total, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 0, Offset: 0})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+
+	if total != 3 {
+		t.Fatalf("history holds %d versions, want 3: two pushes and one restore", total)
+	}
+}
+
 // TestRestoreUnknownVersion proves a restore of a missing version, a pending
 // version or a version of another workspace fails with
 // ErrStateVersionNotFound.
