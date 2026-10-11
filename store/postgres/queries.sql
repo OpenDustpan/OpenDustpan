@@ -80,14 +80,18 @@ FOR NO KEY UPDATE;
 -- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
-    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
+    lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
+    created_by, restored_from
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: GetUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = $1 AND id = $2;
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1 AND u.id = $2;
 
 -- name: SaveUpdate :execrows
 -- A compare-and-swap: it changes nothing unless the stored revision is the
@@ -117,19 +121,25 @@ SET version = $1, updated_at_ms = $2
 WHERE namespace = $3 AND project = $4 AND name = $5;
 
 -- name: ActiveUpdate :one
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = $1
-  AND status = 'running' AND NOT dry_run AND kind <> 'preview';
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.status = 'running' AND NOT u.dry_run AND u.kind <> 'preview';
 
 -- name: ListUpdates :many
-SELECT stack_id, id, kind, dry_run, status, version, revision,
-       lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-FROM updates
-WHERE stack_id = $1
-  AND status <> 'not started' AND NOT dry_run AND kind <> 'preview'
-ORDER BY version DESC
+SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
+       u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
+       u.created_by, u.restored_from,
+       COALESCE(octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+FROM updates AS u
+LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.status <> 'not started' AND NOT u.dry_run AND u.kind <> 'preview'
+ORDER BY u.version DESC
 LIMIT $2 OFFSET $3;
 
 -- name: UpdateExists :one

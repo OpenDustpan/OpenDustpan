@@ -104,6 +104,24 @@ func TestUpdatesConformance(t *testing.T) {
 	})
 }
 
+// TestUpdateHistoryConformance runs the history cases of ADR 28 decision 4
+// on PostgreSQL: the creator and restore source survive, and history reports
+// the checkpoint size.
+func TestUpdateHistoryConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunUpdateHistory(t, func(t *testing.T) storetest.HistoryStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 func TestWorkspaceConformance(t *testing.T) {
 	t.Parallel()
 
@@ -697,6 +715,232 @@ func TestMigration0009FillsInventory(t *testing.T) {
 	checkMigratedInventory(t, s)
 }
 
+// TestMigration0012FillsHistoryFields checks that updates from before the
+// history columns read with an empty creator, no restore source and the
+// checkpoint size from the join.
+func TestMigration0012FillsHistoryFields(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+	seedAt0010WithUpdates(t, migrated)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	checkMigratedHistoryUpdates(t, s, ref)
+	checkMigratedHistoryList(t, s, ref)
+}
+
+// checkMigratedHistoryUpdates checks the migrated updates carry empty history fields
+// and the checkpoint size of u1.
+func checkMigratedHistoryUpdates(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	for _, want := range []struct {
+		id   stack.UpdateID
+		size int64
+	}{
+		{id: "u1", size: int64(len(`{"v":1}`))},
+		{id: "u2", size: 0},
+	} {
+		checkMigratedHistoryUpdate(t, s, ref, want.id, want.size)
+	}
+}
+
+// checkMigratedHistoryUpdate checks one migrated update against its expected size.
+func checkMigratedHistoryUpdate(t *testing.T, s *postgres.Store, ref stack.Ref, id stack.UpdateID, size int64) {
+	t.Helper()
+
+	got, getErr := s.GetUpdate(t.Context(), ref, id)
+	if getErr != nil {
+		t.Fatalf("get update %s: %v", id, getErr)
+	}
+
+	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
+		t.Fatalf(
+			"migrated update %s = creator %q restored %d size %d, want empty, 0 and %d",
+			id,
+			got.CreatedBy,
+			got.RestoredFrom,
+			got.CheckpointBytes,
+			size,
+		)
+	}
+}
+
+// checkMigratedHistoryList checks the migrated history holds u2 then u1
+// with empty history fields and the size of u1.
+func checkMigratedHistoryList(t *testing.T, s *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	history, err := s.ListUpdates(t.Context(), ref, stack.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(history) != 2 || history[0].ID != "u2" || history[0].CheckpointBytes != 0 ||
+		history[1].ID != "u1" || history[1].CheckpointBytes != int64(len(`{"v":1}`)) {
+		t.Fatalf("migrated history = %+v, want [u2 without checkpoint, u1 with size]", history)
+	}
+
+	for i := range history {
+		if history[i].CreatedBy != "" || history[i].RestoredFrom != 0 {
+			t.Fatalf(
+				"migrated history %s = creator %q restored %d, want empty and 0",
+				history[i].ID,
+				history[i].CreatedBy,
+				history[i].RestoredFrom,
+			)
+		}
+	}
+}
+
+// seedAt0010WithUpdates creates a database at migration 0010 with a stack,
+// two finished updates and the checkpoint of the first.
+func seedAt0010WithUpdates(t *testing.T, migrated string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0010(t, conn)
+	recordMigrations0010(t, conn)
+	seed0010Namespace(t, conn)
+	seed0010Stack(t, conn)
+	seed0010Updates(t, conn)
+	seed0010Checkpoint(t, conn)
+}
+
+// seed0010Namespace seeds the namespace of the 0011 and 0012 migration tests.
+func seed0010Namespace(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+}
+
+// seed0010Stack seeds one stack without tags, as the schema at 0010 holds it.
+func seed0010Stack(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', 2, 0, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed stack: %v", err)
+	}
+}
+
+// applyMigrations0010 applies migrations 0001 to 0010 to conn.
+func applyMigrations0010(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
+	}
+
+	for _, name := range names {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+// recordMigrations0010 records migrations 0001 to 0010 as applied.
+func recordMigrations0010(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
+			t.Fatalf("record migration %s: %v", name, err)
+		}
+	}
+}
+
+// seed0010Updates seeds two finished updates without the history columns.
+func seed0010Updates(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
+		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', $1, 'update', false, 'succeeded', $2, 3, ''::bytea, 0, 1000, 2000, 3000)`
+
+	for _, u := range []struct {
+		id      string
+		version int64
+	}{{id: "u1", version: 1}, {id: "u2", version: 2}} {
+		if _, err := conn.Exec(t.Context(), seed, u.id, u.version); err != nil {
+			t.Fatalf("seed update %s: %v", u.id, err)
+		}
+	}
+}
+
+// seed0010Checkpoint seeds the checkpoint of update u1.
+func seed0010Checkpoint(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
+		digest, invalid, features, deployment, saved_at_ms)
+		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', ''::bytea, 3, 0,
+		'\x0000000000000000000000000000000000000000000000000000000000000000', false, '[]', '{"v":1}', 4000)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+}
+
 // checkMigratedInventory checks the migration filled one entry per stack.
 func checkMigratedInventory(t *testing.T, s *postgres.Store) {
 	t.Helper()
@@ -1284,72 +1528,6 @@ func seedAt0010WithStateVersions(t *testing.T, migrated string) {
 	seed0010Namespace(t, conn)
 	seed0010Workspace(t, conn)
 	seed0010StateVersions(t, conn)
-}
-
-// applyMigrations0010 applies migrations 0001 to 0010 to conn.
-func applyMigrations0010(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
-		"0010_workspaces.sql",
-	}
-
-	for _, name := range names {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-// recordMigrations0010 records migrations 0001 to 0010 as applied.
-func recordMigrations0010(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version BIGINT NOT NULL PRIMARY KEY,
-		name    TEXT   NOT NULL
-	)`
-
-	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
-		"0010_workspaces.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
-			t.Fatalf("record migration %s: %v", name, err)
-		}
-	}
-}
-
-// seed0010Namespace seeds the namespace of the migrated workspace.
-func seed0010Namespace(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
 }
 
 // seed0010Workspace seeds one workspace that points at its newest version.

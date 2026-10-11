@@ -96,6 +96,8 @@ type Update struct {
 	StartedAtMs      int64
 	EndedAtMs        int64
 	StackID          string
+	CreatedBy        string
+	RestoredFrom     int64
 }
 
 type UpdateEvent struct {
