@@ -595,7 +595,9 @@ func routes(api, units, tfeAPI, serverAPI http.Handler, cfg settings) (http.Hand
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter.
 	mux.Handle("GET /.well-known/terraform.json", tfeAPI)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// The probes have their own prefix, so that ingress controllers that serve
+	// /healthz themselves cannot answer for this server (ADR 34).
+	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 

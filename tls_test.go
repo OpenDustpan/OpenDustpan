@@ -269,7 +269,7 @@ func TestRunTLSVersions(t *testing.T) {
 }
 
 // checkTLSVersion dials addr with the version range of tc and checks
-// /healthz: a handshake failure when tc wants one, else status 204 and the
+// /health/live: a handshake failure when tc wants one, else status 204 and the
 // negotiated version.
 func checkTLSVersion(t *testing.T, pool *x509.CertPool, addr string, tc tlsVersionCase) {
 	t.Helper()
@@ -284,7 +284,7 @@ func checkTLSVersion(t *testing.T, pool *x509.CertPool, addr string, tc tlsVersi
 		},
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/healthz", http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/health/live", http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -297,7 +297,7 @@ func checkTLSVersion(t *testing.T, pool *x509.CertPool, addr string, tc tlsVersi
 	}
 
 	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
+		t.Fatalf("GET /health/live: %v", err)
 	}
 
 	defer func() {
@@ -307,7 +307,7 @@ func checkTLSVersion(t *testing.T, pool *x509.CertPool, addr string, tc tlsVersi
 	}()
 
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("GET /healthz status %d, want %d", resp.StatusCode, http.StatusNoContent)
+		t.Fatalf("GET /health/live status %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 
 	if resp.TLS == nil || resp.TLS.Version != tc.maxVersion {
