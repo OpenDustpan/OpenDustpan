@@ -28,9 +28,9 @@ func Run(t *testing.T, newStore Factory) {
 		testRoundTrip(t, newStore(t))
 	})
 
-	t.Run("put replaces an existing object", func(t *testing.T) {
+	t.Run("second put on one key fails with ErrExists", func(t *testing.T) {
 		t.Parallel()
-		testReplace(t, newStore(t))
+		testSecondPutFails(t, newStore(t))
 	})
 
 	t.Run("get of a missing key is ErrNotFound", func(t *testing.T) {
@@ -47,7 +47,7 @@ func Run(t *testing.T, newStore Factory) {
 func testRoundTrip(t *testing.T, s blob.Store) {
 	t.Helper()
 
-	key := mustKey(t, "stacks/acme/web/prod/checkpoint-1.json")
+	key := mustKey(t, "tofu/ws-1/sv-1/a1")
 	want := []byte(`{"version":3}`)
 	put(t, s, key, want)
 
@@ -56,15 +56,18 @@ func testRoundTrip(t *testing.T, s blob.Store) {
 	}
 }
 
-func testReplace(t *testing.T, s blob.Store) {
+func testSecondPutFails(t *testing.T, s blob.Store) {
 	t.Helper()
 
 	key := mustKey(t, "a/b")
 	put(t, s, key, []byte("first"))
-	put(t, s, key, []byte("second"))
 
-	if got := get(t, s, key); string(got) != "second" {
-		t.Fatalf("get after replace = %q, want %q", got, "second")
+	if err := s.Put(t.Context(), key, bytes.NewReader([]byte("second"))); !errors.Is(err, blob.ErrExists) {
+		t.Fatalf("second put: err = %v, want ErrExists", err)
+	}
+
+	if got := get(t, s, key); string(got) != "first" {
+		t.Fatalf("get after failed put = %q, want %q", got, "first")
 	}
 }
 

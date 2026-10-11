@@ -1,6 +1,8 @@
-// Package blob defines the object storage port used for large, immutable
-// payloads such as checkpoints. Adapters live in subpackages (blob/fs) or in
-// user code; blob/blobtest is the conformance suite every adapter must pass.
+// Package blob defines the object storage port for large, immutable payloads.
+// The first user of the port is OpenTofu state content. That user writes keys
+// as tofu/<workspace ID>/<state version ID>/<attempt>. The port does not
+// enforce a layout. Adapters live in subpackages (blob/fs) or in user code.
+// blob/blobtest is the conformance suite every adapter must pass.
 package blob
 
 import (
@@ -17,6 +19,8 @@ var (
 	ErrNotFound = errors.New("blob not found")
 	// ErrInvalidKey reports a key that fails validation.
 	ErrInvalidKey = errors.New("invalid blob key")
+	// ErrExists reports that an object already exists under the key.
+	ErrExists = errors.New("blob already exists")
 )
 
 const maxKeyLength = 512
@@ -45,10 +49,12 @@ func (k Key) String() string {
 	return string(k)
 }
 
-// Store is the object storage port. Objects are written whole and are
-// immutable once written; Put on an existing key replaces it atomically.
+// Store is the object storage port. A caller writes each key once. A caller
+// never calls Put on a key that already holds an object. Put on an existing
+// key fails with ErrExists and leaves the first object unchanged.
 type Store interface {
-	// Put stores the contents of r under key, replacing any existing object.
+	// Put stores the contents of r under key. It returns ErrExists when the
+	// key already holds an object.
 	Put(ctx context.Context, key Key, r io.Reader) error
 	// Get opens the object under key, or returns ErrNotFound. The caller closes it.
 	Get(ctx context.Context, key Key) (io.ReadCloser, error)
