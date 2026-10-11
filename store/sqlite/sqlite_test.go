@@ -3,9 +3,11 @@ package sqlite_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret/secrettest"
 	"opendustpan.org/opendustpan/stack"
+	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/sqlite"
 	"opendustpan.org/opendustpan/store/storetest"
 	"opendustpan.org/opendustpan/workspace"
@@ -1072,5 +1075,164 @@ func seedBaseStacks(t *testing.T, conn *sql.DB) {
 		if _, err := conn.ExecContext(t.Context(), seedStack, s[0], s[1]); err != nil {
 			t.Fatalf("seed stack %s: %v", s[1], err)
 		}
+	}
+}
+
+// TestOpenRefusesNewerSchema proves that a database with a version the binary
+// does not embed stops open and leaves the database unchanged.
+func TestOpenRefusesNewerSchema(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	beforeVersions, _ := newerSchemaSnapshot(t, path)
+	if len(beforeVersions) == 0 {
+		t.Fatal("schema versions are empty, want the embedded migrations")
+	}
+
+	extra := beforeVersions[len(beforeVersions)-1] + 1
+
+	insertFutureVersion(t, path, extra)
+
+	wantVersions := append(slices.Clone(beforeVersions), extra)
+	gotVersions, gotTables := newerSchemaSnapshot(t, path)
+
+	if !slices.Equal(gotVersions, wantVersions) {
+		t.Fatalf("seeded versions = %v, want %v", gotVersions, wantVersions)
+	}
+
+	if _, err := sqlite.Open(t.Context(), path); !errors.Is(err, schema.ErrSchemaNewer) {
+		t.Fatalf("open newer database: err = %v, want ErrSchemaNewer", err)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, path)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, gotTables) {
+		t.Fatalf("tables after refusal = %v, want %v", afterTables, gotTables)
+	}
+}
+
+// newerSchemaSnapshot reads the recorded versions and the table names of the
+// database at path.
+func newerSchemaSnapshot(t *testing.T, path string) ([]int64, []string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	return readSchemaVersions(t, conn), readSchemaTables(t, conn)
+}
+
+// readSchemaVersions reads the recorded versions, ordered.
+func readSchemaVersions(t *testing.T, conn *sql.DB) []int64 {
+	t.Helper()
+
+	rows, queryErr := conn.QueryContext(t.Context(), `SELECT version FROM schema_migrations ORDER BY version`)
+	if queryErr != nil {
+		t.Fatalf("read schema versions: %v", queryErr)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close schema versions: %v", closeErr)
+		}
+	}()
+
+	var versions []int64
+
+	for rows.Next() {
+		var version int64
+		if scanErr := rows.Scan(&version); scanErr != nil {
+			t.Fatalf("scan schema version: %v", scanErr)
+		}
+
+		versions = append(versions, version)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read schema versions: %v", iterErr)
+	}
+
+	return versions
+}
+
+// readSchemaTables reads the table names, ordered.
+func readSchemaTables(t *testing.T, conn *sql.DB) []string {
+	t.Helper()
+
+	rows, queryErr := conn.QueryContext(
+		t.Context(),
+		`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+	)
+	if queryErr != nil {
+		t.Fatalf("read tables: %v", queryErr)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close tables: %v", closeErr)
+		}
+	}()
+
+	var tables []string
+
+	for rows.Next() {
+		var name string
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			t.Fatalf("scan table: %v", scanErr)
+		}
+
+		tables = append(tables, name)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read tables: %v", iterErr)
+	}
+
+	return tables
+}
+
+// insertFutureVersion records one version newer than the binary embeds.
+func insertFutureVersion(t *testing.T, path string, version int64) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	name := fmt.Sprintf("%04d_future.sql", version)
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	if _, execErr := conn.ExecContext(t.Context(), record, version, name); execErr != nil {
+		t.Fatalf("record future version: %v", execErr)
 	}
 }

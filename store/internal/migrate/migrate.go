@@ -15,6 +15,28 @@ import (
 // ErrBadName reports a migration file not named NNNN_description.sql.
 var ErrBadName = errors.New("migration file must be named NNNN_description.sql")
 
+// UnknownRecorded returns the recorded versions the binary does not embed,
+// ordered. It returns nothing when the database is equal or older, even when
+// a recorded version is missing in the middle.
+func UnknownRecorded(recorded []int64, embedded []Migration) []int64 {
+	known := make(map[int64]bool, len(embedded))
+	for _, m := range embedded {
+		known[m.Version] = true
+	}
+
+	var unknown []int64
+
+	for _, v := range recorded {
+		if !known[v] {
+			unknown = append(unknown, v)
+		}
+	}
+
+	slices.Sort(unknown)
+
+	return unknown
+}
+
 // Migration is one versioned schema change.
 type Migration struct {
 	Name    string
