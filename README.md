@@ -181,9 +181,20 @@ docker exec dustpan /opendustpan namespace create --database sqlite:/data/dustpa
 
 `make image-smoke` builds the image and runs the local smoke test. The test
 starts the container over TLS, checks the API (`/api/capabilities`) and the
-console page, and checks that the process user is not root. Behind a
+console page, waits until the container reports `healthy`, and checks that
+the process user is not root. Behind a
 TLS-intercepting proxy, set `EXTRA_CA_FILE` to a PEM bundle file so the build
 trusts it. It is not part of `make check`.
+
+The image defines a `HEALTHCHECK` that probes `GET /health/ready` every 30
+seconds with `opendustpan health`. The command reads the same listen
+address and TLS settings as `serve` (`--listen` / `DUSTPAN_LISTEN`,
+`--tls-cert` / `DUSTPAN_TLS_CERT`) and exits 0 on a 2xx answer. When the
+server uses TLS, set `DUSTPAN_TLS_CERT` (with `DUSTPAN_TLS_KEY`) in the
+container environment, not only as a serve flag, so the check probes over
+HTTPS. When `--listen` differs from `:8080`, override the check. Read the
+status with `docker inspect --format '{{.State.Health.Status}}' dustpan`.
+Kubernetes ignores `HEALTHCHECK` and uses its own probes.
 
 ## Concepts
 
