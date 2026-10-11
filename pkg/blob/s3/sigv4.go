@@ -1,8 +1,12 @@
-// Package s3 signs requests for S3-compatible object storage with AWS
-// Signature Version 4. It uses only the standard library. The signer sets
-// the Authorization header with the body SHA-256 in the signature, and it
-// reads credentials from the environment. A later change adds the blob.Store
-// adapter that calls it.
+// Package s3 stores blobs in S3-compatible object storage. It signs requests
+// with AWS Signature Version 4 from the standard library only. It sends each
+// object with one PUT and If-None-Match: *. One PUT holds 5 GiB at most.
+//
+// To run the conformance suite, start a local S3-compatible server that
+// supports conditional writes. Create one bucket. Set
+// DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY
+// and DUSTPAN_TEST_S3_SECRET_KEY. Run make test-s3. Without them the suite
+// skips. Any S3-compatible server works. No specific server is required.
 package s3
 
 import (
