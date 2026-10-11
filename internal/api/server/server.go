@@ -26,8 +26,7 @@ var ErrMissingDependency = errors.New("missing dependency")
 const bearerScheme = "Bearer "
 
 // Config holds the dependencies of a Handler. The backup service is optional:
-// nil means no backup target is configured. Later issues add the metrics
-// dependencies.
+// nil means no backup target is configured.
 type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
@@ -36,6 +35,8 @@ type Config struct {
 	// means no backup target is configured. The target comes only from this
 	// service: no request field, header or query value sets it.
 	Backups *backup.Service
+	// Metrics writes the registry for the metrics route.
+	Metrics MetricsWriter
 }
 
 // Handler serves the installation API under /api/server/.
@@ -44,6 +45,7 @@ type Handler struct {
 	authz   identity.Authorizer
 	logger  *slog.Logger
 	backups *backup.Service
+	metrics MetricsWriter
 	mux     *patternMux
 	routes  []Route
 }
@@ -58,6 +60,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.Metrics == nil:
+		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
 	}
 
 	h := &Handler{
@@ -65,6 +69,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:   cfg.Authorizer,
 		logger:  cfg.Logger,
 		backups: cfg.Backups,
+		metrics: cfg.Metrics,
 		mux:     newPatternMux(),
 		routes:  nil,
 	}

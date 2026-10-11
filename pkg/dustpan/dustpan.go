@@ -360,7 +360,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
 
-	adapters, err := newAdapters(svc, cfg, base, backups, observed.ReadinessFailures())
+	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -402,15 +402,15 @@ type adapters struct {
 	ready     http.Handler
 }
 
-// newAdapters builds every HTTP adapter from the services and settings. It
-// gives the readiness probe failures, the counter on the server registry
-// that the metrics route scrapes.
+// newAdapters builds every HTTP adapter from the services and settings.
+// observed is the server registry: the metrics route writes it, and the
+// readiness probe counts its failures on it.
 func newAdapters(
 	svc services,
 	cfg settings,
 	base baseurl.Resolver,
 	backups *backup.Service,
-	failures *metrics.Counter,
+	observed *metrics.ServerMetrics,
 ) (adapters, error) {
 	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
@@ -427,12 +427,18 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, backups)
+	serverAPI, err := newServerHandler(cfg, backups, observed)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	ready := newReadinessHandler(cfg.namespaceStore, cfg.blobStore, readinessTimeout, failures, cfg.logger)
+	ready := newReadinessHandler(
+		cfg.namespaceStore,
+		cfg.blobStore,
+		readinessTimeout,
+		observed.ReadinessFailures(),
+		cfg.logger,
+	)
 
 	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI, ready: ready}, nil
 }
@@ -719,14 +725,15 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 }
 
 // newServerHandler builds the tool-neutral installation API. It carries the
-// backup service when a backup target is configured, else nil. Later issues
-// add the metrics dependencies.
-func newServerHandler(cfg settings, backups *backup.Service) (http.Handler, error) {
+// backup service when a backup target is configured, else nil, and the
+// registry that the metrics route writes.
+func newServerHandler(cfg settings, backups *backup.Service, observed *metrics.ServerMetrics) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
 		Backups:       backups,
+		Metrics:       observed,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
