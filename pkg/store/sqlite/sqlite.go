@@ -416,7 +416,8 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 	})
 }
 
-// ListStacks implements stack.Store.
+// ListStacks implements stack.Store. Tags come from one query for the whole
+// namespace, not one query per stack.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
 	if filter.Project == "" {
 		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
@@ -437,12 +438,16 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 
 	out := make([]stack.Stack, 0, len(rows))
 
-	for _, row := range rows {
-		tags, tagsErr := stackTags(ctx, s.queries, row.ID)
-		if tagsErr != nil {
-			return nil, tagsErr
-		}
+	if len(rows) == 0 {
+		return out, nil
+	}
 
+	tags, err := stackTagMap(ctx, s.queries, filter.Namespace.String())
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
 		out = append(out, codec.FromStackRow(codec.StackRow{
 			Namespace:   row.Namespace,
 			Project:     row.Project,
@@ -451,24 +456,29 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 			Version:     row.Version,
 			CreatedAtMs: row.CreatedAtMs,
 			UpdatedAtMs: row.UpdatedAtMs,
-		}, tags))
+		}, tags[row.ID]))
 	}
 
 	return out, nil
 }
 
 // hydrateStacks attaches the tag rows of every stack row, keyed by stack ID.
+// The tags come from one query for the whole namespace.
 func (s *Store) hydrateStacks(
 	ctx context.Context, rows []db.ListStacksInNamespaceRow,
 ) ([]stack.Stack, error) {
 	out := make([]stack.Stack, 0, len(rows))
 
-	for _, row := range rows {
-		tags, err := stackTags(ctx, s.queries, row.ID)
-		if err != nil {
-			return nil, err
-		}
+	if len(rows) == 0 {
+		return out, nil
+	}
 
+	tags, err := stackTagMap(ctx, s.queries, rows[0].Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
 		out = append(out, codec.FromStackRow(codec.StackRow{
 			Namespace:   row.Namespace,
 			Project:     row.Project,
@@ -477,7 +487,30 @@ func (s *Store) hydrateStacks(
 			Version:     row.Version,
 			CreatedAtMs: row.CreatedAtMs,
 			UpdatedAtMs: row.UpdatedAtMs,
-		}, tags))
+		}, tags[row.ID]))
+	}
+
+	return out, nil
+}
+
+// stackTagMap reads every tag row of the namespace in one query, keyed by
+// stack ID.
+func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[string]string, error) {
+	rows, err := q.ListStackTagsInNamespace(ctx, ns)
+	if err != nil {
+		return nil, fmt.Errorf("select stack tags: %w", err)
+	}
+
+	out := make(map[string]map[string]string, len(rows))
+
+	for _, row := range rows {
+		m := out[row.StackID]
+		if m == nil {
+			m = make(map[string]string)
+			out[row.StackID] = m
+		}
+
+		m[row.Name] = row.Value
 	}
 
 	return out, nil

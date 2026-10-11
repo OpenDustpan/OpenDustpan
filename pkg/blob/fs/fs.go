@@ -93,6 +93,16 @@ func (s *Store) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 		return errors.Join(fmt.Errorf("put %s: %w", key, err), cleanup)
 	}
 
+	// The link is durable only after the directory entry reaches the disk,
+	// so sync the parent directory before removing the temporary name.
+	if err := s.syncDir(path.Dir(key.String())); err != nil {
+		return errors.Join(
+			fmt.Errorf("put %s: %w", key, err),
+			s.removeIfExists(key.String()),
+			s.removeIfExists(tmp),
+		)
+	}
+
 	if err := s.removeIfExists(tmp); err != nil {
 		return fmt.Errorf("put %s: %w", key, err)
 	}
@@ -186,6 +196,28 @@ func (s *Store) removeIfExists(name string) error {
 	}
 
 	return fmt.Errorf("remove %s: %w", name, err)
+}
+
+// syncDir fsyncs the directory dir, so a link just created in it survives a
+// crash. dir is "." for the root itself.
+func (s *Store) syncDir(dir string) error {
+	f, err := s.root.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open directory: %w", err)
+	}
+
+	syncErr := f.Sync()
+	closeErr := f.Close()
+
+	if syncErr != nil {
+		return errors.Join(fmt.Errorf("sync directory: %w", syncErr), closeErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("close directory: %w", closeErr)
+	}
+
+	return nil
 }
 
 func tempName() (string, error) {

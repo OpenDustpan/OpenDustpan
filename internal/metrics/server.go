@@ -61,7 +61,7 @@ type ServerMetrics struct {
 // readiness families in a new registry. version names the server release for
 // dustpan_build_info; empty means dev. startedAt sets
 // dustpan_process_start_time_seconds. It registers the runtime gauges from
-// runtime/metrics and the readiness counter for issue #163.
+// runtime/metrics and the counter of failed GET /health/ready probes.
 func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 	if strings.TrimSpace(version) == "" {
 		version = "dev"
@@ -151,8 +151,8 @@ func (m *ServerMetrics) DecInFlight(adapter string) {
 	m.inFlight.Dec(NormalizeAdapter(adapter))
 }
 
-// IncReadinessFailure adds one to the readiness failure counter. Issue #163
-// calls it when a readiness check fails.
+// IncReadinessFailure adds one to the readiness failure counter. The GET
+// /health/ready probe calls it when a readiness check fails.
 func (m *ServerMetrics) IncReadinessFailure() {
 	m.ready.Inc()
 }

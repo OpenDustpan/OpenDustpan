@@ -50,6 +50,13 @@ FROM stack_tags
 WHERE stack_id = ?
 ORDER BY name;
 
+-- name: ListStackTagsInNamespace :many
+SELECT t.stack_id, t.name, t.value
+FROM stack_tags AS t
+JOIN stacks AS s ON s.id = t.stack_id
+WHERE s.namespace = ?
+ORDER BY t.stack_id, t.name;
+
 -- name: DeleteStackTags :exec
 DELETE FROM stack_tags
 WHERE stack_id = ?;
