@@ -317,6 +317,48 @@ func (m *memStore) CurrentStateVersion(_ context.Context, id workspace.ID) (work
 	return m.versions[cur], nil
 }
 
+// ListStateVersions implements workspace.StateStore: finalized versions of
+// the workspace, newest first by finalize time, with the total count.
+func (m *memStore) ListStateVersions(
+	_ context.Context, id workspace.ID, page workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	limit := page.Limit
+	if limit <= 0 {
+		limit = workspace.DefaultStatePageSize
+	}
+
+	limit = min(limit, workspace.MaxStatePageSize)
+	offset := max(page.Offset, 0)
+
+	all := make([]workspace.StateVersion, 0)
+
+	for vid := range m.versions {
+		if sv := m.versions[vid]; sv.Workspace == id && sv.Status == workspace.StatusFinalized {
+			all = append(all, sv)
+		}
+	}
+
+	slices.SortFunc(all, func(a, b workspace.StateVersion) int {
+		if c := b.FinalizedAt.Compare(a.FinalizedAt); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+
+	total := len(all)
+	if offset > total {
+		offset = total
+	}
+
+	end := min(offset+limit, total)
+
+	return all[offset:end], total, nil
+}
+
 // checkFence rejects a write to an unknown namespace or a stale failover
 // version. The caller holds mu.
 func (m *memStore) checkFence(fence namespace.Fence) error {

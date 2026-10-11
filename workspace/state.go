@@ -55,6 +55,21 @@ const (
 	StatusFinalized StateStatus = "finalized"
 )
 
+const (
+	// DefaultStatePageSize is the page size when the caller passes a
+	// non-positive limit. It matches the default page size of the TFE list,
+	// so an unpaged call reads what the OpenTofu client expects.
+	DefaultStatePageSize = 20
+	// MaxStatePageSize caps the page size of a state version list.
+	MaxStatePageSize = 100
+)
+
+// Page selects a window of a newest-first list.
+type Page struct {
+	Limit  int
+	Offset int
+}
+
 // StateVersion is one immutable state of a workspace. The content lives in
 // the blob port; this is its metadata.
 type StateVersion struct {
@@ -86,6 +101,9 @@ type StateVersion struct {
 	// Force skips the lineage and serial checks, as `tofu state push -force`
 	// does. It never skips the lock.
 	Force bool
+	// RestoredFrom is the state version this version was restored from. It is
+	// empty when the version is not a restore.
+	RestoredFrom StateVersionID
 }
 
 // NewState is the metadata a client declares before uploading state.

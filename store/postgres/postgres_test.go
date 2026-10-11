@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/store/postgres"
 	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/storetest"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 // envURL names the variable holding a PostgreSQL URL for integration tests.
@@ -1186,5 +1187,205 @@ func insertFutureVersion(t *testing.T, migrated string, version int64) {
 
 	if _, execErr := conn.Exec(t.Context(), record, version, name); execErr != nil {
 		t.Fatalf("record future version: %v", execErr)
+	}
+}
+
+// TestMigration0011FillsRestoredFrom checks that migration 0011 keeps the
+// finalized versions of a database at 0010: every existing row reads back
+// with an empty restored_from, and the list stays newest first with the
+// right total.
+func TestMigration0011FillsRestoredFrom(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+	seedAt0010WithStateVersions(t, migrated)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	checkMigratedStateVersions(t, s)
+}
+
+// checkMigratedStateVersions checks the migrated versions are listed newest
+// first with an empty restored_from and the right total.
+func checkMigratedStateVersions(t *testing.T, s *postgres.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := workspace.ID("ws-aaaaaaaaaaaaaaaaaaaa")
+
+	list, total, err := s.ListStateVersions(ctx, wsID, workspace.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if total != 2 {
+		t.Fatalf("migrated total = %d, want 2", total)
+	}
+
+	if len(list) != 2 {
+		t.Fatalf("migrated state versions = %d, want 2", len(list))
+	}
+
+	if list[0].ID.String() != "sv-bbbbbbbbbbbbbbbbbbbb" ||
+		list[1].ID.String() != "sv-aaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("migrated order = [%s %s], want newest first", list[0].ID, list[1].ID)
+	}
+
+	for i := range list {
+		if list[i].RestoredFrom != "" {
+			t.Fatalf("migrated state version %s restored_from = %q, want empty", list[i].ID, list[i].RestoredFrom)
+		}
+	}
+
+	for _, id := range []workspace.StateVersionID{
+		"sv-aaaaaaaaaaaaaaaaaaaa",
+		"sv-bbbbbbbbbbbbbbbbbbbb",
+		"sv-cccccccccccccccccccc",
+	} {
+		got, err := s.GetStateVersion(ctx, id)
+		if err != nil {
+			t.Fatalf("get state version %s: %v", id, err)
+		}
+
+		if got.RestoredFrom != "" {
+			t.Fatalf("migrated state version %s restored_from = %q, want empty", id, got.RestoredFrom)
+		}
+	}
+}
+
+// seedAt0010WithStateVersions creates a database at migration 0010 with one
+// workspace, two finalized state versions and one pending version.
+func seedAt0010WithStateVersions(t *testing.T, migrated string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	applyMigrations0010(t, conn)
+	recordMigrations0010(t, conn)
+	seed0010Namespace(t, conn)
+	seed0010Workspace(t, conn)
+	seed0010StateVersions(t, conn)
+}
+
+// applyMigrations0010 applies migrations 0001 to 0010 to conn.
+func applyMigrations0010(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
+		"0010_workspaces.sql",
+	}
+
+	for _, name := range names {
+		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
+			filepath.Join("migrations", name),
+		)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", name, readErr)
+		}
+
+		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
+			t.Fatalf("apply %s: %v", name, execErr)
+		}
+	}
+}
+
+// recordMigrations0010 records migrations 0001 to 0010 as applied.
+func recordMigrations0010(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
+	)`
+
+	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	names := []string{
+		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
+		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
+		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
+		"0010_workspaces.sql",
+	}
+
+	for i, name := range names {
+		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
+			t.Fatalf("record migration %s: %v", name, err)
+		}
+	}
+}
+
+// seed0010Namespace seeds the namespace of the migrated workspace.
+func seed0010Namespace(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
+		VALUES ('acme', 'eu-west', 1, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
+}
+
+// seed0010Workspace seeds one workspace that points at its newest version.
+func seed0010Workspace(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO workspaces (id, namespace, name, revision, lock_id, lock_holder,
+		lock_reason, locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms)
+		VALUES ('ws-aaaaaaaaaaaaaaaaaaaa', 'acme', 'network', 1, '', '', '', 0,
+		'sv-bbbbbbbbbbbbbbbbbbbb', 1000, 3000)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+}
+
+// seed0010StateVersions seeds two finalized versions and one pending version
+// with the 0010 columns: no restored_from yet.
+func seed0010StateVersions(t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	const seed = `INSERT INTO state_versions (id, workspace_id, status, serial, lineage, md5, size,
+		content_key, outputs, force, upload_digest, upload_expires_at_ms, holder, lock_id,
+		created_at_ms, finalized_at_ms)
+		VALUES
+		('sv-aaaaaaaaaaaaaaaaaaaa', 'ws-aaaaaaaaaaaaaaaaaaaa', 'finalized', 1, 'lineage-1',
+		'\x00000000000000000000000000000001', 11, 'content-old', NULL, FALSE, ''::bytea, 5000,
+		'seed', 'lock-1', 1000, 2000),
+		('sv-bbbbbbbbbbbbbbbbbbbb', 'ws-aaaaaaaaaaaaaaaaaaaa', 'finalized', 2, 'lineage-1',
+		'\x00000000000000000000000000000002', 22, 'content-new', NULL, FALSE, ''::bytea, 5000,
+		'seed', 'lock-1', 2000, 3000),
+		('sv-cccccccccccccccccccc', 'ws-aaaaaaaaaaaaaaaaaaaa', 'pending', 3, 'lineage-1',
+		'\x00000000000000000000000000000003', 0, '', NULL, FALSE, ''::bytea, 5000,
+		'seed', 'lock-1', 2500, 0)`
+
+	if _, err := conn.Exec(t.Context(), seed); err != nil {
+		t.Fatalf("seed state versions: %v", err)
 	}
 }

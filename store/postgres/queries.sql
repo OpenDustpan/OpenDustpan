@@ -294,23 +294,41 @@ SELECT EXISTS (
 -- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+    force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+    restored_from
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
 FROM state_versions
 WHERE id = $1;
+
+-- name: ListStateVersions :many
+-- Finalized versions of one workspace, newest first. Ties on finalize time
+-- break by ID, as the port comment promises. The caller normalizes the page.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT $2 OFFSET $3;
+
+-- name: CountStateVersions :one
+SELECT COUNT(*)
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized';
 
 -- name: GetCurrentStateVersion :one
 -- Follows the workspace pointer: a forced upload may carry a lower serial and
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;

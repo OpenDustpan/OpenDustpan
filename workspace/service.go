@@ -64,6 +64,15 @@ type StateStore interface {
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
+	// ListStateVersions returns the finalized versions of workspace, newest
+	// first by finalize time, with the total count of finalized versions.
+	// Ties on finalize time break by version ID, so every adapter orders
+	// identically. Page selects the window: a non-positive limit reads as
+	// DefaultStatePageSize, a limit above MaxStatePageSize is capped, and a
+	// negative offset reads as zero. A workspace without finalized versions,
+	// or one that does not exist, yields an empty list and a zero total. It
+	// returns no sentinel errors.
+	ListStateVersions(ctx context.Context, workspace ID, page Page) ([]StateVersion, int, error)
 }
 
 // Config holds the dependencies of a Service.
@@ -449,6 +458,7 @@ func (s *Service) createPending(
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
+		RestoredFrom:    "",
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence); err != nil {

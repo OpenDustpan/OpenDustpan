@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,35 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		},
 		{name: "lock, unlock and finalize move the inventory entry", test: testInventoryFollowsWrites},
 		{name: "a failed write leaves the inventory unchanged", test: testWorkspaceInventoryFailedWrite},
+		{name: "list returns only finalized versions, newest first", test: testListStateVersionsNewestFirst},
+		{
+			name: "list pages size 2 over five versions as 2, 2, 1 and empty past the end",
+			test: testListStateVersionsPages,
+		},
+		{
+			name: "list caps the page size and normalizes the page",
+			test: testListStateVersionsCapsPageSize,
+		},
+		{
+			name: "list sorts a forced lower serial by finalize time, not by serial",
+			test: testListStateVersionsForcedLowerSerial,
+		},
+		{
+			name: "restored-from is stored and read back by get and by list",
+			test: testListStateVersionsRestoredFrom,
+		},
+		{
+			name: "a restored version keeps lineage, serial, MD5 and size and sets force",
+			test: testListStateVersionsRestoredLineage,
+		},
+		{
+			name: "list of one workspace never returns versions of another workspace",
+			test: testListStateVersionsIsolatesWorkspaces,
+		},
+		{
+			name: "a stale fence on a failed write leaves the list unchanged",
+			test: testListStateVersionsFencedWrite,
+		},
 	}
 
 	for _, tc := range cases {
@@ -205,6 +235,7 @@ func newPendingVersion(
 		Serial:          in.serial,
 		Size:            0,
 		Force:           in.force,
+		RestoredFrom:    "",
 	}
 }
 
@@ -250,7 +281,7 @@ func sameStateReference(got, want workspace.StateVersion) bool {
 func sameStateContent(got, want workspace.StateVersion) bool {
 	return got.Content == want.Content && bytes.Equal(got.Outputs, want.Outputs) &&
 		got.MD5 == want.MD5 && got.Serial == want.Serial && got.Size == want.Size &&
-		got.Force == want.Force && got.Upload == want.Upload
+		got.Force == want.Force && got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom
 }
 
 func sameStateTimes(got, want workspace.StateVersion) bool {
@@ -1179,4 +1210,530 @@ func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {
 	if got := entries[0].Reference(); got != "opentofu:"+ns.Name.String()+"/"+w.Ref.Name.String() {
 		t.Fatalf("inventory reference = %q, want opentofu:%s/%s", got, ns.Name, w.Ref.Name)
 	}
+}
+
+// assertNoHistory checks that id lists no versions with total zero: a
+// workspace without state, or one that does not exist, yields empty.
+func assertNoHistory(t *testing.T, s WorkspaceStore, id workspace.ID) {
+	t.Helper()
+
+	list, total, err := s.ListStateVersions(t.Context(), id, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions of %s: %v", id, err)
+	}
+
+	if len(list) != 0 || total != 0 {
+		t.Fatalf("list of %s without state = %v, total %d; want empty and 0", id, list, total)
+	}
+}
+
+// assertHistory checks the total and the newest-first versions against want,
+// with a full round trip of each version.
+func assertHistory(t *testing.T, list []workspace.StateVersion, total int, want []workspace.StateVersion) {
+	t.Helper()
+
+	if total != len(want) {
+		t.Fatalf("total state versions = %d, want %d", total, len(want))
+	}
+
+	if len(list) != len(want) {
+		t.Fatalf("listed state versions = %v, want %v", stateVersionIDs(list), stateVersionIDs(want))
+	}
+
+	for i := range want {
+		if list[i].ID != want[i].ID {
+			t.Fatalf("listed state versions = %v, want %v", stateVersionIDs(list), stateVersionIDs(want))
+		}
+
+		assertStateVersion(t, list[i], want[i])
+	}
+}
+
+// stateVersionIDs returns the IDs of versions in order.
+func stateVersionIDs(versions []workspace.StateVersion) []workspace.StateVersionID {
+	ids := make([]workspace.StateVersionID, 0, len(versions))
+	for i := range versions {
+		ids = append(ids, versions[i].ID)
+	}
+
+	return ids
+}
+
+func testListStateVersionsNewestFirst(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	all := workspace.Page{Limit: 100, Offset: 0}
+
+	assertNoHistory(t, s, w.ID)
+	assertNoHistory(t, s, workspace.ID(ident.NewID("ws-")))
+
+	finalized := make([]workspace.StateVersion, 0, 3)
+
+	for i, serial := range []int64{1, 2, 3} {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", serial),
+		))
+		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
+
+		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+			t.Fatalf("finalize serial %d: %v", serial, err)
+		}
+
+		finalized = append(finalized, done)
+	}
+
+	// A pending version stays out of the list: the exact-ID match below
+	// proves its absence without a second scan.
+	createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v9", 9),
+	))
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, all)
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{finalized[2], finalized[1], finalized[0]})
+}
+
+// testListStateVersionsCapsPageSize proves the paging rules of the port: a
+// non-positive limit reads as DefaultStatePageSize, a limit above
+// MaxStatePageSize is capped, and a negative offset reads as zero. The total
+// always counts every finalized version.
+func testListStateVersionsCapsPageSize(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	const count = workspace.MaxStatePageSize + 2
+
+	finalized := finalizeSerials(t, s, ns, locked, count)
+
+	// Newest first: the last finalized version leads.
+	newest := make([]workspace.StateVersionID, 0, count)
+	for i := range slices.Backward(finalized) {
+		newest = append(newest, finalized[i].ID)
+	}
+
+	for _, tc := range []listPageWant{
+		{
+			page:  workspace.Page{Limit: 0, Offset: 0},
+			want:  newest[:workspace.DefaultStatePageSize],
+			total: count,
+		},
+		{
+			page:  workspace.Page{Limit: workspace.MaxStatePageSize + 400, Offset: 0},
+			want:  newest[:workspace.MaxStatePageSize],
+			total: count,
+		},
+		{
+			page:  workspace.Page{Limit: 2, Offset: -5},
+			want:  newest[:2],
+			total: count,
+		},
+	} {
+		assertListPage(t, s, w.ID, tc)
+	}
+}
+
+// listPageWant is one paging probe: the page to read, the total it must
+// report, and the version IDs it must list in order.
+type listPageWant struct {
+	page  workspace.Page
+	want  []workspace.StateVersionID
+	total int
+}
+
+// finalizeSerials finalizes count versions with serials 1..count and returns
+// them in finalize order.
+func finalizeSerials(
+	t *testing.T, s WorkspaceStore, ns namespace.Namespace, locked workspace.Workspace, count int,
+) []workspace.StateVersion {
+	t.Helper()
+
+	finalized := make([]workspace.StateVersion, 0, count)
+
+	for i := range count {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", int64(i+1)),
+		))
+		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
+
+		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+			t.Fatalf("finalize serial %d: %v", i+1, err)
+		}
+
+		finalized = append(finalized, done)
+	}
+
+	return finalized
+}
+
+// assertListPage checks one page: the total counts every finalized version
+// and the listed IDs match want in order.
+func assertListPage(t *testing.T, s WorkspaceStore, id workspace.ID, tc listPageWant) {
+	t.Helper()
+
+	list, got, err := s.ListStateVersions(t.Context(), id, tc.page)
+	if err != nil {
+		t.Fatalf("list state versions %+v: %v", tc.page, err)
+	}
+
+	if got != tc.total {
+		t.Errorf("total state versions at %+v = %d, want %d", tc.page, got, tc.total)
+	}
+
+	ids := stateVersionIDs(list)
+
+	if len(ids) != len(tc.want) {
+		t.Errorf("listed state versions at %+v = %v, want %d versions", tc.page, ids, len(tc.want))
+
+		return
+	}
+
+	for i := range tc.want {
+		if ids[i] != tc.want[i] {
+			t.Errorf("listed state versions at %+v = %v, want %v", tc.page, ids, tc.want)
+
+			break
+		}
+	}
+}
+
+func testListStateVersionsPages(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	finalized := make([]workspace.StateVersion, 0, 5)
+
+	for i, serial := range []int64{1, 2, 3, 4, 5} {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", serial),
+		))
+		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
+
+		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+			t.Fatalf("finalize serial %d: %v", serial, err)
+		}
+
+		finalized = append(finalized, done)
+	}
+
+	for _, tc := range []struct {
+		page workspace.Page
+		want []workspace.StateVersionID
+	}{
+		{
+			page: workspace.Page{Limit: 2, Offset: 0},
+			want: []workspace.StateVersionID{finalized[4].ID, finalized[3].ID},
+		},
+		{
+			page: workspace.Page{Limit: 2, Offset: 2},
+			want: []workspace.StateVersionID{finalized[2].ID, finalized[1].ID},
+		},
+		{page: workspace.Page{Limit: 2, Offset: 4}, want: []workspace.StateVersionID{finalized[0].ID}},
+		{page: workspace.Page{Limit: 2, Offset: 6}, want: []workspace.StateVersionID{}},
+	} {
+		list, total, err := s.ListStateVersions(t.Context(), w.ID, tc.page)
+		if err != nil {
+			t.Fatalf("list state versions %+v: %v", tc.page, err)
+		}
+
+		if total != 5 {
+			t.Errorf("total state versions at %+v = %d, want 5", tc.page, total)
+		}
+
+		got := stateVersionIDs(list)
+
+		if len(got) != len(tc.want) {
+			t.Errorf("listed state versions at %+v = %v, want %v", tc.page, got, tc.want)
+
+			continue
+		}
+
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Errorf("listed state versions at %+v = %v, want %v", tc.page, got, tc.want)
+
+				break
+			}
+		}
+	}
+}
+
+func testListStateVersionsForcedLowerSerial(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	firstPending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v5", 5),
+	))
+	first := finalizedVersion(firstPending, now().Add(2*time.Hour), "v5")
+
+	if err := s.FinalizeStateVersion(t.Context(), first, ns.Fence()); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	forcedPending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1),
+	))
+	forced := finalizedVersion(forcedPending, now().Add(3*time.Hour), "v1")
+
+	if err := s.FinalizeStateVersion(t.Context(), forced, ns.Fence()); err != nil {
+		t.Fatalf("finalize forced state: %v", err)
+	}
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{forced, first})
+}
+
+func testListStateVersionsRestoredFrom(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	oldPending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	old := finalizedVersion(oldPending, now().Add(2*time.Hour), "v1")
+
+	if err := s.FinalizeStateVersion(t.Context(), old, ns.Fence()); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	if old.RestoredFrom != "" {
+		t.Fatalf("restored-from of a plain version = %q, want empty", old.RestoredFrom)
+	}
+
+	restoredPending := newPendingVersion(t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1))
+	restoredPending.RestoredFrom = old.ID
+	createPendingVersion(t, s, ns, restoredPending)
+
+	restored := finalizedVersion(restoredPending, now().Add(3*time.Hour), "v1")
+
+	if err := s.FinalizeStateVersion(t.Context(), restored, ns.Fence()); err != nil {
+		t.Fatalf("finalize restored state: %v", err)
+	}
+
+	got, err := s.GetStateVersion(t.Context(), restored.ID)
+	if err != nil {
+		t.Fatalf("get restored state version: %v", err)
+	}
+
+	assertStateVersion(t, got, restored)
+
+	if got.RestoredFrom != old.ID {
+		t.Fatalf("restored-from by get = %q, want %q", got.RestoredFrom, old.ID)
+	}
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{restored, old})
+
+	if list[0].RestoredFrom != old.ID {
+		t.Errorf("restored-from by list = %q, want %q", list[0].RestoredFrom, old.ID)
+	}
+
+	if list[1].RestoredFrom != "" {
+		t.Errorf("restored-from of the source version = %q, want empty", list[1].RestoredFrom)
+	}
+}
+
+func testListStateVersionsRestoredLineage(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	oldPending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "state-bytes", 3),
+	))
+	old := finalizedVersion(oldPending, now().Add(2*time.Hour), "state-bytes")
+
+	if err := s.FinalizeStateVersion(t.Context(), old, ns.Fence()); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	restoredPending := newPendingVersion(t, locked, locked.Lock.ID, forcedInput("l1", "state-bytes", 3))
+	restoredPending.RestoredFrom = old.ID
+	createPendingVersion(t, s, ns, restoredPending)
+
+	restored := finalizedVersion(restoredPending, now().Add(3*time.Hour), "state-bytes")
+
+	if err := s.FinalizeStateVersion(t.Context(), restored, ns.Fence()); err != nil {
+		t.Fatalf("finalize restored state: %v", err)
+	}
+
+	got, err := s.GetStateVersion(t.Context(), restored.ID)
+	if err != nil {
+		t.Fatalf("get restored state version: %v", err)
+	}
+
+	assertStateVersion(t, got, restored)
+
+	if got.Lineage != old.Lineage {
+		t.Errorf("restored lineage = %q, want %q", got.Lineage, old.Lineage)
+	}
+
+	if got.Serial != old.Serial {
+		t.Errorf("restored serial = %d, want %d", got.Serial, old.Serial)
+	}
+
+	if got.MD5 != old.MD5 {
+		t.Errorf("restored MD5 = %x, want %x", got.MD5, old.MD5)
+	}
+
+	if got.Size != old.Size {
+		t.Errorf("restored size = %d, want %d", got.Size, old.Size)
+	}
+
+	if !got.Force {
+		t.Error("restored force = false, want true")
+	}
+
+	if got.RestoredFrom != old.ID {
+		t.Errorf("restored-from = %q, want %q", got.RestoredFrom, old.ID)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state after a restore: %v", err)
+	}
+
+	assertStateVersion(t, current, restored)
+}
+
+func testListStateVersionsIsolatesWorkspaces(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	first := createTestWorkspace(t, s, ns, "one")
+	second := createTestWorkspace(t, s, ns, "two")
+	lockedFirst := lockTestWorkspace(t, s, ns, first, "alice")
+	lockedSecond := lockTestWorkspace(t, s, ns, second, "alice")
+
+	firstVersions := make([]workspace.StateVersion, 0, 2)
+
+	for i, serial := range []int64{1, 2} {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, lockedFirst, lockedFirst.Lock.ID, stateInput("l1", "v1", serial),
+		))
+		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
+
+		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+			t.Fatalf("finalize serial %d: %v", serial, err)
+		}
+
+		firstVersions = append(firstVersions, done)
+	}
+
+	otherPending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, lockedSecond, lockedSecond.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	other := finalizedVersion(otherPending, now().Add(2*time.Hour), "v1")
+
+	if err := s.FinalizeStateVersion(t.Context(), other, ns.Fence()); err != nil {
+		t.Fatalf("finalize state of the second workspace: %v", err)
+	}
+
+	list, total, err := s.ListStateVersions(t.Context(), first.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions of the first workspace: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{firstVersions[1], firstVersions[0]})
+
+	for i := range list {
+		if list[i].ID == other.ID {
+			t.Fatalf("list of one workspace holds version %s of another workspace", other.ID)
+		}
+	}
+
+	otherList, otherTotal, err := s.ListStateVersions(
+		t.Context(), second.ID, workspace.Page{Limit: 100, Offset: 0},
+	)
+	if err != nil {
+		t.Fatalf("list state versions of the second workspace: %v", err)
+	}
+
+	assertHistory(t, otherList, otherTotal, []workspace.StateVersion{other})
+}
+
+func testListStateVersionsFencedWrite(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	for i, serial := range []int64{1, 2} {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", serial),
+		))
+		done := finalizedVersion(pending, now().Add(time.Duration(i+2)*time.Hour), "v1")
+
+		if err := s.FinalizeStateVersion(t.Context(), done, ns.Fence()); err != nil {
+			t.Fatalf("finalize serial %d: %v", serial, err)
+		}
+	}
+
+	before, beforeTotal, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if beforeTotal != 2 {
+		t.Fatalf("total state versions = %d, want 2", beforeTotal)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	stalePending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v3", 3))
+	if createErr := s.CreateStateVersion(t.Context(), stalePending, stale); !errors.Is(createErr, namespace.ErrFenced) {
+		t.Fatalf("create state version with a stale fence: err = %v, want ErrFenced", createErr)
+	}
+
+	next := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v3", 3),
+	))
+	fenced := finalizedVersion(next, now().Add(4*time.Hour), "v3")
+
+	if finalizeErr := s.FinalizeStateVersion(t.Context(), fenced, stale); !errors.Is(finalizeErr, namespace.ErrFenced) {
+		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", finalizeErr)
+	}
+
+	after, afterTotal, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions after fenced writes: %v", err)
+	}
+
+	assertHistory(t, after, afterTotal, before)
+
+	stored, err := s.GetStateVersion(t.Context(), next.ID)
+	if err != nil {
+		t.Fatalf("get state version after a fenced finalize: %v", err)
+	}
+
+	assertStateVersion(t, stored, next)
 }
