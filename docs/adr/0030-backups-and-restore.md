@@ -1,6 +1,6 @@
 # 30. Backups and restore
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · the restore part of decision 10 and step 3 of decision 8 superseded by ADR 38
 
 ## Context
 
