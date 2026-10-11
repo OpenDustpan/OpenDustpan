@@ -60,6 +60,9 @@ type Store interface {
 	Get(ctx context.Context, key Key) (io.ReadCloser, error)
 	// Delete removes the object under key. Deleting a missing key is not an error.
 	Delete(ctx context.Context, key Key) error
+	// Ping returns nil when the store can serve a request, and an error
+	// otherwise. The error holds no credential and no path.
+	Ping(ctx context.Context) error
 }
 
 func validSegment(s string) bool {
