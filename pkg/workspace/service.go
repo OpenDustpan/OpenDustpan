@@ -585,6 +585,14 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 		return StateVersion{}, fmt.Errorf("restore %s: %w", id, err)
 	}
 
+	// Restores of one workspace share a stripe from the retry check to the
+	// finalize. A holder that already holds the lock takes no lock below,
+	// so without the stripe two concurrent restores of the same version
+	// would both pass the check and both write a restored version. With
+	// it, the second waits and then answers the first one's version.
+	unlock := s.lockKey("restore/" + id.String())
+	defer unlock()
+
 	if retried, found, retryErr := s.restoredCurrent(ctx, id, from, holder); retryErr != nil || found {
 		return retried, retryErr
 	}
