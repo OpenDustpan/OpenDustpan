@@ -184,7 +184,7 @@ func (h *Handler) discovery(w http.ResponseWriter, r *http.Request, _ identity.P
 // the cloud block accepts. The body is empty: callers read the header.
 func (h *Handler) ping(w http.ResponseWriter, _ *http.Request, _ identity.Principal, _ identity.Object) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("TFP-API-Version", "2.5")
+	w.Header().Set("Tfp-Api-Version", "2.5")
 	w.WriteHeader(http.StatusOK)
 }
 
