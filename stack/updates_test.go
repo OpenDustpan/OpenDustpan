@@ -513,7 +513,7 @@ func newUpdates(t *testing.T) updatesFixture {
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
 	t.Helper()
 
-	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false})
+	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0})
 }
 
 func (f updatesFixture) startedPlan(t *testing.T, plan stack.Plan) stack.Started {
@@ -641,7 +641,9 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	second, err := f.svc.Create(ctx, f.ref, stack.Plan{Kind: stack.KindDestroy, DryRun: false})
+	second, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -734,7 +736,7 @@ func TestDryRunsDoNotMutate(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true})
+	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0})
 	if dry.Update.Mutates() || dry.Update.Version != 0 {
 		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
 	}
@@ -979,6 +981,240 @@ func checkFailedImport(t *testing.T, f updatesFixture, done stack.Update) {
 
 	if history[0].ID != done.ID || history[0].Status != stack.StatusFailed {
 		t.Errorf("newest history entry = %+v, want the failed import", history[0])
+	}
+}
+
+// TestCreateRecordsRequester checks that Create keeps the subject and the
+// restore source from the plan.
+func TestCreateRecordsRequester(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	u, err := f.svc.Create(
+		ctx,
+		f.ref,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0},
+	)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := f.svc.Get(ctx, f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.CreatedBy != "alice@example.com" || got.RestoredFrom != 0 {
+		t.Errorf("update = %+v, want creator alice@example.com and no restore source", got)
+	}
+}
+
+// finishVersion runs one mutating update with body as its checkpoint and
+// returns the finished update.
+func finishVersion(t *testing.T, f updatesFixture, body string) stack.Update {
+	t.Helper()
+
+	ctx := t.Context()
+	s := f.started(t, stack.KindUpdate)
+
+	if err := f.svc.SaveCheckpoint(ctx, f.ref, s.Update.ID, s.Token, checkpoint(0, body)); err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	done, err := f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	return done
+}
+
+// checkLockFree fails when the stack still has a running update.
+func checkLockFree(t *testing.T, f updatesFixture) {
+	t.Helper()
+
+	if u, err := f.svc.Active(t.Context(), f.ref); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Fatalf("active update after restore: %q, %v; want none", u.Status, err)
+	}
+}
+
+// TestRestoreCopiesOldCheckpoint restores version 1 after two updates and
+// checks the new update, the state and the history.
+func TestRestoreCopiesOldCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	finishVersion(t, f, `{"v":1}`)
+	finishVersion(t, f, `{"v":2}`)
+
+	done, err := f.svc.Restore(ctx, f.ref, 1, "bob@example.com")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	checkRestoreUpdate(t, done)
+	checkRestoreExport(t, f, `{"v":1}`)
+	checkRestoreHistory(t, f, done)
+	checkLockFree(t, f)
+}
+
+// checkRestoreUpdate checks the kind, status, version, creator and source of
+// a restore of version 1 after two updates.
+func checkRestoreUpdate(t *testing.T, done stack.Update) {
+	t.Helper()
+
+	if done.Kind != stack.KindRestore || done.Status != stack.StatusSucceeded || done.Version != 3 {
+		t.Errorf("restore update: kind %q status %q version %d, want restore succeeded version 3",
+			done.Kind, done.Status, done.Version)
+	}
+
+	if done.CreatedBy != "bob@example.com" || done.RestoredFrom != 1 {
+		t.Errorf("restore update = %+v, want creator bob@example.com and source 1", done)
+	}
+}
+
+// checkRestoreExport checks that the stack state holds body after a restore.
+func checkRestoreExport(t *testing.T, f updatesFixture, body string) {
+	t.Helper()
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil || string(cp.Deployment) != body {
+		t.Errorf("export after restore: %q, %v; want %s", cp.Deployment, err, body)
+	}
+}
+
+// checkRestoreHistory checks that done is the newest history entry with its
+// kind, source and creator.
+func checkRestoreHistory(t *testing.T, f updatesFixture, done stack.Update) {
+	t.Helper()
+
+	history, err := f.svc.History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
+	if err != nil || len(history) != 3 {
+		t.Fatalf("history: %d entries, %v; want two updates and the restore", len(history), err)
+	}
+
+	if history[0].ID != done.ID || history[0].Kind != stack.KindRestore ||
+		history[0].RestoredFrom != 1 || history[0].CreatedBy != "bob@example.com" {
+		t.Errorf("newest history entry = %+v, want the restore of version 1", history[0])
+	}
+}
+
+// TestRestoreMissingVersion checks that a restore of a version without a
+// checkpoint fails with ErrNoState and records no update.
+func TestRestoreMissingVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	finishVersion(t, f, `{"v":1}`)
+
+	if _, err := f.svc.Restore(ctx, f.ref, 2, "bob@example.com"); !errors.Is(err, stack.ErrNoState) {
+		t.Errorf("restore of a missing version: %v, want ErrNoState", err)
+	}
+
+	f.store.mu.Lock()
+	n := len(f.store.updates)
+	f.store.mu.Unlock()
+
+	if n != 1 {
+		t.Errorf("%d updates recorded for a missing version, want 1", n)
+	}
+
+	history, err := f.svc.History(ctx, f.ref, stack.Page{Limit: 0, Offset: 0})
+	if err != nil || len(history) != 1 {
+		t.Errorf("history: %d entries, %v; want only the first update", len(history), err)
+	}
+
+	checkLockFree(t, f)
+}
+
+// TestRestoreWhileUpdateRuns checks that a restore waits for the stack lock:
+// while another mutating update runs it fails with ErrUpdateConflict and the
+// running update keeps the lock.
+func TestRestoreWhileUpdateRuns(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	ctx := t.Context()
+
+	finishVersion(t, f, `{"v":1}`)
+	running := f.started(t, stack.KindUpdate)
+
+	if _, err := f.svc.Restore(ctx, f.ref, 1, "bob@example.com"); !errors.Is(err, stack.ErrUpdateConflict) {
+		t.Errorf("restore while an update runs: %v, want ErrUpdateConflict", err)
+	}
+
+	active, err := f.svc.Active(ctx, f.ref)
+	if err != nil || active.ID != running.Update.ID {
+		t.Errorf("active update during a conflicting restore: %q, %v; want the running update",
+			active.ID, err)
+	}
+
+	if _, err := f.svc.Cancel(ctx, f.ref, running.Update.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	checkLockFree(t, f)
+}
+
+// TestRestoreFailureEndsUpdate checks that a restore whose save fails still
+// ends its update as failed and frees the stack, keeping the latest state.
+func TestRestoreFailureEndsUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+
+	finishVersion(t, f, `{"v":1}`)
+
+	abandoned, cancel := context.WithCancel(t.Context())
+
+	f.store.mu.Lock()
+	f.store.cancelOnPut = cancel
+	f.store.mu.Unlock()
+
+	done, err := f.svc.Restore(abandoned, f.ref, 1, "bob@example.com")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("restore: %v, want context.Canceled", err)
+	}
+
+	checkFailedRestore(t, done)
+	checkRestoreExport(t, f, `{"v":1}`)
+	checkFailedRestoreHistory(t, f, done)
+	checkLockFree(t, f)
+}
+
+// checkFailedRestore checks the kind, status, version, source and creator of
+// a restore whose save failed.
+func checkFailedRestore(t *testing.T, done stack.Update) {
+	t.Helper()
+
+	if done.Kind != stack.KindRestore || done.Status != stack.StatusFailed || done.Version != 2 {
+		t.Errorf("restore update: kind %q status %q version %d, want restore failed version 2",
+			done.Kind, done.Status, done.Version)
+	}
+
+	if done.RestoredFrom != 1 || done.CreatedBy != "bob@example.com" {
+		t.Errorf("restore update = %+v, want source 1 and creator bob@example.com", done)
+	}
+}
+
+// checkFailedRestoreHistory checks that done is the newest history entry with
+// a failed status.
+func checkFailedRestoreHistory(t *testing.T, f updatesFixture, done stack.Update) {
+	t.Helper()
+
+	history, err := f.svc.History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
+	if err != nil || len(history) != 2 {
+		t.Fatalf("history: %d entries, %v; want the update and the failed restore", len(history), err)
+	}
+
+	if history[0].ID != done.ID || history[0].Status != stack.StatusFailed {
+		t.Errorf("newest history entry = %+v, want the failed restore", history[0])
 	}
 }
 

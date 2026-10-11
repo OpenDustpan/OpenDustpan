@@ -248,12 +248,18 @@ func (f fixture) stackVersion(t *testing.T, ref stack.Ref) int64 {
 	return st.Version
 }
 
-func mutating() stack.Plan { return stack.Plan{Kind: stack.KindUpdate, DryRun: false} }
+func mutating() stack.Plan {
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+}
 
-func preview() stack.Plan { return stack.Plan{Kind: stack.KindPreview, DryRun: false} }
+func preview() stack.Plan {
+	return stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+}
 
 // dryRun is the preview phase of `pulumi up`: the real kind, not mutating.
-func dryRun() stack.Plan { return stack.Plan{Kind: stack.KindUpdate, DryRun: true} }
+func dryRun() stack.Plan {
+	return stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+}
 
 // historyFixture is a store holding namespace "acme" and stack
 // "acme/web/prod", for the staged history cases of RunUpdateHistory.
@@ -379,7 +385,7 @@ func (f historyFixture) historySize(t *testing.T, id stack.UpdateID) int64 {
 func testUpdateRoundTrip(t *testing.T, f fixture) {
 	t.Helper()
 
-	want := f.create(t, f.ref, "u1", stack.Plan{Kind: stack.KindRefresh, DryRun: true})
+	want := f.create(t, f.ref, "u1", stack.Plan{Kind: stack.KindRefresh, DryRun: true, CreatedBy: "", RestoredFrom: 0})
 	assertUpdate(t, f, want)
 
 	want = f.start(t, want)
@@ -492,7 +498,7 @@ func testStartVersions(t *testing.T, f fixture) {
 		t.Fatalf("preview version = %d, want 1", p.Version)
 	}
 
-	second := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindDestroy, DryRun: false})
+	second := f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0})
 	if second.Version != 2 {
 		t.Fatalf("second update version = %d, want 2", second.Version)
 	}
@@ -528,7 +534,12 @@ func testOneRunning(t *testing.T, f fixture) {
 
 	running := f.run(t, f.ref, "u1", mutating())
 
-	blocked := f.create(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false})
+	blocked := f.create(
+		t,
+		f.ref,
+		"u2",
+		stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
 	if _, err := f.s.StartUpdate(t.Context(), started(t, blocked), f.fence); !errors.Is(err, stack.ErrUpdateConflict) {
 		t.Fatalf("start a second mutating update: err = %v, want ErrUpdateConflict", err)
 	}
@@ -717,11 +728,15 @@ func testListUpdates(t *testing.T, f fixture) {
 
 	f.end(t, f.run(t, f.ref, "u1", mutating()), stack.StatusSucceeded)
 	f.end(t, f.run(t, f.ref, "p1", preview()), stack.StatusSucceeded)
-	f.end(t, f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false}), stack.StatusFailed)
+	f.end(
+		t,
+		f.run(t, f.ref, "u2", stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "", RestoredFrom: 0}),
+		stack.StatusFailed,
+	)
 	f.end(t, f.run(t, f.ref, "p2", dryRun()), stack.StatusSucceeded)
 	f.end(t, f.run(t, f.ref, "u3", mutating()), stack.StatusCanceled)
 	f.create(t, f.ref, "waiting", mutating())
-	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false})
+	f.run(t, f.ref, "u4", stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0})
 	f.end(t, f.run(t, f.other(t), "other", mutating()), stack.StatusSucceeded)
 
 	for _, tc := range []struct {
@@ -764,7 +779,13 @@ func testHistoryCreator(t *testing.T, f historyFixture) {
 	f.assertUpdate(t, want)
 
 	// A restore records the version it copied. Each update keeps its own creator.
-	restored := f.create(t, "u2", stack.Plan{Kind: stack.KindRestore, DryRun: false}, "bob@example.com", want.Version)
+	restored := f.create(
+		t,
+		"u2",
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		"bob@example.com",
+		want.Version,
+	)
 	restored = f.end(t, f.start(t, restored), stack.StatusSucceeded)
 	f.assertUpdate(t, restored)
 
@@ -838,11 +859,23 @@ func testHistoryKinds(t *testing.T, f historyFixture) {
 
 	f.end(
 		t,
-		f.run(t, "u1", stack.Plan{Kind: stack.KindImport, DryRun: false}, "alice@example.com", 0),
+		f.run(
+			t,
+			"u1",
+			stack.Plan{Kind: stack.KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+			"alice@example.com",
+			0,
+		),
 		stack.StatusSucceeded,
 	)
 
-	restored := f.run(t, "u2", stack.Plan{Kind: stack.KindRestore, DryRun: false}, "", 1)
+	restored := f.run(
+		t,
+		"u2",
+		stack.Plan{Kind: stack.KindRestore, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		"",
+		1,
+	)
 	f.end(t, restored, stack.StatusSucceeded)
 
 	history := f.history(t)

@@ -498,7 +498,9 @@ func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string
 		tb.Fatalf("updates service: %v", err)
 	}
 
-	u, err := updates.Create(ctx, ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	u, err := updates.Create(ctx, ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+	})
 	if err != nil {
 		tb.Fatalf("create update: %v", err)
 	}
