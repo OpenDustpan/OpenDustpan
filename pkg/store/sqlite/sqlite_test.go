@@ -1,6 +1,7 @@
 package sqlite_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -81,7 +82,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return open(t)
+		return openUncounted(t)
 	})
 
 	// History fields of ADR 28 decision 4: creator, restore source and
@@ -321,6 +322,58 @@ func open(t *testing.T) *sqlite.Store {
 	})
 
 	return s
+}
+
+// uncountedStore wraps a Store with its path so the uncounted-checkpoint
+// case sets the stored count to NULL with a direct SQL update: the port
+// always writes the count, so only SQL seeds rows from before the column.
+type uncountedStore struct {
+	storetest.UpdatesStore
+
+	path string
+}
+
+var _ storetest.CountNullifier = (*uncountedStore)(nil)
+
+// openUncounted returns a fresh store in a temporary directory that the
+// uncounted-checkpoint case can NULL through SQL.
+func openUncounted(t *testing.T) *uncountedStore {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	return &uncountedStore{UpdatesStore: s, path: path}
+}
+
+// NullifyResourceCount implements storetest.CountNullifier.
+func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
+	conn, err := sql.Open("sqlite3", "file:"+s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
+		return fmt.Errorf("nullify the checkpoint count: %w", err)
+	}
+
+	return nil
 }
 
 // TestRenameKeepsTags checks that tags follow the stack ID through a rename:

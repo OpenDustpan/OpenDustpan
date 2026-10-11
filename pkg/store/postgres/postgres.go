@@ -356,11 +356,16 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // DeleteStack implements stack.Store. It removes the stack with its updates,
 // checkpoints, events and wrapped data key in one fenced transaction: child
 // rows go through foreign keys, the data key through an explicit delete. It
-// removes the inventory entry in the same transaction. It
-// returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
-// while a mutating update of the stack runs. The stack row is locked before
-// the running check, so a concurrent start either wins the lock and the
-// delete conflicts, or waits and then finds no stack.
+// removes the inventory entry in the same transaction. When the latest
+// checkpoint manages resources, it returns ErrHasResources and removes
+// nothing: each checkpoint stores its managed resource count, so the check
+// reads only the count, or the one latest deployment when the checkpoint
+// predates the count. It returns ErrNotFound if the stack does not
+// exist, and ErrUpdateConflict while a mutating update of the stack runs.
+// The stack row is locked before the running check, so a concurrent start
+// or save either wins the lock and the delete conflicts, or waits and then
+// finds no stack. A concurrent create takes no stack lock; its insert then
+// fails the stack foreign key and answers ErrNotFound.
 func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, ref)
@@ -372,34 +377,114 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 			return err
 		}
 
-		running, err := q.RunningMutatingUpdates(ctx, locked.ID)
-		if err != nil {
-			return fmt.Errorf("count running updates: %w", err)
+		if err := refuseRunningStack(ctx, q, locked.ID); err != nil {
+			return err
 		}
 
-		if running > 0 {
-			return stack.ErrUpdateConflict
+		if err := refuseResourcedStack(ctx, q, locked.ID); err != nil {
+			return err
 		}
 
-		if err = q.DeleteSecretKeysOfStack(ctx, locked.ID); err != nil {
-			return fmt.Errorf("delete secret key: %w", err)
-		}
+		return removeStack(ctx, q, ref, locked.ID)
+	})
+}
 
-		n, err := q.DeleteStack(ctx, db.DeleteStackParams{
-			Namespace: ref.Namespace.String(),
-			Project:   ref.Project.String(),
-			Name:      ref.Stack.String(),
-		})
-		if err != nil {
-			return fmt.Errorf("delete stack: %w", err)
-		}
-
-		if n == 0 {
+// ForceDeleteStack implements stack.Store. It removes the stack with its
+// updates, checkpoints, events and wrapped data key in one fenced
+// transaction, even when the latest checkpoint manages resources. It returns
+// ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
+// mutating update of the stack runs.
+func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		locked, err := lockStack(ctx, q, ref)
+		if errors.Is(err, stack.ErrUpdateNotFound) {
 			return stack.ErrNotFound
 		}
 
-		return removeStackInventory(ctx, q, ref)
+		if err != nil {
+			return err
+		}
+
+		if err := refuseRunningStack(ctx, q, locked.ID); err != nil {
+			return err
+		}
+
+		return removeStack(ctx, q, ref, locked.ID)
 	})
+}
+
+// refuseRunningStack returns ErrUpdateConflict while a mutating update of the
+// stack with stackID runs. The caller holds the stack lock.
+func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) error {
+	running, err := q.RunningMutatingUpdates(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("count running updates: %w", err)
+	}
+
+	if running > 0 {
+		return stack.ErrUpdateConflict
+	}
+
+	return nil
+}
+
+// refuseResourcedStack returns ErrHasResources when the latest checkpoint of
+// the stack with stackID manages resources. It reads the stored count; a
+// NULL count predates the count column, so it loads that one deployment and
+// counts it instead. The caller holds the stack lock.
+func refuseResourcedStack(ctx context.Context, q *db.Queries, stackID string) error {
+	count, err := q.LatestResourceCount(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("count managed resources: %w", err)
+	}
+
+	if count.Valid {
+		if count.Int64 > 0 {
+			return stack.ErrHasResources
+		}
+
+		return nil
+	}
+
+	deployment, err := q.LatestDeployment(ctx, stackID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read latest deployment: %w", err)
+	}
+
+	if stack.CountManagedResources(deployment) > 0 {
+		return stack.ErrHasResources
+	}
+
+	return nil
+}
+
+// removeStack deletes the stack with stackID with its wrapped data key and
+// inventory entry: child rows go through foreign keys. It returns
+// ErrNotFound when the delete removes no row. The caller holds the stack
+// lock.
+func removeStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID string) error {
+	if err := q.DeleteSecretKeysOfStack(ctx, stackID); err != nil {
+		return fmt.Errorf("delete secret key: %w", err)
+	}
+
+	n, err := q.DeleteStack(ctx, db.DeleteStackParams{
+		Namespace: ref.Namespace.String(),
+		Project:   ref.Project.String(),
+		Name:      ref.Stack.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("delete stack: %w", err)
+	}
+
+	if n == 0 {
+		return stack.ErrNotFound
+	}
+
+	return removeStackInventory(ctx, q, ref)
 }
 
 // ListStacks implements stack.Store. Tags come from one query for the whole

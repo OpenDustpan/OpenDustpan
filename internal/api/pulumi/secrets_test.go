@@ -178,16 +178,11 @@ func (m *mapStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 }
 
 func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.deleteRef(ref)
+}
 
-	if _, ok := m.stacks[ref]; !ok {
-		return stack.ErrNotFound
-	}
-
-	delete(m.stacks, ref)
-
-	return nil
+func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+	return m.deleteRef(ref)
 }
 
 func (m *mapStackStore) RenameStack(
@@ -223,6 +218,20 @@ func (m *mapStackStore) UpdateStackTags(
 	st.Tags = maps.Clone(tags)
 	st.UpdatedAt = updatedAt
 	m.stacks[ref] = st
+
+	return nil
+}
+
+// deleteRef deletes ref, or returns ErrNotFound when it does not exist.
+func (m *mapStackStore) deleteRef(ref stack.Ref) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.stacks[ref]; !ok {
+		return stack.ErrNotFound
+	}
+
+	delete(m.stacks, ref)
 
 	return nil
 }
@@ -1091,6 +1100,10 @@ func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]sta
 
 func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
 	panic("failingStackStore.DeleteStack is not used")
+}
+
+func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	panic("failingStackStore.ForceDeleteStack is not used")
 }
 
 func (m *failingStackStore) RenameStack(

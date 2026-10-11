@@ -107,6 +107,10 @@ func (stubStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fe
 	return stack.ErrNotFound
 }
 
+func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
 func (stubStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
 	return nil, nil
 }
@@ -143,6 +147,7 @@ type recordingStackStore struct {
 	created   []stack.Stack
 	renamed   []renamedStack
 	deleted   []stack.Ref
+	forced    []stack.Ref
 	deleteErr error
 }
 
@@ -178,8 +183,18 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 	return out, nil
 }
 
-func (s *recordingStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+func (s *recordingStackStore) DeleteStack(
+	_ context.Context, ref stack.Ref, _ namespace.Fence,
+) error {
 	s.deleted = append(s.deleted, ref)
+
+	return s.deleteErr
+}
+
+func (s *recordingStackStore) ForceDeleteStack(
+	_ context.Context, ref stack.Ref, _ namespace.Fence,
+) error {
+	s.forced = append(s.forced, ref)
 
 	return s.deleteErr
 }
@@ -327,7 +342,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
@@ -1303,40 +1318,36 @@ func TestResolveGetStackInvalid(t *testing.T) {
 	}
 }
 
-// deploymentCheckpointStore reports deployment as the latest checkpoint of
-// every stack, so delete tests control whether the stack manages resources.
-type deploymentCheckpointStore struct {
-	deployment []byte
+// exportPanicsStore panics on any checkpoint read: the final delete must
+// never load a deployment, so a delete test that reaches it fails.
+type exportPanicsStore struct {
+	stack.UpdateStore
+	stack.EventStore
 }
 
-func (deploymentCheckpointStore) PutCheckpoint(
-	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
-) error {
-	panic("PutCheckpoint is not used by the delete route")
+// LatestCheckpoint panics: the delete route must not read state.
+func (exportPanicsStore) LatestCheckpoint(_ context.Context, _ stack.Ref) (stack.Checkpoint, error) {
+	panic("delete must not export the checkpoint")
 }
 
-func (s deploymentCheckpointStore) LatestCheckpoint(
-	_ context.Context, ref stack.Ref,
-) (stack.Checkpoint, error) {
-	var cp stack.Checkpoint
-
-	cp.Ref = ref
-	cp.Deployment = s.deployment
-
-	return cp, nil
-}
-
-func (deploymentCheckpointStore) CheckpointByVersion(
+// CheckpointByVersion panics: the delete route must not read state.
+func (exportPanicsStore) CheckpointByVersion(
 	_ context.Context, _ stack.Ref, _ int64,
 ) (stack.Checkpoint, error) {
-	return stack.Checkpoint{}, stack.ErrNoState
+	panic("delete must not export the checkpoint")
 }
 
-// newDeleteHandler builds a Handler whose delete removes from stores and
-// whose export reports deployment as the latest checkpoint. A nil deployment
-// reports no state. deleteErr is what the stack store answers.
+// PutCheckpoint panics: the delete route never writes state.
+func (exportPanicsStore) PutCheckpoint(
+	_ context.Context, _ stack.Checkpoint, _ namespace.Fence,
+) error {
+	panic("delete must not write a checkpoint")
+}
+
+// newDeleteHandler builds a Handler whose delete removes from stores.
+// deleteErr is what the stack store answers.
 func newDeleteHandler(
-	t *testing.T, deployment []byte, deleteErr error,
+	t *testing.T, deleteErr error,
 ) (*pulumi.Handler, *recordingStackStore) {
 	t.Helper()
 
@@ -1347,22 +1358,24 @@ func newDeleteHandler(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: deleteErr}
+	stores := &recordingStackStore{
+		created:   nil,
+		renamed:   nil,
+		tags:      nil,
+		deleted:   nil,
+		forced:    nil,
+		deleteErr: deleteErr,
+	}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
 
-	var checkpoints stack.CheckpointStore = emptyCheckpointStore{UpdateStore: nil, EventStore: nil}
-	if deployment != nil {
-		checkpoints = deploymentCheckpointStore{deployment: deployment}
-	}
-
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            emptyCheckpointStore{UpdateStore: nil, EventStore: nil},
-		Checkpoints:        checkpoints,
-		Events:             emptyCheckpointStore{UpdateStore: nil, EventStore: nil},
+		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
+		Checkpoints:        exportPanicsStore{UpdateStore: nil, EventStore: nil},
+		Events:             exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
 		Now:                nil,
 		MaxCheckpointBytes: 0,
@@ -1401,99 +1414,93 @@ func deleteRequest(t *testing.T, target string) *http.Request {
 func TestDeleteStack(t *testing.T) {
 	t.Parallel()
 
-	const (
-		empty      = `{"resources":[]}`
-		onlyStack  = `{"resources":[{"type":"pulumi:pulumi:Stack"}]}`
-		withCustom = `{"resources":[{"type":"pulumi:pulumi:Stack"},{"type":"custom:resource:Type"}]}`
-	)
-
 	cases := []struct {
 		name       string
 		target     string
-		deployment []byte
 		deleteErr  error
 		want       int
 		wantDelete bool
+		wantForced bool
 	}{
 		{
-			name:       "no state",
+			name:       "without force",
 			target:     "/api/stacks/acme/web/prod",
-			deployment: nil,
 			deleteErr:  nil,
 			want:       http.StatusNoContent,
 			wantDelete: true,
+			wantForced: false,
 		},
 		{
-			name:       "no resources",
-			target:     "/api/stacks/acme/web/prod",
-			deployment: []byte(empty),
+			name:       "with force",
+			target:     "/api/stacks/acme/web/prod?force=true",
 			deleteErr:  nil,
 			want:       http.StatusNoContent,
 			wantDelete: true,
+			wantForced: true,
 		},
 		{
-			name:       "only the stack resource",
-			target:     "/api/stacks/acme/web/prod",
-			deployment: []byte(onlyStack),
+			name:       "with force=1",
+			target:     "/api/stacks/acme/web/prod?force=1",
 			deleteErr:  nil,
 			want:       http.StatusNoContent,
 			wantDelete: true,
+			wantForced: true,
+		},
+		{
+			name:       "with force=false",
+			target:     "/api/stacks/acme/web/prod?force=false",
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+			wantForced: false,
+		},
+		{
+			name:       "with force=TRUE",
+			target:     "/api/stacks/acme/web/prod?force=TRUE",
+			deleteErr:  nil,
+			want:       http.StatusNoContent,
+			wantDelete: true,
+			wantForced: true,
 		},
 		{
 			name:       "resources without force",
 			target:     "/api/stacks/acme/web/prod",
-			deployment: []byte(withCustom),
-			deleteErr:  nil,
+			deleteErr:  stack.ErrHasResources,
 			want:       http.StatusBadRequest,
-			wantDelete: false,
+			wantDelete: true,
+			wantForced: false,
 		},
 		{
-			name:       "resources with force",
+			name:       "resources with force still deletes",
 			target:     "/api/stacks/acme/web/prod?force=true",
-			deployment: []byte(withCustom),
 			deleteErr:  nil,
 			want:       http.StatusNoContent,
 			wantDelete: true,
-		},
-		{
-			name:       "resources with force=1",
-			target:     "/api/stacks/acme/web/prod?force=1",
-			deployment: []byte(withCustom),
-			deleteErr:  nil,
-			want:       http.StatusNoContent,
-			wantDelete: true,
-		},
-		{
-			name:       "resources with force=false",
-			target:     "/api/stacks/acme/web/prod?force=false",
-			deployment: []byte(withCustom),
-			deleteErr:  nil,
-			want:       http.StatusBadRequest,
-			wantDelete: false,
+			wantForced: true,
 		},
 		{
 			name:       "missing stack",
 			target:     "/api/stacks/acme/web/prod",
-			deployment: nil,
 			deleteErr:  stack.ErrNotFound,
 			want:       http.StatusNotFound,
 			wantDelete: true,
+			wantForced: false,
 		},
 		{
 			name:       "running update",
 			target:     "/api/stacks/acme/web/prod?force=true",
-			deployment: nil,
 			deleteErr:  stack.ErrUpdateConflict,
 			want:       http.StatusConflict,
 			wantDelete: true,
+			wantForced: true,
 		},
 		{
 			name:       "invalid name",
 			target:     "/api/stacks/acme/web/..%2Fx",
-			deployment: nil,
 			deleteErr:  nil,
 			want:       http.StatusBadRequest,
 			wantDelete: false,
+			wantForced: false,
 		},
 	}
 
@@ -1501,7 +1508,7 @@ func TestDeleteStack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler, stores := newDeleteHandler(t, tc.deployment, tc.deleteErr)
+			handler, stores := newDeleteHandler(t, tc.deleteErr)
 
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, deleteRequest(t, tc.target))
@@ -1510,8 +1517,13 @@ func TestDeleteStack(t *testing.T) {
 				t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
 
-			if got := len(stores.deleted) == 1; got != tc.wantDelete {
-				t.Fatalf("deleted %d stacks, want delete=%t", len(stores.deleted), tc.wantDelete)
+			calls := len(stores.deleted) + len(stores.forced)
+			if got := calls == 1; got != tc.wantDelete {
+				t.Fatalf("delete called %d stores, want delete=%t", calls, tc.wantDelete)
+			}
+
+			if tc.wantDelete && (len(stores.forced) == 1) != tc.wantForced {
+				t.Fatalf("force delete = %t, want %t", len(stores.forced) == 1, tc.wantForced)
 			}
 		})
 	}
@@ -1522,11 +1534,7 @@ func TestDeleteStack(t *testing.T) {
 func TestDeleteStackWithResourcesMessage(t *testing.T) {
 	t.Parallel()
 
-	handler, _ := newDeleteHandler(
-		t,
-		[]byte(`{"resources":[{"type":"pulumi:pulumi:Stack"},{"type":"custom:resource:Type"}]}`),
-		nil,
-	)
+	handler, _ := newDeleteHandler(t, stack.ErrHasResources)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))

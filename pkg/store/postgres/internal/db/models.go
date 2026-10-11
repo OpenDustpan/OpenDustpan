@@ -28,6 +28,7 @@ type Checkpoint struct {
 	Deployment    []byte
 	SavedAtMs     int64
 	StackID       string
+	ResourceCount pgtype.Int8
 }
 
 type Inventory struct {

@@ -93,6 +93,10 @@ func (m *memStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.
 	return errNotUsed
 }
 
+func (m *memStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+	return errNotUsed
+}
+
 func (m *memStackStore) UpdateStackTags(
 	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
 ) error {

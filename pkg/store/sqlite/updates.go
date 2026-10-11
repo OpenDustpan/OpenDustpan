@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ncruces/go-sqlite3"
+
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -46,6 +48,14 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			RestoredFrom:     row.RestoredFrom,
 		})
 		if err != nil {
+			if errors.Is(err, sqlite3.CONSTRAINT_FOREIGNKEY) {
+				// A concurrent DeleteStack removed the stack after the
+				// resolve above. The transaction holds the write lock from
+				// the start, so this cannot happen today, but the insert
+				// meets the missing stack here if it ever does.
+				return stack.ErrNotFound
+			}
+
 			return fmt.Errorf("insert update: %w", err)
 		}
 
@@ -249,6 +259,7 @@ func writeCheckpoint(
 		FeaturesJson:  string(row.Features),
 		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
+		ResourceCount: sql.NullInt64{Int64: row.ResourceCount, Valid: true},
 	})
 	if putErr != nil {
 		return fmt.Errorf("upsert checkpoint: %w", putErr)
@@ -623,5 +634,8 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
+		// A NULL count predates the count column; the domain checkpoint
+		// holds no count, and the delete guard handles NULL itself.
+		ResourceCount: row.ResourceCount.Int64,
 	}
 }

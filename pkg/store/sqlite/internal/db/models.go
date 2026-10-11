@@ -28,6 +28,7 @@ type Checkpoint struct {
 	FeaturesJson  string
 	Deployment    []byte
 	SavedAtMs     int64
+	ResourceCount sql.NullInt64
 }
 
 type Inventory struct {

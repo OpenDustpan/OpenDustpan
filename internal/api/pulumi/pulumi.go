@@ -45,9 +45,6 @@ const (
 	// force meets a stack that still manages resources. The Pulumi CLI
 	// recognizes exactly this message and reports that removal is refused.
 	hasResourcesMessage = "Bad Request: Stack still contains resources."
-	// rootStackType is the type of the automatic stack resource. A deployment
-	// with only this resource holds no managed resources.
-	rootStackType = "pulumi:pulumi:Stack"
 	// unitTool names this API's tool in unit references.
 	unitTool = "pulumi"
 )
@@ -545,20 +542,10 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 	})
 }
 
-// deploymentResource is one entry of the resources list in a checkpoint
-// deployment, as far as the delete guard reads it.
-type deploymentResource struct {
-	Type string `json:"type"`
-}
-
-// deploymentDoc is the part of a checkpoint deployment that the delete guard
-// reads: the list of managed resources.
-type deploymentDoc struct {
-	Resources []deploymentResource `json:"resources"`
-}
-
-// deleteStack removes the stack with its history. Without force=true it
-// refuses when the stack still manages resources, as the Pulumi CLI expects.
+// deleteStack removes the stack with its history. Without force=true the
+// store refuses when the stack still manages resources, as the Pulumi CLI
+// expects. The check runs inside the delete transaction, so an update that
+// finishes between the check and the delete cannot drop resources.
 func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -569,27 +556,13 @@ func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	if !deleteForce(r) {
-		has, err := h.stackHasResources(ctx, ref)
-		if err != nil {
-			h.writeError(ctx, w, err)
-
-			return
-		}
-
-		if has {
-			h.writeJSON(
-				ctx,
-				w,
-				http.StatusBadRequest,
-				errorResponse{Code: http.StatusBadRequest, Message: hasResourcesMessage},
-			)
-
-			return
-		}
+	if deleteForce(r) {
+		err = h.stacks.ForceDelete(ctx, ref)
+	} else {
+		err = h.stacks.Delete(ctx, ref)
 	}
 
-	if err := h.stacks.Delete(ctx, ref); err != nil {
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -604,43 +577,6 @@ func deleteForce(r *http.Request) bool {
 	v := r.URL.Query().Get("force")
 
 	return strings.EqualFold(v, "true") || v == "1"
-}
-
-// stackHasResources reports whether the latest checkpoint of ref manages
-// resources beyond the automatic stack resource. A stack without state
-// manages none.
-func (h *Handler) stackHasResources(ctx context.Context, ref stack.Ref) (bool, error) {
-	cp, err := h.updates.Export(ctx, ref)
-	if errors.Is(err, stack.ErrNoState) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, err
-	}
-
-	return deploymentHasResources(cp.Deployment), nil
-}
-
-// deploymentHasResources reports whether deployment, the opaque JSON of a
-// checkpoint, lists resources beyond the automatic stack resource. A
-// deployment that does not parse counts as holding resources, so a delete
-// without force cannot drop state the server cannot read.
-func deploymentHasResources(deployment []byte) bool {
-	var doc deploymentDoc
-
-	if err := json.Unmarshal(deployment, &doc); err != nil {
-		return true
-	}
-
-	switch len(doc.Resources) {
-	case 0:
-		return false
-	case 1:
-		return doc.Resources[0].Type != rootStackType
-	default:
-		return true
-	}
 }
 
 // renameStackRequest is the body the Pulumi CLI sends to rename a stack: the
