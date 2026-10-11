@@ -1,7 +1,8 @@
 ---
 rfc: 32
 title: Object storage adapters
-status: draft
+status: accepted
+adr: 31
 created: 2026-10-10
 ---
 
@@ -38,4 +39,7 @@ storage drivers for backups only.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 31](../adr/0031-s3-compatible-object-storage.md)
+for milestone 3: the S3-compatible adapter, with no new dependency. GCS,
+Azure Blob, a bucket for each namespace and cloud identity stay open for a
+later decision.

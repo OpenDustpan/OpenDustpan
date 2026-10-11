@@ -1,15 +1,17 @@
 ---
 rfc: 3
 title: Domain modules for updates, secrets and OpenTofu state
-status: discussing
+status: accepted
+adr: 20, 23, 26
 created: 2026-10-09
 was: proposed ADR 11
 ---
 
 # RFC 3. Domain modules for updates, secrets and OpenTofu state
 
-Status: under discussion. It was proposed ADR 11 until ADR 15 moved every
-undecided proposal to `docs/rfc/`.
+Status: accepted as ADR 20 (part 1, the Pulumi update cycle), ADR 23
+(part 2, secrets) and ADR 26 (part 3, OpenTofu state). It was proposed ADR 11
+until ADR 15 moved every undecided proposal to `docs/rfc/`.
 
 Part 1, the Pulumi update cycle, is accepted as ADR 20.
 Part 2, secrets, is accepted as ADR 23.
@@ -126,3 +128,10 @@ OpenTofu state:
 - Unwrapping a data key on every request is a KMS call per request once a
   cloud KMS is plugged in; a bounded in-memory cache of unwrapped keys is the
   expected follow-up.
+
+## Outcome
+
+Accepted as [ADR 20](../adr/0020-the-pulumi-update-cycle.md) for part 1 (the
+Pulumi update cycle), [ADR 23](../adr/0023-secrets-and-the-built-in-key-encryption-key.md)
+for part 2 (secrets) and
+[ADR 26](../adr/0026-opentofu-state.md) for part 3 (OpenTofu state).

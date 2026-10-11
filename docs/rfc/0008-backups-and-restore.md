@@ -1,7 +1,8 @@
 ---
 rfc: 8
 title: Backups and restore, built in
-status: draft
+status: accepted
+adr: 30
 created: 2026-10-10
 ---
 
@@ -84,4 +85,8 @@ holds the encrypted data keys, never the key-encryption key.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 30](../adr/0030-backups-and-restore.md) for
+milestone 3: backup and restore of the whole installation, to a local
+directory or to S3-compatible storage. Schedules, retention, backups of one
+namespace, other targets, a public format and encryption of the whole backup
+stay open for a later decision.

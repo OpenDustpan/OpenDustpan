@@ -1,7 +1,8 @@
 ---
 rfc: 34
 title: Observing the OpenDustpan server
-status: draft
+status: accepted
+adr: 32
 created: 2026-10-10
 ---
 
@@ -33,4 +34,6 @@ metrics; Terrakube has OpenTelemetry tracing. OpenDustpan has `log/slog` only.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 32](../adr/0032-observing-the-server.md) for
+milestone 3: request logs, liveness, readiness and metrics. Tracing stays
+open for a later decision. Rate limits move to a new RFC.

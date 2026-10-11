@@ -51,12 +51,12 @@ both together.
 | --- | --- | --- |
 | [1](0001-opentofu-via-the-tfe-compatible-api.md) | OpenTofu support through the TFE-compatible remote API | accepted |
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
-| [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | discussing |
+| [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | draft |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft |
-| [8](0008-backups-and-restore.md) | Backups and restore, built in | draft |
+| [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted |
 | [9](0009-themes-and-white-labeling.md) | Themes and white-labeling | draft |
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
@@ -66,7 +66,7 @@ both together.
 | [15](0015-output-sharing.md) | Output sharing between units | draft |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
-| [18](0018-state-operations.md) | State operations: history, restore, locks and leases | draft |
+| [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted |
 | [19](0019-users-teams-roles.md) | Users, teams and roles | draft |
 | [20](0020-access-tokens.md) | Access tokens and machine identity | draft |
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | draft |
@@ -80,17 +80,17 @@ both together.
 | [29](0029-existing-ci.md) | Using an existing CI as the executor | draft |
 | [30](0030-opentofu-remote-execution.md) | CLI-driven remote execution for OpenTofu | draft |
 | [31](0031-kubernetes.md) | Kubernetes: runner, operator, and blueprints as resources | draft |
-| [32](0032-object-storage.md) | Object storage adapters | draft |
+| [32](0032-object-storage.md) | Object storage adapters | accepted |
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | draft |
-| [34](0034-server-observability.md) | Observing the OpenDustpan server | draft |
+| [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | draft |
 | [36](0036-high-availability.md) | High availability and scale-out | draft |
 | [37](0037-federation.md) | One view over many OpenDustpan installs | draft |
-| [38](0038-upgrade-checks.md) | Upgrade checks | draft |
+| [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | draft |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
-| [42](0042-migration-import.md) | Migration from other backends and operators | draft |
+| [42](0042-migration-import.md) | Migration from other backends and operators | accepted |
 | [43](0043-ephemeral-units.md) | Ephemeral units and time to live | draft |
 | [44](0044-bulk-operations.md) | Bulk operations | draft |
 | [45](0045-cost-estimation.md) | Cost estimation | draft |
@@ -107,3 +107,4 @@ both together.
 | [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | draft |
 | [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft |
 | [58](0058-large-request-limits.md) | Bound memory of large request bodies | draft |
+| [59](0059-installation-api.md) | Shape of the installation API served by api/server | draft |
