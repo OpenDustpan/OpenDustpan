@@ -1,7 +1,8 @@
 ---
 rfc: 39
 title: Reading state contents
-status: draft
+status: accepted
+adr: 41
 created: 2026-10-10
 ---
 
@@ -41,4 +42,7 @@ five parts of the competitor review flagged it.
 
 ## Outcome
 
-None yet.
+Accepted as [ADR 41](../adr/0041-the-server-reads-state-and-masks-secrets.md)
+with a wider model than these first ideas: the server reads state, a read
+masks secret values, and a separate reveal call writes an audit entry. The
+indexer with a fixed list of fields is not part of that decision.
