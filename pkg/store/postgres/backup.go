@@ -758,6 +758,13 @@ func (s *Store) loadStagingDump(
 			return fmt.Errorf("set staging search path: %w", err)
 		}
 
+		// The migration seeds the installation row in the staging schema as
+		// it does in a fresh destination. Clear it, as the import does, so
+		// the COPY below loads the row the backup holds.
+		if _, err := tx.Exec(ctx, `DELETE FROM installation`); err != nil {
+			return fmt.Errorf("clear staged installation state: %w", err)
+		}
+
 		for _, table := range backup.Tables {
 			if err := copyTableIn(ctx, tx, table, frames[table], want); err != nil {
 				return err
