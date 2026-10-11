@@ -569,6 +569,37 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listNamespaces = `-- name: ListNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms
+FROM namespaces
+ORDER BY name
+`
+
+func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
+	rows, err := q.db.Query(ctx, listNamespaces)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Namespace
+	for rows.Next() {
+		var i Namespace
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
 FROM stacks

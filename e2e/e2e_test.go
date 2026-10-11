@@ -196,7 +196,25 @@ func contains(want string) func(e2e.Result) error {
 
 // step is a scenario step with no extra environment.
 func step(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
-	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil}
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Fail: false}
+}
+
+// failStep is a scenario step that expects the CLI to fail, for steps that
+// prove an error message.
+func failStep(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Fail: true}
+}
+
+// outputContains reports whether stdout or stderr holds want. Failing CLI
+// commands print the server error to stderr, so error steps check both.
+func outputContains(want string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if !strings.Contains(r.Stdout, want) && !strings.Contains(r.Stderr, want) {
+			return fmt.Errorf("%w: output lacks %q", errUnexpected, want)
+		}
+
+		return nil
+	}
 }
 
 // pulumiScenario exercises login and stack management. A namespace is a
@@ -224,9 +242,28 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		Name:  "stack rename",
 		Args:  []string{"stack", "rename", renamedQualified, "--stack", qualified},
 		Env:   nil,
+		Fail:  false,
 	})
 
 	for _, s := range pulumiTeardownSteps(scratch) {
+		env.Step(ctx, t, s)
+	}
+
+	// A second namespace, so the list-all step proves stacks from every
+	// readable namespace. It is created late so the default-organization
+	// step above still sees one namespace.
+	env.CreateNamespace(ctx, t, e2e.Namespace2)
+
+	second := fmt.Sprintf("%s/%s/%s", e2e.Namespace2, e2e.Project, stackName)
+	for _, s := range []e2e.StepSpec{
+		step("stack init second namespace", nil, "stack", "init", second, "--no-select"),
+		step("stack ls all namespaces", bothStacksListed, "stack", "ls", "--json", "--all"),
+		failStep(
+			"missing subject namespace names the fix",
+			outputContains("pulumi org set-default"),
+			"stack", "init", e2e.Subject+"/"+e2e.Project+"/ghost",
+		),
+	} {
 		env.Step(ctx, t, s)
 	}
 
@@ -273,6 +310,7 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 			Name: "stack init default org",
 			Args: []string{"stack", "init", "other"},
 			Env:  nil,
+			Fail: false,
 		},
 	}
 }
@@ -335,6 +373,35 @@ func checkRenameKeptID(
 	}
 }
 
+// bothStacksListed checks that stack ls --all lists the dev stack in both
+// namespaces. The CLI prints each stack as "<organization>/<stack>", so the
+// organization is the part before the slash.
+func bothStacksListed(r e2e.Result) error {
+	var stacks []struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
+		return fmt.Errorf("%w: decode stack list: %w", errUnexpected, err)
+	}
+
+	seen := map[string]bool{}
+
+	for _, s := range stacks {
+		if org, _, ok := strings.Cut(s.Name, "/"); ok {
+			seen[org] = true
+		}
+	}
+
+	for _, want := range []string{e2e.Namespace, e2e.Namespace2} {
+		if !seen[want] {
+			return fmt.Errorf("%w: no stack listed in namespace %q: %s", errUnexpected, want, r.Stdout)
+		}
+	}
+
+	return nil
+}
+
 func stackListed(r e2e.Result) error {
 	var stacks []struct {
 		Name string `json:"name"`
@@ -375,13 +442,15 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
 		// test server acting as an HTTP proxy; the server routes on the request path.
-		Env: []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
+		Env:  []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
+		Fail: false,
 	})
 	env.Step(ctx, t, e2e.StepSpec{
 		Check: contains("(" + overrideURL + ")"),
 		Name:  "console url from PULUMI_CONSOLE_DOMAIN",
 		Args:  []string{"login"},
 		Env:   []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
+		Fail:  false,
 	})
 }
 

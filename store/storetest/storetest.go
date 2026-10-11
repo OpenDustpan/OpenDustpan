@@ -43,6 +43,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "namespace round trip", test: testNamespaceRoundTrip},
 		{name: "duplicate namespace is ErrAlreadyExists", test: testDuplicateNamespace},
 		{name: "missing namespace is ErrNotFound", test: testMissingNamespace},
+		{name: "list namespaces orders by name", test: testListNamespaces},
 		{name: "stack round trip", test: testStackRoundTrip},
 		{name: "duplicate stack is ErrAlreadyExists", test: testDuplicateStack},
 		{name: "stale fence is ErrFenced", test: testStaleFence},
@@ -129,6 +130,48 @@ func testMissingNamespace(t *testing.T, s Store) {
 	if _, err := s.GetNamespace(t.Context(), "nope"); !errors.Is(err, namespace.ErrNotFound) {
 		t.Fatalf("get missing namespace: err = %v, want ErrNotFound", err)
 	}
+}
+
+func testListNamespaces(t *testing.T, s Store) {
+	t.Helper()
+
+	empty, err := s.ListNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces: %v", err)
+	}
+
+	if len(empty) != 0 {
+		t.Fatalf("list namespaces = %v, want empty", empty)
+	}
+
+	for _, name := range []string{"zeta", "acme", "beta"} {
+		newNamespace(t, s, name)
+	}
+
+	got, err := s.ListNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces: %v", err)
+	}
+
+	want := []namespace.Name{"acme", "beta", "zeta"}
+	if len(got) != len(want) {
+		t.Fatalf("list namespaces = %v, want %v", names(got), want)
+	}
+
+	for i := range want {
+		if got[i].Name != want[i] {
+			t.Fatalf("list namespaces = %v, want %v", names(got), want)
+		}
+	}
+}
+
+func names(namespaces []namespace.Namespace) []namespace.Name {
+	out := make([]namespace.Name, 0, len(namespaces))
+	for i := range namespaces {
+		out = append(out, namespaces[i].Name)
+	}
+
+	return out
 }
 
 func testStackRoundTrip(t *testing.T, s Store) {

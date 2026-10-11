@@ -113,6 +113,10 @@ func (oneNamespace) GetNamespace(_ context.Context, name namespace.Name) (namesp
 	return namespace.Namespace{CreatedAt: time.Time{}, Name: name, HomeRegion: "local", FailoverVersion: 1}, nil
 }
 
+func (oneNamespace) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	return nil, nil
+}
+
 type fixture struct {
 	svc     *secret.Service
 	keys    *memKeys

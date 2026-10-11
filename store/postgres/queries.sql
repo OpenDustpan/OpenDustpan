@@ -8,6 +8,11 @@ SELECT name, home_region, failover_version, created_at_ms
 FROM namespaces
 WHERE name = $1;
 
+-- name: ListNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms
+FROM namespaces
+ORDER BY name;
+
 -- name: GetFailoverVersionForShare :one
 -- Locks the namespace row so a concurrent promotion waits for this write.
 SELECT failover_version

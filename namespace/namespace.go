@@ -98,6 +98,8 @@ type Store interface {
 	CreateNamespace(ctx context.Context, ns Namespace) error
 	// GetNamespace returns the namespace called name, or ErrNotFound.
 	GetNamespace(ctx context.Context, name Name) (Namespace, error)
+	// ListNamespaces returns every namespace, ordered by name.
+	ListNamespaces(ctx context.Context) ([]Namespace, error)
 }
 
 // Config holds the dependencies of a Service.
@@ -156,6 +158,16 @@ func (s *Service) Get(ctx context.Context, name Name) (Namespace, error) {
 	}
 
 	return ns, nil
+}
+
+// List returns every namespace, ordered by name.
+func (s *Service) List(ctx context.Context) ([]Namespace, error) {
+	namespaces, err := s.store.ListNamespaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+
+	return namespaces, nil
 }
 
 // WritableHere returns the namespace if this region may write to it. It returns

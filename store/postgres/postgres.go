@@ -103,6 +103,21 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
 }
 
+// ListNamespaces implements namespace.Store.
+func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	rows, err := s.queries.ListNamespaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select namespaces: %w", err)
+	}
+
+	out := make([]namespace.Namespace, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, codec.FromNamespaceRow(codec.NamespaceRow(row)))
+	}
+
+	return out, nil
+}
+
 // CreateStack implements stack.Store with a fenced insert.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
 	row, err := codec.ToStackRow(st)
