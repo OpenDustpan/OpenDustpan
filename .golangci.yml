@@ -94,13 +94,13 @@ linters:
             - "**/backup/**"
             - "**/blob/*.go"
             - "!**/*_test.go"
-            - "!**/api/inventory/**"
+            - "!**/internal/api/inventory/**"
           deny:
-            - pkg: opendustpan.org/opendustpan/store
+            - pkg: opendustpan.org/opendustpan/pkg/store
               desc: Domain code depends on ports, never on store adapters.
-            - pkg: opendustpan.org/opendustpan/api
+            - pkg: opendustpan.org/opendustpan/internal/api
               desc: Domain code must not import transport adapters.
-            - pkg: opendustpan.org/opendustpan/blob/
+            - pkg: opendustpan.org/opendustpan/pkg/blob/
               desc: Domain code depends on the blob port, never on an adapter.
             - pkg: net/http
               desc: HTTP belongs in api/, not in the domain.
@@ -328,7 +328,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^store/storetest/|^blob/blobtest/|^secret/secrettest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/)
         linters:
           - mnd
           - funlen

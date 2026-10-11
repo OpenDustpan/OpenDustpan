@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/namespace"
-	"opendustpan.org/opendustpan/secret"
-	"opendustpan.org/opendustpan/store/schema"
-	"opendustpan.org/opendustpan/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // testKeyString is a fixed 32-byte key-encryption key for these tests.

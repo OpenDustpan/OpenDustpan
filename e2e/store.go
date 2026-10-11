@@ -17,7 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 const (

@@ -35,26 +35,29 @@ Do not report work as finished if any of these fail. Say what fails instead.
 ## Layout
 
 ```
-.agents/skills/      agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
-dustpan.go, web.go   package dustpan: the SDK entry point (NewServer + options)
-cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that may exit.
-namespace/           domain: namespaces, home region, failover-version fencing
-inventory/           domain: cross-tool inventory projection of units
-stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
-secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
-workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
-identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
-blob/                port: object storage; blob/fs adapter; blob/blobtest suite
-backup/              domain: backup ports (export, import, registry) and the table list
-store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
-api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
-api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
-api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
-e2e/                 end-to-end suite driving real CLI binaries of every supported tool (make e2e)
-internal/            helpers shared across packages, not part of the SDK
-docs/adr/            architecture decision records: accepted decisions only
-docs/rfc/            RFCs: open questions, options and proposals (ADR 15)
-GLOSSARY.md          the project's domain language: one word per concept
+.agents/skills/        agent skills, installed with `npx skills` (see skills-lock.json); .claude/skills/ links here
+cmd/opendustpan/       the binary: flags, env, built-in adapters. Only place that may exit.
+pkg/                   the public SDK (ADR 35)
+  dustpan/             the SDK entry point: NewServer + options, routes, probes
+  namespace/           domain: namespaces, home region, failover-version fencing
+  inventory/           domain: cross-tool inventory projection of units
+  stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
+  secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
+  workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
+  identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
+  blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
+  backup/              domain: backup ports (export, import, registry) and the table list
+  store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
+internal/              code that is not part of the SDK
+  api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
+  api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
+  api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
+  api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
+  metrics/, token/...  helpers shared across packages
+e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
+docs/adr/              architecture decision records: accepted decisions only
+docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
+GLOSSARY.md            the project's domain language: one word per concept
 ```
 
 The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
@@ -67,7 +70,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 - Each tool's model of deployable units and state lives in its own domain
   package (`stack` for the Pulumi CLI, `workspace` for OpenTofu). Do not merge
   them or share types between them. Share concepts through the core instead.
-- Each tool's wire protocol lives in its own HTTP adapter under `api/<tool>/`,
+- Each tool's wire protocol lives in its own HTTP adapter under `internal/api/<tool>/`,
   with its own route prefix. Adapters never call each other.
 - Support a tool only once the e2e suite drives its real CLI. Every
   endpoint lands with its e2e step first.
@@ -81,7 +84,7 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 ## Backend rules (Go)
 
 - Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`) never import
-  `net/http`, `database/sql`, drivers, `store/...` or `api/...`. depguard enforces this.
+  `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.
 - Every port has a conformance suite (`*test` package). A new adapter must run
@@ -91,9 +94,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   conflicts) into domain sentinels. Never return driver errors to callers.
 - Writes inside a namespace carry a `namespace.Fence` and the store checks it in
   the same transaction. Never add a write path that skips the fence.
-- SQL: hand-written per dialect. Put fixed queries in `store/<dialect>/queries.sql`
+- SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `store/<dialect>/migrations/`. Never
+  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
   edit an applied migration. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.

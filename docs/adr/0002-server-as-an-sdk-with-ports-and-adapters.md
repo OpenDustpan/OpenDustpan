@@ -1,6 +1,6 @@
 # 2. The server is an SDK with ports and adapters
 
-Status: accepted · 2026-10-08
+Status: superseded by ADR 35 · accepted 2026-10-08
 
 ## Context
 

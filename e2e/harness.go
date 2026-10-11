@@ -25,15 +25,15 @@ import (
 	"testing"
 	"time"
 
-	dustpan "opendustpan.org/opendustpan"
-	"opendustpan.org/opendustpan/blob/fs"
-	"opendustpan.org/opendustpan/identity"
-	"opendustpan.org/opendustpan/inventory"
-	"opendustpan.org/opendustpan/namespace"
-	"opendustpan.org/opendustpan/secret"
-	"opendustpan.org/opendustpan/stack"
-	"opendustpan.org/opendustpan/store/sqlite"
-	"opendustpan.org/opendustpan/workspace"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 const (
