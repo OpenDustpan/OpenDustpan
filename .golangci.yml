@@ -15,6 +15,7 @@ run:
   tests: true
   build-tags:
     - e2e # Lint the end-to-end package too; make test excludes it.
+    - upgrade # Lint the upgrade test with the e2e harness; make check excludes it.
   modules-download-mode: readonly
 
 linters:

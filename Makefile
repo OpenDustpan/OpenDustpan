@@ -4,7 +4,7 @@
 #   sqlc          v1.31.1  https://docs.sqlc.dev/en/latest/overview/install.html
 #   python3       any 3.x, standard library only (for docs-lint)
 
-.PHONY: check fmt lint docs-lint test test-postgres e2e generate build image-smoke
+.PHONY: check fmt lint docs-lint test test-postgres e2e upgrade-test generate build image-smoke
 
 check: lint docs-lint test ## Everything CI checks.
 
@@ -34,6 +34,9 @@ test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case while no v* tag exists). Not part of check.
+	E2E_SERVER=binary go test -tags "e2e upgrade" -race -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
 	sqlc generate
