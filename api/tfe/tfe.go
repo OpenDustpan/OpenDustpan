@@ -1,10 +1,11 @@
 // Package tfe serves the HTTP API that OpenTofu speaks to its remote
 // backend (the TFE-compatible API). The web console uses the same API.
 //
-// Only service discovery, ping, the entitlement set and the workspace
-// read, create and list routes exist so far. Every further endpoint lands
-// with its e2e step first, so no other route is served until its issue adds
-// it with the CLI coverage.
+// Service discovery, ping, the entitlement set, the workspace read, create
+// and list routes, and the state read routes (current state, one state
+// version, its download and its outputs) exist so far. Every further
+// endpoint lands with its e2e step first, so no other route is served until
+// its issue adds it with the CLI coverage.
 package tfe
 
 import (
@@ -12,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -33,10 +36,17 @@ const (
 	maxBodyBytes = 1 << 20
 )
 
-// WorkspaceService is the workspace use cases the workspace routes need:
-// create, read and list for the documents, lock and unlock for the lock
-// routes, and the current state for the current-state-version relationship.
+// WorkspaceService is the workspace use cases the TFE routes need: the
+// workspace documents, the locks and the state reads. Each part is its own
+// small interface; workspace.Service implements all three.
 type WorkspaceService interface {
+	WorkspaceReader
+	WorkspaceLocker
+	StateReader
+}
+
+// WorkspaceReader is what the workspace routes need: create, read and list.
+type WorkspaceReader interface {
 	// Create creates an unlocked workspace without state.
 	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
 	// Get returns the workspace called ref, or workspace.ErrNotFound.
@@ -45,6 +55,10 @@ type WorkspaceService interface {
 	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// List returns the namespace's workspaces, ordered by name.
 	List(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error)
+}
+
+// WorkspaceLocker is what the lock routes need.
+type WorkspaceLocker interface {
 	// Lock locks the workspace for holder, the subject of the calling
 	// principal.
 	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
@@ -52,9 +66,20 @@ type WorkspaceService interface {
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
 	// ForceUnlock releases the lock whoever holds it.
 	ForceUnlock(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
+}
+
+// StateReader is what the state read routes and the current-state-version
+// relationship need.
+type StateReader interface {
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
 	Current(ctx context.Context, id workspace.ID) (workspace.StateVersion, error)
+	// ReadState returns the finalized state version with id, or
+	// workspace.ErrStateVersionNotFound when it does not exist or is not
+	// finalized.
+	ReadState(ctx context.Context, id workspace.StateVersionID) (workspace.StateVersion, error)
+	// Open returns the content of sv. The caller closes it.
+	Open(ctx context.Context, sv workspace.StateVersion) (io.ReadCloser, error)
 }
 
 // Config holds the dependencies of a Handler.
@@ -63,9 +88,12 @@ type Config struct {
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
 	Namespaces    *namespace.Service
-	// Workspaces serves the workspace routes. It is required: routes by ID
-	// resolve the ID through it.
+	// Workspaces serves the workspace and state routes. It is required:
+	// routes by ID resolve the ID through it.
 	Workspaces WorkspaceService
+	// BaseURL reports the external base URL for a request, for absolute
+	// URLs. The zero value derives it from each request.
+	BaseURL baseurl.Resolver
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -76,6 +104,7 @@ type Handler struct {
 	logger     *slog.Logger
 	namespaces *namespace.Service
 	workspaces WorkspaceService
+	baseURL    baseurl.Resolver
 	mux        *patternMux
 	routes     []Route
 }
@@ -101,6 +130,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:     cfg.Logger,
 		namespaces: cfg.Namespaces,
 		workspaces: cfg.Workspaces,
+		baseURL:    cfg.BaseURL,
 		mux:        newPatternMux(),
 		routes:     nil,
 	}
@@ -135,6 +165,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))
 	}
+}
+
+// ExternalBaseURL returns the external base URL for r: the --public-url
+// value when one is set, else the scheme and host of the request.
+func (h *Handler) ExternalBaseURL(r *http.Request) string {
+	return h.baseURL.BaseURL(r)
 }
 
 // notFoundWriter swallows the default 404 of the mux, so ServeHTTP can

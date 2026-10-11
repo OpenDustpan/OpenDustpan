@@ -126,7 +126,8 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
 	case errors.Is(err, identity.ErrDenied):
 		return errorClass{status: http.StatusForbidden, title: "forbidden", detail: "forbidden"}
-	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
+	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
+		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound):
 		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}
 	case errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),

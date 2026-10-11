@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/api/tfe"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -89,6 +90,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
