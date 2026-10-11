@@ -762,17 +762,20 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 		return nil, errBackupNeedsRegistry
 	}
 
+	maxSQL := int64(0)
+	if strings.HasPrefix(strings.TrimSpace(cfg.backupTargetName), "s3://") {
+		maxSQL = backup.S3ObjectLimit
+	}
+
 	service, err := backup.NewService(backup.Config{
-		Exporter:   exporter,
-		Registry:   registry,
-		Blobs:      cfg.blobStore,
-		Target:     cfg.backupTarget,
-		TargetName: cfg.backupTargetName,
-		Now:        cfg.now,
-		Version:    cfg.version,
-		// MaxSQLBytes stays zero: a dir: target has no object limit.
-		// An s3:// target (issue #158) sets backup.S3ObjectLimit.
-		MaxSQLBytes: 0,
+		Exporter:    exporter,
+		Registry:    registry,
+		Blobs:       cfg.blobStore,
+		Target:      cfg.backupTarget,
+		TargetName:  cfg.backupTargetName,
+		Now:         cfg.now,
+		Version:     cfg.version,
+		MaxSQLBytes: maxSQL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)

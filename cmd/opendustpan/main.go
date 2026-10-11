@@ -34,7 +34,9 @@ import (
 	"syscall"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -78,7 +80,17 @@ var (
 	// the allowed forms, so the operator knows what to set. Only the serve
 	// flag --backup-target takes it.
 	errBackupTarget = errors.New(
-		"backup target must be dir:/path: set --backup-target (DUSTPAN_BACKUP_TARGET)",
+		"backup target must be dir:/path or s3://<bucket>[/<prefix>]: set --backup-target (DUSTPAN_BACKUP_TARGET)",
+	)
+	// errBlobStore reports a blob store with an unknown form. It shows the
+	// allowed forms, so the operator knows what to set.
+	errBlobStore = errors.New(
+		"blob store must be fs or s3://<bucket>[/<prefix>]: set --blob-store (DUSTPAN_BLOB_STORE)",
+	)
+	// errS3Endpoint reports an S3 endpoint that is not an http(s) URL. It
+	// names the flag, so the operator knows what to set.
+	errS3Endpoint = errors.New(
+		"s3 endpoint must be an http(s) URL with a host: set --s3-endpoint (DUSTPAN_S3_ENDPOINT)",
 	)
 	// errBackupID reports a backup check without a backup ID. It names the
 	// flag, so the operator knows what to set.
@@ -125,6 +137,9 @@ const (
 	// blobDirPerm is the mode the server creates the blob directory with:
 	// owner only, so state content does not leak through shared directories.
 	blobDirPerm = 0o700
+	// defaultS3Region signs S3 requests when --s3-region is empty. Both S3
+	// settings stay optional for AWS (ADR 31 decision 6).
+	defaultS3Region = "us-east-1"
 )
 
 func main() {
@@ -244,6 +259,9 @@ type serveFlags struct {
 	tlsKey               string
 	publicURL            string
 	blobDir              string
+	blobStore            string
+	s3Endpoint           string
+	s3Region             string
 	backupTarget         string
 	logLevel             string
 	logFormat            string
@@ -257,11 +275,36 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	f.common.register(fs)
 	f.registerNet(fs)
 	f.registerLimits(fs)
+	f.registerStorage(fs)
+}
+
+// registerStorage registers the blob store, S3 and backup target flags.
+// Credentials never appear here: they come from AWS_ACCESS_KEY_ID,
+// AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
+func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
+	fs.StringVar(
+		&f.blobStore,
+		"blob-store",
+		env("DUSTPAN_BLOB_STORE", "fs"),
+		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
+	)
+	fs.StringVar(
+		&f.s3Endpoint,
+		"s3-endpoint",
+		env("DUSTPAN_S3_ENDPOINT", ""),
+		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
+	)
+	fs.StringVar(
+		&f.s3Region,
+		"s3-region",
+		env("DUSTPAN_S3_REGION", ""),
+		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
+	)
 	fs.StringVar(
 		&f.backupTarget,
 		"backup-target",
 		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path, empty means no backups (DUSTPAN_BACKUP_TARGET)",
+		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
 	)
 }
 
@@ -369,28 +412,27 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	}
 	defer st.close()
 
-	blobs, err := openBlobs(f.database, f.blobDir)
+	return f.serveWithStores(ctx, st, authn, wrapper, logger)
+}
+
+// serveWithStores opens the blob stores, wires the server and serves until
+// ctx is done.
+func (f *serveFlags) serveWithStores(
+	ctx context.Context,
+	st store,
+	authn *identity.StaticTokens,
+	wrapper secret.Wrapper,
+	logger *slog.Logger,
+) error {
+	blobs, backupTarget, err := f.openBlobStores(ctx, logger)
 	if err != nil {
 		return err
 	}
 
-	defer func() {
-		if closeErr := blobs.Close(); closeErr != nil {
-			logger.WarnContext(ctx, "close blob store", slog.String("error", closeErr.Error()))
-		}
-	}()
-
-	backupTarget, err := openBackupTarget(f.backupTarget)
-	if err != nil {
-		return err
-	}
+	defer closeLiveStore(ctx, logger, blobs)
 
 	if backupTarget != nil {
-		defer func() {
-			if closeErr := backupTarget.Close(); closeErr != nil {
-				logger.WarnContext(ctx, "close backup target", slog.String("error", closeErr.Error()))
-			}
-		}()
+		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
 	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
@@ -410,11 +452,77 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	return nil
 }
 
+// openBlobStores opens the live blob store and the backup target. A backup
+// target failure closes the live store, so no directory handle leaks. The two
+// stores stay unnamed, as nonamedreturns requires; the first is the live
+// store, the second is the backup target.
+//
+//nolint:revive,ireturn // Unnamed two-store result per nonamedreturns; adapters are chosen at runtime.
+func (f *serveFlags) openBlobStores(
+	ctx context.Context,
+	logger *slog.Logger,
+) (blob.Store, blob.Store, error) {
+	blobs, err := f.openLiveBlobs(ctx, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	target, err := openBackupTarget(ctx, f.backupTarget, f.s3Endpoint, f.s3Region, logger)
+	if err != nil {
+		closeLiveStore(ctx, logger, blobs)
+
+		return nil, nil, err
+	}
+
+	return blobs, target, nil
+}
+
+// openLiveBlobs opens the live blob store from the serve storage flags.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
+	cfg := blobOpenConfig{
+		database: f.database,
+		dir:      f.blobDir,
+		store:    f.blobStore,
+		endpoint: f.s3Endpoint,
+		region:   f.s3Region,
+	}
+
+	return openBlobs(ctx, cfg, logger)
+}
+
+// closeLiveStore closes the live blob store when it holds a directory
+// handle, so dir: stores release their handle while S3 stores need no close.
+func closeLiveStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
+	closer, ok := s.(io.Closer)
+	if !ok {
+		return
+	}
+
+	if err := closer.Close(); err != nil {
+		logger.WarnContext(ctx, "close blob store", slog.String("error", err.Error()))
+	}
+}
+
+// closeTargetStore closes the backup target when it holds a directory
+// handle, so dir: targets release their handle while S3 targets need no close.
+func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
+	closer, ok := s.(io.Closer)
+	if !ok {
+		return
+	}
+
+	if err := closer.Close(); err != nil {
+		logger.WarnContext(ctx, "close backup target", slog.String("error", err.Error()))
+	}
+}
+
 // serverOptions returns the NewServer options for the opened store, blob
 // store, authenticator, key wrapper and logger.
 func (f *serveFlags) serverOptions(
 	st store,
-	blobs *blobfs.Store,
+	blobs blob.Store,
 	authn *identity.StaticTokens,
 	wrapper secret.Wrapper,
 	logger *slog.Logger,
@@ -447,8 +555,43 @@ func (f *serveFlags) serverOptions(
 	}
 }
 
-// openBlobs creates the state content directory and opens it.
-func openBlobs(database, flagDir string) (*blobfs.Store, error) {
+// blobOpenConfig holds the live blob store settings of serve.
+type blobOpenConfig struct {
+	database string
+	dir      string
+	store    string
+	endpoint string
+	region   string
+}
+
+// openBlobs opens the live blob store. A store of fs (the default) opens the
+// state content directory. An s3://<bucket>[/<prefix>] store opens S3-compatible
+// storage with the probe of ADR 31, so serve fails at start when the store
+// ignores conditional writes. Anything else names --blob-store.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openBlobs(ctx context.Context, cfg blobOpenConfig, logger *slog.Logger) (blob.Store, error) {
+	trimmed := strings.TrimSpace(cfg.store)
+	if trimmed == "" || trimmed == "fs" {
+		return openFSBlobs(cfg.database, cfg.dir)
+	}
+
+	if strings.HasPrefix(trimmed, "s3://") {
+		return openS3Store(ctx, s3StoreConfig{
+			raw:      trimmed,
+			endpoint: cfg.endpoint,
+			region:   cfg.region,
+			formErr:  errBlobStore,
+		}, logger)
+	}
+
+	return nil, fmt.Errorf("blob store %q: %w", trimmed, errBlobStore)
+}
+
+// openFSBlobs creates the state content directory and opens it.
+//
+//nolint:ireturn // The caller keeps the store as a blob.Store.
+func openFSBlobs(database, flagDir string) (blob.Store, error) {
 	blobDir := defaultBlobDir(database, flagDir)
 
 	if err := os.MkdirAll(blobDir, blobDirPerm); err != nil {
@@ -463,22 +606,183 @@ func openBlobs(database, flagDir string) (*blobfs.Store, error) {
 	return blobs, nil
 }
 
+// parseS3Target splits an s3://<bucket>[/<prefix>] value into its bucket and
+// prefix. The prefix keeps no leading or trailing slash. The two strings stay
+// unnamed, as nonamedreturns requires; the first is the bucket, the second is
+// the prefix. A bad value wraps formErr, so the live blob store names
+// --blob-store and the backup target names --backup-target.
+//
+//nolint:revive // Unnamed two-string result per nonamedreturns; order is documented.
+func parseS3Target(raw string, formErr error) (string, string, error) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(raw), "s3://")
+	if !ok {
+		return "", "", fmt.Errorf("parse %q: %w", raw, formErr)
+	}
+
+	bucket, prefix, _ := strings.Cut(strings.TrimSpace(rest), "/")
+
+	bucket = strings.TrimSpace(bucket)
+	prefix = strings.Trim(strings.TrimSpace(prefix), "/")
+
+	if bucket == "" || strings.Contains(bucket, " ") {
+		return "", "", fmt.Errorf("parse %q: %w", raw, formErr)
+	}
+
+	if prefix != "" {
+		if _, err := blob.ParseKey(prefix); err != nil {
+			return "", "", fmt.Errorf("parse %q: %w", raw, formErr)
+		}
+	}
+
+	return bucket, prefix, nil
+}
+
+// resolveS3Region returns region, or the default for AWS when empty.
+func resolveS3Region(region string) string {
+	if trimmed := strings.TrimSpace(region); trimmed != "" {
+		return trimmed
+	}
+
+	return defaultS3Region
+}
+
+// checkS3Endpoint rejects an endpoint that is not an http(s) URL with a host.
+func checkS3Endpoint(endpoint string) error {
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return nil
+	}
+
+	parsed, err := parseEndpoint(trimmed)
+	if err != nil {
+		return err
+	}
+
+	if parsed != "http" && parsed != "https" {
+		return errS3Endpoint
+	}
+
+	return nil
+}
+
+// parseEndpoint returns the scheme of endpoint when it has a host.
+func parseEndpoint(endpoint string) (string, error) {
+	lower := strings.ToLower(strings.TrimSpace(endpoint))
+
+	var scheme string
+
+	switch {
+	case strings.HasPrefix(lower, "http://"):
+		scheme = "http"
+	case strings.HasPrefix(lower, "https://"):
+		scheme = "https"
+	default:
+		return "", errS3Endpoint
+	}
+
+	host := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(lower, "http://"), "https://"))
+	host, _, _ = strings.Cut(host, "/")
+
+	if strings.TrimSpace(host) == "" {
+		return "", errS3Endpoint
+	}
+
+	return scheme, nil
+}
+
+// warnPlainHTTP logs a warning for a plain http:// endpoint, so the operator
+// knows state content travels without TLS.
+func warnPlainHTTP(ctx context.Context, logger *slog.Logger, endpoint string) {
+	if logger == nil {
+		return
+	}
+
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return
+	}
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "http://") {
+		logger.WarnContext(ctx, "s3 endpoint uses plain HTTP", slog.String("endpoint", trimmed))
+	}
+}
+
+// s3StoreConfig holds the s3:// value and S3 settings of openS3Store.
+// formErr wraps a bad s3:// value, so the live blob store names --blob-store
+// and the backup target names --backup-target.
+type s3StoreConfig struct {
+	raw      string
+	endpoint string
+	region   string
+	formErr  error
+}
+
+// openS3Store builds a blob.Store from the s3:// form for the live blob store
+// and for the backup target. Credentials come from AWS_ACCESS_KEY_ID,
+// AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only: a missing variable names
+// the variable. The open probes conditional writes, so serve fails at start
+// with the probe error. A bad s3:// value wraps the config form error, so the
+// caller names the flag it parsed. No error holds a credential.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (blob.Store, error) {
+	bucket, prefix, parseErr := parseS3Target(cfg.raw, cfg.formErr)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+
+	if endpointErr := checkS3Endpoint(cfg.endpoint); endpointErr != nil {
+		return nil, endpointErr
+	}
+
+	creds, credErr := blobs3.LoadCredentials(os.LookupEnv)
+	if credErr != nil {
+		return nil, credErr
+	}
+
+	warnPlainHTTP(ctx, logger, cfg.endpoint)
+
+	signer := &blobs3.Signer{
+		Bucket:      bucket,
+		Region:      resolveS3Region(cfg.region),
+		Endpoint:    strings.TrimSpace(cfg.endpoint),
+		Credentials: creds,
+		Now:         nil,
+	}
+
+	store, err := blobs3.Open(ctx, signer, prefix, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return store, nil
+}
+
 // openBackupTarget opens the backup target in raw as a blob store. Empty
 // means no backup target is configured: it returns nil without an error. A
 // dir:/path target opens the local directory, creating it owner-only, as a
-// backup holds OpenTofu state in plain text. An s3:// target stays reserved
-// for a later change (issue #158): it is an error here. Anything else is an
-// error that shows the allowed forms.
+// backup holds OpenTofu state in plain text. An s3://<bucket>[/<prefix>]
+// target opens S3-compatible storage with the same constructor as the live
+// blob store. Anything else is an error that shows the allowed forms.
 //
-//nolint:nilnil // No target without an error means backups stay off.
-func openBackupTarget(raw string) (*blobfs.Store, error) {
+//nolint:nilnil,ireturn // No target without an error means backups stay off; the adapter is chosen at runtime.
+func openBackupTarget(
+	ctx context.Context,
+	raw, endpoint, region string,
+	logger *slog.Logger,
+) (blob.Store, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, nil
 	}
 
 	if strings.HasPrefix(trimmed, "s3://") {
-		return nil, fmt.Errorf("backup target %q: s3 targets are not supported yet: %w", trimmed, errBackupTarget)
+		return openS3Store(ctx, s3StoreConfig{
+			raw:      trimmed,
+			endpoint: endpoint,
+			region:   region,
+			formErr:  errBackupTarget,
+		}, logger)
 	}
 
 	dir, ok := strings.CutPrefix(trimmed, "dir:")
@@ -546,7 +850,7 @@ func openRestoreSource(raw string) (*blobfs.Store, error) {
 // backupOptions returns the NewServer backup option for the opened target, or
 // none when no backup target is configured. WithBackupTarget is the only way
 // the target gets in: no request field, header or query value sets it.
-func (f *serveFlags) backupOptions(target *blobfs.Store) []dustpan.Option {
+func (f *serveFlags) backupOptions(target blob.Store) []dustpan.Option {
 	if target == nil {
 		return nil
 	}
@@ -881,12 +1185,14 @@ func executeRestore(
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
-	blobs, err := openBlobs(plan.flags.database, plan.flags.blobDir)
+	// The offline restore writes to a local blob directory only; ADR 39
+	// (issue #281) moves restore into the server, which owns every store.
+	blobs, err := openFSBlobs(plan.flags.database, plan.flags.blobDir)
 	if err != nil {
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
-	defer closeRestoreBlobs(ctx, logger, blobs)
+	defer closeLiveStore(ctx, logger, blobs)
 
 	target, err := openRestoreSource(plan.from)
 	if err != nil {
@@ -921,14 +1227,6 @@ func executeRestore(
 	}
 
 	return nil
-}
-
-// closeRestoreBlobs closes the destination blob store and logs the error
-// with context instead of discarding it, as serve does for its stores.
-func closeRestoreBlobs(ctx context.Context, logger *slog.Logger, blobs *blobfs.Store) {
-	if err := blobs.Close(); err != nil {
-		logger.WarnContext(ctx, "close blob store", slog.String("error", err.Error()))
-	}
 }
 
 // closeRestoreTarget closes the backup source and logs the error with
@@ -1071,8 +1369,10 @@ func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) err
 // backupCheckFlags holds the settings of the backup check subcommand. It
 // takes no database flag and reads no key: the check reads only the target.
 type backupCheckFlags struct {
-	target string
-	id     string
+	target     string
+	id         string
+	s3Endpoint string
+	s3Region   string
 }
 
 func (f *backupCheckFlags) register(fs *flag.FlagSet) {
@@ -1080,9 +1380,21 @@ func (f *backupCheckFlags) register(fs *flag.FlagSet) {
 		&f.target,
 		"backup-target",
 		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path (DUSTPAN_BACKUP_TARGET)",
+		"backup target dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
 	)
 	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
+	fs.StringVar(
+		&f.s3Endpoint,
+		"s3-endpoint",
+		env("DUSTPAN_S3_ENDPOINT", ""),
+		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
+	)
+	fs.StringVar(
+		&f.s3Region,
+		"s3-region",
+		env("DUSTPAN_S3_REGION", ""),
+		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
+	)
 }
 
 // backupCheck runs `opendustpan backup check --backup <id>`: it reads the
@@ -1110,7 +1422,9 @@ func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return errBackupID
 	}
 
-	target, err := openBackupTarget(f.target)
+	logger := slog.New(slog.NewJSONHandler(stderr, nil))
+
+	target, err := openBackupTarget(ctx, f.target, f.s3Endpoint, f.s3Region, logger)
 	if err != nil {
 		return err
 	}
@@ -1120,7 +1434,12 @@ func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	checkErr := backup.Check(ctx, target, backup.ID(id))
-	closeErr := target.Close()
+
+	var closeErr error
+
+	if closer, ok := target.(io.Closer); ok {
+		closeErr = closer.Close()
+	}
 
 	if checkErr != nil {
 		return checkErr

@@ -186,6 +186,12 @@ func (s *Service) Start(ctx context.Context, id ID) error {
 	return nil
 }
 
+// MaxSQLBytes returns the SQL part limit the service enforces. Zero means
+// no limit; an S3-compatible target sets S3ObjectLimit.
+func (s *Service) MaxSQLBytes() int64 {
+	return s.maxSQL
+}
+
 // List returns every backup row, newest first, from the registry.
 func (s *Service) List(ctx context.Context) ([]Record, error) {
 	records, err := s.registry.ListBackups(ctx)
