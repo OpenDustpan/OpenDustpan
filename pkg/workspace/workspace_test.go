@@ -1111,3 +1111,79 @@ func TestDiscardJSONRendering(t *testing.T) {
 		t.Errorf("expired capability: %v, want ErrUploadDenied", discardErr)
 	}
 }
+
+// TestDiscardJSONRenderingTooLarge proves a rendering over the size limit
+// fails with ErrTooLarge without consuming the capability: a small rendering
+// with the same capability still succeeds, and the state upload still
+// finalizes.
+func TestDiscardJSONRenderingTooLarge(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	oversized := strings.Repeat("x", 65)
+
+	discardErr := f.svc.DiscardJSONRendering(ctx, pending.Version.ID, pending.Upload, strings.NewReader(oversized))
+	if !errors.Is(discardErr, workspace.ErrTooLarge) {
+		t.Errorf("oversized rendering: %v, want ErrTooLarge", discardErr)
+	}
+
+	discardErr = f.svc.DiscardJSONRendering(
+		ctx,
+		pending.Version.ID,
+		pending.Upload,
+		strings.NewReader(`{"rendering":1}`),
+	)
+	if discardErr != nil {
+		t.Errorf("discard after oversized: %v", discardErr)
+	}
+
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); err != nil {
+		t.Errorf("upload after oversized discard: %v", err)
+	}
+}
+
+// TestDiscardJSONRenderingExpiryAfterFinalize proves the expiry applies
+// whatever the version status: a finalized version with its own capability
+// is denied once expired.
+func TestDiscardJSONRenderingExpiryAfterFinalize(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow)
+
+	discardErr := f.svc.DiscardJSONRendering(
+		ctx,
+		pending.Version.ID,
+		pending.Upload,
+		strings.NewReader(`{"rendering":2}`),
+	)
+	if !errors.Is(discardErr, workspace.ErrUploadDenied) {
+		t.Errorf("expired capability after finalize: %v, want ErrUploadDenied", discardErr)
+	}
+}
