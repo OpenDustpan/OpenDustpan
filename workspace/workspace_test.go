@@ -693,6 +693,59 @@ func TestUnknownFinalizeOutcomeKeepsContent(t *testing.T) {
 	checkCurrent(t, f, "l1", "v1")
 }
 
+// checkUnreadable proves ReadState of id fails with
+// ErrStateVersionNotFound.
+func checkUnreadable(t *testing.T, svc *workspace.Service, id workspace.StateVersionID) {
+	t.Helper()
+
+	if _, err := svc.ReadState(t.Context(), id); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Errorf("read of %s: %v, want ErrStateVersionNotFound", id, err)
+	}
+}
+
+// TestReadState proves a finalized version reads back, while a pending
+// version and an unknown ID fail with ErrStateVersionNotFound: a version
+// that is not finalized is never readable.
+func TestReadState(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	checkUnreadable(t, f.svc, "sv-missing")
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if beginErr != nil {
+		t.Fatalf("begin: %v", beginErr)
+	}
+
+	checkUnreadable(t, f.svc, pending.Version.ID)
+
+	if pushErr := f.push(t, newState("l1", 1, "v1"), "v1"); pushErr != nil {
+		t.Fatalf("push: %v", pushErr)
+	}
+
+	current, currentErr := f.svc.Current(ctx, f.ws.ID)
+	if currentErr != nil {
+		t.Fatalf("current: %v", currentErr)
+	}
+
+	got, readErr := f.svc.ReadState(ctx, current.ID)
+	if readErr != nil {
+		t.Fatalf("read of a finalized version: %v", readErr)
+	}
+
+	if got.ID != current.ID || got.Status != workspace.StatusFinalized || got.Lineage != "l1" || got.Serial != 1 {
+		t.Errorf("read state = %+v, want the finalized version of lineage l1 serial 1", got)
+	}
+
+	checkUnreadable(t, f.svc, pending.Version.ID)
+}
+
 func TestParseName(t *testing.T) {
 	t.Parallel()
 

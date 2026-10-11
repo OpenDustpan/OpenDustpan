@@ -2,10 +2,12 @@ package tfe_test
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // The test fixture uses MD5 as the protocol does.
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,8 @@ import (
 
 	"opendustpan.org/opendustpan/api/tfe"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -56,8 +60,8 @@ func (stubAuthenticator) AuthenticateToken(_ context.Context, _ string) (identit
 // tokenAuthenticator signs in exactly the test token.
 type tokenAuthenticator struct{}
 
-func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	if token != "test-token" {
+func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (identity.Principal, error) {
+	if raw != "test-token" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
@@ -110,11 +114,14 @@ func (stubWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace.Wor
 }
 
 func (stubWorkspaces) Get(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
-	if ref.Namespace.String() == "acme" && ref.Name.String() == "web" {
+	switch {
+	case ref.Namespace.String() == "acme" && ref.Name.String() == "web":
 		return stubWorkspaceByID(workspace.ID("ws-test123"))
+	case ref.Namespace.String() == "acme" && ref.Name.String() == "empty":
+		return stubWorkspaceByID(workspace.ID("ws-empty123"))
+	default:
+		return workspace.Workspace{}, workspace.ErrNotFound
 	}
-
-	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
 func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
@@ -194,8 +201,70 @@ func (stubWorkspaces) ForceUnlock(_ context.Context, id workspace.ID) (workspace
 	return ws, nil
 }
 
-func (stubWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
-	return workspace.StateVersion{}, workspace.ErrNoState
+func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.StateVersion, error) {
+	if id.String() != "ws-test123" {
+		return workspace.StateVersion{}, workspace.ErrNoState
+	}
+
+	return stubStateVersion(), nil
+}
+
+// stubStateContent is the state the stub download serves: a tfstate document
+// with a greeting output.
+func stubStateContent() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
+		`"outputs":{"greeting":{"value":"hello","type":"string"}},"resources":[]}`
+}
+
+// stubStateOutputs is the json-state-outputs document of the stub state: the
+// greeting output with its cty value and type.
+func stubStateOutputs() string {
+	return `{"outputs":{"greeting":{"sensitive":false,"value":"hello","type":"string"}}}`
+}
+
+// stubStateVersion is the finalized current state of ws-test123: serial 3 of
+// the seed lineage, with the greeting output.
+func stubStateVersion() workspace.StateVersion {
+	content := stubStateContent()
+	sum := md5.Sum([]byte(content)) //nolint:gosec // The test fixture uses MD5 as the protocol does.
+
+	return workspace.StateVersion{
+		CreatedAt:       stubWorkspaceTime(),
+		FinalizedAt:     stubWorkspaceTime(),
+		UploadExpiresAt: stubWorkspaceTime(),
+		Upload:          token.Digest{},
+		ID:              workspace.StateVersionID("sv-test123"),
+		Workspace:       workspace.ID("ws-test123"),
+		Holder:          "tester",
+		LockID:          "lock-test",
+		Lineage:         "seed-lineage",
+		Status:          workspace.StatusFinalized,
+		Content:         "tofu/ws-test123/sv-test123/seed",
+		Outputs:         []byte(stubStateOutputs()),
+		MD5:             sum,
+		Serial:          3,
+		Size:            int64(len(content)),
+		Force:           false,
+	}
+}
+
+func (stubWorkspaces) ReadState(
+	_ context.Context, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	switch id.String() {
+	case "sv-test123":
+		return stubStateVersion(), nil
+	default:
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+}
+
+func (stubWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.ReadCloser, error) {
+	if sv.ID.String() != "sv-test123" || sv.Status != workspace.StatusFinalized {
+		return nil, workspace.ErrStateVersionNotFound
+	}
+
+	return io.NopCloser(strings.NewReader(stubStateContent())), nil
 }
 
 // stubWorkspaceTime stamps every stub workspace.
@@ -203,13 +272,19 @@ func stubWorkspaceTime() time.Time {
 	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 }
 
-// stubWorkspaceByID resolves one workspace ID to acme/web. Unknown IDs
-// answer workspace.ErrNotFound and ws-locked answers workspace.ErrLocked.
+// stubWorkspaceByID resolves workspace IDs: ws-test123 is acme/web with
+// state, ws-empty123 is acme/empty without state. Unknown IDs answer
+// workspace.ErrNotFound and ws-locked answers workspace.ErrLocked.
 func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
+	var name string
+
 	switch id.String() {
 	case "ws-locked":
 		return workspace.Workspace{}, workspace.ErrLocked
 	case "ws-test123":
+		name = "web"
+	case "ws-empty123":
+		name = "empty"
 	default:
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}
@@ -219,7 +294,7 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 		return workspace.Workspace{}, err
 	}
 
-	name, err := workspace.ParseName("web")
+	parsed, err := workspace.ParseName(name)
 	if err != nil {
 		return workspace.Workspace{}, err
 	}
@@ -234,7 +309,7 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Reason:   "",
 		},
 		ID:       id,
-		Ref:      workspace.Ref{Namespace: ns, Name: name},
+		Ref:      workspace.Ref{Namespace: ns, Name: parsed},
 		Revision: 1,
 	}, nil
 }
@@ -248,6 +323,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -265,6 +341,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -284,6 +361,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -568,15 +646,17 @@ func probeRoute(t *testing.T, handler *tfe.Handler, route tfe.Route) {
 }
 
 // routeRequest builds a valid request for route: path placeholders filled
-// and a JSON body where the route reads one. token is sent as a Bearer
+// and a JSON body where the route reads one. raw is sent as a Bearer
 // Authorization header when not empty.
-func routeRequest(t *testing.T, route tfe.Route, token string) *http.Request {
+func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 	t.Helper()
 
 	path := strings.NewReplacer(
 		"{organization}", "acme",
 		"{workspace}", "web",
 		"{id}", "ws-test123",
+		"{state_version_id}", "sv-test123",
+		"{output_id}", "sv-test123.greeting",
 	).Replace(route.Path)
 
 	body := ""
@@ -589,8 +669,8 @@ func routeRequest(t *testing.T, route tfe.Route, token string) *http.Request {
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, strings.NewReader(body))
 
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if raw != "" {
+		req.Header.Set("Authorization", "Bearer "+raw)
 	}
 
 	return req
@@ -707,10 +787,21 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 			t.Fatalf("allowed request answers %d, want %d", rec.Code, want)
 		}
 
-		if got := rec.Header().Get("Content-Type"); got != "application/vnd.api+json" {
-			t.Fatalf("media type = %q, want %q", got, "application/vnd.api+json")
+		if got := rec.Header().Get("Content-Type"); got != wantMediaType(route) {
+			t.Fatalf("media type = %q, want %q", got, wantMediaType(route))
 		}
 	})
+}
+
+// wantMediaType returns the media type route serves on success: the download
+// route streams raw state as application/json, every other route answers
+// JSON:API.
+func wantMediaType(route tfe.Route) string {
+	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions/{state_version_id}/download" {
+		return "application/json"
+	}
+
+	return "application/vnd.api+json"
 }
 
 // jsonAPIErrorItem is one entry of a JSON:API error document.
@@ -891,6 +982,16 @@ func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.Sta
 	return workspace.StateVersion{}, errTestInternal
 }
 
+func (errorWorkspaces) ReadState(
+	_ context.Context, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
+}
+
+func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
+	return nil, errTestInternal
+}
+
 // errTestInternal is the internal failure errorWorkspaces answers with.
 var errTestInternal = errors.New("test internal failure")
 
@@ -905,6 +1006,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    errorWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

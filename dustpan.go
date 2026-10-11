@@ -274,7 +274,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc)
+	tfeAPI, err := newTFEHandler(cfg, svc, base)
 	if err != nil {
 		return nil, err
 	}
@@ -296,14 +296,15 @@ func NewServer(opts ...Option) (*Server, error) {
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to.
-func newTFEHandler(cfg settings, svc services) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs.
+func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
+		BaseURL:       base,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)

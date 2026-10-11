@@ -3,6 +3,7 @@ package tfe_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/api/tfe"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -93,6 +95,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -297,6 +300,8 @@ func checkWorkspaceRoute(t *testing.T, handler *tfe.Handler, tc workspaceRouteCa
 	req.SetPathValue("organization", "acme")
 	req.SetPathValue("workspace", "web")
 	req.SetPathValue("id", "ws-test123")
+	req.SetPathValue("state_version_id", "sv-test123")
+	req.SetPathValue("output_id", "sv-test123.greeting")
 
 	obj, err := found.Resolve(httptest.NewRecorder(), req)
 	if err != nil {
@@ -310,8 +315,11 @@ func checkWorkspaceRoute(t *testing.T, handler *tfe.Handler, tc workspaceRouteCa
 
 // checkWorkspaceDoc proves one workspace document holds the want ID and
 // name, type workspaces, execution-mode local, auto-apply false, every
-// permission flag set and a null current-state-version.
-func checkWorkspaceDoc(t *testing.T, doc workspaceTestDoc, wantID, wantName string) {
+// permission flag set and the current-state-version relationship of want
+// state: the sv-test123 version, or null when the workspace has no state.
+func checkWorkspaceDoc(
+	t *testing.T, doc workspaceTestDoc, wantID, wantName string, wantState *string,
+) {
 	t.Helper()
 
 	got := doc.Data
@@ -326,7 +334,7 @@ func checkWorkspaceDoc(t *testing.T, doc workspaceTestDoc, wantID, wantName stri
 	}
 
 	checkAllPermissions(t, attrs.Permissions)
-	checkNullStateRelation(t, got.Relationships)
+	checkStateRelation(t, got.Relationships, wantState)
 }
 
 // checkAllPermissions proves every permission flag is set.
@@ -338,9 +346,9 @@ func checkAllPermissions(t *testing.T, perms workspaceTestPermissions) {
 	}
 }
 
-// checkNullStateRelation proves the document holds a null
-// current-state-version relationship.
-func checkNullStateRelation(t *testing.T, relations map[string]workspaceTestRelation) {
+// checkStateRelation proves the document holds the current-state-version
+// relationship: the want state version, or null data when want is nil.
+func checkStateRelation(t *testing.T, relations map[string]workspaceTestRelation, want *string) {
 	t.Helper()
 
 	relation, ok := relations["current-state-version"]
@@ -348,23 +356,48 @@ func checkNullStateRelation(t *testing.T, relations map[string]workspaceTestRela
 		t.Fatal("document holds no current-state-version relationship")
 	}
 
-	if relation.Data != nil {
-		t.Fatalf("current-state-version = %+v, want null data", relation.Data)
+	if want == nil {
+		if relation.Data != nil {
+			t.Fatalf("current-state-version = %+v, want null data", relation.Data)
+		}
+
+		return
+	}
+
+	if relation.Data == nil || relation.Data.ID != *want || relation.Data.Type != "state-versions" {
+		t.Fatalf("current-state-version = %+v, want %q of type state-versions", relation.Data, *want)
 	}
 }
 
-// TestReadWorkspace proves the read by name answers the workspace document.
+// TestReadWorkspace proves the read by name answers the workspace document
+// with its current state version, and a workspace without state answers a
+// null current-state-version relationship.
 func TestReadWorkspace(t *testing.T) {
 	t.Parallel()
 
 	handler := newWorkspaceHandler(t, allowAll())
 
-	req := workspaceRequest(t, http.MethodGet, "/api/v2/organizations/acme/workspaces/web", "")
-	rec := httptest.NewRecorder()
+	t.Run("workspace with state", func(t *testing.T) {
+		t.Parallel()
 
-	handler.ServeHTTP(rec, req)
+		req := workspaceRequest(t, http.MethodGet, "/api/v2/organizations/acme/workspaces/web", "")
+		rec := httptest.NewRecorder()
 
-	checkWorkspaceDoc(t, decodeWorkspaceDoc(t, rec, http.StatusOK), "ws-test123", "web")
+		handler.ServeHTTP(rec, req)
+
+		checkWorkspaceDoc(t, decodeWorkspaceDoc(t, rec, http.StatusOK), "ws-test123", "web", new("sv-test123"))
+	})
+
+	t.Run("workspace without state", func(t *testing.T) {
+		t.Parallel()
+
+		req := workspaceRequest(t, http.MethodGet, "/api/v2/organizations/acme/workspaces/empty", "")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		checkWorkspaceDoc(t, decodeWorkspaceDoc(t, rec, http.StatusOK), "ws-empty123", "empty", nil)
+	})
 }
 
 // TestReadWorkspaceUnknown proves a missing workspace and an unknown
@@ -670,6 +703,16 @@ func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.
 	return workspace.StateVersion{}, workspace.ErrNoState
 }
 
+func (p pagingWorkspaces) ReadState(
+	_ context.Context, _ workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
+	return nil, workspace.ErrStateVersionNotFound
+}
+
 // newPagingHandler returns a production Handler over three workspaces.
 func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
@@ -680,6 +723,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    newPagingWorkspaces(t),
+		BaseURL:       baseurl.Resolver{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
