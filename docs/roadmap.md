@@ -73,7 +73,7 @@ Its gate:
 - [x] A `LICENSE` in this repository ([ADR 22](adr/0022-apache-2-license.md)).
 - [ ] A `LICENSE` in the Console repository.
 - [x] A `--version` flag that the build stamps.
-- [ ] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
+- [x] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
 - [x] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
 - [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
