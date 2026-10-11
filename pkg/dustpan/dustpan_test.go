@@ -915,6 +915,46 @@ func TestNewServerWithoutBackupTargetBuildsNoBackupService(t *testing.T) {
 	}
 }
 
+func TestBackupTargetS3SetsObjectLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		targetName string
+		want       int64
+	}{
+		{name: "s3 sets the limit", targetName: "s3://b/p", want: backup.S3ObjectLimit},
+		{name: "s3 with spaces sets the limit", targetName: "  s3://b/p  ", want: backup.S3ObjectLimit},
+		{name: "dir keeps no limit", targetName: "dir:/var/backups", want: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			target := openBackupTarget(t, "backup-target")
+
+			srv, err := dustpan.NewServer(append(
+				fullServerOptions(st, blobs, authn),
+				dustpan.WithBackupTarget(target, tc.targetName),
+			)...)
+			if err != nil {
+				t.Fatalf("new server: %v", err)
+			}
+
+			service := srv.Backups()
+			if service == nil {
+				t.Fatal("server with a backup target builds no backup service")
+			}
+
+			if got := service.MaxSQLBytes(); got != tc.want {
+				t.Fatalf("backup SQL limit for %q = %d, want %d", tc.targetName, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBackupTargetComesOnlyFromTheOption proves WithBackupTarget is the only
 // way the target gets in: a request that names another target in the query, a
 // header and the body leaves the service and the other directory untouched.
