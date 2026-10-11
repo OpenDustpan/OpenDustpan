@@ -341,6 +341,19 @@ func (e *Env) DatabaseURL(tb testing.TB) string {
 	return e.backendCfg.dbURL
 }
 
+// BackupTarget returns the --backup-target value of the binary environment
+// (dir:<path>), so a test runs backup check and restore against the same
+// target the server backs up into. It needs E2E_SERVER=binary.
+func (e *Env) BackupTarget(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BackupTarget needs E2E_SERVER=binary")
+	}
+
+	return e.backendCfg.backupTarget
+}
+
 // BlobDir returns the --blob-dir value of the binary environment, so a test
 // does not rebuild it for RunBinary. It needs E2E_SERVER=binary.
 func (e *Env) BlobDir(tb testing.TB) string {
@@ -361,13 +374,26 @@ func (e *Env) BlobDir(tb testing.TB) string {
 func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) BinaryResult {
 	tb.Helper()
 
+	return e.RunBinaryWithEnv(ctx, tb, nil, args...)
+}
+
+// RunBinaryWithEnv runs `opendustpan <args>` as RunBinary does, with extra
+// NAME=value pairs added to the child environment. An entry replaces the
+// backend entry of the same name, so a test overrides the key-encryption key
+// for a wrong-key restore without changing the server. It needs
+// E2E_SERVER=binary.
+func (e *Env) RunBinaryWithEnv(
+	ctx context.Context, tb testing.TB, extra []string, args ...string,
+) BinaryResult {
+	tb.Helper()
+
 	if e.binPath == "" {
 		tb.Fatalf("RunBinary needs E2E_SERVER=binary")
 	}
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, e.binPath, args...)
-	cmd.Env = backendEnv(e.backendCfg.tokens)
+	cmd.Env = backendEnvWith(e.backendCfg.tokens, extra)
 
 	var stdout, stderr bytes.Buffer
 
@@ -387,6 +413,31 @@ func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) Bina
 	}
 
 	return BinaryResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+}
+
+// backendEnvWith returns the backend process environment with extra applied:
+// an entry replaces the backend entry of the same name, so overrides win.
+func backendEnvWith(tokens string, extra []string) []string {
+	base := backendEnv(tokens)
+
+	replaced := map[string]bool{}
+
+	for _, kv := range extra {
+		name, _, _ := strings.Cut(kv, "=")
+		replaced[name] = true
+	}
+
+	env := make([]string, 0, len(base)+len(extra))
+
+	for _, kv := range base {
+		name, _, _ := strings.Cut(kv, "=")
+
+		if !replaced[name] {
+			env = append(env, kv)
+		}
+	}
+
+	return append(env, extra...)
 }
 
 // StopServer ends the binary server with SIGTERM and checks that it exits
