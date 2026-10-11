@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
