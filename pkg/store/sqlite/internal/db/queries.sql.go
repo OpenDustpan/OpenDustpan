@@ -87,6 +87,19 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const countPendingStateVersions = `-- name: CountPendingStateVersions :one
+SELECT COUNT(*)
+FROM state_versions
+WHERE workspace_id = ? AND status = 'pending'
+`
+
+func (q *Queries) CountPendingStateVersions(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPendingStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -425,6 +438,21 @@ func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
 	return err
 }
 
+const deleteStateVersion = `-- name: DeleteStateVersion :execrows
+DELETE FROM state_versions
+WHERE id = ? AND status = 'pending'
+`
+
+// Deletes one pending version. A finalized version matches no row, so a
+// concurrent finalize wins over a sweep: the sweep then skips the version.
+func (q *Queries) DeleteStateVersion(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteStateVersion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failRunningBackups = `-- name: FailRunningBackups :exec
 UPDATE backups
 SET state = 'failed', error = ?, ended_at_ms = ?
@@ -445,28 +473,29 @@ func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackups
 
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
-SET status = ?1, finalized_at_ms = ?2,
-    content_key = ?3, size = ?4
-WHERE id = ?5 AND status = 'pending'
+SET status = ?1, finalized_at_ms = ?2, size = ?3
+WHERE id = ?4 AND status = 'pending' AND content_key = ?5
 `
 
 type FinalizeStateVersionParams struct {
 	Status        string
 	FinalizedAtMs int64
-	ContentKey    string
 	Size          int64
 	ID            string
+	ContentKey    string
 }
 
-// Marks one pending version finalized with its content. A finalized version
+// Marks one pending version finalized with its recorded attempt. The write
+// matches only the recorded content key, so a superseded attempt reports no
+// change instead of finalizing over a newer one; a finalized version also
 // matches no row, so a retry reports no change.
 func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVersionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, finalizeStateVersion,
 		arg.Status,
 		arg.FinalizedAtMs,
-		arg.ContentKey,
 		arg.Size,
 		arg.ID,
+		arg.ContentKey,
 	)
 	if err != nil {
 		return 0, err
@@ -1106,6 +1135,63 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from
+FROM state_versions
+WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
+ORDER BY upload_expires_at_ms ASC, id ASC
+`
+
+type ListExpiredPendingStateVersionsParams struct {
+	WorkspaceID       string
+	UploadExpiresAtMs int64
+}
+
+// Expired pending versions of one workspace, oldest expiry first. Ties on
+// expiry break by ID, as the port comment promises.
+func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListExpiredPendingStateVersionsParams) ([]StateVersion, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredPendingStateVersions, arg.WorkspaceID, arg.UploadExpiresAtMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateVersion
+	for rows.Next() {
+		var i StateVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.Serial,
+			&i.Lineage,
+			&i.Md5,
+			&i.Size,
+			&i.ContentKey,
+			&i.Outputs,
+			&i.Force,
+			&i.UploadDigest,
+			&i.UploadExpiresAtMs,
+			&i.Holder,
+			&i.LockID,
+			&i.CreatedAtMs,
+			&i.FinalizedAtMs,
+			&i.RestoredFrom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventory = `-- name: ListInventory :many
 SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
 FROM inventory
@@ -1330,6 +1416,36 @@ func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProje
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStateContentKeys = `-- name: ListStateContentKeys :many
+SELECT content_key
+FROM state_versions
+WHERE workspace_id = ? AND content_key <> ''
+`
+
+// Every blob key the versions of one workspace name, without the empty ones.
+func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listStateContentKeys, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var content_key string
+		if err := rows.Scan(&content_key); err != nil {
+			return nil, err
+		}
+		items = append(items, content_key)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -1675,6 +1791,27 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.ID,
 		arg.ExpectedRevision,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setPendingContentKey = `-- name: SetPendingContentKey :execrows
+UPDATE state_versions
+SET content_key = ?
+WHERE id = ? AND status = 'pending'
+`
+
+type SetPendingContentKeyParams struct {
+	ContentKey string
+	ID         string
+}
+
+// Notes one upload attempt on a pending version. A finalized version
+// matches no row, so a late attempt reports no change.
+func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
 	if err != nil {
 		return 0, err
 	}

@@ -27,6 +27,10 @@ var (
 	ErrChecksumMismatch = errors.New("uploaded state does not match its declared MD5")
 	// ErrUploadDenied reports an upload capability that is unknown, used or expired.
 	ErrUploadDenied = errors.New("state upload not allowed")
+	// ErrTooManyPending reports a workspace holding the maximum pending
+	// state versions: declare no new version until an old one finalizes or
+	// expires past the sweep grace period.
+	ErrTooManyPending = errors.New("too many pending state versions")
 	// ErrTooLarge reports state over the size limit.
 	ErrTooLarge = errors.New("state too large")
 )
@@ -87,9 +91,10 @@ type StateVersion struct {
 	LockID  string
 	Lineage string
 	Status  StateStatus
-	// Content is the blob holding the state, set when the upload finalizes.
-	// Every upload attempt writes its own key, so a failed or losing attempt
-	// can never remove content another attempt made current.
+	// Content names the latest upload attempt while pending, and the state
+	// once the upload finalizes. Every upload attempt writes its own key,
+	// so a failed or losing attempt can never remove content another
+	// attempt made current.
 	Content blob.Key
 	// Outputs is the client's JSON rendering of the root outputs (the TFE
 	// json-state-outputs attribute), kept opaque. It is the only source of

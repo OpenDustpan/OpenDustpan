@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -20,6 +22,15 @@ const (
 	DefaultMaxStateBytes = 512 << 20
 	// UploadWindow is how long a state upload capability stays valid.
 	UploadWindow = 10 * time.Minute
+	// DefaultMaxPendingVersions bounds the pending state versions of one
+	// workspace. A lock holder that declares without uploading cannot fill
+	// the store past this count.
+	DefaultMaxPendingVersions = 10
+	// SweepGracePeriod is how long after its capability expires a pending
+	// state version stays before a sweep deletes it with its attempted
+	// content. The grace covers an upload that started before expiry and
+	// still streams.
+	SweepGracePeriod = time.Hour
 )
 
 // Store persists workspaces. Writes carry the namespace fence and fail with
@@ -44,24 +55,38 @@ type Store interface {
 }
 
 // StateStore persists state version metadata.
+//
+//nolint:interfacebloat // One adapter contract for one table set: every state version operation shares its rows.
 type StateStore interface {
-	// CreateStateVersion persists a new, pending sv. It returns ErrNotFound
-	// if sv.Workspace does not exist, namespace.ErrNotFound if the namespace
-	// does not exist, or namespace.ErrFenced if fence is stale.
-	CreateStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
+	// CreateStateVersion persists a new, pending sv, refusing with
+	// ErrTooManyPending when the workspace already holds maxPending
+	// pending versions. The count and the insert run in one fenced
+	// transaction, so concurrent declares over several services never
+	// pass the cap together. A non-positive maxPending refuses every
+	// version. It returns ErrNotFound if sv.Workspace does not exist,
+	// namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale.
+	CreateStateVersion(
+		ctx context.Context, sv StateVersion, fence namespace.Fence, maxPending int,
+	) error
 	// GetStateVersion returns the state version, or ErrStateVersionNotFound.
 	GetStateVersion(ctx context.Context, id StateVersionID) (StateVersion, error)
 	// FinalizeStateVersion saves the finalized sv (with its Content key),
 	// stamps the workspace's UpdatedAt with sv.FinalizedAt, and makes sv the
 	// workspace's current state, checking in the same transaction that:
 	//   - the stored version is still pending, else ErrUploadDenied;
+	//   - the stored version still names sv.Content as its latest attempt,
+	//     else ErrUploadDenied: a superseded attempt never finalizes over a
+	//     newer one, so the current state never points at a deleted blob;
 	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
 	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
-	// Those errors, namespace.ErrNotFound and namespace.ErrFenced mean
-	// nothing was written. Any other error leaves the outcome unknown: the
-	// version may be current.
+	// Those errors, ErrNotFound, ErrStateVersionNotFound,
+	// namespace.ErrNotFound and namespace.ErrFenced mean nothing was
+	// written. Any other error leaves the outcome unknown: the version may
+	// be current. Callers record the attempt key with RecordUploadAttempt
+	// before finalizing, so the row names sv.Content when the write runs.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
@@ -74,6 +99,42 @@ type StateStore interface {
 	// or one that does not exist, yields an empty list and a zero total. It
 	// returns no sentinel errors.
 	ListStateVersions(ctx context.Context, workspace ID, page Page) ([]StateVersion, int, error)
+	// CountPendingStateVersions returns how many pending versions workspace
+	// holds. A workspace that does not exist holds none. It returns no
+	// sentinel errors.
+	CountPendingStateVersions(ctx context.Context, workspace ID) (int, error)
+	// ReferencedContentKeys returns the blob keys every version of
+	// workspace names, pending and finalized, without the empty ones. A
+	// workspace without versions, or one that does not exist, yields an
+	// empty list. It returns no sentinel errors. A sweeper compares this
+	// set against the stored objects to find blobs no version references.
+	ReferencedContentKeys(ctx context.Context, workspace ID) ([]blob.Key, error)
+	// RecordUploadAttempt notes the blob key of one upload attempt on a
+	// pending version, so a later sweep finds the content even when the
+	// finalize outcome stays unknown. It returns the key the attempt
+	// supersedes, so the caller deletes the earlier blob the row stopped
+	// naming: an empty key when the version names no content yet. It returns
+	// ErrStateVersionNotFound when id does not exist, ErrUploadDenied when
+	// it is not pending, namespace.ErrNotFound when the namespace does not
+	// exist, or namespace.ErrFenced when fence is stale.
+	RecordUploadAttempt(
+		ctx context.Context, id StateVersionID, key blob.Key, fence namespace.Fence,
+	) (blob.Key, error)
+	// DeleteExpiredPendingStateVersions deletes the pending versions of
+	// workspace whose capability expired before before, oldest expiry
+	// first with ties by version ID, and returns them with their attempted
+	// content keys, so the caller deletes the blobs. The delete matches
+	// only versions that are still pending: a version that finalized after
+	// the listing stays, with its content untouched, and stays out of the
+	// result. A workspace that does not exist yields an empty list. It
+	// returns namespace.ErrNotFound when the namespace does not exist, or
+	// namespace.ErrFenced when fence is stale.
+	DeleteExpiredPendingStateVersions(
+		ctx context.Context,
+		workspace ID,
+		before time.Time,
+		fence namespace.Fence,
+	) ([]StateVersion, error)
 }
 
 // Config holds the dependencies of a Service.
@@ -83,10 +144,20 @@ type Config struct {
 	// Blobs holds state content under "tofu/<workspace id>/<state version id>/<attempt>".
 	Blobs      blob.Store
 	Namespaces *namespace.Service
-	Now        func() time.Time
+	// Logger receives sweep failures; nil discards them.
+	Logger *slog.Logger
+	Now    func() time.Time
 	// MaxStateBytes bounds one state version; zero means DefaultMaxStateBytes.
 	MaxStateBytes int64
+	// MaxPendingVersions bounds the pending state versions of one
+	// workspace; zero means DefaultMaxPendingVersions.
+	MaxPendingVersions int
 }
+
+// lockStripes is the number of striped mutexes serializing declares and
+// uploads. Two IDs that share a stripe only wait for each other; the bound
+// is fixed, so the table grows with neither workspaces nor versions.
+const lockStripes = 64
 
 // Service implements the workspace use cases behind OpenTofu's cloud block:
 // workspaces, locking, and state versions uploaded through single-use
@@ -96,8 +167,11 @@ type Service struct {
 	states     StateStore
 	blobs      blob.Store
 	namespaces *namespace.Service
+	logger     *slog.Logger
 	now        func() time.Time
 	maxState   int64
+	maxPending int
+	stripes    [lockStripes]sync.Mutex
 }
 
 // NewService returns a Service. Every port and Namespaces are required.
@@ -118,16 +192,27 @@ func NewService(cfg Config) (*Service, error) {
 		states:     cfg.States,
 		blobs:      cfg.Blobs,
 		namespaces: cfg.Namespaces,
+		logger:     cfg.Logger,
 		now:        cfg.Now,
 		maxState:   cfg.MaxStateBytes,
+		maxPending: cfg.MaxPendingVersions,
+		stripes:    [lockStripes]sync.Mutex{},
 	}
 
 	if s.now == nil {
 		s.now = time.Now
 	}
 
+	if s.logger == nil {
+		s.logger = slog.New(slog.DiscardHandler)
+	}
+
 	if s.maxState <= 0 {
 		s.maxState = DefaultMaxStateBytes
+	}
+
+	if s.maxPending <= 0 {
+		s.maxPending = DefaultMaxPendingVersions
 	}
 
 	return s, nil
@@ -221,6 +306,15 @@ type PendingState struct {
 
 // BeginState declares a new state version for the workspace. The caller must
 // hold the lock. The content follows through Upload with the returned token.
+// It first sweeps the expired pending versions of the workspace with their
+// attempted content, then refuses with ErrTooManyPending when the workspace
+// still holds the maximum pending versions. The sweep is best effort: a
+// cleanup failure never fails the declare, and the rows stay for the next
+// sweep. Retention follows the declares: a workspace with no new declares
+// keeps its expired pendings, at most MaxPendingVersions, until the next
+// declare sweeps them. The store enforces the cap where concurrent declares
+// serialize, so it holds across services; the stripe below only trims
+// contention between declares of one workspace in this service.
 func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewState) (PendingState, error) {
 	sum, err := in.parse()
 	if err != nil {
@@ -248,22 +342,64 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 		}
 	}
 
+	// Declares of one workspace share a stripe from here to the create,
+	// which trims contention on the cap check below. The store enforces
+	// the cap where concurrent declares serialize, so the check below is
+	// only an early refusal with a count.
+	unlock := s.lockKey("begin/" + id.String())
+	defer unlock()
+
+	// Best effort only: a cleanup failure never fails the declare. The
+	// rows stay for the next sweep, and the cap check below still bounds
+	// the workspace.
+	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+		s.logger.WarnContext(
+			ctx,
+			"sweep expired state",
+			slog.String("workspace", w.ID.String()),
+			slog.String("error", sweepErr.Error()),
+		)
+	}
+
+	pending, err := s.states.CountPendingStateVersions(ctx, id)
+	if err != nil {
+		return PendingState{}, fmt.Errorf("count pending state of %s: %w", w.Ref, err)
+	}
+
+	if pending >= s.maxPending {
+		return PendingState{}, fmt.Errorf(
+			"%w for %s: %d pending, limit %d",
+			ErrTooManyPending,
+			w.Ref,
+			pending,
+			s.maxPending,
+		)
+	}
+
 	return s.createPending(ctx, w, in, sum, "")
 }
 
 // Upload stores the content of a pending state version and makes it current.
 // The content must match the declared MD5 and fit the size limit, and the
 // lock it was declared under must still be held when it finalizes; otherwise
-// the content is discarded. Concurrent uploads of one version are safe: each
-// writes its own blob, exactly one finalizes, and the others delete only their
-// own blob. A retry after success (same capability, same content) succeeds
+// the content is discarded. Concurrent uploads of one version are safe
+// across services: each writes its own blob and records its own attempt,
+// the finalize commits only when the row still names that attempt, so
+// exactly one attempt wins, and each loser deletes only its own blob. The
+// stripe below only trims contention between uploads of one version in this
+// service. A retry after success (same capability, same content) succeeds
 // without storing anything, because go-tfe retries when a response is lost.
+// A retry after an unknown outcome records a new attempt, which supersedes
+// the earlier one: the row always names the blob the sweep must keep.
 func (s *Service) Upload(
 	ctx context.Context,
 	id StateVersionID,
 	tok token.Token,
 	content io.Reader,
 ) (StateVersion, error) {
+	unlock := s.lockKey("upload/" + id.String())
+	defer unlock()
+
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
@@ -290,6 +426,12 @@ func (s *Service) Upload(
 	key, err := attemptKey(sv)
 	if err != nil {
 		return StateVersion{}, err
+	}
+
+	// Note the attempt before writing: when the finalize outcome stays
+	// unknown, the row still names the content, so a later sweep deletes it.
+	if noteErr := s.noteAttempt(ctx, id, key, fence); noteErr != nil {
+		return StateVersion{}, noteErr
 	}
 
 	size, err := s.store(ctx, key, sv.MD5, content)
@@ -536,8 +678,9 @@ func (s *Service) mapRestoreLockError(ctx context.Context, id ID, holder string,
 }
 
 // copyState copies src to a new blob key and makes it current as a forced
-// version that records src. The blob lands before the finalize, so a
-// committed version never names a missing blob.
+// version that records src. The pending row records the attempt before the
+// copy, and the blob lands before the finalize, so a committed version
+// never names a missing blob.
 func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) (StateVersion, error) {
 	// The hex MD5 in NewState is display only; createPending stores the
 	// validated sum passed alongside it, which is src.MD5 here.
@@ -557,14 +700,20 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, err
 	}
 
-	size, err := s.copyBlob(ctx, key, src)
+	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return StateVersion{}, err
 	}
 
-	fence, err := s.fence(ctx, w.Ref.Namespace)
+	// Like an upload, the row names the attempt before the bytes land, so a
+	// sweep finds the blob even when the finalize outcome stays unknown.
+	if noteErr := s.noteAttempt(ctx, pending.Version.ID, key, fence); noteErr != nil {
+		return StateVersion{}, noteErr
+	}
+
+	size, err := s.copyBlob(ctx, key, src)
 	if err != nil {
-		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+		return StateVersion{}, err
 	}
 
 	sv := pending.Version
@@ -632,10 +781,192 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 	return sv, nil
 }
 
+// sweepExpired deletes the expired pending versions of w with their
+// attempted content, then deletes the blobs under the workspace prefix
+// that no version references, and returns the swept version IDs. A version
+// expires with its upload capability; the sweep keeps it for
+// SweepGracePeriod past expiry, so an upload that started before expiry
+// still finishes. A version that never recorded an attempt sweeps its row
+// with no blob to delete. A blob whose row delete already committed, or
+// whose superseded delete never ran, stays unreferenced: the second pass
+// collects it once it is older than the grace period, so a cleanup failure
+// or a crash between the row delete and the blob delete never leaves an
+// orphan for ever. A cleanup failure fails the sweep, so the caller
+// decides: BeginState treats the sweep as best effort and declares anyway,
+// leaving the rows for the next sweep.
+func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersionID, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
+	if err != nil {
+		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
+	}
+
+	ids := make([]StateVersionID, 0, len(expired))
+
+	var cleanupErr error
+
+	for i := range expired {
+		ids = append(ids, expired[i].ID)
+
+		if expired[i].Content == "" {
+			continue
+		}
+
+		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
+		}
+	}
+
+	// A blob delete above may have failed, or the process may have crashed
+	// between an earlier row delete and its blob delete: the unreferenced
+	// pass retries those blobs once they are past the grace period.
+	if unrefErr := s.sweepUnreferenced(ctx, w); unrefErr != nil {
+		cleanupErr = errors.Join(cleanupErr, unrefErr)
+	}
+
+	if cleanupErr != nil {
+		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+	}
+
+	return ids, nil
+}
+
+// sweepUnreferenced deletes the blobs under the workspace prefix that no
+// version names and that are older than the grace period: superseded
+// attempts whose delete never ran, and swept attempts whose row delete
+// committed before the blob delete. Blobs younger than the grace period
+// stay, so an upload that still streams is never collected: every attempt
+// blob is fresh, and the row names it before the bytes land. Blob
+// modification times share the service clock wherever the store runs. The
+// sweep filters by age before reading the referenced keys, so a declare
+// with only fresh blobs pays for one listing and no history read.
+func (s *Service) sweepUnreferenced(ctx context.Context, w Workspace) error {
+	listed, err := s.blobs.List(ctx, "tofu/"+w.ID.String()+"/")
+	if err != nil {
+		return fmt.Errorf("list state content of %s: %w", w.Ref, err)
+	}
+
+	if len(listed) == 0 {
+		return nil
+	}
+
+	now := s.clock()
+
+	candidates := make([]blob.Object, 0, len(listed))
+
+	for _, obj := range listed {
+		if now.Sub(obj.ModifiedAt) >= SweepGracePeriod {
+			candidates = append(candidates, obj)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	refs, err := s.states.ReferencedContentKeys(ctx, w.ID)
+	if err != nil {
+		return fmt.Errorf("list referenced content of %s: %w", w.Ref, err)
+	}
+
+	named := make(map[blob.Key]struct{}, len(refs))
+
+	for _, key := range refs {
+		named[key] = struct{}{}
+	}
+
+	var cleanupErr error
+
+	for _, obj := range candidates {
+		if _, ok := named[obj.Key]; ok {
+			continue
+		}
+
+		if blobErr := s.deleteBlobRetried(ctx, obj.Key); blobErr != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content %q: %w", obj.Key, blobErr))
+		}
+	}
+
+	return cleanupErr
+}
+
+// noteAttempt records key as the latest upload attempt of id, so a later
+// sweep finds the content even when the finalize outcome stays unknown.
+// The record runs in the store, which returns the superseded key atomically:
+// the row names only the latest attempt, so only that earlier blob goes,
+// after the row stops naming it. A delete failure leaves it for the
+// unreferenced-blob sweep. The caller never deletes a key the row still
+// names, so a concurrent upload on another service never loses its content:
+// the finalize admits only the recorded attempt, and each loser deletes
+// only its own blob.
+func (s *Service) noteAttempt(ctx context.Context, id StateVersionID, key blob.Key, fence namespace.Fence) error {
+	superseded, err := s.states.RecordUploadAttempt(ctx, id, key, fence)
+	if err != nil {
+		return fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	if superseded != "" && superseded != key {
+		if deleteErr := s.deleteBlobRetried(ctx, superseded); deleteErr != nil {
+			return fmt.Errorf("upload state %s: %w", id, deleteErr)
+		}
+	}
+
+	return nil
+}
+
+// sweepBlobRetries bounds the blob deletes of one cleanup: a transient
+// object store failure retries instead of orphaning the blob.
+const sweepBlobRetries = 3
+
+// deleteBlobRetried removes the object under key, retrying a transient
+// failure. Deleting a missing key is not an error.
+func (s *Service) deleteBlobRetried(ctx context.Context, key blob.Key) error {
+	var err error
+
+	for range sweepBlobRetries {
+		if err = s.blobs.Delete(ctx, key); err == nil {
+			return nil
+		}
+	}
+
+	return err
+}
+
+// stripeSpread widens adjacent keys across the lock stripes.
+const stripeSpread = 31
+
+// lockKey serializes the callers that share one key: concurrent declares of
+// one workspace, and concurrent uploads of one state version. The stripes
+// are fixed, so two keys that share a stripe only wait for each other.
+func (s *Service) lockKey(key string) func() {
+	var sum uint32
+
+	for i := range len(key) {
+		sum = sum*stripeSpread + uint32(key[i])
+	}
+
+	stripe := &s.stripes[sum%lockStripes]
+	stripe.Lock()
+
+	return stripe.Unlock
+}
+
 // rejected reports whether a finalize error proves nothing was written.
 func rejected(err error) bool {
 	for _, sentinel := range []error{
-		ErrUploadDenied, ErrNotLocked, ErrLockedByOther, ErrLineageMismatch, ErrStaleSerial, namespace.ErrFenced,
+		ErrUploadDenied,
+		ErrNotLocked,
+		ErrLockedByOther,
+		ErrLineageMismatch,
+		ErrStaleSerial,
+		ErrNotFound,
+		ErrStateVersionNotFound,
+		namespace.ErrNotFound,
+		namespace.ErrFenced,
 	} {
 		if errors.Is(err, sentinel) {
 			return true
@@ -684,7 +1015,7 @@ func (s *Service) createPending(
 		RestoredFrom:    restoredFrom,
 	}
 
-	if err := s.states.CreateStateVersion(ctx, sv, fence); err != nil {
+	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {
 		return PendingState{}, fmt.Errorf("create state version for %s: %w", w.Ref, err)
 	}
 

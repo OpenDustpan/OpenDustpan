@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 )
@@ -141,6 +143,52 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 	return nil
 }
 
+// List implements blob.Store: the objects under prefix, ordered by key,
+// with their modification times in UTC. A prefix that names no directory
+// yields an empty list. The temporary directory never lists: in-flight
+// uploads stay invisible until their link lands.
+func (s *Store) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list %s: %w", prefix, err)
+	}
+
+	dir := strings.TrimSuffix(prefix, "/")
+	if dir == "" {
+		dir = "."
+	}
+
+	info, err := s.root.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", prefix, err)
+	}
+
+	if !info.IsDir() {
+		// A prefix that names a file lists just it; anything else
+		// yields an empty list.
+		if key, keyErr := blob.ParseKey(dir); keyErr == nil {
+			return []blob.Object{{ModifiedAt: info.ModTime().UTC(), Key: key}}, nil
+		}
+
+		return nil, nil
+	}
+
+	var out []blob.Object
+
+	if err := s.listDir(dir, &out); err != nil {
+		return nil, err
+	}
+
+	slices.SortFunc(out, func(a, b blob.Object) int {
+		return strings.Compare(a.Key.String(), b.Key.String())
+	})
+
+	return out, nil
+}
+
 // Ping reports whether the directory exists and accepts writes. It writes a
 // temporary file and removes it, so no file is left behind.
 func (s *Store) Ping(ctx context.Context) error {
@@ -163,6 +211,70 @@ func (s *Store) Ping(ctx context.Context) error {
 
 	if closeErr != nil || removeErr != nil {
 		return errPing
+	}
+
+	return nil
+}
+
+// listDir appends every object under dir to out.
+func (s *Store) listDir(dir string, out *[]blob.Object) error {
+	entries, err := s.readDirEntries(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		if err := s.listEntry(dir, entry, out); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// readDirEntries returns the entries of dir.
+func (s *Store) readDirEntries(dir string) ([]fs.DirEntry, error) {
+	f, err := s.root.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", dir, err)
+	}
+
+	entries, err := f.ReadDir(-1)
+	closeErr := f.Close()
+
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("list %s: %w", dir, err), closeErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("list %s: %w", dir, closeErr)
+	}
+
+	return entries, nil
+}
+
+// listEntry appends entry to out, descending into directories. The
+// temporary directory never lists: in-flight uploads stay invisible until
+// their link lands.
+func (s *Store) listEntry(dir string, entry fs.DirEntry, out *[]blob.Object) error {
+	name := path.Join(dir, entry.Name())
+
+	if entry.IsDir() {
+		if name == tmpDir {
+			return nil
+		}
+
+		return s.listDir(name, out)
+	}
+
+	key, keyErr := blob.ParseKey(name)
+	if keyErr == nil {
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("list %s: %w", dir, err)
+		}
+
+		*out = append(*out, blob.Object{ModifiedAt: info.ModTime().UTC(), Key: key})
 	}
 
 	return nil

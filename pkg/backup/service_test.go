@@ -96,6 +96,12 @@ func (m *memStore) Delete(ctx context.Context, key blob.Key) error {
 	return nil
 }
 
+// List implements blob.Store: the backup service never lists, so the
+// in-memory store lists nothing.
+func (m *memStore) List(_ context.Context, _ string) ([]blob.Object, error) {
+	return nil, nil
+}
+
 // Ping implements blob.Store: the in-memory store always answers.
 func (m *memStore) Ping(_ context.Context) error {
 	return nil

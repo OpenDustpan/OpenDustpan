@@ -353,8 +353,10 @@ func serveResult(stdout, stderr bytes.Buffer, err error) BinaryResult {
 func probeHealth(ctx context.Context, port string) bool {
 	//nolint:gosec // The probe dials the test backend on loopback.
 	client := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		Timeout:   commandTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13},
+		},
+		Timeout: commandTimeout,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://127.0.0.1:"+port+"/health/live", http.NoBody)

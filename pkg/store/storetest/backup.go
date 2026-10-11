@@ -157,6 +157,10 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	createPendingVersion(t, s, acme, declared)
 
 	current := finalizedVersion(declared, now().Add(2*time.Hour), "v1")
+	if _, err := s.RecordUploadAttempt(ctx, current.ID, current.Content, acme.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
 	if err := s.FinalizeStateVersion(ctx, current, acme.Fence()); err != nil {
 		t.Fatalf("finalize state version: %v", err)
 	}

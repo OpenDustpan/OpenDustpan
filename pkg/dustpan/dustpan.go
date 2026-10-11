@@ -483,12 +483,14 @@ func newServices(cfg settings) (services, error) {
 	}
 
 	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:    cfg.workspaceStore,
-		States:        cfg.stateStore,
-		Blobs:         cfg.blobStore,
-		Namespaces:    namespaces,
-		Now:           cfg.now,
-		MaxStateBytes: cfg.maxStateBytes,
+		Workspaces:         cfg.workspaceStore,
+		States:             cfg.stateStore,
+		Blobs:              cfg.blobStore,
+		Namespaces:         namespaces,
+		Logger:             cfg.logger,
+		Now:                cfg.now,
+		MaxStateBytes:      cfg.maxStateBytes,
+		MaxPendingVersions: 0,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("workspace service: %w", err)

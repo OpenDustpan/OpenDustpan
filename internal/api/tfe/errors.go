@@ -140,6 +140,7 @@ func classify(err error) errorClass {
 		errors.Is(err, workspace.ErrNotLocked),
 		errors.Is(err, workspace.ErrLockedByOther),
 		errors.Is(err, workspace.ErrConcurrentModification),
+		errors.Is(err, workspace.ErrTooManyPending),
 		errors.Is(err, namespace.ErrFenced):
 		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
 	case errors.Is(err, workspace.ErrTooLarge):
