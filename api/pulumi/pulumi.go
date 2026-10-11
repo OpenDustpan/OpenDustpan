@@ -33,6 +33,7 @@ const (
 // Config holds the dependencies of a Handler.
 type Config struct {
 	Stacks        *stack.Service
+	Updates       *stack.Updates
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
@@ -40,11 +41,12 @@ type Config struct {
 
 // Handler serves the Pulumi CLI API under /api/.
 type Handler struct {
-	stacks *stack.Service
-	authn  identity.Authenticator
-	authz  identity.Authorizer
-	logger *slog.Logger
-	mux    *http.ServeMux
+	stacks  *stack.Service
+	updates *stack.Updates
+	authn   identity.Authenticator
+	authz   identity.Authorizer
+	logger  *slog.Logger
+	mux     *http.ServeMux
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -52,6 +54,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Stacks == nil:
 		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
+	case cfg.Updates == nil:
+		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
@@ -61,11 +65,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		stacks: cfg.Stacks,
-		authn:  cfg.Authenticator,
-		authz:  cfg.Authorizer,
-		logger: cfg.Logger,
-		mux:    http.NewServeMux(),
+		stacks:  cfg.Stacks,
+		updates: cfg.Updates,
+		authn:   cfg.Authenticator,
+		authz:   cfg.Authorizer,
+		logger:  cfg.Logger,
+		mux:     http.NewServeMux(),
 	}
 
 	h.mux.HandleFunc("GET /api/capabilities", h.capabilities)

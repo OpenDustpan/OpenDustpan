@@ -101,6 +101,9 @@ type Env struct {
 type serverStore interface {
 	namespace.Store
 	stack.Store
+	stack.UpdateStore
+	stack.CheckpointStore
+	stack.EventStore
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -215,6 +218,9 @@ func newServer(ctx context.Context, tb testing.TB, store Store, dbPath, token st
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
 		dustpan.WithAuthenticator(authn),
 	)
 	if err != nil {

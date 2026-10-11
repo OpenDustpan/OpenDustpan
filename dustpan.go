@@ -9,6 +9,9 @@
 //		dustpan.WithRegion("eu-west"),
 //		dustpan.WithNamespaceStore(myStore),
 //		dustpan.WithStackStore(myStore),
+//		dustpan.WithUpdateStore(myStore),
+//		dustpan.WithCheckpointStore(myStore),
+//		dustpan.WithEventStore(myStore),
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
@@ -42,16 +45,19 @@ const (
 
 // settings collects every option before NewServer validates them.
 type settings struct {
-	namespaceStore namespace.Store
-	stackStore     stack.Store
-	authenticator  identity.Authenticator
-	authorizer     identity.Authorizer
-	logger         *slog.Logger
-	now            func() time.Time
-	region         namespace.Region
-	listenAddr     string
-	consoleDir     string
-	allowedOrigins []string
+	namespaceStore  namespace.Store
+	stackStore      stack.Store
+	updateStore     stack.UpdateStore
+	checkpointStore stack.CheckpointStore
+	eventStore      stack.EventStore
+	authenticator   identity.Authenticator
+	authorizer      identity.Authorizer
+	logger          *slog.Logger
+	now             func() time.Time
+	region          namespace.Region
+	listenAddr      string
+	consoleDir      string
+	allowedOrigins  []string
 }
 
 // Option configures a Server.
@@ -65,6 +71,21 @@ func WithNamespaceStore(s namespace.Store) Option {
 // WithStackStore sets the stack persistence port. Required.
 func WithStackStore(s stack.Store) Option {
 	return func(o *settings) { o.stackStore = s }
+}
+
+// WithUpdateStore sets the update persistence port. Required.
+func WithUpdateStore(s stack.UpdateStore) Option {
+	return func(o *settings) { o.updateStore = s }
+}
+
+// WithCheckpointStore sets the checkpoint persistence port. Required.
+func WithCheckpointStore(s stack.CheckpointStore) Option {
+	return func(o *settings) { o.checkpointStore = s }
+}
+
+// WithEventStore sets the engine event persistence port. Required.
+func WithEventStore(s stack.EventStore) Option {
+	return func(o *settings) { o.eventStore = s }
 }
 
 // WithAuthenticator sets how access tokens are resolved to principals. Required.
@@ -119,16 +140,19 @@ type Server struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore: nil,
-		stackStore:     nil,
-		authenticator:  nil,
-		authorizer:     identity.AdminOnly{},
-		logger:         slog.New(slog.DiscardHandler),
-		now:            time.Now,
-		region:         "",
-		listenAddr:     defaultListenAddr,
-		consoleDir:     "",
-		allowedOrigins: nil,
+		namespaceStore:  nil,
+		stackStore:      nil,
+		updateStore:     nil,
+		checkpointStore: nil,
+		eventStore:      nil,
+		authenticator:   nil,
+		authorizer:      identity.AdminOnly{},
+		logger:          slog.New(slog.DiscardHandler),
+		now:             time.Now,
+		region:          "",
+		listenAddr:      defaultListenAddr,
+		consoleDir:      "",
+		allowedOrigins:  nil,
 	}
 
 	for _, opt := range opts {
@@ -151,8 +175,21 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("stack service: %w", err)
 	}
 
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Now:                cfg.now,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
 	api, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
+		Updates:       updates,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
