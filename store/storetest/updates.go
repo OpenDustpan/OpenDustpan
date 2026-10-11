@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -22,6 +23,12 @@ type UpdatesStore interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+}
+
+// RenameStore renames a stack for tests until issue #48 adds the port. It
+// keeps the stack ID and moves no history, checkpoint or event rows.
+type RenameStore interface {
+	RenameStackForTest(ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence) error
 }
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
@@ -54,6 +61,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
+		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 	}
 
 	for _, tc := range cases {
@@ -837,6 +845,168 @@ func testEventsLease(t *testing.T, f fixture) {
 	}
 
 	assertEvents(t, f, u)
+}
+
+// testRenameKeepsHistory shows that a rename keeps the stack ID, so its
+// history, checkpoint and events stay with the stack.
+func testRenameKeepsHistory(t *testing.T, f fixture) {
+	t.Helper()
+
+	renamer, ok := f.s.(RenameStore)
+	if !ok {
+		t.Skip("store does not implement RenameStackForTest until issue #48")
+	}
+
+	ended, wantCP, wantEvents := seedRenameHistory(t, f)
+	oldID := f.stackID(t, f.ref)
+	newRef := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "renamed"}
+
+	if renameErr := renamer.RenameStackForTest(t.Context(), f.ref, "renamed", f.fence); renameErr != nil {
+		t.Fatalf("rename stack: %v", renameErr)
+	}
+
+	checkRenamedStack(t, f, newRef, oldID)
+	checkRenamedUpdate(t, f, newRef, ended)
+	checkRenamedHistory(t, f, newRef, ended)
+	checkRenamedCheckpoint(t, f, newRef, wantCP)
+	checkRenamedEvents(t, f, newRef, ended, wantEvents)
+
+	next := f.run(t, newRef, "u2", mutating())
+	if next.Version != 2 {
+		t.Fatalf("update after rename version = %d, want 2", next.Version)
+	}
+}
+
+// seedRenameHistory creates one finished update with a checkpoint and events.
+func seedRenameHistory(
+	t *testing.T, f fixture,
+) (stack.Update, stack.Checkpoint, stack.EventBatch) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+
+	wantCP := newCheckpoint(u, 0, `{"v":1}`)
+	if err := f.s.PutCheckpoint(t.Context(), wantCP, f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	wantEvents := newEvents(u, 1, 0, 1)
+	if err := f.s.AppendEvents(t.Context(), wantEvents, f.fence); err != nil {
+		t.Fatalf("append events: %v", err)
+	}
+
+	ended := f.end(t, u, stack.StatusSucceeded)
+
+	return ended, wantCP, wantEvents
+}
+
+// checkRenamedStack checks the ID stayed and the old name is gone.
+func checkRenamedStack(t *testing.T, f fixture, newRef stack.Ref, oldID string) {
+	t.Helper()
+
+	gotStack, err := f.s.GetStack(t.Context(), newRef)
+	if err != nil {
+		t.Fatalf("get renamed stack: %v", err)
+	}
+
+	if gotStack.ID.String() != oldID {
+		t.Fatalf("renamed stack ID = %q, want %q", gotStack.ID, oldID)
+	}
+
+	_, oldErr := f.s.GetStack(t.Context(), f.ref)
+	if !errors.Is(oldErr, stack.ErrNotFound) {
+		t.Fatalf("get old stack: err = %v, want ErrNotFound", oldErr)
+	}
+}
+
+// checkRenamedUpdate checks the update moved to the new name.
+func checkRenamedUpdate(t *testing.T, f fixture, newRef stack.Ref, ended stack.Update) {
+	t.Helper()
+
+	gotUpdate, err := f.s.GetUpdate(t.Context(), newRef, ended.ID)
+	if err != nil {
+		t.Fatalf("get update after rename: %v", err)
+	}
+
+	ended.Ref = newRef
+
+	if !sameUpdate(gotUpdate, ended) {
+		t.Fatalf("update after rename = %+v, want %+v", gotUpdate, ended)
+	}
+
+	_, oldErr := f.s.GetUpdate(t.Context(), f.ref, ended.ID)
+	if !errors.Is(oldErr, stack.ErrUpdateNotFound) {
+		t.Fatalf("get update through old name: err = %v, want ErrUpdateNotFound", oldErr)
+	}
+}
+
+// checkRenamedHistory checks the history moved to the new name.
+func checkRenamedHistory(t *testing.T, f fixture, newRef stack.Ref, ended stack.Update) {
+	t.Helper()
+
+	history, err := f.s.ListUpdates(t.Context(), newRef, stack.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("history after rename: %v", err)
+	}
+
+	if len(history) != 1 || history[0].ID != ended.ID || history[0].Ref != newRef {
+		t.Fatalf("history after rename = %+v, want one update of %s", history, newRef)
+	}
+
+	oldHistory, oldErr := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0})
+	if oldErr != nil || len(oldHistory) != 0 {
+		t.Fatalf("history of old name = %v, %v; want empty", oldHistory, oldErr)
+	}
+}
+
+// checkRenamedCheckpoint checks the checkpoint moved to the new name.
+func checkRenamedCheckpoint(t *testing.T, f fixture, newRef stack.Ref, wantCP stack.Checkpoint) {
+	t.Helper()
+
+	wantCP.Ref = newRef
+
+	assertCheckpoint(t, fixture{s: f.s, ref: newRef, fence: f.fence}, newRef, wantCP)
+
+	_, oldErr := f.s.LatestCheckpoint(t.Context(), f.ref)
+	if !errors.Is(oldErr, stack.ErrNoState) {
+		t.Fatalf("checkpoint of old name: err = %v, want ErrNoState", oldErr)
+	}
+}
+
+// checkRenamedEvents checks the events moved to the new name.
+func checkRenamedEvents(
+	t *testing.T, f fixture, newRef stack.Ref, ended stack.Update, wantEvents stack.EventBatch,
+) {
+	t.Helper()
+
+	gotEvents, err := f.s.ListEvents(t.Context(), newRef, ended.ID, -1, 100)
+	if err != nil {
+		t.Fatalf("events after rename: %v", err)
+	}
+
+	if !sameEvents(gotEvents, wantEvents.Events) {
+		t.Fatalf(
+			"events after rename = %s, want %s",
+			eventsString(gotEvents),
+			eventsString(wantEvents.Events),
+		)
+	}
+
+	_, oldErr := f.s.ListEvents(t.Context(), f.ref, ended.ID, -1, 100)
+	if !errors.Is(oldErr, stack.ErrUpdateNotFound) {
+		t.Fatalf("events of old name: err = %v, want ErrUpdateNotFound", oldErr)
+	}
+}
+
+func (f fixture) stackID(t *testing.T, ref stack.Ref) string {
+	t.Helper()
+
+	st, err := f.s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack %s: %v", ref, err)
+	}
+
+	return st.ID.String()
 }
 
 func assertUpdate(t *testing.T, f fixture, want stack.Update) {

@@ -5,9 +5,7 @@
 package db
 
 type Checkpoint struct {
-	Namespace     string
-	Project       string
-	Stack         string
+	StackID       string
 	UpdateID      string
 	LeaseDigest   []byte
 	SchemaVersion int64
@@ -38,9 +36,7 @@ type Stack struct {
 }
 
 type Update struct {
-	Namespace        string
-	Project          string
-	Stack            string
+	StackID          string
 	ID               string
 	Kind             string
 	DryRun           bool
@@ -55,9 +51,7 @@ type Update struct {
 }
 
 type UpdateEvent struct {
-	Namespace   string
-	Project     string
-	Stack       string
+	StackID     string
 	UpdateID    string
 	Sequence    int64
 	TimestampMs int64

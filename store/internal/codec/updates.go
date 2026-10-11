@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
-	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 )
 
@@ -16,11 +15,10 @@ import (
 var ErrCorruptRow = errors.New("corrupt row")
 
 // UpdateRow is the column representation of an update. Unset times are 0 and
-// an absent lease digest is empty.
+// an absent lease digest is empty. The stack is its stable ID; the caller
+// supplies the current reference.
 type UpdateRow struct {
-	Namespace        string
-	Project          string
-	Stack            string
+	StackID          string
 	ID               string
 	Kind             string
 	Status           string
@@ -35,11 +33,10 @@ type UpdateRow struct {
 }
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
-// JSON array of strings.
+// JSON array of strings. The stack is its stable ID; the caller supplies the
+// current reference.
 type CheckpointRow struct {
-	Namespace     string
-	Project       string
-	Stack         string
+	StackID       string
 	UpdateID      string
 	LeaseDigest   []byte
 	Digest        []byte
@@ -69,12 +66,10 @@ func FromOptionalMillis(ms int64) time.Time {
 	return FromMillis(ms)
 }
 
-// ToUpdateRow converts a domain update into a row.
-func ToUpdateRow(u stack.Update) UpdateRow {
+// ToUpdateRow converts a domain update into a row for the stack with stackID.
+func ToUpdateRow(u stack.Update, stackID stack.ID) UpdateRow {
 	return UpdateRow{
-		Namespace:        u.Ref.Namespace.String(),
-		Project:          u.Ref.Project.String(),
-		Stack:            u.Ref.Stack.String(),
+		StackID:          stackID.String(),
 		ID:               u.ID.String(),
 		Kind:             string(u.Kind),
 		Status:           string(u.Status),
@@ -89,8 +84,8 @@ func ToUpdateRow(u stack.Update) UpdateRow {
 	}
 }
 
-// FromUpdateRow converts a row into a domain update.
-func FromUpdateRow(row UpdateRow) (stack.Update, error) {
+// FromUpdateRow converts a row into a domain update of ref.
+func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 	kind, err := stack.ParseUpdateKind(row.Kind)
 	if err != nil {
 		return stack.Update{}, fmt.Errorf("decode update %s: %w", row.ID, err)
@@ -114,19 +109,19 @@ func FromUpdateRow(row UpdateRow) (stack.Update, error) {
 		ID:        stack.UpdateID(row.ID),
 		Kind:      kind,
 		Status:    status,
-		Ref:       ref(row.Namespace, row.Project, row.Stack),
+		Ref:       ref,
 		DryRun:    row.DryRun,
 		Version:   row.Version,
 		Revision:  row.Revision,
 	}, nil
 }
 
-// FromUpdateRows converts rows into domain updates.
-func FromUpdateRows(rows []UpdateRow) ([]stack.Update, error) {
+// FromUpdateRows converts rows into domain updates of ref.
+func FromUpdateRows(rows []UpdateRow, ref stack.Ref) ([]stack.Update, error) {
 	out := make([]stack.Update, 0, len(rows))
 
 	for i := range rows {
-		u, err := FromUpdateRow(rows[i])
+		u, err := FromUpdateRow(rows[i], ref)
 		if err != nil {
 			return nil, err
 		}
@@ -137,8 +132,8 @@ func FromUpdateRows(rows []UpdateRow) ([]stack.Update, error) {
 	return out, nil
 }
 
-// ToCheckpointRow converts a domain checkpoint into a row.
-func ToCheckpointRow(cp stack.Checkpoint) (CheckpointRow, error) {
+// ToCheckpointRow converts a domain checkpoint into a row for the stack with stackID.
+func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, error) {
 	features := cp.Features
 	if features == nil {
 		features = []string{}
@@ -156,9 +151,7 @@ func ToCheckpointRow(cp stack.Checkpoint) (CheckpointRow, error) {
 	}
 
 	return CheckpointRow{
-		Namespace:     cp.Ref.Namespace.String(),
-		Project:       cp.Ref.Project.String(),
-		Stack:         cp.Ref.Stack.String(),
+		StackID:       stackID.String(),
 		UpdateID:      cp.Update.String(),
 		LeaseDigest:   EncodeDigest(cp.Lease),
 		Digest:        cp.Digest[:],
@@ -171,8 +164,8 @@ func ToCheckpointRow(cp stack.Checkpoint) (CheckpointRow, error) {
 	}, nil
 }
 
-// FromCheckpointRow converts a row into a domain checkpoint.
-func FromCheckpointRow(row CheckpointRow) (stack.Checkpoint, error) {
+// FromCheckpointRow converts a row into a domain checkpoint of ref.
+func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, error) {
 	var features []string
 	if err := json.Unmarshal(row.Features, &features); err != nil {
 		return stack.Checkpoint{}, fmt.Errorf("decode checkpoint features of update %s: %w", row.UpdateID, err)
@@ -198,7 +191,7 @@ func FromCheckpointRow(row CheckpointRow) (stack.Checkpoint, error) {
 		Features:      features,
 		Deployment:    row.Deployment,
 		Update:        stack.UpdateID(row.UpdateID),
-		Ref:           ref(row.Namespace, row.Project, row.Stack),
+		Ref:           ref,
 		Lease:         lease,
 		SchemaVersion: int(row.SchemaVersion),
 		Sequence:      row.Sequence,
@@ -234,13 +227,5 @@ func parseStatus(s string) (stack.UpdateStatus, error) {
 		return st, nil
 	default:
 		return "", fmt.Errorf("%w: unknown status %q", ErrCorruptRow, s)
-	}
-}
-
-func ref(ns, project, name string) stack.Ref {
-	return stack.Ref{
-		Namespace: namespace.Name(ns),
-		Project:   stack.ProjectName(project),
-		Stack:     stack.Name(name),
 	}
 }

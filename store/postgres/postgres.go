@@ -151,6 +151,43 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 	})
 }
 
+// RenameStackForTest renames a stack without moving its history, checkpoint
+// or events. It is test-only until issue #48 adds the rename port.
+func (s *Store) RenameStackForTest(
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		_, err := q.GetStack(ctx, db.GetStackParams{
+			Namespace: oldRef.Namespace.String(),
+			Project:   oldRef.Project.String(),
+			Name:      newName.String(),
+		})
+		if err == nil {
+			return stack.ErrAlreadyExists
+		}
+
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("check new stack name: %w", err)
+		}
+
+		n, err := q.RenameStack(ctx, db.RenameStackParams{
+			Name:      newName.String(),
+			Namespace: oldRef.Namespace.String(),
+			Project:   oldRef.Project.String(),
+			Name_2:    oldRef.Stack.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("rename stack: %w", err)
+		}
+
+		if n == 0 {
+			return stack.ErrNotFound
+		}
+
+		return nil
+	})
+}
+
 // ListStacks implements stack.Store.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
 	if filter.Project == "" {
