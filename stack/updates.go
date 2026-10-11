@@ -31,27 +31,34 @@ const (
 // UpdateStore persists updates. Writes carry the namespace fence and fail with
 // namespace.ErrFenced if it is stale.
 type UpdateStore interface {
-	// CreateUpdate persists a new, not-started u. It returns ErrNotFound if
-	// the stack does not exist.
+	// CreateUpdate persists a new, not-started u with its CreatedBy and
+	// RestoredFrom as given. It returns ErrNotFound if the stack does not exist.
 	CreateUpdate(ctx context.Context, u Update, fence namespace.Fence) error
-	// GetUpdate returns the update, or ErrUpdateNotFound.
+	// GetUpdate returns the update with its CreatedBy, RestoredFrom and
+	// CheckpointBytes, or ErrUpdateNotFound. CheckpointBytes is the size in
+	// bytes of the checkpoint the update saved, or 0 when it saved none.
 	GetUpdate(ctx context.Context, ref Ref, id UpdateID) (Update, error)
 	// StartUpdate persists the started u and returns it with Version assigned:
 	// one more than the highest version of any update of the stack if
 	// u.Mutates(), else the stack's current version. A mutating u fails with
 	// ErrUpdateConflict while another mutating update of the stack is running.
 	// Any u fails with ErrConcurrentModification unless the store holds
-	// u.Revision-1.
+	// u.Revision-1. It keeps the CreatedBy and RestoredFrom of u.
 	StartUpdate(ctx context.Context, u Update, fence namespace.Fence) (Update, error)
 	// SaveUpdate persists a transition of u if the store holds u.Revision-1,
 	// else returns ErrConcurrentModification. When a started mutating update
 	// ends, the stack's Version becomes u.Version in the same transaction.
+	// It keeps the CreatedBy and RestoredFrom of u.
 	SaveUpdate(ctx context.Context, u Update, fence namespace.Fence) error
 	// ActiveUpdate returns the stack's running update that Mutates, or ErrUpdateNotFound.
 	ActiveUpdate(ctx context.Context, ref Ref) (Update, error)
 	// ListUpdates returns the stack's started updates that Mutates, newest
 	// first. A stack without updates, or one that does not exist, yields an
-	// empty list.
+	// empty list. Each entry carries its CreatedBy, its RestoredFrom (0 when
+	// the update is not a restore) and its CheckpointBytes: the size in bytes
+	// of the checkpoint the update saved, or 0 when it saved none. The size
+	// travels on the update itself, read with one join, so history needs no
+	// second query and no new port method.
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
@@ -172,6 +179,12 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		DryRun:    plan.DryRun,
 		Version:   0,
 		Revision:  1,
+		// CreatedBy stays empty until the API passes the principal, and
+		// RestoredFrom stays 0 until the restore route sets it. Sizes come
+		// from the checkpoint rows on read.
+		CreatedBy:       "",
+		RestoredFrom:    0,
+		CheckpointBytes: 0,
 	}
 
 	if err := s.updates.CreateUpdate(ctx, u, fence); err != nil {

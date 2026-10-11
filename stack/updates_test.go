@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
+	"opendustpan.org/opendustpan/store/storetest"
 )
 
 // memNamespaces is a namespace.Store holding one namespace.
@@ -38,9 +40,12 @@ func (m *memNamespaces) Ping(context.Context) error {
 }
 
 // memUpdates implements the update, checkpoint and event ports in memory,
-// following their documented contracts.
+// following their documented contracts. It also holds the namespaces and
+// stacks the history cases create, so it can check their fences.
 type memUpdates struct {
 	updates      map[stack.UpdateID]stack.Update
+	namespaces   map[namespace.Name]namespace.Namespace
+	stacks       map[stack.Ref]stack.Stack
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
@@ -58,6 +63,8 @@ type memUpdates struct {
 func newMemUpdates() *memUpdates {
 	return &memUpdates{
 		updates:      map[stack.UpdateID]stack.Update{},
+		namespaces:   map[namespace.Name]namespace.Namespace{},
+		stacks:       map[stack.Ref]stack.Stack{},
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
@@ -68,9 +75,100 @@ func newMemUpdates() *memUpdates {
 	}
 }
 
-func (m *memUpdates) CreateUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+// Ping implements namespace.Store: the in-memory store is always ready.
+func (m *memUpdates) Ping(context.Context) error {
+	return nil
+}
+
+func (m *memUpdates) CreateNamespace(_ context.Context, ns namespace.Namespace) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, ok := m.namespaces[ns.Name]; ok {
+		return namespace.ErrAlreadyExists
+	}
+
+	m.namespaces[ns.Name] = ns
+
+	return nil
+}
+
+func (m *memUpdates) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ns, ok := m.namespaces[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return ns, nil
+}
+
+func (m *memUpdates) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]namespace.Namespace, 0, len(m.namespaces))
+	for _, ns := range m.namespaces {
+		out = append(out, ns)
+	}
+
+	slices.SortFunc(
+		out,
+		func(a, b namespace.Namespace) int { return strings.Compare(a.Name.String(), b.Name.String()) },
+	)
+
+	return out, nil
+}
+
+func (m *memUpdates) CreateStack(_ context.Context, st stack.Stack, fence namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ns, ok := m.namespaces[st.Ref.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if fence != ns.Fence() {
+		return namespace.ErrFenced
+	}
+
+	if _, ok := m.stacks[st.Ref]; ok {
+		return stack.ErrAlreadyExists
+	}
+
+	m.stacks[st.Ref] = st
+
+	return nil
+}
+
+func (m *memUpdates) GetStack(_ context.Context, ref stack.Ref) (stack.Stack, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	st, ok := m.stacks[ref]
+	if !ok {
+		return stack.Stack{}, stack.ErrNotFound
+	}
+
+	return st, nil
+}
+
+func (m *memUpdates) CreateUpdate(_ context.Context, u stack.Update, fence namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(u.Ref, fence); err != nil {
+		return err
+	}
+
+	if _, ok := m.namespaces[u.Ref.Namespace]; ok {
+		if _, ok := m.stacks[u.Ref]; !ok {
+			return stack.ErrNotFound
+		}
+	}
 
 	m.updates[u.ID] = u
 
@@ -90,12 +188,16 @@ func (m *memUpdates) GetUpdate(ctx context.Context, _ stack.Ref, id stack.Update
 		return stack.Update{}, stack.ErrUpdateNotFound
 	}
 
-	return u, nil
+	return m.withSize(u), nil
 }
 
-func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, _ namespace.Fence) (stack.Update, error) {
+func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, fence namespace.Fence) (stack.Update, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := m.checkFence(u.Ref, fence); err != nil {
+		return stack.Update{}, err
+	}
 
 	if m.updates[u.ID].Revision != u.Revision-1 {
 		return stack.Update{}, stack.ErrConcurrentModification
@@ -126,13 +228,17 @@ func (m *memUpdates) StartUpdate(_ context.Context, u stack.Update, _ namespace.
 	return u, nil
 }
 
-func (m *memUpdates) SaveUpdate(ctx context.Context, u stack.Update, _ namespace.Fence) error {
+func (m *memUpdates) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("save update: %w", err)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := m.checkFence(u.Ref, fence); err != nil {
+		return err
+	}
 
 	if m.renewFirst {
 		m.renewFirst = false
@@ -177,7 +283,7 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 
 	for id := range m.updates {
 		if u := m.updates[id]; u.Ref == ref && u.Mutates() && u.Status != stack.StatusNotStarted {
-			list = append(list, u)
+			list = append(list, m.withSize(u))
 		}
 	}
 
@@ -186,9 +292,13 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	return list, nil
 }
 
-func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
+func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := m.checkFence(cp.Ref, fence); err != nil {
+		return err
+	}
 
 	if !m.runningUnder(cp.Update, cp.Lease) {
 		return stack.ErrWrongUpdateState
@@ -312,6 +422,32 @@ func (m *memUpdates) runningUnder(id stack.UpdateID, lease token.Digest) bool {
 	return u.Status == stack.StatusRunning && u.Lease.Digest == lease
 }
 
+// checkFence reports whether fence authorizes a write to ref. Namespaces the
+// store does not know stay lenient: the service tests drive this store
+// without creating any, so their writes skip the check. Callers hold mu.
+func (m *memUpdates) checkFence(ref stack.Ref, fence namespace.Fence) error {
+	ns, ok := m.namespaces[ref.Namespace]
+	if !ok {
+		return nil
+	}
+
+	if fence != ns.Fence() {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// withSize fills the CheckpointBytes of u from its checkpoint row, or 0 when
+// it saved none. Callers hold mu.
+func (m *memUpdates) withSize(u stack.Update) stack.Update {
+	if cp, ok := m.checkpoints[u.ID]; ok {
+		u.CheckpointBytes = int64(len(cp.Deployment))
+	}
+
+	return u
+}
+
 // clock is a settable time source.
 type clock struct {
 	now time.Time
@@ -404,6 +540,19 @@ func checkpoint(seq int64, body string) stack.CheckpointInput {
 		Sequence:      seq,
 		Invalid:       false,
 	}
+}
+
+// TestUpdateHistoryConformance runs the staged history cases of ADR 28
+// decision 4 on the in-memory store, before the SQL adapters grow the
+// matching columns in issues #135 and #136.
+func TestUpdateHistoryConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunUpdateHistory(t, func(t *testing.T) storetest.HistoryStore {
+		t.Helper()
+
+		return newMemUpdates()
+	})
 }
 
 func TestUpdateLifecycle(t *testing.T) {

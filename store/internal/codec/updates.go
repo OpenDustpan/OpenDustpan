@@ -113,6 +113,11 @@ func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 		DryRun:    row.DryRun,
 		Version:   row.Version,
 		Revision:  row.Revision,
+		// CreatedBy, RestoredFrom and CheckpointBytes stay zero until issues
+		// #135 and #136 add the columns and the checkpoint join.
+		CreatedBy:       "",
+		RestoredFrom:    0,
+		CheckpointBytes: 0,
 	}, nil
 }
 
