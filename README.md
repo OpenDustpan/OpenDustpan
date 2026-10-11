@@ -14,7 +14,7 @@ speaks, so the CLI needs no plugin.
 | Tool | Protocol | Status |
 | --- | --- | --- |
 | Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Full deployments work on one node. Login, stacks, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm` and `stack tag set` work. |
-| OpenTofu | TFE-compatible remote API (`cloud` block) | Designed (RFC 1), not built yet. |
+| OpenTofu | TFE-compatible remote API (`cloud` block) | Works with OpenTofu on one node. State, locks, `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select` and `destroy` work. Remote runs, `tofu login`, workspace tags, rename and delete are out. |
 
 More tools follow the same pattern (ADR 12). An end-to-end suite that drives
 the real CLI checks every supported version of every tool.
@@ -24,11 +24,12 @@ is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
 or HashiCorp.
 
 > **Status: pre-alpha.** The Pulumi CLI runs full deployments on one node,
-> with SQLite or PostgreSQL.
+> with SQLite or PostgreSQL. OpenDustpan works with OpenTofu as a remote
+> backend on one node.
 
 ## Try it
 
-Requires Go 1.27.1+ and the Pulumi CLI.
+Requires Go 1.27.1+, the Pulumi CLI and OpenTofu.
 
 Build the server. Generate the two secrets it needs. The administrator
 signs in with the admin token. The key-encryption key protects secret
@@ -81,6 +82,72 @@ The web console is a separate repository,
 development against this server, or build it and let the server host it in one
 process: `opendustpan serve --console-dir <console>/dist`. Sign in with the
 value of `DUSTPAN_ADMIN_TOKEN`.
+
+### OpenTofu
+
+OpenDustpan works with OpenTofu through the TFE-compatible API. The steps
+below store the state of one workspace on the server.
+
+Create a namespace. Then start the server with TLS. OpenTofu refuses plain
+HTTP for service discovery.
+
+```sh
+./bin/opendustpan namespace create acme
+./bin/opendustpan serve --tls-cert cert.pem --tls-key key.pem
+```
+
+Point OpenTofu at the server. The `cloud` block names the host and the
+workspace. The token comes from a `credentials` block or from
+`TF_TOKEN_<host>`.
+
+```hcl
+terraform {
+  cloud {
+    hostname     = "dustpan.example"
+    organization = "acme"
+    workspaces {
+      name = "web"
+    }
+  }
+}
+```
+
+```hcl
+credentials "dustpan.example" {
+  token = "REDACTED"
+}
+```
+
+Run `tofu init` to create the workspace. Run `tofu apply` to store state.
+When a lock stays behind, release it with `tofu force-unlock`.
+
+```sh
+export TF_TOKEN_dustpan_example="REDACTED"
+tofu init
+tofu apply
+tofu force-unlock acme/web
+```
+
+The `remote` backend with a workspace prefix covers many workspaces. With
+the prefix `web-`, `tofu workspace new dev` creates the `web-dev`
+workspace.
+
+```hcl
+terraform {
+  backend "remote" {
+    hostname     = "dustpan.example"
+    organization = "acme"
+    workspaces {
+      prefix = "web-"
+    }
+  }
+}
+```
+
+A TLS-terminating reverse proxy is a supported setup. The server never
+trusts `X-Forwarded-*` headers. Set `--public-url` to the external base URL
+so absolute URLs point at the proxy. The supported endpoints and the
+differences from TFE are in `docs/tfe-api.md`.
 
 ## Container image
 
@@ -142,7 +209,7 @@ trusts it. It is not part of `make check`.
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
-| | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes |
+| | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes (comma-separated tokens sign in as distinct administrators: admin, admin-2, ...) |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |
 

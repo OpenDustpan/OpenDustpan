@@ -8,6 +8,7 @@ package identity
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -248,6 +249,81 @@ func (s *StaticToken) AuthenticateToken(_ context.Context, token string) (Princi
 	}
 
 	return s.principal, nil
+}
+
+// StaticTokens authenticates a fixed set of bootstrap tokens, one
+// administrator per token. It exists to bootstrap a fresh install; replace
+// it once real identity is configured. It stores only the SHA-256 of each
+// token, so the comparison never handles raw tokens of different lengths.
+type StaticTokens struct {
+	principals []Principal
+	hashes     [][32]byte
+}
+
+var _ Authenticator = (*StaticTokens)(nil)
+
+// NewStaticTokens returns an authenticator accepting each of tokens as a
+// distinct administrator. The first token signs in as admin, the next ones
+// as admin-2, admin-3, and so on. Each token must hold at least 32 bytes.
+// Empty and duplicate entries fail with ErrWeakToken, as does an empty
+// list. White space around an entry is ignored.
+func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("%w: need at least one token", ErrWeakToken)
+	}
+
+	principals := make([]Principal, 0, len(tokens))
+	hashes := make([][32]byte, 0, len(tokens))
+	seen := make(map[[32]byte]struct{}, len(tokens))
+
+	for i, raw := range tokens {
+		token := strings.TrimSpace(raw)
+		if len(token) < minTokenLength {
+			return nil, fmt.Errorf("%w: token %d needs at least %d bytes", ErrWeakToken, i+1, minTokenLength)
+		}
+
+		sum := sha256.Sum256([]byte(token))
+		if _, dup := seen[sum]; dup {
+			return nil, fmt.Errorf("%w: token %d is a duplicate", ErrWeakToken, i+1)
+		}
+
+		seen[sum] = struct{}{}
+
+		subject := "admin"
+		if i > 0 {
+			subject = fmt.Sprintf("admin-%d", i+1)
+		}
+
+		principals = append(principals, Principal{Subject: subject, DisplayName: subject, Admin: true})
+		hashes = append(hashes, sum)
+	}
+
+	return &StaticTokens{principals: principals, hashes: hashes}, nil
+}
+
+// AuthenticateToken compares the SHA-256 of token against every stored
+// token in constant time, without an early exit.
+func (s *StaticTokens) AuthenticateToken(_ context.Context, token string) (Principal, error) {
+	sum := sha256.Sum256([]byte(token))
+
+	found := 0
+
+	var principal Principal
+
+	for i := range s.hashes {
+		match := subtle.ConstantTimeCompare(sum[:], s.hashes[i][:])
+		found |= match
+
+		if match == 1 {
+			principal = s.principals[i]
+		}
+	}
+
+	if found != 1 {
+		return Principal{}, ErrUnauthenticated
+	}
+
+	return principal, nil
 }
 
 // AdminOnly allows administrators and denies everyone else. It is the safe
