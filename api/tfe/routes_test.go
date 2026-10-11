@@ -458,6 +458,10 @@ func (stubNamespaceStore) ListNamespaces(ctx context.Context) ([]namespace.Names
 	return []namespace.Namespace{ns}, nil
 }
 
+func (stubNamespaceStore) Ping(_ context.Context) error {
+	return nil
+}
+
 // newTestNamespaces returns a namespace service over the stub store.
 func newTestNamespaces(t *testing.T) *namespace.Service {
 	t.Helper()

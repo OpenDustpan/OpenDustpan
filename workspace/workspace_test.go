@@ -102,6 +102,10 @@ func (m *memStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, err
 	return out, nil
 }
 
+func (m *memStore) Ping(_ context.Context) error {
+	return nil
+}
+
 func (m *memStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
