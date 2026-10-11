@@ -24,6 +24,7 @@ import (
 	"time"
 
 	dustpan "opendustpan.org/opendustpan"
+	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/store/sqlite"
@@ -112,6 +113,17 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
 	base := []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -120,6 +132,9 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListenAddr(addr),
 	}
@@ -332,6 +347,17 @@ func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
 	base := []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -340,6 +366,9 @@ func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 	}
 
@@ -375,6 +404,17 @@ func TestNewServerRejectsBadPublicURL(t *testing.T) {
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
 	_, err = dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -383,6 +423,9 @@ func TestNewServerRejectsBadPublicURL(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithPublicURL("not a url"),
 	)

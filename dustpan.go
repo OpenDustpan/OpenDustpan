@@ -14,6 +14,9 @@
 //		dustpan.WithEventStore(myStore),
 //		dustpan.WithSecretKeyStore(myStore),
 //		dustpan.WithSecretWrapper(myWrapper),
+//		dustpan.WithWorkspaceStore(myStore),
+//		dustpan.WithStateStore(myStore),
+//		dustpan.WithBlobStore(myBlobs),
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
@@ -33,11 +36,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/api/pulumi"
+	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 // ErrMissingOption reports that a required option was not provided.
@@ -59,6 +64,9 @@ type settings struct {
 	eventStore      stack.EventStore
 	secretKeys      secret.KeyStore
 	secretWrapper   secret.Wrapper
+	workspaceStore  workspace.Store
+	stateStore      workspace.StateStore
+	blobStore       blob.Store
 	authenticator   identity.Authenticator
 	authorizer      identity.Authorizer
 	logger          *slog.Logger
@@ -111,6 +119,21 @@ func WithSecretKeyStore(s secret.KeyStore) Option {
 // holds no wrapped key (ADR 23).
 func WithSecretWrapper(w secret.Wrapper) Option {
 	return func(o *settings) { o.secretWrapper = w }
+}
+
+// WithWorkspaceStore sets the workspace persistence port. Required.
+func WithWorkspaceStore(s workspace.Store) Option {
+	return func(o *settings) { o.workspaceStore = s }
+}
+
+// WithStateStore sets the state version persistence port. Required.
+func WithStateStore(s workspace.StateStore) Option {
+	return func(o *settings) { o.stateStore = s }
+}
+
+// WithBlobStore sets the state content persistence port. Required.
+func WithBlobStore(s blob.Store) Option {
+	return func(o *settings) { o.blobStore = s }
 }
 
 // WithAuthenticator sets how access tokens are resolved to principals. Required.
@@ -176,6 +199,7 @@ type Server struct {
 	logger      *slog.Logger
 	listenAddr  string
 	secrets     *secret.Service
+	workspaces  *workspace.Service
 	tlsCertFile string
 	tlsKeyFile  string
 }
@@ -186,6 +210,7 @@ type services struct {
 	stacks     *stack.Service
 	updates    *stack.Updates
 	secrets    *secret.Service
+	workspaces *workspace.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -198,6 +223,9 @@ func NewServer(opts ...Option) (*Server, error) {
 		eventStore:      nil,
 		secretKeys:      nil,
 		secretWrapper:   nil,
+		workspaceStore:  nil,
+		stateStore:      nil,
+		blobStore:       nil,
 		authenticator:   nil,
 		authorizer:      identity.AdminOnly{},
 		logger:          slog.New(slog.DiscardHandler),
@@ -249,6 +277,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		logger:      cfg.logger,
 		listenAddr:  cfg.listenAddr,
 		secrets:     svc.secrets,
+		workspaces:  svc.workspaces,
 		tlsCertFile: cfg.tlsCertFile,
 		tlsKeyFile:  cfg.tlsKeyFile,
 	}, nil
@@ -263,6 +292,18 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 
 	if cfg.secretKeys == nil {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithSecretKeyStore", ErrMissingOption)
+	}
+
+	if cfg.workspaceStore == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithWorkspaceStore", ErrMissingOption)
+	}
+
+	if cfg.stateStore == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithStateStore", ErrMissingOption)
+	}
+
+	if cfg.blobStore == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithBlobStore", ErrMissingOption)
 	}
 
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
@@ -321,12 +362,35 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	return services{namespaces: namespaces, stacks: stacks, updates: updates, secrets: secrets}, nil
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:    cfg.workspaceStore,
+		States:        cfg.stateStore,
+		Blobs:         cfg.blobStore,
+		Namespaces:    namespaces,
+		Now:           cfg.now,
+		MaxStateBytes: 0,
+	})
+	if err != nil {
+		return services{}, fmt.Errorf("workspace service: %w", err)
+	}
+
+	return services{
+		namespaces: namespaces,
+		stacks:     stacks,
+		updates:    updates,
+		secrets:    secrets,
+		workspaces: workspaces,
+	}, nil
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+// Workspaces returns the workspace service the server was wired with.
+func (s *Server) Workspaces() *workspace.Service {
+	return s.workspaces
 }
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With

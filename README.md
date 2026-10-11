@@ -141,6 +141,7 @@ trusts it. It is not part of `make check`.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
+| `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
 | | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |

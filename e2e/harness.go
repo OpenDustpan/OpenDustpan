@@ -23,11 +23,13 @@ import (
 	"time"
 
 	dustpan "opendustpan.org/opendustpan"
+	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 const (
@@ -125,6 +127,8 @@ type serverStore interface {
 	stack.CheckpointStore
 	stack.EventStore
 	secret.KeyStore
+	workspace.Store
+	workspace.StateStore
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -210,18 +214,7 @@ func newServer(
 
 	switch store {
 	case StoreSQLite:
-		sqliteStore, err := sqlite.Open(ctx, dbPath)
-		if err != nil {
-			tb.Fatalf("open sqlite store: %v", err)
-		}
-
-		tb.Cleanup(func() {
-			if closeErr := sqliteStore.Close(); closeErr != nil {
-				tb.Errorf("close sqlite store: %v", closeErr)
-			}
-		})
-
-		st = sqliteStore
+		st = openSQLiteStore(ctx, tb, dbPath)
 	case StorePostgres:
 		st = openPostgresStore(ctx, tb, PostgresURL())
 	default:
@@ -253,6 +246,8 @@ func newServer(
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
 
+	blobs := openTestBlobStore(tb, dbPath)
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -262,6 +257,9 @@ func newServer(
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
 		dustpan.WithSecretWrapper(wrapper),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 	)
 	if err != nil {
@@ -269,6 +267,44 @@ func newServer(
 	}
 
 	return srv.Handler(), st
+}
+
+// openSQLiteStore opens the SQLite file at dbPath for one test.
+//
+//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
+func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverStore {
+	tb.Helper()
+
+	st, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		tb.Fatalf("open sqlite store: %v", err)
+	}
+
+	tb.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			tb.Errorf("close sqlite store: %v", closeErr)
+		}
+	})
+
+	return st
+}
+
+// openTestBlobStore opens a blob store in the test directory holding dbPath.
+func openTestBlobStore(tb testing.TB, dbPath string) *fs.Store {
+	tb.Helper()
+
+	blobs, err := fs.Open(filepath.Join(filepath.Dir(dbPath), "blobs"))
+	if err != nil {
+		tb.Fatalf("open blob store: %v", err)
+	}
+
+	tb.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			tb.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs
 }
 
 // seedSchemaVersion is the deployment format version SeedResources saves.

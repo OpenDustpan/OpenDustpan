@@ -1,6 +1,8 @@
 package dustpan_test
 
 import (
+	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,10 +15,12 @@ import (
 	"time"
 
 	dustpan "opendustpan.org/opendustpan"
+	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 const (
@@ -29,6 +33,7 @@ const (
 type fixture struct {
 	store  *sqlite.Store
 	server *httptest.Server
+	srv    *dustpan.Server
 }
 
 func newFixture(t *testing.T) fixture {
@@ -45,6 +50,17 @@ func newFixture(t *testing.T) fixture {
 		}
 	})
 
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
 	authn, err := identity.NewStaticToken("admin", adminToken)
 	if err != nil {
 		t.Fatalf("authenticator: %v", err)
@@ -58,6 +74,9 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAllowedOrigins(origin),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
@@ -69,7 +88,7 @@ func newFixture(t *testing.T) fixture {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	return fixture{store: st, server: ts}
+	return fixture{store: st, server: ts, srv: srv}
 }
 
 func (f fixture) createNamespace(t *testing.T, name, home string) {
@@ -153,6 +172,113 @@ func TestStackLifecycle(t *testing.T) {
 	status, body = f.do(t, http.MethodGet, "/api/user/stacks?organization=acme", adminToken, "")
 	if status != http.StatusOK || !strings.Contains(body, `"stackName":"prod"`) {
 		t.Fatalf("list stacks: status %d, body %s", status, body)
+	}
+}
+
+func TestWorkspaceLifecycle(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.createNamespace(t, "acme", region)
+
+	svc := f.srv.Workspaces()
+	if svc == nil {
+		t.Fatal("server has no workspace service")
+	}
+
+	w := createLockedWorkspace(t, svc)
+	finalized := uploadWorkspaceState(t, svc, w.ID, `{"version":4,"serial":1,"lineage":"l1"}`)
+	checkWorkspaceContent(t, svc, w.ID, finalized.ID, `{"version":4,"serial":1,"lineage":"l1"}`)
+}
+
+// createLockedWorkspace creates a workspace in acme and locks it for apply.
+func createLockedWorkspace(t *testing.T, svc *workspace.Service) workspace.Workspace {
+	t.Helper()
+
+	name, err := workspace.ParseName("e2e-workspace")
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	w, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	locked, err := svc.Lock(t.Context(), w.ID, "admin", "apply")
+	if err != nil {
+		t.Fatalf("lock workspace: %v", err)
+	}
+
+	return locked
+}
+
+// uploadWorkspaceState declares and uploads content as serial 1 of lineage l1.
+func uploadWorkspaceState(
+	t *testing.T,
+	svc *workspace.Service,
+	id workspace.ID,
+	content string,
+) workspace.StateVersion {
+	t.Helper()
+
+	//nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
+	sum := md5.Sum([]byte(content))
+
+	pending, err := svc.BeginState(t.Context(), id, "admin", workspace.NewState{
+		Lineage: "l1",
+		MD5:     hex.EncodeToString(sum[:]),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
+	})
+	if err != nil {
+		t.Fatalf("begin state: %v", err)
+	}
+
+	finalized, err := svc.Upload(t.Context(), pending.Version.ID, pending.Upload, strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("upload state: %v", err)
+	}
+
+	return finalized
+}
+
+// checkWorkspaceContent proves the current state of id is wantID with content want.
+func checkWorkspaceContent(
+	t *testing.T,
+	svc *workspace.Service,
+	id workspace.ID,
+	wantID workspace.StateVersionID,
+	want string,
+) {
+	t.Helper()
+
+	current, err := svc.Current(t.Context(), id)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	if current.ID != wantID {
+		t.Fatalf("current state = %q, want %q", current.ID, wantID)
+	}
+
+	r, err := svc.Open(t.Context(), current)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+
+	got, err := io.ReadAll(r)
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("close state: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+
+	if string(got) != want {
+		t.Fatalf("state content = %q, want %q", got, want)
 	}
 }
 
@@ -261,32 +387,8 @@ func TestNewServerRequiresPorts(t *testing.T) {
 		t.Fatal("NewServer without stores or authenticator succeeded")
 	}
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	authn, err := identity.NewStaticToken("admin", adminToken)
-	if err != nil {
-		t.Fatalf("authenticator: %v", err)
-	}
-
-	full := []dustpan.Option{
-		dustpan.WithRegion(region),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
-		dustpan.WithAuthenticator(authn),
-	}
+	st, blobs, authn := requireServerPorts(t)
+	full := fullServerOptions(st, blobs, authn)
 
 	cases := []struct {
 		name string
@@ -305,6 +407,30 @@ func TestNewServerRequiresPorts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			checkMissingOption(t, full, tc.drop, tc.name)
+		})
+	}
+}
+
+func TestNewServerRequiresWorkspacePorts(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	full := fullServerOptions(st, blobs, authn)
+
+	cases := []struct {
+		name string
+		drop int
+	}{
+		{name: "workspace store", drop: 8},
+		{name: "state store", drop: 9},
+		{name: "blob store", drop: 10},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			opts := append([]dustpan.Option(nil), full[:tc.drop]...)
 			opts = append(opts, full[tc.drop+1:]...)
 
@@ -313,12 +439,80 @@ func TestNewServerRequiresPorts(t *testing.T) {
 				t.Fatalf("NewServer without %s succeeded", tc.name)
 			}
 
-			if !errors.Is(err, dustpan.ErrMissingOption) &&
-				!errors.Is(err, namespace.ErrMissingDependency) &&
-				!errors.Is(err, stack.ErrMissingDependency) {
-				t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption or ErrMissingDependency", tc.name, err)
+			if !errors.Is(err, dustpan.ErrMissingOption) {
+				t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption", tc.name, err)
 			}
 		})
+	}
+}
+
+// requireServerPorts opens a SQLite store, a blob store and an authenticator.
+func requireServerPorts(t *testing.T) (*sqlite.Store, *fs.Store, *identity.StaticToken) {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	authn, err := identity.NewStaticToken("admin", adminToken)
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	return st, blobs, authn
+}
+
+// fullServerOptions returns every required NewServer option in a fixed order.
+func fullServerOptions(st *sqlite.Store, blobs *fs.Store, authn *identity.StaticToken) []dustpan.Option {
+	return []dustpan.Option{
+		dustpan.WithRegion(region),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithAuthenticator(authn),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
+	}
+}
+
+// checkMissingOption proves NewServer without full[drop] fails.
+func checkMissingOption(t *testing.T, full []dustpan.Option, drop int, name string) {
+	t.Helper()
+
+	opts := append([]dustpan.Option(nil), full[:drop]...)
+	opts = append(opts, full[drop+1:]...)
+
+	_, err := dustpan.NewServer(opts...)
+	if err == nil {
+		t.Fatalf("NewServer without %s succeeded", name)
+	}
+
+	if !errors.Is(err, dustpan.ErrMissingOption) &&
+		!errors.Is(err, namespace.ErrMissingDependency) &&
+		!errors.Is(err, stack.ErrMissingDependency) {
+		t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption or ErrMissingDependency", name, err)
 	}
 }
 
@@ -346,6 +540,17 @@ func TestConsoleDir(t *testing.T) {
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -354,6 +559,9 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithConsoleDir(dir),
 	)
@@ -364,7 +572,7 @@ func TestConsoleDir(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	f := fixture{store: st, server: ts}
+	f := fixture{store: st, server: ts, srv: srv}
 
 	cases := []struct {
 		name, method, path, token, wantBody string
