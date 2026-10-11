@@ -35,7 +35,24 @@ var (
 	ErrTooLarge = errors.New("secret too large")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrKeyNotConfigured reports that no key-encryption key is configured.
+	// The message names the settings that provide it, because this error
+	// reaches operators directly from Encrypt, Decrypt and the start-up
+	// check (ADR 23).
+	ErrKeyNotConfigured = errors.New("no key-encryption key is configured: set " + keyEnvSetting)
+	// ErrWrapperMismatch reports that the configured key-encryption key
+	// matches none of the wrapper IDs of stored data keys. The message names
+	// the settings that provide the key, because this error reaches
+	// operators directly from the start-up check (ADR 23).
+	ErrWrapperMismatch = errors.New(
+		"key-encryption key does not match stored keys: set " + keyEnvSetting + " to the matching key",
+	)
 )
+
+// keyEnvSetting names the settings that provide the key-encryption key: the
+// value in DUSTPAN_KEY_ENCRYPTION_KEY, or the file in
+// DUSTPAN_KEY_ENCRYPTION_KEY_FILE (ADR 23).
+const keyEnvSetting = "DUSTPAN_KEY_ENCRYPTION_KEY or DUSTPAN_KEY_ENCRYPTION_KEY_FILE"
 
 const (
 	formatV1      byte = 1
@@ -120,7 +137,9 @@ type KeyStore interface {
 
 // Config holds the dependencies of a Service.
 type Config struct {
-	Keys       KeyStore
+	Keys KeyStore
+	// Wrapper holds the key-encryption key. It may be nil when no key is
+	// configured; Encrypt and Decrypt then fail with ErrKeyNotConfigured.
 	Wrapper    Wrapper
 	Namespaces *namespace.Service
 	Now        func() time.Time
@@ -137,13 +156,13 @@ type Service struct {
 	maxBatch   int
 }
 
-// NewService returns a Service. Keys, Wrapper and Namespaces are required.
+// NewService returns a Service. Keys and Namespaces are required. Wrapper
+// may be nil when no key-encryption key is configured; Encrypt and Decrypt
+// then fail with ErrKeyNotConfigured.
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Keys == nil:
 		return nil, fmt.Errorf("%w: key store", ErrMissingDependency)
-	case cfg.Wrapper == nil:
-		return nil, fmt.Errorf("%w: key wrapper", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	}
@@ -159,6 +178,44 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{keys: cfg.Keys, wrapper: cfg.Wrapper, namespaces: cfg.Namespaces, now: now, maxBatch: maxBatch}, nil
+}
+
+// CheckWrapper reports whether wrapper can open the data keys in keys, for
+// the start-up check that refuses a key-encryption key that matches none of
+// them (ADR 23). It returns nil when keys holds no wrapped key: a server
+// without a key-encryption key may start while the database holds no wrapped
+// key. Otherwise wrapper must be set, and its ID must name one of the stored
+// wrapper IDs.
+func CheckWrapper(ctx context.Context, keys KeyStore, wrapper Wrapper) error {
+	if keys == nil {
+		return fmt.Errorf("%w: key store", ErrMissingDependency)
+	}
+
+	ids, err := keys.ListWrapperIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list wrapped keys: %w", err)
+	}
+
+	if len(ids) == 0 {
+		return nil
+	}
+
+	if wrapper == nil {
+		return fmt.Errorf("server refuses to start: database holds wrapped keys: %w", ErrKeyNotConfigured)
+	}
+
+	for _, id := range ids {
+		if id == wrapper.ID() {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"server refuses to start: database holds keys wrapped by %q: server holds %q: %w",
+		ids,
+		wrapper.ID(),
+		ErrWrapperMismatch,
+	)
 }
 
 // Encrypt seals each plaintext under the scope's data key, creating the key on
@@ -232,12 +289,18 @@ func (s *Service) dataKey(ctx context.Context, scope Scope, create bool) (cipher
 		if err != nil {
 			return nil, err
 		}
+	case errors.Is(err, ErrKeyNotFound) && s.wrapper == nil:
+		return nil, fmt.Errorf("%w for %s: %w", ErrDecrypt, scope, ErrKeyNotConfigured)
 	case errors.Is(err, ErrKeyNotFound):
 		// Nothing was ever encrypted in this scope.
 		return nil, fmt.Errorf("%w: no key for %s", ErrDecrypt, scope)
 	case err != nil:
 		return nil, fmt.Errorf("get key for %s: %w", scope, err)
 	default:
+	}
+
+	if s.wrapper == nil {
+		return nil, fmt.Errorf("%w for %s: %w", ErrDecrypt, scope, ErrKeyNotConfigured)
 	}
 
 	if stored.WrapperID != s.wrapper.ID() {
@@ -256,6 +319,10 @@ func (s *Service) dataKey(ctx context.Context, scope Scope, create bool) (cipher
 }
 
 func (s *Service) createKey(ctx context.Context, scope Scope) (WrappedKey, error) {
+	if s.wrapper == nil {
+		return WrappedKey{}, fmt.Errorf("create key for %s: %w", scope, ErrKeyNotConfigured)
+	}
+
 	ns, err := s.namespaces.WritableHere(ctx, scope.Namespace)
 	if err != nil {
 		return WrappedKey{}, fmt.Errorf("create key for %s: %w", scope, err)
