@@ -1984,3 +1984,143 @@ func checkPushedState(serial int64, lineage string) func(e2e.Result) error {
 		return nil
 	}
 }
+
+// TestBinaryRunAndRestart proves the binary helpers: RunBinary runs any
+// subcommand against the database of the environment, and StopServer and
+// StartServer stop and start the same server on the same port with the same
+// state. It runs only with E2E_SERVER=binary, on every store under test.
+func TestBinaryRunAndRestart(t *testing.T) {
+	t.Parallel()
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary")
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runBinaryRestartOnStore(t, cli, db)
+		})
+	}
+}
+
+// runBinaryRestartOnStore runs the binary restart steps on one store: a
+// namespace create and an unknown subcommand through RunBinary, one Pulumi
+// stack before the stop, and the same stack read with the same login after
+// the start.
+func runBinaryRestartOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	checkRunBinary(ctx, t, env)
+	writeRestartStack(ctx, t, env)
+	checkServerRestart(ctx, t, env)
+	readRestartStack(ctx, t, env)
+}
+
+// checkRunBinary proves RunBinary against the database of the environment: a
+// namespace create gives exit code 0 and an unknown subcommand gives a
+// non-zero exit with text on stderr.
+func checkRunBinary(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	created := env.RunBinary(ctx, t, "namespace", "create", "--database", env.DatabaseURL(t), e2e.Namespace2)
+	if created.ExitCode != 0 {
+		t.Fatalf("namespace create exits with status %d: %s%s", created.ExitCode, created.Stdout, created.Stderr)
+	}
+
+	if blobDir := env.BlobDir(t); blobDir == "" {
+		t.Fatal("blob directory is empty")
+	}
+
+	unknown := env.RunBinary(ctx, t, "no-such-command")
+	if unknown.ExitCode == 0 {
+		t.Fatal("unknown subcommand exits with status 0")
+	}
+
+	if !strings.Contains(unknown.Stderr, "usage") {
+		t.Fatalf("unknown subcommand stderr lacks usage: %q", unknown.Stderr)
+	}
+}
+
+// writeRestartStack writes one Pulumi stack before the stop, so the restart
+// check proves the same state survives.
+func writeRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("stack init", nil, "stack", "init", qualified),
+		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
+	} {
+		env.Step(ctx, t, s)
+	}
+}
+
+// healthStatus returns the status of GET /healthz through the environment.
+func healthStatus(ctx context.Context, env *e2e.Env) (int, string, error) {
+	return env.APIStatus(ctx, http.MethodGet, "/healthz", "")
+}
+
+// checkServerRestart proves the stop and the start: after StopServer
+// GET /healthz fails, after StartServer it answers 204 again.
+func checkServerRestart(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	env.StopServer(ctx, t)
+
+	status, body, err := healthStatus(ctx, env)
+	if err == nil && status == http.StatusNoContent {
+		t.Fatal("GET /healthz answers 204 after the stop")
+	}
+
+	t.Logf("GET /healthz after the stop: status %d, err %v, body %q", status, err, body)
+
+	env.StartServer(ctx, t)
+
+	status, body, err = healthStatus(ctx, env)
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("GET /healthz after the start: status %d, err %v, body %q", status, err, body)
+	}
+}
+
+// readRestartStack proves the CLI reads the same stack with the same login
+// after the start.
+func readRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	for _, s := range []e2e.StepSpec{
+		step("config get after restart", contains("s3cr3t"), "config", "get", "apiKey"),
+		step("stack ls after restart", stackListed, "stack", "ls", "--json"),
+	} {
+		env.Step(ctx, t, s)
+	}
+}
