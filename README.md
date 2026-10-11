@@ -219,6 +219,11 @@ Kubernetes ignores `HEALTHCHECK` and uses its own probes.
 - [Backup, restore and upgrade](docs/guides/backup-restore-upgrade.md):
   back up the whole installation, check a backup, restore it into an empty
   installation, and upgrade the server.
+- [S3-compatible object storage](docs/guides/s3-blobs.md):
+  hold state content in S3-compatible storage, with the settings, the
+  start probe and the limits.
+- [Observe the server](docs/guides/observe.md):
+  check liveness and readiness, scrape metrics, and read request logs.
 
 ## Configuration
 
@@ -232,6 +237,8 @@ Kubernetes ignores `HEALTHCHECK` and uses its own probes.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
+| `--log-level` | `DUSTPAN_LOG_LEVEL` | `info` (or `debug`, `warn`, `error`) |
+| `--log-format` | `DUSTPAN_LOG_FORMAT` | `json` (or `text`) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
 | `--blob-store` | `DUSTPAN_BLOB_STORE` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
