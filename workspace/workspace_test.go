@@ -5,7 +5,10 @@ import (
 	"crypto/md5" //nolint:gosec // The protocol under test uses MD5 for integrity.
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -504,6 +507,7 @@ func TestStateVersions(t *testing.T) {
 	}{
 		{name: "first state", in: newState("l1", 1, "v1"), content: "v1", want: nil},
 		{name: "same serial", in: newState("l1", 1, "v1b"), content: "v1b", want: workspace.ErrStaleSerial},
+		{name: "lower serial", in: newState("l1", 0, "v0"), content: "v0", want: workspace.ErrStaleSerial},
 		{name: "other lineage", in: newState("l2", 2, "v2"), content: "v2", want: workspace.ErrLineageMismatch},
 		{name: "wrong md5", in: newState("l1", 2, "v2"), content: "tampered", want: workspace.ErrChecksumMismatch},
 		{
@@ -531,7 +535,56 @@ func TestStateVersions(t *testing.T) {
 		}
 	}
 
+	// The outputs document has its own 16 MiB limit, separate from the state
+	// limit the "too large" case above proves.
+	oversized := workspace.NewState{
+		Lineage: "l1",
+		MD5:     sum("v3"),
+		Outputs: make([]byte, (16<<20)+1),
+		Serial:  3,
+		Force:   false,
+	}
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized); !errors.Is(err, workspace.ErrTooLarge) {
+		t.Errorf("oversized outputs: %v, want ErrTooLarge", err)
+	}
+
 	checkCurrent(t, f, "l9", "v9")
+}
+
+// TestForcedStateNeedsTheLock proves force skips the lineage and serial
+// checks but never the lock: a forced begin without the lock fails with
+// ErrNotLocked, and a forced version declared under the lock does not
+// finalize after the lock is lost.
+func TestForcedStateNeedsTheLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	forced := workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true}
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced); !errors.Is(err, workspace.ErrNotLocked) {
+		t.Errorf("forced begin without the lock: %v, want ErrNotLocked", err)
+	}
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced)
+	if err != nil {
+		t.Fatalf("forced begin: %v", err)
+	}
+
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	_, err = f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v9"))
+	if !errors.Is(err, workspace.ErrNotLocked) {
+		t.Errorf("forced upload after losing the lock: %v, want ErrNotLocked", err)
+	}
 }
 
 func checkCurrent(t *testing.T, f fixture, lineage, content string) {
@@ -841,6 +894,95 @@ func TestChecksumMismatchDeletesBlob(t *testing.T) {
 		if !errors.Is(getErr, blob.ErrNotFound) {
 			t.Errorf("get of deleted blob %q: %v, want ErrNotFound", key, getErr)
 		}
+	}
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Errorf("state version status = %q, want pending", stored.Status)
+	}
+}
+
+// listBlobDir returns the slash-separated files under dir, sorted, so tests
+// prove what an upload leaves behind. Empty directories do not count: only
+// objects are blobs.
+func listBlobDir(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var out []string
+
+	walkErr := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return fmt.Errorf("relative blob path: %w", relErr)
+		}
+
+		out = append(out, filepath.ToSlash(rel))
+
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("list blob dir: %v", walkErr)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// TestTooLargeUploadDeletesBlob proves a too-large upload fails with
+// ErrTooLarge and leaves no blob behind: the blob directory lists the same
+// objects before and after the rejection, and the version stays pending.
+func TestTooLargeUploadDeletesBlob(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	blobs, err := fs.Open(dir)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err = f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	before := listBlobDir(t, dir)
+
+	content := strings.Repeat("x", 65)
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, content))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))
+	if !errors.Is(uploadErr, workspace.ErrTooLarge) {
+		t.Fatalf("upload: %v, want ErrTooLarge", uploadErr)
+	}
+
+	if after := listBlobDir(t, dir); !slices.Equal(after, before) {
+		t.Errorf("blob dir = %v, want %v: the rejected upload left an orphan blob", after, before)
 	}
 
 	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)

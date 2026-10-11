@@ -865,6 +865,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
+	// state push rejects a stale serial and another lineage, and accepts
+	// -force.
+	tofuStatePushScenario(t, env)
+
 	// A crashed apply leaves the lock behind, and force-unlock recovers.
 	tofuCrashScenario(t, env)
 
@@ -1577,4 +1581,401 @@ func checkOutputDestroyed(r e2e.Result) error {
 	}
 
 	return nil
+}
+
+// staleSerialDetail is the server detail a stale push shows: the CLI prints
+// the JSON:API error detail go-tfe returns, which holds this sentinel text.
+const staleSerialDetail = "state serial is not newer than the current state"
+
+// lineageMismatchDetail is the server detail a push of another lineage
+// shows, through the same path as staleSerialDetail.
+const lineageMismatchDetail = "state lineage differs from the current state"
+
+// clientImportStale and clientOverwriteSame are the CLI-side refusals of a
+// push without -force: a lower serial cannot import over a newer state, an
+// equal serial cannot overwrite a different state, and another lineage
+// cannot import over an unrelated state (which shares the import wording).
+const (
+	clientImportStale   = "cannot import state"
+	clientOverwriteSame = "cannot overwrite existing state"
+)
+
+// tofuStatePushScenario proves stale-serial rejection and force push: a push
+// of a copy of the current state with its own serial fails, direct API
+// creates with a stale serial and another lineage answer 422, a force push
+// of the same file succeeds and a later pull shows it, and a push of another
+// lineage fails without -force.
+func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	pulled := env.Step(ctx, t, step("state pull before push", contains(`"greeting"`), "state", "pull"))
+
+	var current pulledStateDoc
+
+	if err := json.Unmarshal([]byte(pulled.Stdout), &current); err != nil {
+		t.Fatalf("decode pulled state: %v", err)
+	}
+
+	if current.Lineage == "" {
+		t.Fatal("pulled state has no lineage")
+	}
+
+	// The file carries the current serial with a marker output added. A
+	// lower serial would not survive the force push: the CLI writes file
+	// serial plus one, which would still be stale. The current serial fails
+	// without -force (the CLI stops the import itself, and the server would
+	// answer 422 for a serial that is not newer) and succeeds with -force.
+	stalePath := writePushFile(t, "stale.tfstate", pushedState(t, pulled.Stdout, current.Serial, current.Lineage))
+
+	env.Step(
+		ctx,
+		t,
+		failStep(
+			"state push stale",
+			checkPushRejected(env, "state push stale", staleSerialDetail),
+			"state",
+			"push",
+			stalePath,
+		),
+	)
+	logPushSide(t, env, "state push stale")
+
+	// The CLI may stop a push itself before it reaches the server, so the
+	// harness also calls the create route directly: a lower serial and
+	// another lineage each answer 422 with the JSON:API error the failure
+	// steps prove when the server is the side that rejects. The workspace
+	// must be held for the creates to reach the checks.
+	wsID := env.WorkspaceID(ctx, t)
+	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
+	unlockPath := "/api/v2/workspaces/" + wsID + "/actions/unlock"
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock for stale check",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkDirectRejected(staleSerialDetail),
+		Name:   "stale serial rejected direct",
+		Method: http.MethodPost,
+		Path:   "/api/v2/workspaces/" + wsID + "/state-versions",
+		Body: fmt.Sprintf(
+			`{"data":{"type":"state-versions","attributes":{"serial":%d,"lineage":%q,"md5":%q}}}`,
+			max(current.Serial-1, 0),
+			current.Lineage,
+			"d41d8cd98f00b204e9800998ecf8427e",
+		),
+		Want: http.StatusUnprocessableEntity,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkDirectRejected(lineageMismatchDetail),
+		Name:   "other lineage rejected direct",
+		Method: http.MethodPost,
+		Path:   "/api/v2/workspaces/" + wsID + "/state-versions",
+		Body: fmt.Sprintf(
+			`{"data":{"type":"state-versions","attributes":{"serial":%d,"lineage":%q,"md5":%q}}}`,
+			current.Serial+100,
+			"00000000-0000-0000-0000-000000000000",
+			"d41d8cd98f00b204e9800998ecf8427e",
+		),
+		Want: http.StatusUnprocessableEntity,
+	})
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "unlock after stale check",
+		Method: http.MethodPost,
+		Path:   unlockPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.Step(ctx, t, step("state push force", nil, "state", "push", "-force", stalePath))
+	env.Step(
+		ctx,
+		t,
+		step("state pull after force", checkPushedState(current.Serial, current.Lineage), "state", "pull"),
+	)
+
+	otherPath := writePushFile(
+		t,
+		"other.tfstate",
+		editedState(t, pulled.Stdout, current.Serial+100, "00000000-0000-0000-0000-000000000000"),
+	)
+
+	env.Step(
+		ctx,
+		t,
+		failStep(
+			"state push other lineage",
+			checkPushRejected(env, "state push other lineage", lineageMismatchDetail),
+			"state",
+			"push",
+			otherPath,
+		),
+	)
+	logPushSide(t, env, "state push other lineage")
+}
+
+// pulledStateDoc decodes the serial and lineage of a pulled state document.
+type pulledStateDoc struct {
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+}
+
+// editedState returns pulled with its serial and lineage replaced.
+func editedState(t *testing.T, pulled string, serial int64, lineage string) []byte {
+	t.Helper()
+
+	var fields map[string]json.RawMessage
+
+	if err := json.Unmarshal([]byte(pulled), &fields); err != nil {
+		t.Fatalf("decode pulled state: %v", err)
+	}
+
+	rawSerial, err := json.Marshal(serial)
+	if err != nil {
+		t.Fatalf("encode serial %d: %v", serial, err)
+	}
+
+	rawLineage, err := json.Marshal(lineage)
+	if err != nil {
+		t.Fatalf("encode lineage: %v", err)
+	}
+
+	fields["serial"], fields["lineage"] = rawSerial, rawLineage
+
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("encode edited state: %v", err)
+	}
+
+	return out
+}
+
+// pushedState returns pulled with its serial and lineage replaced and a
+// marker output added, so the pull after a force push proves the pushed
+// state landed whatever serial the CLI sent.
+func pushedState(t *testing.T, pulled string, serial int64, lineage string) []byte {
+	t.Helper()
+
+	doc := editedState(t, pulled, serial, lineage)
+
+	var fields map[string]json.RawMessage
+
+	if err := json.Unmarshal(doc, &fields); err != nil {
+		t.Fatalf("decode edited state: %v", err)
+	}
+
+	var outputs map[string]json.RawMessage
+
+	if raw, ok := fields["outputs"]; ok {
+		if err := json.Unmarshal(raw, &outputs); err != nil {
+			t.Fatalf("decode state outputs: %v", err)
+		}
+	}
+
+	if outputs == nil {
+		outputs = map[string]json.RawMessage{}
+	}
+
+	marker, err := json.Marshal(map[string]string{"value": "forced", "type": "string"})
+	if err != nil {
+		t.Fatalf("encode marker output: %v", err)
+	}
+
+	outputs["pushed"] = marker
+
+	rawOutputs, err := json.Marshal(outputs)
+	if err != nil {
+		t.Fatalf("encode state outputs: %v", err)
+	}
+
+	fields["outputs"] = rawOutputs
+
+	out, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("encode pushed state: %v", err)
+	}
+
+	return out
+}
+
+// writePushFile saves doc for a state push step and returns its path.
+func writePushFile(t *testing.T, name string, doc []byte) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+
+	return path
+}
+
+// checkPushRejected proves the push failed and which side rejected it. When
+// the create reached the server, the CLI output holds the server detail
+// go-tfe printed and the create answers 422 with the JSON:API error
+// document holding it. Otherwise the CLI stopped the push itself, and the
+// output holds its own message.
+func checkPushRejected(env *e2e.Env, step, serverDetail string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		out := r.Stdout + r.Stderr
+
+		if !pushReachedServer(env, step) {
+			return checkClientRefusal(step, out)
+		}
+
+		return checkServerRefusal(env, step, out, serverDetail)
+	}
+}
+
+// checkClientRefusal proves the CLI stopped the push itself with its own
+// import refusal.
+func checkClientRefusal(step, out string) error {
+	if strings.Contains(out, clientImportStale) || strings.Contains(out, clientOverwriteSame) {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"%w: %s output lacks %q or %q: %s",
+		errUnexpected,
+		step,
+		clientImportStale,
+		clientOverwriteSame,
+		out,
+	)
+}
+
+// checkServerRefusal proves the CLI output holds the server detail and the
+// create the step made answers 422 with the JSON:API error document holding
+// it.
+func checkServerRefusal(env *e2e.Env, step, out, serverDetail string) error {
+	if !strings.Contains(out, serverDetail) {
+		return fmt.Errorf("%w: %s output lacks %q: %s", errUnexpected, step, serverDetail, out)
+	}
+
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		e := &entries[i]
+		if e.Step != step || e.Method != http.MethodPost || !strings.HasSuffix(e.Path, "/state-versions") {
+			continue
+		}
+
+		return checkCreateError(step, e, serverDetail)
+	}
+
+	return fmt.Errorf("%w: %s reached no state-versions route", errUnexpected, step)
+}
+
+// checkCreateError proves the recorded create answers 422 with the JSON:API
+// error document holding the detail.
+func checkCreateError(step string, e *e2e.Entry, serverDetail string) error {
+	if e.Status != http.StatusUnprocessableEntity {
+		return fmt.Errorf(
+			"%w: POST state-versions during %q answers %d, want %d: %s",
+			errUnexpected,
+			step,
+			e.Status,
+			http.StatusUnprocessableEntity,
+			e.ResponseBody,
+		)
+	}
+
+	if !strings.Contains(e.ResponseBody, `"errors"`) ||
+		!strings.Contains(e.ResponseBody, `"422"`) ||
+		!strings.Contains(e.ResponseBody, serverDetail) {
+		return fmt.Errorf(
+			"%w: POST state-versions during %q lacks the 422 detail %q: %s",
+			errUnexpected,
+			step,
+			serverDetail,
+			e.ResponseBody,
+		)
+	}
+
+	return nil
+}
+
+// pushReachedServer reports whether the CLI sent a state version create
+// during step: a create means the server rejected the push, none means the
+// CLI stopped it itself.
+func pushReachedServer(env *e2e.Env, step string) bool {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		if e := &entries[i]; e.Step == step && e.Method == http.MethodPost &&
+			strings.HasSuffix(e.Path, "/state-versions") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkDirectRejected proves the direct create answered the JSON:API error
+// with the detail.
+func checkDirectRejected(wantDetail string) func(string) error {
+	return func(body string) error {
+		if !strings.Contains(body, `"errors"`) ||
+			!strings.Contains(body, `"422"`) ||
+			!strings.Contains(body, wantDetail) {
+			return fmt.Errorf("%w: direct create lacks the 422 detail %q: %s", errUnexpected, wantDetail, body)
+		}
+
+		return nil
+	}
+}
+
+// logPushSide records which side rejected step's push: a create request
+// during the step means the server answered, otherwise the CLI stopped the
+// push itself.
+func logPushSide(t *testing.T, env *e2e.Env, step string) {
+	t.Helper()
+
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		e := &entries[i]
+		if e.Step == step && e.Method == http.MethodPost && strings.HasSuffix(e.Path, "/state-versions") {
+			t.Logf("%s rejected server-side: POST %s answers %d", step, e.Path, e.Status)
+
+			return
+		}
+	}
+
+	t.Logf("%s rejected client-side: the CLI stopped the push itself", step)
+}
+
+// checkPushedState proves the pull after a force push shows the pushed
+// state: its lineage, its marker output, and the pushed serial with the
+// increment of one the CLI writes on top.
+func checkPushedState(serial int64, lineage string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		var got pulledStateDoc
+
+		if err := json.Unmarshal([]byte(r.Stdout), &got); err != nil {
+			return fmt.Errorf("%w: decode pulled state: %w", errUnexpected, err)
+		}
+
+		if got.Lineage != lineage || (got.Serial != serial && got.Serial != serial+1) {
+			return fmt.Errorf(
+				"%w: pulled serial %d lineage %q, want %d or %d of %q",
+				errUnexpected,
+				got.Serial,
+				got.Lineage,
+				serial,
+				serial+1,
+				lineage,
+			)
+		}
+
+		if !strings.Contains(r.Stdout, `"pushed"`) {
+			return fmt.Errorf("%w: pulled state lacks the pushed marker output: %s", errUnexpected, r.Stdout)
+		}
+
+		return nil
+	}
 }
