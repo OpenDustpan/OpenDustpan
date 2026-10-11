@@ -8,9 +8,9 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog docs-lint test test-postgres test-s3 e2e upgrade-test generate build image-smoke
+.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 e2e upgrade-test generate build image-smoke
 
-check: lint nilaway vuln semgrep trivy trufflehog docs-lint test ## Everything CI checks.
+check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -52,6 +52,13 @@ trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Docke
 # network failure can fail this target. Exit code 183 means a secret was found.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
 	trufflehog git file://. --results=verified,unknown --fail --no-update
+
+# The same platform pairs as scripts/release-build.sh. The release archives
+# and the container image ship these files (third_party_licenses/).
+RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+
+licenses: ## Each module linked into the binary has a license file to ship, on each release platform.
+	./scripts/third-party-licenses.sh --check $(RELEASE_PLATFORMS)
 
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
