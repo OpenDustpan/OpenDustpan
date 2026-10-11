@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -876,5 +878,211 @@ func TestConsoleDir(t *testing.T) {
 				t.Fatalf("status %d body %q, want %d containing %q", status, body, tc.want, tc.wantBody)
 			}
 		})
+	}
+}
+
+// openBackupTarget opens a file-system backup target under a temporary
+// directory, for the backup wiring tests.
+func openBackupTarget(t *testing.T, name string) *fs.Store {
+	t.Helper()
+
+	target, err := fs.Open(filepath.Join(t.TempDir(), name))
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	return target
+}
+
+func TestNewServerWithoutBackupTargetBuildsNoBackupService(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+
+	srv, err := dustpan.NewServer(fullServerOptions(st, blobs, authn)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	if srv.Backups() != nil {
+		t.Fatal("server without a backup target builds a backup service, want nil")
+	}
+}
+
+// TestBackupTargetComesOnlyFromTheOption proves WithBackupTarget is the only
+// way the target gets in: a request that names another target in the query, a
+// header and the body leaves the service and the other directory untouched.
+func TestBackupTargetComesOnlyFromTheOption(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	target := openBackupTarget(t, "backup-target")
+
+	srv, err := dustpan.NewServer(append(
+		fullServerOptions(st, blobs, authn),
+		dustpan.WithBackupTarget(target, "dir:/var/backups"),
+	)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	before := srv.Backups()
+	if before == nil {
+		t.Fatal("server with a backup target builds no backup service")
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	evil := filepath.Join(t.TempDir(), "evil")
+	sendEvilTarget(t, ts.URL, evil)
+
+	if srv.Backups() != before {
+		t.Fatal("a request changed the backup service, want the option to stay the only way in")
+	}
+
+	if _, statErr := os.Stat(evil); !os.IsNotExist(statErr) {
+		t.Fatalf("request reached %s, want the target unchanged", evil)
+	}
+}
+
+// sendEvilTarget sends a request that names another backup target in the
+// query, a header and the body. No route reads it.
+func sendEvilTarget(t *testing.T, base, evil string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		base+"/api/server/backups?target="+evil,
+		strings.NewReader(`{"target":"dir:`+evil+`"}`),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "token "+adminToken)
+	req.Header.Set("X-Backup-Target", "dir:"+evil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post evil target: %v", err)
+	}
+
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close body: %v", closeErr)
+	}
+}
+
+// TestRunMarksRunningBackupsFailed proves the server marks running backups
+// failed at start (ADR 30 decision 9): a running row from before the stop
+// reads failed with error text after Run starts.
+func TestRunMarksRunningBackupsFailed(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	target := openBackupTarget(t, "backup-target")
+
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	seedRunningBackup(t, st, now)
+
+	srv, err := dustpan.NewServer(append(
+		fullServerOptions(st, blobs, authn),
+		dustpan.WithBackupTarget(target, "dir:/var/backups"),
+		dustpan.WithClock(func() time.Time { return now }),
+		dustpan.WithListenAddr("127.0.0.1:0"),
+	)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- srv.Run(ctx)
+	}()
+
+	waitForFailedBackup(t, st, "bkp-restart00000000001", now)
+
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run server: %v", err)
+	}
+}
+
+// seedRunningBackup stores one running backup row, as a stop during a backup leaves it.
+func seedRunningBackup(t *testing.T, st *sqlite.Store, now time.Time) {
+	t.Helper()
+
+	running := backup.Record{
+		StartedAt: now,
+		EndedAt:   time.Time{},
+		ID:        "bkp-restart00000000001",
+		Target:    "dir:/var/backups",
+		Error:     "",
+		State:     backup.StateRunning,
+	}
+
+	if err := st.CreateBackup(t.Context(), running); err != nil {
+		t.Fatalf("create running backup: %v", err)
+	}
+}
+
+// waitForFailedBackup waits until id reads failed, then checks the row.
+func waitForFailedBackup(t *testing.T, st *sqlite.Store, id backup.ID, now time.Time) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		row, err := st.GetBackup(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get backup: %v", err)
+		}
+
+		if row.State == backup.StateFailed {
+			checkFailedRow(t, row, now)
+
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("backup %s = %+v, want failed after start", id, row)
+		}
+
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-t.Context().Done():
+			timer.Stop()
+			t.Fatal("test ended before the server marked the running backup failed")
+		}
+	}
+}
+
+// checkFailedRow proves row failed with the stop text, keeping its start time.
+func checkFailedRow(t *testing.T, row backup.Record, now time.Time) {
+	t.Helper()
+
+	if row.Error != "server stopped during backup" {
+		t.Fatalf("backup error = %q, want the stop text", row.Error)
+	}
+
+	if !row.StartedAt.Equal(now) || !row.EndedAt.Equal(now) {
+		t.Fatalf("backup times = %v to %v, want %v to %v", row.StartedAt, row.EndedAt, now, now)
 	}
 }

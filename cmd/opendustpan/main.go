@@ -68,6 +68,11 @@ var (
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
+	// errBackupTarget reports a backup target with an unknown form. It shows
+	// the allowed forms, so the operator knows what to set.
+	errBackupTarget = errors.New(
+		"backup target must be dir:/path: set --backup-target (DUSTPAN_BACKUP_TARGET)",
+	)
 )
 
 // version is the server version. The build stamps it with
@@ -183,6 +188,7 @@ type serveFlags struct {
 	tlsKey               string
 	publicURL            string
 	blobDir              string
+	backupTarget         string
 	logLevel             string
 	logFormat            string
 	maxCheckpointBytes   int64
@@ -195,6 +201,12 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	f.common.register(fs)
 	f.registerNet(fs)
 	f.registerLimits(fs)
+	fs.StringVar(
+		&f.backupTarget,
+		"backup-target",
+		env("DUSTPAN_BACKUP_TARGET", ""),
+		"backup target dir:/path, empty means no backups (DUSTPAN_BACKUP_TARGET)",
+	)
 }
 
 // registerNet registers the network and console flags.
@@ -312,7 +324,23 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		}
 	}()
 
-	srv, err := dustpan.NewServer(f.serverOptions(st, blobs, authn, wrapper, logger)...)
+	backupTarget, err := openBackupTarget(f.backupTarget)
+	if err != nil {
+		return err
+	}
+
+	if backupTarget != nil {
+		defer func() {
+			if closeErr := backupTarget.Close(); closeErr != nil {
+				logger.WarnContext(ctx, "close backup target", slog.String("error", closeErr.Error()))
+			}
+		}()
+	}
+
+	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
+	opts = append(opts, f.backupOptions(backupTarget)...)
+
+	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
 	}
@@ -377,6 +405,54 @@ func openBlobs(database, flagDir string) (*blobfs.Store, error) {
 	}
 
 	return blobs, nil
+}
+
+// openBackupTarget opens the backup target in raw as a blob store. Empty
+// means no backup target is configured: it returns nil without an error. A
+// dir:/path target opens the local directory, creating it owner-only, as a
+// backup holds OpenTofu state in plain text. An s3:// target stays reserved
+// for a later change (issue #158): it is an error here. Anything else is an
+// error that shows the allowed forms.
+//
+//nolint:nilnil // No target without an error means backups stay off.
+func openBackupTarget(raw string) (*blobfs.Store, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(trimmed, "s3://") {
+		return nil, fmt.Errorf("backup target %q: s3 targets are not supported yet: %w", trimmed, errBackupTarget)
+	}
+
+	dir, ok := strings.CutPrefix(trimmed, "dir:")
+	if !ok || strings.TrimSpace(dir) == "" {
+		return nil, fmt.Errorf("backup target %q: %w", trimmed, errBackupTarget)
+	}
+
+	dir = strings.TrimSpace(dir)
+
+	if err := os.MkdirAll(dir, blobDirPerm); err != nil {
+		return nil, fmt.Errorf("create backup target directory: %w", err)
+	}
+
+	target, err := blobfs.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	return target, nil
+}
+
+// backupOptions returns the NewServer backup option for the opened target, or
+// none when no backup target is configured. WithBackupTarget is the only way
+// the target gets in: no request field, header or query value sets it.
+func (f *serveFlags) backupOptions(target *blobfs.Store) []dustpan.Option {
+	if target == nil {
+		return nil
+	}
+
+	return []dustpan.Option{dustpan.WithBackupTarget(target, strings.TrimSpace(f.backupTarget))}
 }
 
 // checkTLSFlags requires both TLS files or none. It names the missing one,

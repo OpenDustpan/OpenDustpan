@@ -4,14 +4,18 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/backup"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -82,6 +86,7 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -100,6 +105,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -491,6 +497,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       nil,
 	}
 
 	cases := []struct {
@@ -513,5 +520,108 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 				t.Fatalf("NewHandler without %s succeeded", tc.name)
 			}
 		})
+	}
+}
+
+// stubBackupExporter answers an empty export, for the handler backup test.
+type stubBackupExporter struct{}
+
+func (stubBackupExporter) Export(_ context.Context, _ io.Writer) (backup.Summary, error) {
+	return backup.Summary{
+		Dialect:       "",
+		HomeRegions:   nil,
+		WrapperIDs:    nil,
+		RowCounts:     nil,
+		Blobs:         nil,
+		SchemaVersion: 0,
+	}, nil
+}
+
+// stubBackupRegistry answers no rows, for the handler backup test.
+type stubBackupRegistry struct{}
+
+func (stubBackupRegistry) CreateBackup(_ context.Context, _ backup.Record) error { return nil }
+
+func (stubBackupRegistry) FinishBackup(
+	_ context.Context, _ backup.ID, _ backup.State, _ string, _ time.Time,
+) (backup.Record, error) {
+	return backup.Record{
+		StartedAt: time.Time{},
+		EndedAt:   time.Time{},
+		ID:        "",
+		Target:    "",
+		Error:     "",
+		State:     "",
+	}, nil
+}
+
+func (stubBackupRegistry) GetBackup(_ context.Context, _ backup.ID) (backup.Record, error) {
+	return backup.Record{}, backup.ErrNotFound
+}
+
+func (stubBackupRegistry) ListBackups(_ context.Context) ([]backup.Record, error) { return nil, nil }
+
+func (stubBackupRegistry) FailRunningBackups(_ context.Context, _ time.Time, _ string) error {
+	return nil
+}
+
+// TestNewHandlerKeepsBackupService proves the backup service passes through
+// Config untouched: the handler keeps it, and nil stays nil. The target never
+// comes from a request: no handler field holds it.
+func TestNewHandlerKeepsBackupService(t *testing.T) {
+	t.Parallel()
+
+	live, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open live store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := live.Close(); closeErr != nil {
+			t.Errorf("close live store: %v", closeErr)
+		}
+	})
+
+	target, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	service, err := backup.NewService(backup.Config{
+		Exporter:    stubBackupExporter{},
+		Registry:    stubBackupRegistry{},
+		Blobs:       live,
+		Target:      target,
+		TargetName:  "dir:/var/backups",
+		Now:         nil,
+		Version:     "",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: stubAuthenticator{},
+		Authorizer:    stubAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       service,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if handler.Backups() != service {
+		t.Fatal("handler keeps another backup service, want the configured one")
+	}
+
+	if newTestHandler(t).Backups() != nil {
+		t.Fatal("handler without a backup target builds a backup service, want nil")
 	}
 }
