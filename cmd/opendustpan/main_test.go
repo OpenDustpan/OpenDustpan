@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -425,6 +426,83 @@ func TestServeTLSAndPublicURLFlags(t *testing.T) {
 				t.Fatalf("serve %s: err = %v, want it to name %s", tc.name, err, tc.want)
 			}
 		})
+	}
+}
+
+// newTestFlagSet registers serve flags on a new set, so tests read defaults.
+func newTestFlagSet(f *serveFlags) *flag.FlagSet {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	f.register(fs)
+
+	return fs
+}
+
+//nolint:paralleltest // serve reads process environment, so this test sets it and runs its cases in order.
+func TestServeLogFlags(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
+
+	database := "--database"
+	path := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "bad log level",
+			args: []string{database, path, "--log-level", "verbose"},
+			want: "--log-level",
+		},
+		{
+			name: "bad log format",
+			args: []string{database, path, "--log-format", "yaml"},
+			want: "--log-format",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := serve(t.Context(), tc.args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("serve %s: err = %v, want it to name %s", tc.name, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestServeLogFlagDefaults(t *testing.T) {
+	t.Parallel()
+
+	var f serveFlags
+
+	fs := newTestFlagSet(&f)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if f.logLevel != "info" {
+		t.Fatalf("log level = %q, want info", f.logLevel)
+	}
+
+	if f.logFormat != "json" {
+		t.Fatalf("log format = %q, want json", f.logFormat)
+	}
+
+	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
+		t.Fatalf("default log flags: %v", err)
+	}
+
+	f.logLevel = "debug"
+	f.logFormat = "text"
+
+	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
+		t.Fatalf("debug/text log flags: %v", err)
+	}
+
+	logger, err := f.loggerFor(io.Discard)
+	if err != nil || logger == nil {
+		t.Fatalf("logger for debug/text: logger %v, err %v", logger, err)
 	}
 }
 
