@@ -43,16 +43,19 @@ set`) pass too. Delta checkpoints and journaling are not part of it.
 **Goal.** A team can use OpenDustpan as the remote backend of OpenTofu, next to
 the Pulumi CLI, on one node.
 
-**Exit test.** The e2e suite drives `tofu init`, `plan`, `apply`, `destroy`,
-`state pull`/`push` and `force-unlock` through the TFE-compatible API, over
-TLS, on SQLite and on PostgreSQL. The decisions of milestone 2 can refine
-it.
+**Exit test.** On Linux, for each OpenTofu version in the e2e matrix, on
+SQLite and on PostgreSQL, over TLS, the e2e suite drives `init`, `plan`,
+`apply`, `output` and `state pull`. It drives `state push` (the server rejects
+a stale serial and accepts `-force`). It drives a lock held by another
+principal and `force-unlock`, and recovery after a crashed `apply`. It drives
+`workspace new`, `workspace list` and `workspace select`, and `destroy`. The
+full Pulumi scenario still passes on the same server.
 
 | Where | Item | Part | State |
 | --- | --- | --- | --- |
-| server | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all | discussing |
-| server | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules | 3: OpenTofu state | discussing |
-| server | [RFC 35](rfc/0035-packaging.md) Packaging and installation | TLS, binary, container image | draft |
+| server | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all | accepted (ADR 25) |
+| server | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules | 3: OpenTofu state | accepted (ADR 26) |
+| server | [RFC 35](rfc/0035-packaging.md) Packaging and installation | TLS, binary, container image | accepted (ADR 27) |
 | server | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle | the rest: soft delete, move, workspace lifecycle, tags as labels (RFC 4) | draft |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views | unit list across both tools, "connect your CLI" snippet | draft |
 

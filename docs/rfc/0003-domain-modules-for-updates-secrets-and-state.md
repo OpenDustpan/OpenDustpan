@@ -13,6 +13,7 @@ undecided proposal to `docs/rfc/`.
 
 Part 1, the Pulumi update cycle, is accepted as ADR 20.
 Part 2, secrets, is accepted as ADR 23.
+Part 3, OpenTofu state, is accepted as ADR 26.
 
 ## Context
 
