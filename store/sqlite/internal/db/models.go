@@ -63,6 +63,25 @@ type StackTag struct {
 	Value   string
 }
 
+type StateVersion struct {
+	ID                string
+	WorkspaceID       string
+	Status            string
+	Serial            int64
+	Lineage           string
+	Md5               []byte
+	Size              int64
+	ContentKey        string
+	Outputs           []byte
+	Force             bool
+	UploadDigest      []byte
+	UploadExpiresAtMs int64
+	Holder            string
+	LockID            string
+	CreatedAtMs       int64
+	FinalizedAtMs     int64
+}
+
 type Update struct {
 	StackID          string
 	ID               string
@@ -84,4 +103,18 @@ type UpdateEvent struct {
 	Sequence    int64
 	TimestampMs int64
 	Payload     []byte
+}
+
+type Workspace struct {
+	ID                    string
+	Namespace             string
+	Name                  string
+	Revision              int64
+	LockID                string
+	LockHolder            string
+	LockReason            string
+	LockedAtMs            int64
+	CurrentStateVersionID string
+	CreatedAtMs           int64
+	UpdatedAtMs           int64
 }
