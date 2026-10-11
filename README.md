@@ -29,7 +29,7 @@ or HashiCorp.
 
 ## Try it
 
-Requires Go 1.27.1+, the Pulumi CLI and OpenTofu.
+Requires Go 1.27.2+, the Pulumi CLI and OpenTofu.
 
 Build the server. Generate the two secrets it needs. The administrator
 signs in with the admin token. The key-encryption key protects secret
