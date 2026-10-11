@@ -2,6 +2,10 @@
 // capture the SQL data of an installation and load it back, and the registry
 // of the backups table.
 //
+// A backup holds wrapped data keys but never the key-encryption key that
+// unwraps them, so a backup alone cannot decrypt secrets. OpenTofu state
+// content travels in plain text, as the server stores it: protect the target.
+//
 // The package holds no SQL and no HTTP. Each store adapter (SQLite,
 // PostgreSQL) implements these ports in a later change. The conformance suite
 // store/storetest.RunBackup exercises them before any adapter does.
@@ -150,7 +154,9 @@ var (
 // dump. The returned Summary describes what was captured: the dialect, the
 // schema version, the home regions, the wrapper IDs, the row count of each
 // table in Tables, and the blob references. It returns storage errors
-// without a dedicated value.
+// without a dedicated value. Export stops and returns promptly when w.Write
+// reports an error, so a failed target unblocks the backup instead of
+// hanging it.
 type Exporter interface {
 	// Export captures the SQL data in one read transaction and writes it to
 	// w, so concurrent writes land all in the capture or all out of it.
