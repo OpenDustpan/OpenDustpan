@@ -144,26 +144,37 @@ with its fixed list of fields, is not part of this decision.
     sealed every row.
 12. **The key, with no silent default.** The server needs a key-encryption key
     to seal state. The project owner decided this on 2026-10-11:
-    - `DUSTPAN_KEY_ENCRYPTION_KEY` and `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` supply
-      the key, as ADR 23 sets.
-    - When the operator supplies no key and `serve` runs on a terminal (TTY),
-      `serve` asks before it makes a key file. The prompt says where the
-      server will write the file. It also says that an operator who loses the
-      file loses every secret that the key encrypts, and that nobody can
-      recover them.
-      The server makes the file (32 random bytes, readable by the owner only)
-      only when the operator agrees. A log line names the file. The issue
-      chooses the default path.
-    - When the operator supplies no key and no terminal is present, `serve`
-      stops with an error that names `DUSTPAN_KEY_ENCRYPTION_KEY` and
-      `DUSTPAN_KEY_ENCRYPTION_KEY_FILE`. The server never makes a key without
-      the prompt.
-    - The server does not block the single binary in a container. In a
-      container there is often no terminal, so the operator supplies the key.
-      The documents for the reference container deployment strongly recommend
-      a mounted key file or the environment variable.
-    - The upgrade check (ADR 33) reports an installation that holds OpenTofu
-      state and has no key.
+    - **Sources.** `DUSTPAN_KEY_ENCRYPTION_KEY` holds the key, as ADR 23
+      sets. The key file has a flag now, in the style of `--tls-key`:
+      `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). The
+      flag holds a path, never the key, so ADR 23 decision 1 still holds.
+    - **Default path.** The default key file is `dustpan.key` next to the
+      SQLite database, as for `--blob-dir`. With PostgreSQL, it is in the
+      working directory.
+    - **Prompt on a terminal.** When no key and no key file exist, and `serve`
+      runs on a terminal (TTY), `serve` asks before it makes a key file. The
+      prompt says where the server will write the file. It also says that an
+      operator who loses the file loses every secret that the key encrypts,
+      and that nobody can recover them. The server makes the file only when
+      the operator agrees.
+    - **Opt-in without a terminal.** `--generate-key-encryption-key`
+      (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`) makes the key file with no
+      prompt. It is for an operator who chose the single binary with no
+      terminal on purpose. It never overwrites a file that exists.
+    - **Error.** When no key and no key file exist, no terminal is present
+      and the opt-in is not set, `serve` stops before it opens the database.
+      The error names `--generate-key-encryption-key`,
+      `--key-encryption-key-file` and `DUSTPAN_KEY_ENCRYPTION_KEY`. The
+      server never makes a key without the prompt or the opt-in.
+    - **Made file.** The server writes 32 random bytes in base64 (ADR 23
+      decision 2), readable by the owner only. At each start, a log line
+      names the path of the key file that the server uses. No log line holds
+      the key.
+    - **Containers.** The server does not block the single binary in a
+      container. The documents for the reference container deployment
+      strongly recommend a mounted key file or the environment variable.
+    - **Upgrade check.** The upgrade check (ADR 33) reports an installation
+      that holds OpenTofu state and has no key.
 13. **The audit store.** RFC 22 stays open for the full audit log. This ADR
     adds the smallest store that decision 5 needs: append-only entries in
     SQL, with a conformance suite and a REST route to list them. No API
@@ -232,8 +243,8 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
 - **ADR 23, decisions 2 and 3:** "The server never generates the key", and
   "If the database holds no wrapped key and the operator sets no key, the
   server starts." After decision 12, `serve` makes a key file after the
-  prompt on a terminal, and stops with an error when no key and no terminal
-  are present.
+  prompt on a terminal or with the opt-in, and stops with an error when no
+  key, no terminal and no opt-in are present.
 
 ## Consequences
 
@@ -253,8 +264,9 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   The audit store grows with each run until RFC 22 decides retention.
 - A hash chain puts the appends of one namespace in a sequence. Each append
   reads the last entry of its namespace in the same transaction.
-- Every installation now needs a key-encryption key, supplied or made after
-  the prompt. A server with no key and no terminal does not start. The e2e
+- Every installation now needs a key-encryption key, supplied, or made after
+  the prompt or with the opt-in. A server with no key, no terminal and no
+  opt-in does not start. The e2e
   suite, the container image and its documents must supply a key.
 - A lost key means lost OpenTofu state, as it means lost secrets for the
   Pulumi CLI (ADR 23). A key file next to the data does not protect a backup
