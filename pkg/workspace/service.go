@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -247,7 +248,7 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 		}
 	}
 
-	return s.createPending(ctx, w, in, sum)
+	return s.createPending(ctx, w, in, sum, "")
 }
 
 // Upload stores the content of a pending state version and makes it current.
@@ -396,6 +397,220 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 	return r, nil
 }
 
+// History returns the finalized state versions of the workspace, newest
+// first, with the total count of finalized versions.
+func (s *Service) History(ctx context.Context, id ID, page Page) ([]StateVersion, int, error) {
+	list, total, err := s.states.ListStateVersions(ctx, id, page)
+	if err != nil {
+		return nil, 0, fmt.Errorf("history of %s: %w", id, err)
+	}
+
+	return list, total, nil
+}
+
+// Restore makes the finalized state version from current again as a new,
+// forced version, so OpenTofu reads the old bytes with the next apply. The
+// workspace must be unlocked or locked by holder; a lock that another
+// principal holds gives ErrLockedByOther. The service takes the lock when it
+// is free and releases it at the end, also on error. A lock the caller
+// already holds stays.
+//
+// The new version keeps the lineage, serial, MD5 and size of the old one,
+// sets Force and RestoredFrom, and becomes current through the same pending
+// and finalize path as an upload, so the lock and fence checks stay in the
+// store. The content is copied to its own blob key with the MD5 checked while
+// it streams; a mismatch deletes the new key. The service never parses or
+// rewrites state content. A restore repeats the serial of the old version in
+// the history, as `tofu state push -force` does. A retried restore answers
+// the version the first call made current and writes nothing new, but still
+// needs the workspace unlocked or held by holder.
+func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holder string) (StateVersion, error) {
+	if holder == "" {
+		return StateVersion{}, fmt.Errorf("%w: restore without a holder", ErrNotLocked)
+	}
+
+	src, err := s.states.GetStateVersion(ctx, from)
+	if err != nil {
+		return StateVersion{}, fmt.Errorf("restore %s from %s: %w", id, from, err)
+	}
+
+	if src.Workspace != id || src.Status != StatusFinalized {
+		return StateVersion{}, fmt.Errorf("%w: state version %s", ErrStateVersionNotFound, from)
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return StateVersion{}, fmt.Errorf("restore %s: %w", id, err)
+	}
+
+	if retried, found, retryErr := s.restoredCurrent(ctx, id, from, holder); retryErr != nil || found {
+		return retried, retryErr
+	}
+
+	w, release, err := s.takeRestoreLock(ctx, w, holder)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	sv, err := s.copyState(ctx, w, src)
+	if !release {
+		return sv, err
+	}
+
+	_, unlockErr := s.Unlock(ctx, id, holder)
+
+	return sv, errors.Join(err, unlockErr)
+}
+
+// takeRestoreLock holds w for holder: it takes the lock when w is free and
+// reports whether the caller must release it afterwards.
+func (s *Service) takeRestoreLock(ctx context.Context, w Workspace, holder string) (Workspace, bool, error) {
+	switch {
+	case !w.Lock.Locked():
+		locked, err := s.Lock(ctx, w.ID, holder, "restore")
+		if err != nil {
+			return Workspace{}, false, s.mapRestoreLockError(ctx, w.ID, holder, err)
+		}
+
+		return locked, true, nil
+	case w.Lock.Holder != holder:
+		return Workspace{}, false, fmt.Errorf("restore %s: %w", w.ID, w.heldBy(holder))
+	default:
+		return w, false, nil
+	}
+}
+
+// restoredCurrent answers the current version when it already restores from,
+// without taking the lock. Found reports a retry.
+func (s *Service) restoredCurrent(
+	ctx context.Context,
+	id ID,
+	from StateVersionID,
+	holder string,
+) (StateVersion, bool, error) {
+	var none StateVersion
+
+	current, err := s.states.CurrentStateVersion(ctx, id)
+	switch {
+	case errors.Is(err, ErrNoState):
+		return none, false, nil
+	case err != nil:
+		return none, false, fmt.Errorf("current state of %s: %w", id, err)
+	case current.RestoredFrom != from:
+		return none, false, nil
+	}
+
+	fresh, err := s.GetByID(ctx, id)
+	if err != nil {
+		return none, false, fmt.Errorf("restore %s: %w", id, err)
+	}
+
+	if fresh.Lock.Locked() {
+		if lockErr := fresh.heldBy(holder); lockErr != nil {
+			return none, false, fmt.Errorf("restore %s: %w", fresh.ID, lockErr)
+		}
+	}
+
+	return current, true, nil
+}
+
+// mapRestoreLockError names the holder when a take of a free workspace loses
+// a race to another principal. ErrLocked and ErrConcurrentModification both
+// mean the stored workspace changed under the fetch, so a fresh read decides
+// the sentinel: a lock another principal holds gives ErrLockedByOther.
+func (s *Service) mapRestoreLockError(ctx context.Context, id ID, holder string, err error) error {
+	if !errors.Is(err, ErrLocked) && !errors.Is(err, ErrConcurrentModification) {
+		return err
+	}
+
+	fresh, freshErr := s.GetByID(ctx, id)
+	if freshErr != nil {
+		return err
+	}
+
+	if lockErr := fresh.heldBy(holder); errors.Is(lockErr, ErrLockedByOther) {
+		return fmt.Errorf("restore %s: %w", id, lockErr)
+	}
+
+	return err
+}
+
+// copyState copies src to a new blob key and makes it current as a forced
+// version that records src. The blob lands before the finalize, so a
+// committed version never names a missing blob.
+func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) (StateVersion, error) {
+	// The hex MD5 in NewState is display only; createPending stores the
+	// validated sum passed alongside it, which is src.MD5 here.
+	pending, err := s.createPending(ctx, w, NewState{
+		Lineage: src.Lineage,
+		MD5:     hex.EncodeToString(src.MD5[:]),
+		Outputs: src.Outputs,
+		Serial:  src.Serial,
+		Force:   true,
+	}, src.MD5, src.ID)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	key, err := attemptKey(pending.Version)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	size, err := s.copyBlob(ctx, key, src)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+	}
+
+	sv := pending.Version
+	sv.Status = StatusFinalized
+	sv.FinalizedAt = s.clock()
+	sv.Size = size
+	sv.Content = key
+
+	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
+		err = fmt.Errorf("finalize restored state %s: %w", sv.ID, err)
+		if rejected(err) {
+			// Nothing was written, so this attempt's blob is an orphan.
+			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+		}
+
+		// The outcome is unknown; the version may point at this blob. Keep it.
+		return StateVersion{}, err
+	}
+
+	return sv, nil
+}
+
+// copyBlob copies the content of src under key, checking size and MD5 as it
+// streams. On any mismatch the object is deleted.
+func (s *Service) copyBlob(ctx context.Context, key blob.Key, src StateVersion) (int64, error) {
+	r, err := s.blobs.Get(ctx, src.Content)
+	if err != nil {
+		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
+	}
+
+	size, storeErr := s.store(ctx, key, src.MD5, r)
+	closeErr := r.Close()
+
+	switch {
+	case storeErr != nil:
+		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, errors.Join(storeErr, closeErr))
+	case closeErr != nil:
+		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, errors.Join(
+			closeErr,
+			s.blobs.Delete(ctx, key),
+		))
+	default:
+		return size, nil
+	}
+}
+
 // confirmRetry answers a retried upload of a finalized version: the same
 // content succeeds without being stored again, other content is denied.
 func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion, error) {
@@ -436,6 +651,7 @@ func (s *Service) createPending(
 	w Workspace,
 	in NewState,
 	sum [md5.Size]byte,
+	restoredFrom StateVersionID,
 ) (PendingState, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
@@ -465,7 +681,7 @@ func (s *Service) createPending(
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
-		RestoredFrom:    "",
+		RestoredFrom:    restoredFrom,
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence); err != nil {

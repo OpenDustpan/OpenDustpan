@@ -1187,3 +1187,732 @@ func TestDiscardJSONRenderingExpiryAfterFinalize(t *testing.T) {
 		t.Errorf("expired capability after finalize: %v, want ErrUploadDenied", discardErr)
 	}
 }
+
+// pushVersion pushes one state version as alice with its own finalize time,
+// so the history order is deterministic, and returns the current version.
+func pushVersion(t *testing.T, f fixture, serial int64, content string) workspace.StateVersion {
+	t.Helper()
+
+	*f.now = f.now.Add(time.Second)
+
+	if err := f.push(t, newState("l1", serial, content), content); err != nil {
+		t.Fatalf("push serial %d: %v", serial, err)
+	}
+
+	current, err := f.svc.Current(t.Context(), f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	return current
+}
+
+// mustLock locks the fixture workspace for holder, failing the test on error.
+func mustLock(t *testing.T, f fixture, holder string) {
+	t.Helper()
+
+	if _, err := f.svc.Lock(t.Context(), f.ws.ID, holder, "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+}
+
+// mustUnlock releases alice's lock on the fixture workspace.
+func mustUnlock(t *testing.T, f fixture) {
+	t.Helper()
+
+	if _, err := f.svc.Unlock(t.Context(), f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+}
+
+// openDirBlobs opens a blob store in a temporary directory and returns the
+// store with its path, so tests prove what a restore leaves behind.
+func openDirBlobs(t *testing.T) (*fs.Store, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	blobs, err := fs.Open(dir)
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs, dir
+}
+
+// checkCurrentID proves the workspace's current state version is want.
+func checkCurrentID(t *testing.T, f fixture, want workspace.StateVersionID) {
+	t.Helper()
+
+	current, err := f.svc.Current(t.Context(), f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if current.ID != want {
+		t.Errorf("current = %s, want %s", current.ID, want)
+	}
+}
+
+// checkUnlocked proves the fixture workspace holds no lock.
+func checkUnlocked(t *testing.T, f fixture) {
+	t.Helper()
+
+	w, err := f.svc.GetByID(t.Context(), f.ws.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	if w.Lock.Locked() {
+		t.Error("workspace still locked, want it unlocked")
+	}
+}
+
+// checkHistoryTotal proves the workspace history holds want versions.
+func checkHistoryTotal(t *testing.T, f fixture, want int) {
+	t.Helper()
+
+	_, total, err := f.svc.History(t.Context(), f.ws.ID, workspace.Page{Limit: 0, Offset: 0})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+
+	if total != want {
+		t.Errorf("history total = %d, want %d", total, want)
+	}
+}
+
+// checkHistory proves list holds want in order.
+func checkHistory(t *testing.T, list, want []workspace.StateVersion) {
+	t.Helper()
+
+	if len(list) != len(want) {
+		t.Fatalf("history holds %d versions, want %d", len(list), len(want))
+	}
+
+	for i := range want {
+		if list[i].ID != want[i].ID || list[i].Serial != want[i].Serial {
+			t.Errorf(
+				"history [%d] = %s serial %d, want %s serial %d",
+				i,
+				list[i].ID,
+				list[i].Serial,
+				want[i].ID,
+				want[i].Serial,
+			)
+		}
+	}
+}
+
+// checkRestored proves restored carries src as a new, forced, finalized
+// version with its own blob key.
+func checkRestored(t *testing.T, restored, src workspace.StateVersion) {
+	t.Helper()
+
+	if restored.Lineage != src.Lineage || restored.Serial != src.Serial {
+		t.Errorf(
+			"restored = lineage %q serial %d, want lineage %q serial %d",
+			restored.Lineage,
+			restored.Serial,
+			src.Lineage,
+			src.Serial,
+		)
+	}
+
+	if restored.MD5 != src.MD5 || restored.Size != src.Size {
+		t.Errorf("restored = md5 %x size %d, want md5 %x size %d", restored.MD5, restored.Size, src.MD5, src.Size)
+	}
+
+	if !restored.Force {
+		t.Error("restored force = false, want true")
+	}
+
+	if restored.RestoredFrom != src.ID {
+		t.Errorf("restored-from = %q, want %q", restored.RestoredFrom, src.ID)
+	}
+
+	if restored.ID == src.ID {
+		t.Error("restored id repeats the source id, want a new version")
+	}
+
+	if restored.Content == src.Content {
+		t.Error("restored blob repeats the source key, want its own key")
+	}
+
+	if restored.Status != workspace.StatusFinalized {
+		t.Errorf("restored status = %q, want finalized", restored.Status)
+	}
+
+	if restored.Holder != "alice" {
+		t.Errorf("restored holder = %q, want alice", restored.Holder)
+	}
+}
+
+// readContent opens sv through the service and returns its bytes.
+func readContent(t *testing.T, f fixture, sv workspace.StateVersion) string {
+	t.Helper()
+
+	r, err := f.svc.Open(t.Context(), sv)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	return string(got)
+}
+
+// TestHistory proves the service lists finalized versions newest first with
+// the total count, through paging and for an unknown workspace.
+func TestHistory(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+	second := pushVersion(t, f, 2, "v2")
+
+	list, total, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 0, Offset: 0})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+
+	if total != 2 {
+		t.Errorf("history total = %d, want 2", total)
+	}
+
+	checkHistory(t, list, []workspace.StateVersion{second, first})
+
+	paged, pagedTotal, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("paged history: %v", err)
+	}
+
+	if pagedTotal != 2 {
+		t.Errorf("paged history total = %d, want 2", pagedTotal)
+	}
+
+	checkHistory(t, paged, []workspace.StateVersion{first})
+
+	empty, emptyTotal, err := f.svc.History(ctx, "ws-missing", workspace.Page{Limit: 0, Offset: 0})
+	if err != nil {
+		t.Fatalf("history of an unknown workspace: %v", err)
+	}
+
+	if emptyTotal != 0 {
+		t.Errorf("history total of an unknown workspace = %d, want 0", emptyTotal)
+	}
+
+	checkHistory(t, empty, nil)
+}
+
+// TestRestoreMiddleVersion proves a restore of an older version makes it
+// current again as a forced version with its own blob key, keeps its lineage,
+// serial, MD5 and size, records its source, releases the taken lock, and
+// repeats its serial in the history.
+func TestRestoreMiddleVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+	second := pushVersion(t, f, 2, "v2")
+	third := pushVersion(t, f, 3, "v3")
+
+	mustUnlock(t, f)
+
+	*f.now = f.now.Add(time.Second)
+
+	restored, err := f.svc.Restore(ctx, f.ws.ID, second.ID, "alice")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	checkRestored(t, restored, second)
+
+	if got := readContent(t, f, restored); got != "v2" {
+		t.Errorf("restored content = %q, want %q", got, "v2")
+	}
+
+	checkCurrentID(t, f, restored.ID)
+	checkUnlocked(t, f)
+
+	list, total, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+
+	if total != 4 {
+		t.Errorf("history total = %d, want 4", total)
+	}
+
+	checkHistory(t, list, []workspace.StateVersion{restored, third, second, first})
+
+	if list[0].RestoredFrom != second.ID {
+		t.Errorf("restored-from in history = %q, want %q", list[0].RestoredFrom, second.ID)
+	}
+
+	for _, sv := range list[1:] {
+		if sv.RestoredFrom != "" {
+			t.Errorf("restored-from of %s = %q, want empty", sv.ID, sv.RestoredFrom)
+		}
+	}
+}
+
+// TestRestoreLockedByOther proves a restore while another principal holds
+// the lock fails with ErrLockedByOther, names the holder, and changes
+// nothing: the lock stays and no version or blob appears.
+func TestRestoreLockedByOther(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openDirBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+	mustLock(t, f, "bob")
+
+	before := listBlobDir(t, dir)
+
+	_, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Fatalf("restore: %v, want ErrLockedByOther", err)
+	}
+
+	if !strings.Contains(err.Error(), "bob") {
+		t.Errorf("restore error = %q, want it to name the holder bob", err)
+	}
+
+	w, err := f.svc.GetByID(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	if !w.Lock.Locked() || w.Lock.Holder != "bob" {
+		t.Errorf("lock = %+v, want the lock still held by bob", w.Lock)
+	}
+
+	checkCurrentID(t, f, first.ID)
+	checkHistoryTotal(t, f, 1)
+
+	if after := listBlobDir(t, dir); !slices.Equal(after, before) {
+		t.Errorf("blob dir = %v, want %v: the refused restore left a blob", after, before)
+	}
+}
+
+// TestRestoreWhileCallerHoldsLock proves a restore under the caller's own
+// lock succeeds and the lock stays with the same acquisition.
+func TestRestoreWhileCallerHoldsLock(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+	pushVersion(t, f, 2, "v2")
+
+	before, err := f.svc.GetByID(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	*f.now = f.now.Add(time.Second)
+
+	restored, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if restored.RestoredFrom != first.ID {
+		t.Errorf("restored-from = %q, want %q", restored.RestoredFrom, first.ID)
+	}
+
+	after, err := f.svc.GetByID(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	if !after.Lock.Locked() || after.Lock.Holder != "alice" || after.Lock.ID != before.Lock.ID {
+		t.Errorf("lock = %+v, want the lock still held by alice under %q", after.Lock, before.Lock.ID)
+	}
+
+	if got := readContent(t, f, restored); got != "v1" {
+		t.Errorf("restored content = %q, want %q", got, "v1")
+	}
+}
+
+// TestRestoreUnknownVersion proves a restore of a missing version, a pending
+// version or a version of another workspace fails with
+// ErrStateVersionNotFound.
+func TestRestoreUnknownVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	_, err := f.svc.Restore(ctx, f.ws.ID, "sv-missing", "alice")
+	if !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Errorf("restore of a missing version: %v, want ErrStateVersionNotFound", err)
+	}
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, pendingErr := f.svc.Restore(ctx, f.ws.ID, pending.Version.ID, "alice")
+	if !errors.Is(pendingErr, workspace.ErrStateVersionNotFound) {
+		t.Errorf("restore of a pending version: %v, want ErrStateVersionNotFound", pendingErr)
+	}
+
+	otherName, err := workspace.ParseName("other")
+	if err != nil {
+		t.Fatalf("name: %v", err)
+	}
+
+	other, err := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName})
+	if err != nil {
+		t.Fatalf("create other workspace: %v", err)
+	}
+
+	if _, err = f.svc.Lock(ctx, other.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock other: %v", err)
+	}
+
+	otherPending, err := f.svc.BeginState(ctx, other.ID, "alice", newState("l1", 1, "v1"))
+	if err != nil {
+		t.Fatalf("begin other: %v", err)
+	}
+
+	_, err = f.svc.Upload(ctx, otherPending.Version.ID, otherPending.Upload, strings.NewReader("v1"))
+	if err != nil {
+		t.Fatalf("upload other: %v", err)
+	}
+
+	foreign, err := f.svc.Current(ctx, other.ID)
+	if err != nil {
+		t.Fatalf("current other: %v", err)
+	}
+
+	_, foreignErr := f.svc.Restore(ctx, f.ws.ID, foreign.ID, "alice")
+	if !errors.Is(foreignErr, workspace.ErrStateVersionNotFound) {
+		t.Errorf("restore of another workspace's version: %v, want ErrStateVersionNotFound", foreignErr)
+	}
+}
+
+// TestRestoreFailedCopyKeepsCurrent proves a restore whose source content no
+// longer matches its MD5 fails, leaves the old state current and leaves no
+// blob behind.
+func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openDirBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+
+	// Replace the source content with other bytes under the same key, as a
+	// damaged object would read.
+	if err := blobs.Delete(ctx, first.Content); err != nil {
+		t.Fatalf("delete source blob: %v", err)
+	}
+
+	if err := blobs.Put(ctx, first.Content, strings.NewReader("tampered")); err != nil {
+		t.Fatalf("tamper source blob: %v", err)
+	}
+
+	before := listBlobDir(t, dir)
+
+	*f.now = f.now.Add(time.Second)
+
+	_, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if !errors.Is(err, workspace.ErrChecksumMismatch) {
+		t.Fatalf("restore: %v, want ErrChecksumMismatch", err)
+	}
+
+	checkCurrentID(t, f, first.ID)
+	checkHistoryTotal(t, f, 1)
+	checkUnlocked(t, f)
+
+	if after := listBlobDir(t, dir); !slices.Equal(after, before) {
+		t.Errorf("blob dir = %v, want %v: the failed copy left a stray blob", after, before)
+	}
+}
+
+// fencedWorkspaces rejects every write with namespace.ErrFenced, proving a
+// restore with a stale fence writes nothing.
+type fencedWorkspaces struct {
+	*memStore
+}
+
+// CreateWorkspace rejects the write with namespace.ErrFenced.
+func (f fencedWorkspaces) CreateWorkspace(
+	_ context.Context, _ workspace.Workspace, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+// SaveWorkspace rejects the write with namespace.ErrFenced.
+func (f fencedWorkspaces) SaveWorkspace(
+	_ context.Context, _ workspace.Workspace, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+// fencedStates rejects every write with namespace.ErrFenced, proving a
+// restore with a stale fence writes nothing.
+type fencedStates struct {
+	*memStore
+}
+
+// CreateStateVersion rejects the write with namespace.ErrFenced.
+func (f fencedStates) CreateStateVersion(
+	_ context.Context, _ workspace.StateVersion, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+// FinalizeStateVersion rejects the write with namespace.ErrFenced.
+func (f fencedStates) FinalizeStateVersion(
+	_ context.Context, _ workspace.StateVersion, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
+// TestRestoreStaleFenceWritesNothing proves a restore whose writes the store
+// fences fails with ErrFenced and changes nothing: no lock, no version and
+// no blob.
+func TestRestoreStaleFenceWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	blobs, dir := openDirBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	fenced, err := workspace.NewService(workspace.Config{
+		Workspaces:    fencedWorkspaces{memStore: f.store},
+		States:        fencedStates{memStore: f.store},
+		Blobs:         blobs,
+		Namespaces:    namespaces,
+		Now:           func() time.Time { return *f.now },
+		MaxStateBytes: 64,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	before := listBlobDir(t, dir)
+
+	*f.now = f.now.Add(time.Second)
+
+	if _, err = fenced.Restore(ctx, f.ws.ID, first.ID, "alice"); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("restore: %v, want ErrFenced", err)
+	}
+
+	checkCurrentID(t, f, first.ID)
+	checkUnlocked(t, f)
+	checkHistoryTotal(t, f, 1)
+
+	if after := listBlobDir(t, dir); !slices.Equal(after, before) {
+		t.Errorf("blob dir = %v, want %v: the fenced restore left a blob", after, before)
+	}
+}
+
+// TestRestoreRetryMakesNoSecondVersion proves a retried restore answers the
+// version the first call made current and writes no second version.
+func TestRestoreRetryMakesNoSecondVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+
+	*f.now = f.now.Add(time.Second)
+
+	restored, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	retried, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if err != nil {
+		t.Fatalf("retried restore: %v", err)
+	}
+
+	if retried.ID != restored.ID {
+		t.Errorf("retried restore = %s, want the first restore %s", retried.ID, restored.ID)
+	}
+
+	list, total, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+
+	if total != 2 {
+		t.Errorf("history total = %d, want 2", total)
+	}
+
+	checkHistory(t, list, []workspace.StateVersion{restored, first})
+}
+
+// TestRestoreRetryLockedByOther proves a retried restore while another
+// principal holds the lock fails with ErrLockedByOther and writes nothing,
+// even though the first call already made the requested source current.
+func TestRestoreRetryLockedByOther(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+
+	*f.now = f.now.Add(time.Second)
+
+	restored, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	mustLock(t, f, "bob")
+
+	_, err = f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Fatalf("retried restore: %v, want ErrLockedByOther", err)
+	}
+
+	if !strings.Contains(err.Error(), "bob") {
+		t.Errorf("retried restore error = %q, want it to name the holder bob", err)
+	}
+
+	checkCurrentID(t, f, restored.ID)
+	checkHistoryTotal(t, f, 2)
+}
+
+// raceWorkspaces lets a concurrent locker win the restore lock race: the
+// first save of alice's restore lock finds bob already holding the lock.
+type raceWorkspaces struct {
+	*memStore
+
+	raced bool
+}
+
+// SaveWorkspace injects bob's lock before alice's restore take lands, so the
+// take fails on the revision and the service must map it to ErrLockedByOther.
+func (r *raceWorkspaces) SaveWorkspace(
+	ctx context.Context, w workspace.Workspace, fence namespace.Fence,
+) error {
+	if !r.raced && w.Lock.Holder == "alice" && w.Lock.Reason == "restore" {
+		r.raced = true
+
+		r.mu.Lock()
+		stored := r.workspaces[w.ID]
+		stored.Lock = workspace.Lock{LockedAt: w.UpdatedAt, ID: "lock-bob", Holder: "bob", Reason: "apply"}
+		stored.Revision++
+		r.workspaces[w.ID] = stored
+		r.mu.Unlock()
+	}
+
+	return r.memStore.SaveWorkspace(ctx, w, fence)
+}
+
+// TestRestoreLockRaceNamesHolder proves a restore whose lock take loses a
+// race to another principal fails with ErrLockedByOther naming the winner,
+// not with the raw error of the lost take.
+func TestRestoreLockRaceNamesHolder(t *testing.T) {
+	t.Parallel()
+
+	blobs := openFixtureBlobs(t)
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	mustLock(t, f, "alice")
+
+	first := pushVersion(t, f, 1, "v1")
+
+	mustUnlock(t, f)
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: f.store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	raced, err := workspace.NewService(workspace.Config{
+		Workspaces:    &raceWorkspaces{memStore: f.store, raced: false},
+		States:        f.store,
+		Blobs:         blobs,
+		Namespaces:    namespaces,
+		Now:           func() time.Time { return *f.now },
+		MaxStateBytes: 64,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	*f.now = f.now.Add(time.Second)
+
+	_, err = raced.Restore(ctx, f.ws.ID, first.ID, "alice")
+	if !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Fatalf("restore: %v, want ErrLockedByOther", err)
+	}
+
+	if !strings.Contains(err.Error(), "bob") {
+		t.Errorf("restore error = %q, want it to name the holder bob", err)
+	}
+
+	checkCurrentID(t, f, first.ID)
+	checkHistoryTotal(t, f, 1)
+}
