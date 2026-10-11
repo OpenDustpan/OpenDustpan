@@ -26,6 +26,8 @@ var ErrMissingDependency = errors.New("missing dependency")
 const (
 	maxBodyBytes = 1 << 20
 	tokenScheme  = "token "
+	// unitTool names this API's tool in unit references.
+	unitTool = "pulumi"
 )
 
 // Config holds the dependencies of a Handler.
@@ -133,7 +135,7 @@ func (h *Handler) listStacks(w http.ResponseWriter, r *http.Request, p identity.
 		}
 	}
 
-	if !h.authorize(ctx, w, p, identity.ActionStackRead, ns) {
+	if !h.authorize(ctx, w, p, identity.ActionUnitRead, identity.NamespaceObject(ns)) {
 		return
 	}
 
@@ -187,7 +189,14 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 		return
 	}
 
-	if !h.authorize(ctx, w, p, identity.ActionStackWrite, ref.Namespace) {
+	obj, err := unitObject(ref)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if !h.authorize(ctx, w, p, identity.ActionUnitManage, obj) {
 		return
 	}
 
@@ -220,7 +229,14 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, p identity.Pr
 		return
 	}
 
-	if !h.authorize(ctx, w, p, identity.ActionStackRead, ref.Namespace) {
+	obj, err := unitObject(ref)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if !h.authorize(ctx, w, p, identity.ActionUnitRead, obj) {
 		return
 	}
 
@@ -242,15 +258,20 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, p identity.Pr
 	})
 }
 
-// authorize reports whether p may perform action in ns, writing the error response if not.
+// unitObject maps a stack reference to its tool-neutral unit reference.
+func unitObject(ref stack.Ref) (identity.Object, error) {
+	return identity.UnitObject(unitTool, ref.Namespace, ref.Project.String()+"/"+ref.Stack.String())
+}
+
+// authorize reports whether p may perform action on obj, writing the error response if not.
 func (h *Handler) authorize(
 	ctx context.Context,
 	w http.ResponseWriter,
 	p identity.Principal,
 	action identity.Action,
-	ns namespace.Name,
+	obj identity.Object,
 ) bool {
-	if err := h.authz.Authorize(ctx, p, action, ns); err != nil {
+	if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
 		h.writeError(ctx, w, err)
 
 		return false
@@ -304,7 +325,8 @@ func classify(err error) (int, string) {
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName):
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
+		errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound):
 		return http.StatusNotFound, err.Error()
