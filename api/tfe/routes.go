@@ -91,6 +91,47 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveOrganization,
 			Serve:   h.entitlementSet,
 		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/organizations/{organization}/workspaces/{workspace}",
+			// A read needs unit:read on opentofu:<namespace>/<name>. The
+			// handler answers 404 for an unknown organization or workspace.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: resolveWorkspace,
+			Serve:   h.readWorkspace,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/v2/organizations/{organization}/workspaces",
+			// A creation needs unit:manage on the unit the body names. The
+			// resolver reads the name from the body, so a bad name answers
+			// 422 before authorization runs.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitManage},
+			Resolve: resolveCreateWorkspace,
+			Serve:   h.createWorkspace,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/workspaces/{id}",
+			// A read needs unit:read. The resolver maps the ID to the unit,
+			// so authorization still names the unit.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.readWorkspaceByID,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/organizations/{organization}/workspaces",
+			// A list reads the organization, so namespace:read stays the
+			// gate. The handler answers 404 for an unknown organization.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveOrganization,
+			Serve:   h.listWorkspaces,
+		},
 	}
 }
 
@@ -181,8 +222,9 @@ func resolveWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 
 // resolveWorkspaceID returns the unit for the workspace ID in the path
 // value. It reads the body once with http.MaxBytesReader and restores r.Body
-// before returning, so the handler can read it again. The ID lookup needs
-// the Workspaces port; without it the route answers 500.
+// before returning, so the handler can read it again. The current GET handler
+// reads no body; the restore keeps the shared shape for future lock POSTs on
+// the same ID.
 func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
@@ -191,11 +233,7 @@ func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (id
 
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
-	if h.workspaces == nil {
-		return identity.Object{}, errMissingWorkspaces
-	}
-
-	ws, err := h.workspaces.GetWorkspaceByID(r.Context(), workspace.ID(r.PathValue("id")))
+	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("id")))
 	if err != nil {
 		return identity.Object{}, err
 	}

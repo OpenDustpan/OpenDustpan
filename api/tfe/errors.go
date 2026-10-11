@@ -23,10 +23,6 @@ const notFoundTitle = "not found"
 // to 422.
 var errInvalidBody = errors.New("invalid request body")
 
-// errMissingWorkspaces reports an ID route without the Workspaces port. It
-// is a server setup fault, so classify maps it to 500.
-var errMissingWorkspaces = errors.New("workspace lookup not configured")
-
 // jsonAPIError is one entry of a JSON:API error document.
 type jsonAPIError struct {
 	Status string `json:"status"`

@@ -94,12 +94,83 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
-// stubWorkspaces resolves one workspace ID to acme/web. Unknown IDs answer
-// workspace.ErrNotFound and ws-locked answers workspace.ErrLocked, so the
-// error tests can prove the 404 and 409 documents through HTTP.
+// stubWorkspaces serves one workspace, acme/web with ID ws-test123, for
+// every workspace route. Unknown names and IDs answer workspace.ErrNotFound
+// and ws-locked answers workspace.ErrLocked, so the error tests can prove
+// the 404 and 409 documents through HTTP. Create answers a new workspace, or
+// workspace.ErrAlreadyExists for the existing web name.
 type stubWorkspaces struct{}
 
 func (stubWorkspaces) GetWorkspaceByID(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+	return stubWorkspaceByID(id)
+}
+
+func (stubWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+	return stubWorkspaceByID(id)
+}
+
+func (stubWorkspaces) Get(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+	if ref.Namespace.String() == "acme" && ref.Name.String() == "web" {
+		return stubWorkspaceByID(workspace.ID("ws-test123"))
+	}
+
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+	if ref.Namespace.String() != "acme" {
+		return workspace.Workspace{}, namespace.ErrNotFound
+	}
+
+	if ref.Name.String() == "web" {
+		return workspace.Workspace{}, workspace.ErrAlreadyExists
+	}
+
+	ns, err := namespace.ParseName(ref.Namespace.String())
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	name, err := workspace.ParseName(ref.Name.String())
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	return workspace.Workspace{
+		CreatedAt: stubWorkspaceTime(),
+		UpdatedAt: stubWorkspaceTime(),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID("ws-" + name.String()),
+		Ref:       workspace.Ref{Namespace: ns, Name: name},
+		Revision:  1,
+	}, nil
+}
+
+func (stubWorkspaces) List(_ context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
+	if ns.String() != "acme" {
+		return nil, nil
+	}
+
+	ws, err := stubWorkspaceByID(workspace.ID("ws-test123"))
+	if err != nil {
+		return nil, err
+	}
+
+	return []workspace.Workspace{ws}, nil
+}
+
+func (stubWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNoState
+}
+
+// stubWorkspaceTime stamps every stub workspace.
+func stubWorkspaceTime() time.Time {
+	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+}
+
+// stubWorkspaceByID resolves one workspace ID to acme/web. Unknown IDs
+// answer workspace.ErrNotFound and ws-locked answers workspace.ErrLocked.
+func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 	switch id.String() {
 	case "ws-locked":
 		return workspace.Workspace{}, workspace.ErrLocked
@@ -119,8 +190,8 @@ func (stubWorkspaces) GetWorkspaceByID(_ context.Context, id workspace.ID) (work
 	}
 
 	return workspace.Workspace{
-		CreatedAt: time.Time{},
-		UpdatedAt: time.Time{},
+		CreatedAt: stubWorkspaceTime(),
+		UpdatedAt: stubWorkspaceTime(),
 		Lock: workspace.Lock{
 			LockedAt: time.Time{},
 			ID:       "",
@@ -476,6 +547,9 @@ func routeRequest(t *testing.T, route tfe.Route, token string) *http.Request {
 	body := ""
 	if route.Method == http.MethodPost {
 		body = `{"data":{}}`
+		if strings.HasSuffix(route.Path, "/workspaces") {
+			body = `{"data":{"type":"workspaces","attributes":{"name":"fresh"}}}`
+		}
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, strings.NewReader(body))
@@ -588,8 +662,14 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 		rec := httptest.NewRecorder()
 		allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("allowed request answers %d, want %d", rec.Code, http.StatusOK)
+		// Workspace creation answers 201; every other route answers 200.
+		want := http.StatusOK
+		if route.Method == http.MethodPost && strings.HasSuffix(route.Path, "/workspaces") {
+			want = http.StatusCreated
+		}
+
+		if rec.Code != want {
+			t.Fatalf("allowed request answers %d, want %d", rec.Code, want)
 		}
 
 		if got := rec.Header().Get("Content-Type"); got != "application/vnd.api+json" {
@@ -736,6 +816,33 @@ func TestErrorDocuments(t *testing.T) {
 	}
 }
 
+// errorWorkspaces fails every workspace use case with an internal error, so
+// the 500 path stays covered now that the workspace service is required.
+type errorWorkspaces struct{}
+
+func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) Get(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) List(_ context.Context, _ namespace.Name) ([]workspace.Workspace, error) {
+	return nil, errTestInternal
+}
+
+func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
+}
+
+// errTestInternal is the internal failure errorWorkspaces answers with.
+var errTestInternal = errors.New("test internal failure")
+
 // TestErrorHidesInternalDetail proves a 500 never returns an internal error
 // text.
 func TestErrorHidesInternalDetail(t *testing.T) {
@@ -746,7 +853,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
-		Workspaces:    nil,
+		Workspaces:    errorWorkspaces{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
