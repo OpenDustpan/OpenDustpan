@@ -20,10 +20,11 @@ const (
 	reportExt      = ".json"
 )
 
-// Run is everything recorded for one CLI version.
+// Run is everything recorded for one CLI version on one store.
 type Run struct {
 	Tool           string       `json:"tool"`
 	Label          string       `json:"label"`
+	Store          Store        `json:"store"`
 	Version        string       `json:"version"`
 	ChecksumSource string       `json:"checksumSource"`
 	Steps          []StepResult `json:"steps"`
@@ -46,6 +47,7 @@ func NewRun(env *Env) Run {
 	return Run{
 		Tool:           cli.Tool,
 		Label:          cli.Label,
+		Store:          env.Store(),
 		Version:        cli.Version,
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          env.Steps(),
@@ -53,12 +55,14 @@ func NewRun(env *Env) Run {
 	}
 }
 
-// NotRun is the report of a version whose scenario could not run: the CLI did
-// not install, or the platform does not support it (skipped).
-func NotRun(tool, label, reason string, skipped bool) Run {
+// NotRun is the report of a version and store whose scenario could not run:
+// the CLI did not install, the store is not configured, or the platform does
+// not support it (skipped).
+func NotRun(tool, label string, store Store, reason string, skipped bool) Run {
 	return Run{
 		Tool:           tool,
 		Label:          label,
+		Store:          store,
 		Version:        "",
 		ChecksumSource: "",
 		Steps: []StepResult{{
@@ -74,9 +78,10 @@ func NotRun(tool, label, reason string, skipped bool) Run {
 	}
 }
 
-// WriteRun saves run as <dir>/<tool>-<label>-v<version>.json. The label is
-// part of the name so that "latest" and the same version pinned do not
-// overwrite each other.
+// WriteRun saves run as <dir>/<tool>-<label>-<store>-v<version>.json. The label
+// is part of the name so that "latest" and the same version pinned do not
+// overwrite each other, and the store is part of it so runs on SQLite and
+// PostgreSQL do not overwrite each other.
 func WriteRun(dir string, run Run) error {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("create report dir: %w", err)
@@ -87,7 +92,10 @@ func WriteRun(dir string, run Run) error {
 		return fmt.Errorf("encode report: %w", err)
 	}
 
-	name := filepath.Join(dir, run.Tool+"-"+strings.ReplaceAll(run.Label, "/", "_")+"-v"+run.Version+reportExt)
+	name := filepath.Join(
+		dir,
+		run.Tool+"-"+strings.ReplaceAll(run.Label, "/", "_")+"-"+string(run.Store)+"-v"+run.Version+reportExt,
+	)
 	if err := os.WriteFile(name, append(data, '\n'), fileMode); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
@@ -147,7 +155,11 @@ func WriteSummary(dir string) error {
 	}
 
 	slices.SortFunc(runs, func(a, b Run) int {
-		return cmp.Or(cmp.Compare(a.Tool, b.Tool), slices.Compare(semver(b.Version), semver(a.Version)))
+		return cmp.Or(
+			cmp.Compare(a.Tool, b.Tool),
+			cmp.Compare(a.Store, b.Store),
+			slices.Compare(semver(b.Version), semver(a.Version)),
+		)
 	})
 
 	if err := os.WriteFile(filepath.Join(dir, summaryFile), []byte(render(runs)), fileMode); err != nil {
@@ -165,9 +177,9 @@ func render(runs []Run) string {
 	for _, tool := range []string{ToolPulumi, ToolTofu} {
 		var mine []Run
 
-		for _, r := range runs {
-			if r.Tool == tool {
-				mine = append(mine, r)
+		for i := range runs {
+			if runs[i].Tool == tool {
+				mine = append(mine, runs[i])
 			}
 		}
 
@@ -191,8 +203,8 @@ func toolTitle(tool string) string {
 func renderTool(b *strings.Builder, runs []Run) {
 	b.WriteString("## Steps\n\n| Step |")
 
-	for _, r := range runs {
-		fmt.Fprintf(b, " %s |", versionTitle(r))
+	for i := range runs {
+		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
 	}
 
 	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
@@ -200,8 +212,8 @@ func renderTool(b *strings.Builder, runs []Run) {
 	for _, name := range stepNames(runs) {
 		fmt.Fprintf(b, "| `%s` |", name)
 
-		for _, r := range runs {
-			fmt.Fprintf(b, " %s |", stepCell(r, name))
+		for i := range runs {
+			fmt.Fprintf(b, " %s |", stepCell(runs[i], name))
 		}
 
 		b.WriteString("\n")
@@ -212,8 +224,8 @@ func renderTool(b *strings.Builder, runs []Run) {
 		"4xx and 5xx mean the server does not yet do what the CLI expects.\n\n")
 	b.WriteString("| Request |")
 
-	for _, r := range runs {
-		fmt.Fprintf(b, " %s |", versionTitle(r))
+	for i := range runs {
+		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
 	}
 
 	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
@@ -221,27 +233,27 @@ func renderTool(b *strings.Builder, runs []Run) {
 	for _, key := range requestKeys(runs) {
 		fmt.Fprintf(b, "| `%s` |", key)
 
-		for _, r := range runs {
-			fmt.Fprintf(b, " %s |", statusCell(r, key))
+		for i := range runs {
+			fmt.Fprintf(b, " %s |", statusCell(runs[i], key))
 		}
 
 		b.WriteString("\n")
 	}
 
-	for _, r := range runs {
-		fmt.Fprintf(b, "\n## Failures: %s\n\n", versionTitle(r))
-		b.WriteString(failures(r))
+	for i := range runs {
+		fmt.Fprintf(b, "\n## Failures: %s\n\n", versionTitle(runs[i]))
+		b.WriteString(failures(runs[i]))
 	}
 
-	for _, r := range runs {
+	for i := range runs {
 		fmt.Fprintf(
 			b,
 			"\n## Request log: %s\n\n| # | Step | Request | Status | Accept |\n|---|---|---|---|---|\n",
-			versionTitle(r),
+			versionTitle(runs[i]),
 		)
 
-		for i := range r.Requests {
-			e := &r.Requests[i]
+		for j := range runs[i].Requests {
+			e := &runs[i].Requests[j]
 			target := e.Path
 			if e.Query != "" {
 				target += "?" + e.Query
@@ -253,21 +265,29 @@ func renderTool(b *strings.Builder, runs []Run) {
 }
 
 func versionTitle(r Run) string {
+	var base string
+
 	switch {
 	case r.Version == "":
-		return r.Label + " (not run)"
+		base = r.Label + " (not run)"
 	case r.Label == Latest:
-		return "v" + r.Version + " (latest)"
+		base = "v" + r.Version + " (latest)"
 	default:
-		return "v" + r.Version
+		base = "v" + r.Version
 	}
+
+	if r.Store == "" {
+		return base
+	}
+
+	return base + " on " + string(r.Store)
 }
 
 func stepNames(runs []Run) []string {
 	var names []string
 
-	for _, r := range runs {
-		for _, s := range r.Steps {
+	for i := range runs {
+		for _, s := range runs[i].Steps {
 			if !slices.Contains(names, s.Name) {
 				names = append(names, s.Name)
 			}
@@ -301,9 +321,9 @@ func requestKey(e *Entry) string {
 func requestKeys(runs []Run) []string {
 	var keys []string
 
-	for _, r := range runs {
-		for i := range r.Requests {
-			if k := requestKey(&r.Requests[i]); !slices.Contains(keys, k) {
+	for i := range runs {
+		for j := range runs[i].Requests {
+			if k := requestKey(&runs[i].Requests[j]); !slices.Contains(keys, k) {
 				keys = append(keys, k)
 			}
 		}
