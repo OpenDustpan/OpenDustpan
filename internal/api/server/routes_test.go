@@ -79,6 +79,16 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
+// stubMetrics writes a fixed exposition. Tests that check the body use
+// their own writer; this one only proves the route serves.
+type stubMetrics struct{}
+
+func (stubMetrics) Write(w io.Writer) error {
+	_, err := io.WriteString(w, "# HELP dustpan_http_requests_total HTTP requests.\n")
+
+	return err //nolint:wrapcheck // Transparent writer: callers must see the original error.
+}
+
 func newTestHandler(t *testing.T) *apiserver.Handler {
 	t.Helper()
 
@@ -87,6 +97,7 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
 		Backups:       nil,
+		Metrics:       stubMetrics{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -106,6 +117,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
 		Backups:       nil,
+		Metrics:       stubMetrics{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -498,6 +510,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Backups:       nil,
+		Metrics:       stubMetrics{},
 	}
 
 	cases := []struct {
@@ -507,6 +520,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		{name: "authenticator", drop: func(c *apiserver.Config) { c.Authenticator = nil }},
 		{name: "authorizer", drop: func(c *apiserver.Config) { c.Authorizer = nil }},
 		{name: "logger", drop: func(c *apiserver.Config) { c.Logger = nil }},
+		{name: "metrics", drop: func(c *apiserver.Config) { c.Metrics = nil }},
 	}
 
 	for _, tc := range cases {
@@ -612,6 +626,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
 		Backups:       service,
+		Metrics:       stubMetrics{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
