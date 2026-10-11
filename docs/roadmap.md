@@ -97,8 +97,8 @@ the scenarios write. It restores the backup into an empty installation with the
 same key, and both CLIs read the same state. A wrong key stops the restore
 before it writes (ADR 30). The OpenTofu scenario and the backup scenario pass
 with the blobs on an S3-compatible server (ADR 31). The metrics route counts
-the requests of both tools. `/readyz` turns to 503 when the database stops
-(ADR 32). The upgrade test starts the current binary on a database of the
+the requests of both tools. `/health/ready` turns to 503 when the database
+stops (ADR 32, ADR 34). The upgrade test starts the current binary on a database of the
 previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.

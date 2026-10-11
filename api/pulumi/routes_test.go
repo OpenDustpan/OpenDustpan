@@ -29,10 +29,10 @@ var packageSources embed.FS
 
 // publicPatterns lists the routes that need no sign-in: service discovery,
 // capabilities and health. Every other route must declare its actions in the
-// route table. GET /healthz is served by the root handler, not by the Pulumi
+// route table. GET /health/live is served by the root handler, not by the Pulumi
 // CLI handler, and is listed here so the public surface stays in one place.
 func publicPatterns() []string {
-	return []string{"GET /api/capabilities", "GET /healthz"}
+	return []string{"GET /api/capabilities", "GET /health/live"}
 }
 
 // stubNamespaceStore answers no namespace. It exists only to build a Handler.
@@ -344,7 +344,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 	}
 
 	for pattern := range public {
-		if pattern == "GET /healthz" {
+		if pattern == "GET /health/live" {
 			continue
 		}
 

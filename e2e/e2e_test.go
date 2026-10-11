@@ -2085,13 +2085,13 @@ func writeRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 }
 
-// healthStatus returns the status of GET /healthz through the environment.
+// healthStatus returns the status of GET /health/live through the environment.
 func healthStatus(ctx context.Context, env *e2e.Env) (int, string, error) {
-	return env.APIStatus(ctx, http.MethodGet, "/healthz", "")
+	return env.APIStatus(ctx, http.MethodGet, "/health/live", "")
 }
 
 // checkServerRestart proves the stop and the start: after StopServer
-// GET /healthz fails, after StartServer it answers 204 again.
+// GET /health/live fails, after StartServer it answers 204 again.
 func checkServerRestart(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -2099,16 +2099,16 @@ func checkServerRestart(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	status, body, err := healthStatus(ctx, env)
 	if err == nil && status == http.StatusNoContent {
-		t.Fatal("GET /healthz answers 204 after the stop")
+		t.Fatal("GET /health/live answers 204 after the stop")
 	}
 
-	t.Logf("GET /healthz after the stop: status %d, err %v, body %q", status, err, body)
+	t.Logf("GET /health/live after the stop: status %d, err %v, body %q", status, err, body)
 
 	env.StartServer(ctx, t)
 
 	status, body, err = healthStatus(ctx, env)
 	if err != nil || status != http.StatusNoContent {
-		t.Fatalf("GET /healthz after the start: status %d, err %v, body %q", status, err, body)
+		t.Fatalf("GET /health/live after the start: status %d, err %v, body %q", status, err, body)
 	}
 }
 
