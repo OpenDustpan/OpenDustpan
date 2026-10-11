@@ -87,6 +87,7 @@ type settings struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	publicURL       string
+	version         string
 }
 
 // Option configures a Server.
@@ -207,6 +208,12 @@ func WithClock(now func() time.Time) Option {
 	return func(o *settings) { o.now = now }
 }
 
+// WithVersion sets the server version for dustpan_build_info. Empty means
+// dev. The binary passes its stamped version; tests use the default.
+func WithVersion(v string) Option {
+	return func(o *settings) { o.version = v }
+}
+
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler     http.Handler
@@ -217,6 +224,7 @@ type Server struct {
 	registry    *metrics.Registry
 	tlsCertFile string
 	tlsKeyFile  string
+	observed    *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -253,6 +261,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		tlsCertFile:     "",
 		tlsKeyFile:      "",
 		publicURL:       "",
+		version:         "",
 	}
 
 	for _, opt := range opts {
@@ -269,14 +278,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	registry := metrics.NewRegistry()
+	// One registry holds every family: the request, runtime and build
+	// families, and the readiness failure counter of the probe.
+	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
+	registry := observed.Registry()
 
-	adapters, err := newAdapters(svc, cfg, base, registry)
+	adapters, err := newAdapters(svc, cfg, base, observed.ReadinessFailures())
 	if err != nil {
 		return nil, err
 	}
 
-	handler, err := routes(adapters, cfg)
+	handler, err := routes(adapters, cfg, observed)
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +302,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		registry:    registry,
 		tlsCertFile: cfg.tlsCertFile,
 		tlsKeyFile:  cfg.tlsKeyFile,
+		observed:    observed,
 	}, nil
 }
 
@@ -303,9 +316,9 @@ type adapters struct {
 }
 
 // newAdapters builds every HTTP adapter from the services and settings. It
-// registers the readiness failure counter on registry; the metrics route of a
-// later issue scrapes the same registry.
-func newAdapters(svc services, cfg settings, base baseurl.Resolver, registry *metrics.Registry) (adapters, error) {
+// gives the readiness probe failures, the counter on the server registry
+// that the metrics route scrapes.
+func newAdapters(svc services, cfg settings, base baseurl.Resolver, failures *metrics.Counter) (adapters, error) {
 	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
 		return adapters{}, err
@@ -326,7 +339,6 @@ func newAdapters(svc services, cfg settings, base baseurl.Resolver, registry *me
 		return adapters{}, err
 	}
 
-	failures := registry.NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0)
 	ready := newReadinessHandler(cfg.namespaceStore, cfg.blobStore, readinessTimeout, failures, cfg.logger)
 
 	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI, ready: ready}, nil
@@ -466,6 +478,13 @@ func (s *Server) Handler() http.Handler {
 // Workspaces returns the workspace service the server was wired with.
 func (s *Server) Workspaces() *workspace.Service {
 	return s.workspaces
+}
+
+// Metrics returns the request, build, process, runtime and readiness
+// metrics the middleware records. The metrics route of issue #165 reads
+// through it.
+func (s *Server) Metrics() *metrics.ServerMetrics {
+	return s.observed
 }
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
@@ -729,10 +748,11 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 	return principal.Subject, true
 }
 
-// withRequestLog mints a request ID, stores it in the context, and writes
-// one log line for each request. The line holds the method, the route, the
-// status, the duration, the size, the ID, the adapter and, for a signed-in
-// request, the subject. It holds nothing else.
+// withRequestLog mints a request ID, stores it in the context, records the
+// request in the metrics registry, and writes one log line for each request.
+// The line holds the method, the route, the status, the duration, the size,
+// the ID, the adapter and, for a signed-in request, the subject. It holds
+// nothing else.
 //
 // Go's ServeMux stores the matched pattern in Request.Pattern. The root mux
 // matches a prefix such as /api/ and forwards the request to an adapter
@@ -740,8 +760,14 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 // pattern. The middleware reads Pattern after the next handler returns, so
 // it sees the inner pattern. When nothing matches, Pattern stays empty and
 // the line uses unmatched. The line names the pattern only, never the path,
-// so a capability token in the path cannot leak into the log.
-func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authenticator) http.Handler {
+// so a capability token in the path cannot leak into the log. The metrics
+// use the same pattern and adapter, so no label holds a path value.
+func withRequestLog(
+	next http.Handler,
+	logger *slog.Logger,
+	authn identity.Authenticator,
+	observed *metrics.ServerMetrics,
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := newRequestID()
 		// A direct assignment keeps the header name of ADR 32. The key is already
@@ -754,10 +780,21 @@ func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authe
 
 		subject, signedIn := subjectForRequest(ctx, authn, r)
 
+		// The route pattern is not known until the handler returns, so the
+		// in-flight gauge tracks the adapter from the path only. The gauge
+		// holds no route label for the same reason.
+		startAdapter := adapterForRequest("", r.URL.Path)
+		if observed != nil {
+			observed.IncInFlight(startAdapter)
+			defer observed.DecInFlight(startAdapter)
+		}
+
 		start := time.Now()
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 
 		next.ServeHTTP(wrapped, r)
+
+		elapsed := time.Since(start)
 
 		route := r.Pattern
 		if route == "" {
@@ -772,11 +809,15 @@ func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authe
 
 		adapter := adapterForRequest(r.Pattern, r.URL.Path)
 
+		if observed != nil {
+			observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
+		}
+
 		attrs := []slog.Attr{
 			slog.String("method", r.Method),
 			slog.String("route", route),
 			slog.Int64("status", int64(wrapped.status)),
-			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.Int64("duration_ms", elapsed.Milliseconds()),
 			slog.Int64("bytes", wrapped.bytes),
 			slog.String("request_id", id),
 			slog.String("adapter", adapter),
@@ -795,7 +836,7 @@ func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authe
 	})
 }
 
-func routes(a adapters, cfg settings) (http.Handler, error) {
+func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory units route, the OpenTofu routes and the
@@ -826,5 +867,5 @@ func routes(a adapters, cfg settings) (http.Handler, error) {
 		mux.Handle("/", console)
 	}
 
-	return withRequestLog(mux, cfg.logger, cfg.authenticator), nil
+	return withRequestLog(mux, cfg.logger, cfg.authenticator, observed), nil
 }
