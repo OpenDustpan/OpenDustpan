@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -100,7 +101,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return open(t, base)
+		return openUncounted(t, base)
 	})
 }
 
@@ -213,6 +214,55 @@ func open(t *testing.T, base string) *postgres.Store {
 	t.Cleanup(s.Close)
 
 	return s
+}
+
+// uncountedStore wraps a Store with its schema URL so the uncounted-checkpoint
+// case sets the stored count to NULL with a direct SQL update: the port
+// always writes the count, so only SQL seeds rows from before the column.
+type uncountedStore struct {
+	storetest.UpdatesStore
+
+	url string
+	t   *testing.T
+}
+
+var _ storetest.CountNullifier = (*uncountedStore)(nil)
+
+// openUncounted returns a store in a fresh schema of the database at base
+// that the uncounted-checkpoint case can NULL through SQL.
+func openUncounted(t *testing.T, base string) *uncountedStore {
+	t.Helper()
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return &uncountedStore{UpdatesStore: s, url: schemaURL, t: t}
+}
+
+// NullifyResourceCount implements storetest.CountNullifier.
+func (s *uncountedStore) NullifyResourceCount(ctx context.Context) error {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			s.t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
+		return fmt.Errorf("nullify the checkpoint count: %w", err)
+	}
+
+	return nil
 }
 
 // TestRenameKeepsTags checks that tags follow the stack ID through a rename:

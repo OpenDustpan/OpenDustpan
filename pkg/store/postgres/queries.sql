@@ -170,7 +170,7 @@ FOR SHARE;
 
 -- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1
@@ -179,13 +179,13 @@ LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features, deployment, saved_at_ms
+       digest, invalid, features, deployment, saved_at_ms, resource_count
 FROM checkpoints
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms
+       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = $1 AND u.version = $2;
@@ -193,8 +193,8 @@ WHERE c.stack_id = $1 AND u.version = $2;
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    digest, invalid, features, deployment, saved_at_ms, resource_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -203,7 +203,32 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     invalid = excluded.invalid,
     features = excluded.features,
     deployment = excluded.deployment,
-    saved_at_ms = excluded.saved_at_ms;
+    saved_at_ms = excluded.saved_at_ms,
+    resource_count = excluded.resource_count;
+
+-- name: LatestResourceCount :one
+-- The stored managed resource count of the stack's latest checkpoint. It is
+-- NULL when the stack has no checkpoint or when the checkpoint predates the
+-- count: the caller then counts that one deployment. It reads only the count
+-- column, never the deployment.
+SELECT (
+    SELECT c.resource_count
+    FROM checkpoints AS c
+    JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+    WHERE c.stack_id = $1
+    ORDER BY u.version DESC
+    LIMIT 1
+);
+
+-- name: LatestDeployment :one
+-- The deployment of the stack's latest checkpoint, for the delete guard of a
+-- checkpoint that predates the stored count. It loads one deployment only.
+SELECT c.deployment
+FROM checkpoints AS c
+JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE c.stack_id = $1
+ORDER BY u.version DESC
+LIMIT 1;
 
 -- name: DeleteStack :execrows
 DELETE FROM stacks

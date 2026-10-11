@@ -298,6 +298,8 @@ func (s *fakeBackupStore) ListStacks(_ context.Context, filter stack.Filter) ([]
 }
 
 // DeleteStack implements stack.Store with its children, key and entry.
+// When the latest checkpoint manages resources, it returns
+// ErrHasResources and removes nothing.
 func (s *fakeBackupStore) DeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -321,18 +323,41 @@ func (s *fakeBackupStore) DeleteStack(_ context.Context, ref stack.Ref, fence na
 		}
 	}
 
-	delete(s.data.stacks, ref.String())
-	delete(s.data.stackIDs, st.ID.String())
-	delete(s.data.updates, st.ID.String())
-	delete(s.data.checkpoints, st.ID.String())
-	delete(s.data.events, st.ID.String())
-	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
+	if s.latestResourceCount(st.ID.String()) > 0 {
+		return stack.ErrHasResources
+	}
 
-	for scope, key := range s.data.keys {
-		if key.Scope.Namespace == ref.Namespace && key.Scope.ID == st.ID.String() {
-			delete(s.data.keys, scope)
+	s.removeStack(ref, st)
+
+	return nil
+}
+
+// ForceDeleteStack implements stack.Store with its children, key and entry,
+// even when the latest checkpoint manages resources.
+func (s *fakeBackupStore) ForceDeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return err
+	}
+
+	st, ok := s.data.stacks[ref.String()]
+	if !ok {
+		return stack.ErrNotFound
+	}
+
+	for id := range s.data.updates[st.ID.String()] {
+		if u := s.data.updates[st.ID.String()][id]; u.Status == stack.StatusRunning && u.Mutates() {
+			return stack.ErrUpdateConflict
 		}
 	}
+
+	s.removeStack(ref, st)
 
 	return nil
 }
@@ -1737,6 +1762,48 @@ func (s *fakeBackupStore) Import(
 	}
 
 	return s.swapLoaded(loaded)
+}
+
+// latestResourceCount returns the managed resource count of the latest
+// checkpoint of the stack with stackID, or 0 when it has none. Callers hold
+// the write lock, so the check runs in the same step as the delete.
+func (s *fakeBackupStore) latestResourceCount(stackID string) int64 {
+	var (
+		best  stack.Checkpoint
+		found bool
+	)
+
+	for key := range s.data.checkpoints[stackID] {
+		cp := s.data.checkpoints[stackID][key]
+		u := s.data.updates[stackID][cp.Update.String()]
+
+		if !found || u.Version > s.data.updates[stackID][best.Update.String()].Version {
+			best, found = cp, true
+		}
+	}
+
+	if !found {
+		return 0
+	}
+
+	return stack.CountManagedResources(best.Deployment)
+}
+
+// removeStack deletes ref with the stack st, its children, key and entry.
+// Callers hold the write lock.
+func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
+	delete(s.data.stacks, ref.String())
+	delete(s.data.stackIDs, st.ID.String())
+	delete(s.data.updates, st.ID.String())
+	delete(s.data.checkpoints, st.ID.String())
+	delete(s.data.events, st.ID.String())
+	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
+
+	for scope, key := range s.data.keys {
+		if key.Scope.Namespace == ref.Namespace && key.Scope.ID == st.ID.String() {
+			delete(s.data.keys, scope)
+		}
+	}
 }
 
 // checkManifest refuses a manifest of another dialect or schema version,
