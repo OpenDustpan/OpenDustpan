@@ -399,6 +399,125 @@ type StepSpec struct {
 	Fail bool
 }
 
+// ParallelSpec describes one scenario step that runs several CLI invocations
+// at the same time, for operations that must not block each other.
+type ParallelSpec struct {
+	// Check inspects every successful run; nil means zero exits are enough.
+	Check func([]Result) error
+	// Name labels the subtest, the report row and the requests the runs make.
+	Name string
+	// Args holds one CLI argument list per invocation.
+	Args [][]string
+	// Env holds extra NAME=value pairs for every invocation of this step.
+	Env []string
+}
+
+// StepParallel runs every argument list in spec at the same time and records
+// one step. It fails the subtest on a non-zero exit or when spec.Check
+// returns an error. A failing step does not stop later steps.
+func (e *Env) StepParallel(ctx context.Context, t *testing.T, spec ParallelSpec) []Result {
+	t.Helper()
+
+	res := make([]Result, len(spec.Args))
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		type outcome struct {
+			res Result
+			err error
+		}
+
+		outs := make([]outcome, len(spec.Args))
+
+		var wg sync.WaitGroup
+
+		for i, args := range spec.Args {
+			wg.Go(func() {
+				outs[i].res, outs[i].err = e.Run(ctx, spec.Env, args...)
+			})
+		}
+
+		wg.Wait()
+
+		var failure string
+
+		for i := range outs {
+			res[i] = outs[i].res
+
+			t.Logf("%s (%s)\nstdout:\n%s\nstderr:\n%s", res[i].Command,
+				res[i].Duration.Round(time.Millisecond), clip(res[i].Stdout), clip(res[i].Stderr))
+
+			switch {
+			case failure != "":
+			case outs[i].err != nil:
+				failure = outs[i].err.Error()
+			case res[i].ExitCode != 0:
+				failure = fmt.Sprintf("exit code %d", res[i].ExitCode)
+			default:
+			}
+		}
+
+		if failure == "" && spec.Check != nil {
+			if checkErr := spec.Check(res); checkErr != nil {
+				failure = checkErr.Error()
+			}
+		}
+
+		e.steps = append(e.steps, StepResult{
+			Name:     spec.Name,
+			Command:  parallelCommand(spec.Args),
+			Failure:  failure,
+			Stderr:   clip(parallelStderr(res)),
+			ExitCode: parallelExit(res, failure),
+			Passed:   failure == "",
+			Skipped:  false,
+		})
+
+		if failure != "" {
+			t.Errorf("%s: %s", spec.Name, failure)
+		}
+	})
+
+	return res
+}
+
+// parallelCommand joins several argument lists into one report command.
+func parallelCommand(argSets [][]string) string {
+	parts := make([]string, 0, len(argSets))
+	for _, args := range argSets {
+		parts = append(parts, strings.Join(args, " "))
+	}
+
+	return strings.Join(parts, " & ")
+}
+
+// parallelStderr joins the stderr of parallel runs for the report.
+func parallelStderr(res []Result) string {
+	parts := make([]string, 0, len(res))
+	for _, r := range res {
+		parts = append(parts, r.Stderr)
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// parallelExit reports the first non-zero exit, or zero when failure names a
+// transport error rather than an exit.
+func parallelExit(res []Result, failure string) int {
+	for _, r := range res {
+		if r.ExitCode != 0 {
+			return r.ExitCode
+		}
+	}
+
+	if failure != "" {
+		return 1
+	}
+
+	return 0
+}
+
 // Step runs spec as a subtest. It fails the subtest on an unexpected exit
 // (non-zero, or zero when spec.Fail expects a failure) or when spec.Check
 // returns an error, and records the outcome for the report. A failing step

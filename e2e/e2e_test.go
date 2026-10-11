@@ -263,6 +263,25 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
+	for _, s := range []e2e.StepSpec{
+		step("preview", nil, "preview", "--non-interactive"),
+		// A preview changes no resources, so it leaves no history.
+		step("stack history hides previews", historyHidesPreviews, "stack", "history", "--json"),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	// Previews take no lock, so two at once on one stack both work.
+	env.StepParallel(ctx, t, e2e.ParallelSpec{
+		Name:  "concurrent previews",
+		Check: nil,
+		Args: [][]string{
+			{"preview", "--non-interactive"},
+			{"preview", "--non-interactive"},
+		},
+		Env: nil,
+	})
+
 	beforeID := stackIDBeforeRename(t, env, org)
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -277,6 +296,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("stack tag ls after rename", tagListed("team", "e2e"), "stack", "tag", "ls"))
 	env.Step(ctx, t, step("stack tag rm", nil, "stack", "tag", "rm", "team"))
 	env.Step(ctx, t, step("stack tag ls after rm", tagAbsent("team"), "stack", "tag", "ls"))
+
+	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
 
 	for _, s := range pulumiTeardownSteps(scratch) {
 		env.Step(ctx, t, s)
@@ -330,8 +351,6 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 		// The service backend encrypts secrets on the server, per stack.
 		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
 		step("stack export", nil, "stack", "export"),
-		step("preview", nil, "preview", "--non-interactive"),
-		step("up", nil, "up", "--yes", "--non-interactive"),
 		{
 			// An unqualified stack name takes the default organization.
 			Check: func(e2e.Result) error {
@@ -452,6 +471,24 @@ func stackListed(r e2e.Result) error {
 	}
 
 	return fmt.Errorf("%w: stack %q not listed: %s", errUnexpected, stackName, r.Stdout)
+}
+
+// historyHidesPreviews fails when the stack history holds any update: a
+// preview changes nothing, so it must leave no entry.
+func historyHidesPreviews(r e2e.Result) error {
+	var updates []struct {
+		Kind string `json:"kind"`
+	}
+
+	if err := json.Unmarshal([]byte(r.Stdout), &updates); err != nil {
+		return fmt.Errorf("%w: decode stack history: %w", errUnexpected, err)
+	}
+
+	if len(updates) != 0 {
+		return fmt.Errorf("%w: stack history holds %d updates, want none after a preview", errUnexpected, len(updates))
+	}
+
+	return nil
 }
 
 // consoleURLSteps records how the CLI derives console links from the backend

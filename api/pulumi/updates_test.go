@@ -1,0 +1,961 @@
+package pulumi_test
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"opendustpan.org/opendustpan/api/pulumi"
+	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/stack"
+)
+
+// updatePatterns lists every update route as "METHOD path". The enforcement
+// tests use it to tell update routes, which need live update state, apart
+// from the older routes.
+func updatePatterns() []string {
+	return []string{
+		"POST /api/stacks/{namespace}/{project}/{stack}/update",
+		"POST /api/stacks/{namespace}/{project}/{stack}/preview",
+		"POST /api/stacks/{namespace}/{project}/{stack}/refresh",
+		"POST /api/stacks/{namespace}/{project}/{stack}/destroy",
+		"POST /api/stacks/{namespace}/{project}/{stack}/import",
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}",
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
+		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
+		"GET /api/stacks/{namespace}/{project}/{stack}/export",
+	}
+}
+
+// memUpdateStore implements the update, checkpoint and event ports in
+// memory, following their documented contracts far enough for the HTTP
+// tests: compare-and-swap on revision, one mutating update per stack,
+// versions, and lease checks on event writes.
+type memUpdateStore struct {
+	updates      map[stack.UpdateID]stack.Update
+	stackVersion map[stack.Ref]int64
+	checkpoints  map[stack.UpdateID]stack.Checkpoint
+	events       map[stack.UpdateID][]stack.Event
+	mu           sync.Mutex
+}
+
+func newMemUpdateStore() *memUpdateStore {
+	return &memUpdateStore{
+		updates:      map[stack.UpdateID]stack.Update{},
+		stackVersion: map[stack.Ref]int64{},
+		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
+		events:       map[stack.UpdateID][]stack.Event{},
+		mu:           sync.Mutex{},
+	}
+}
+
+func (m *memUpdateStore) CreateUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.updates[u.ID] = u
+
+	return nil
+}
+
+func (m *memUpdateStore) GetUpdate(_ context.Context, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	u, ok := m.updates[id]
+	if !ok || u.Ref != ref {
+		return stack.Update{}, stack.ErrUpdateNotFound
+	}
+
+	return u, nil
+}
+
+func (m *memUpdateStore) StartUpdate(_ context.Context, u stack.Update, _ namespace.Fence) (stack.Update, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.updates[u.ID].Revision != u.Revision-1 {
+		return stack.Update{}, stack.ErrConcurrentModification
+	}
+
+	var highest int64
+
+	for id := range m.updates {
+		if !m.updates[id].Mutates() || m.updates[id].Ref != u.Ref {
+			continue
+		}
+
+		if m.updates[id].Status == stack.StatusRunning && u.Mutates() {
+			return stack.Update{}, stack.ErrUpdateConflict
+		}
+
+		highest = max(highest, m.updates[id].Version)
+	}
+
+	u.Version = m.stackVersion[u.Ref]
+	if u.Mutates() {
+		u.Version = highest + 1
+	}
+
+	m.updates[u.ID] = u
+
+	return u, nil
+}
+
+func (m *memUpdateStore) SaveUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.updates[u.ID].Revision != u.Revision-1 {
+		return stack.ErrConcurrentModification
+	}
+
+	if u.Mutates() && u.Status.Terminal() && u.Version > 0 {
+		m.stackVersion[u.Ref] = u.Version
+	}
+
+	m.updates[u.ID] = u
+
+	return nil
+}
+
+func (m *memUpdateStore) ActiveUpdate(_ context.Context, ref stack.Ref) (stack.Update, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.updates {
+		if m.updates[id].Ref == ref && m.updates[id].Mutates() && m.updates[id].Status == stack.StatusRunning {
+			return m.updates[id], nil
+		}
+	}
+
+	return stack.Update{}, stack.ErrUpdateNotFound
+}
+
+func (m *memUpdateStore) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page) ([]stack.Update, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var list []stack.Update
+
+	for id := range m.updates {
+		if m.updates[id].Ref == ref && m.updates[id].Mutates() && m.updates[id].Status != stack.StatusNotStarted {
+			list = append(list, m.updates[id])
+		}
+	}
+
+	slices.SortFunc(list, func(a, b stack.Update) int { return int(b.Version - a.Version) })
+
+	return list, nil
+}
+
+func (m *memUpdateStore) PutCheckpoint(_ context.Context, cp stack.Checkpoint, _ namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.checkpoints[cp.Update] = cp
+
+	return nil
+}
+
+func (m *memUpdateStore) LatestCheckpoint(_ context.Context, ref stack.Ref) (stack.Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var (
+		best    stack.Checkpoint
+		found   bool
+		highest int64 = -1
+	)
+
+	for id := range m.checkpoints {
+		if m.checkpoints[id].Ref != ref {
+			continue
+		}
+
+		if v := m.updates[id].Version; v > highest {
+			highest, best, found = v, m.checkpoints[id], true
+		}
+	}
+
+	if !found {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	return best, nil
+}
+
+func (m *memUpdateStore) CheckpointByVersion(
+	_ context.Context, ref stack.Ref, version int64,
+) (stack.Checkpoint, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.checkpoints {
+		if m.checkpoints[id].Ref == ref && m.updates[id].Version == version {
+			return m.checkpoints[id], nil
+		}
+	}
+
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+func (m *memUpdateStore) AppendEvents(
+	_ context.Context,
+	batch stack.EventBatch,
+	_ namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	u := m.updates[batch.Update]
+	if u.Status != stack.StatusRunning || u.Lease.Digest != batch.Lease {
+		return stack.ErrWrongUpdateState
+	}
+
+	for _, e := range batch.Events {
+		if !slices.ContainsFunc(
+			m.events[batch.Update],
+			func(have stack.Event) bool { return have.Sequence == e.Sequence },
+		) {
+			m.events[batch.Update] = append(m.events[batch.Update], e)
+		}
+	}
+
+	return nil
+}
+
+func (m *memUpdateStore) ListEvents(
+	_ context.Context, _ stack.Ref, id stack.UpdateID, after int64, limit int,
+) ([]stack.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.updates[id]; !ok {
+		return nil, stack.ErrUpdateNotFound
+	}
+
+	var out []stack.Event
+
+	for _, e := range m.events[id] {
+		if e.Sequence > after && len(out) < limit {
+			out = append(out, e)
+		}
+	}
+
+	return out, nil
+}
+
+// updateFixture is a Handler backed by real stack and update services over
+// in-memory stores, plus the services to mint update state with.
+type updateFixture struct {
+	handler *pulumi.Handler
+	updates *stack.Updates
+	ref     stack.Ref
+}
+
+// newUpdateFixture builds a Handler whose update routes work end to end.
+// authz decides the authorization policy under test.
+func newUpdateFixture(t *testing.T, authz identity.Authorizer) updateFixture {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil}
+
+	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	mem := newMemUpdateStore()
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            mem,
+		Checkpoints:        mem,
+		Events:             mem,
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("updates service: %v", err)
+	}
+
+	handler, err := pulumi.NewHandler(pulumi.Config{
+		Stacks:        stacks,
+		Updates:       updates,
+		Namespaces:    namespaces,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	return updateFixture{handler: handler, updates: updates, ref: ref}
+}
+
+// allowAll authorizes every action.
+func allowAll() selectiveAuthorizer {
+	return selectiveAuthorizer{deny: map[identity.Action]bool{}}
+}
+
+// updateRequest describes one update-route request. Lease is sent as the
+// update-token credential when not empty, access as the access token
+// otherwise. Either may be empty for the unauthenticated cases.
+type updateRequest struct {
+	Method string
+	Target string
+	Access string
+	Lease  string
+	Body   string
+}
+
+// accessRequest builds a request that signs in with the test access token.
+func accessRequest(method, target, body string) updateRequest {
+	return updateRequest{Method: method, Target: target, Access: "test-token", Lease: "", Body: body}
+}
+
+// leaseRequest builds a request that presents the update lease token.
+func leaseRequest(method, target, lease, body string) updateRequest {
+	return updateRequest{Method: method, Target: target, Access: "", Lease: lease, Body: body}
+}
+
+// anonymousRequest builds a request with no credential.
+func anonymousRequest(method, target, body string) updateRequest {
+	return updateRequest{Method: method, Target: target, Access: "", Lease: "", Body: body}
+}
+
+// doUpdate sends one update-route request.
+func (f updateFixture) doUpdate(t *testing.T, req updateRequest) (int, string) {
+	t.Helper()
+
+	var httpReq *http.Request
+	if req.Body == "" {
+		httpReq = httptest.NewRequestWithContext(t.Context(), req.Method, req.Target, http.NoBody)
+	} else {
+		httpReq = httptest.NewRequestWithContext(t.Context(), req.Method, req.Target, strings.NewReader(req.Body))
+	}
+
+	switch {
+	case req.Lease != "":
+		httpReq.Header.Set("Authorization", "update-token "+req.Lease)
+	case req.Access != "":
+		httpReq.Header.Set("Authorization", "token "+req.Access)
+	default:
+	}
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, httpReq)
+
+	return rec.Code, rec.Body.String()
+}
+
+// mintStarted creates and starts a preview update and returns its ID and
+// lease token.
+func (f updateFixture) mintStarted(t *testing.T) (stack.UpdateID, string) {
+	t.Helper()
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.updates.Start(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	return u.ID, started.Token.Reveal()
+}
+
+// updatePaths holds the start, lease and get paths for one update.
+type updatePaths struct {
+	Start    string
+	Renew    string
+	Events   string
+	Complete string
+	Get      string
+}
+
+// mintedPaths returns the start, lease and get paths for one update.
+func mintedPaths(id stack.UpdateID) updatePaths {
+	base := "/api/stacks/acme/web/prod/update/" + id.String()
+
+	return updatePaths{
+		Start:    base,
+		Renew:    base + "/renew_lease",
+		Events:   base + "/events/batch",
+		Complete: base + "/complete",
+		Get:      base,
+	}
+}
+
+// isLeasePattern reports whether pattern is a lease route: the lease token
+// stands in for sign-in on these routes only.
+func isLeasePattern(pattern string) bool {
+	for _, suffix := range []string{"/renew_lease", "/events/batch", "/complete"} {
+		if strings.HasSuffix(pattern, suffix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// wantUpdateScope maps every update route to the scope it must declare.
+func wantUpdateScope() map[string]pulumi.Scope {
+	want := map[string]pulumi.Scope{}
+
+	for _, pattern := range updatePatterns() {
+		if isLeasePattern(pattern) {
+			want[pattern] = pulumi.ScopeUpdateLease
+		} else {
+			want[pattern] = pulumi.ScopeAuthorized
+		}
+	}
+
+	return want
+}
+
+// checkUpdateRoute proves one route declares exactly unit:write with a
+// resolver and the expected scope.
+func checkUpdateRoute(t *testing.T, route pulumi.Route, want map[string]pulumi.Scope) {
+	t.Helper()
+
+	pattern := route.Method + " " + route.Path
+	scope, ok := want[pattern]
+
+	if !ok {
+		return
+	}
+
+	if route.Scope != scope {
+		t.Errorf("route %q scope = %v, want %v", pattern, route.Scope, scope)
+	}
+
+	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionUnitWrite {
+		t.Errorf("route %q actions = %v, want exactly [unit:write]", pattern, route.Actions)
+	}
+
+	if route.Resolve == nil {
+		t.Errorf("route %q declares actions but no resolver", pattern)
+	}
+}
+
+// TestUpdateRoutesDeclareUnitWrite proves every update route declares
+// exactly unit:write on the unit, with a resolver and the expected scope:
+// the lease token stands in for sign-in on the lease routes only.
+func TestUpdateRoutesDeclareUnitWrite(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	want := wantUpdateScope()
+	seen := map[string]bool{}
+
+	for _, route := range f.handler.Routes() {
+		pattern := route.Method + " " + route.Path
+		if _, ok := want[pattern]; ok {
+			seen[pattern] = true
+		}
+
+		checkUpdateRoute(t, route, want)
+	}
+
+	for _, pattern := range updatePatterns() {
+		if !seen[pattern] {
+			t.Errorf("route %q is not declared", pattern)
+		}
+	}
+}
+
+// createPreviewUpdate creates a preview through HTTP and returns its ID.
+func createPreviewUpdate(t *testing.T, f updateFixture) stack.UpdateID {
+	t.Helper()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/preview", `{}`))
+	if status != http.StatusOK {
+		t.Fatalf("create answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var created struct {
+		UpdateID string `json:"updateID"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.UpdateID == "" {
+		t.Fatalf("create answers %q, want an update ID: %v", body, err)
+	}
+
+	return stack.UpdateID(created.UpdateID)
+}
+
+// startPreviewUpdate starts a preview through HTTP and returns its lease.
+// A preview takes no version: it carries the stack's current version.
+func startPreviewUpdate(t *testing.T, f updateFixture, paths updatePaths) string {
+	t.Helper()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Start, `{}`))
+	if status != http.StatusOK {
+		t.Fatalf("start answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var started struct {
+		Token   string `json:"token"`
+		Version int    `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil {
+		t.Fatalf("decode start: %v (%s)", err, body)
+	}
+
+	if started.Token == "" {
+		t.Fatalf("start answers no lease token (%s)", body)
+	}
+
+	if started.Version != 0 {
+		t.Fatalf("preview version = %d, want the stack's current version 0", started.Version)
+	}
+
+	return started.Token
+}
+
+// finishPreviewUpdate posts one engine event batch and completes a preview.
+func finishPreviewUpdate(t *testing.T, f updateFixture, paths updatePaths, lease string) {
+	t.Helper()
+
+	event := `{"sequence":0,"timestamp":0,"diagnosticEvent":{"message":"hi","severity":"info"}}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPost, paths.Events, lease, `{"events":[`+event+`]}`))
+	if status != http.StatusOK {
+		t.Fatalf("events answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	status, body = f.doUpdate(t, leaseRequest(http.MethodPost, paths.Complete, lease, `{"status":"succeeded"}`))
+	if status != http.StatusOK {
+		t.Fatalf("complete answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+}
+
+// checkPreviewInvisible proves a finished preview is readable but leaves no
+// history: a preview changes nothing.
+func checkPreviewInvisible(t *testing.T, f updateFixture, paths updatePaths) {
+	t.Helper()
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, paths.Get, ""))
+	if status != http.StatusOK || !strings.Contains(body, `"status":"succeeded"`) {
+		t.Fatalf("get answers %d %q, want 200 with status succeeded", status, body)
+	}
+
+	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""))
+	if status != http.StatusOK || strings.TrimSpace(body) != `{"updates":[]}` {
+		t.Fatalf("history answers %d %q, want 200 with no updates", status, body)
+	}
+}
+
+// TestPreviewUpdateCycle drives one preview through HTTP: create, start,
+// events, complete, get and history. History stays empty: a preview changes
+// nothing.
+func TestPreviewUpdateCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	id := createPreviewUpdate(t, f)
+	paths := mintedPaths(id)
+	lease := startPreviewUpdate(t, f, paths)
+	finishPreviewUpdate(t, f, paths, lease)
+	checkPreviewInvisible(t, f, paths)
+}
+
+// leaseCase is one renewal or completion attempt against a lease route.
+type leaseCase struct {
+	name   string
+	method string
+	target string
+	body   string
+}
+
+// leaseCases returns the renew and complete attempts for paths.
+func leaseCases(prefix string, paths updatePaths) []leaseCase {
+	return []leaseCase{
+		{name: prefix + "renew", method: http.MethodPost, target: paths.Renew, body: `{"duration":60}`},
+		{name: prefix + "complete", method: http.MethodPost, target: paths.Complete, body: `{"status":"succeeded"}`},
+	}
+}
+
+// checkUnauthorizedError proves an error body carries the 401 code shape.
+func checkUnauthorizedError(t *testing.T, body string) {
+	t.Helper()
+
+	var decoded struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode error: %v (%s)", err, body)
+	}
+
+	if decoded.Code != http.StatusUnauthorized || decoded.Message == "" {
+		t.Fatalf("error = %+v, want code 401 with a message", decoded)
+	}
+}
+
+// checkLeaseMissing proves the lease routes answer 401 without a credential.
+func checkLeaseMissing(t *testing.T, f updateFixture, paths updatePaths) {
+	t.Helper()
+
+	for _, tc := range leaseCases("missing ", paths) {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, body := f.doUpdate(t, anonymousRequest(tc.method, tc.target, tc.body))
+			if status != http.StatusUnauthorized {
+				t.Fatalf("status %d, want %d (%s)", status, http.StatusUnauthorized, body)
+			}
+		})
+	}
+}
+
+// checkLeaseWrong proves the lease routes answer 401 for a foreign token.
+func checkLeaseWrong(t *testing.T, f updateFixture, paths updatePaths, foreign string) {
+	t.Helper()
+
+	for _, tc := range leaseCases("wrong ", paths) {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, body := f.doUpdate(t, leaseRequest(tc.method, tc.target, foreign, tc.body))
+			if status != http.StatusUnauthorized {
+				t.Fatalf("status %d, want %d (%s)", status, http.StatusUnauthorized, body)
+			}
+
+			checkUnauthorizedError(t, body)
+		})
+	}
+}
+
+// TestUpdateLeaseRejected proves renewal and completion with a wrong lease
+// token are rejected, without touching any store.
+func TestUpdateLeaseRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, _ := f.mintStarted(t)
+	paths := mintedPaths(id)
+
+	foreign, err := token.New()
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+
+	checkLeaseMissing(t, f, paths)
+	checkLeaseWrong(t, f, paths, foreign.Reveal())
+}
+
+// TestUpdateRoutesEnforce proves every update route enforces its row.
+// Access-authed routes answer 200 when allowed and 403 when their action is
+// denied. Lease routes answer 200 with a valid lease even when the
+// Authorizer denies: the lease stands in for the declared unit:write. Both
+// answer 401 without a usable credential.
+func TestUpdateRoutesEnforce(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range updatePatterns() {
+		t.Run(pattern, func(t *testing.T) {
+			t.Parallel()
+			checkUpdateRouteEnforcement(t, pattern)
+		})
+	}
+}
+
+// checkUpdateRouteEnforcement proves one update route enforces its row with
+// a fresh handler and fresh update state per case.
+func checkUpdateRouteEnforcement(t *testing.T, pattern string) {
+	t.Helper()
+
+	route := updateRoute(t, newUpdateFixture(t, allowAll()).handler, pattern)
+
+	if route.Scope == pulumi.ScopeUpdateLease {
+		checkLeaseRouteEnforcement(t, route, pattern)
+
+		return
+	}
+
+	allowed := newUpdateFixture(t, allowAll())
+	at := accessRouteTarget(t, allowed, pattern)
+
+	status, resp := allowed.doUpdate(t, accessRequest(route.Method, at.Target, at.Body))
+	if status != http.StatusOK {
+		t.Fatalf("allowed request answers %d, want %d (%s)", status, http.StatusOK, resp)
+	}
+
+	denied := newUpdateFixture(t, selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWrite: true}})
+
+	status, resp = denied.doUpdate(t, accessRequest(route.Method, at.Target, at.Body))
+	if status != http.StatusForbidden {
+		t.Fatalf("denied request answers %d, want %d (%s)", status, http.StatusForbidden, resp)
+	}
+
+	status, resp = allowed.doUpdate(t, anonymousRequest(route.Method, at.Target, at.Body))
+	if status != http.StatusUnauthorized {
+		t.Fatalf("unsigned request answers %d, want %d (%s)", status, http.StatusUnauthorized, resp)
+	}
+}
+
+// updateRoute returns the declared route for pattern.
+func updateRoute(t *testing.T, handler *pulumi.Handler, pattern string) pulumi.Route {
+	t.Helper()
+
+	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path == pattern {
+			return route
+		}
+	}
+
+	t.Fatalf("route %q is not declared", pattern)
+
+	return pulumi.Route{Method: "", Path: "", Scope: 0, Actions: nil, Resolve: nil, Serve: nil}
+}
+
+// accessTarget holds the target and body for an access-authed update route.
+type accessTarget struct {
+	Target string
+	Body   string
+}
+
+// accessRouteTarget builds the target and body for an access-authed update
+// route, minting the update state the route needs in f: a created update
+// for start and get, none for create, history and export.
+func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarget {
+	t.Helper()
+
+	switch {
+	case strings.HasSuffix(pattern, "/updates"), strings.HasSuffix(pattern, "/export"):
+		return accessTarget{
+			Target: "/api/stacks/acme/web/prod" + strings.TrimPrefix(
+				pattern, "GET /api/stacks/{namespace}/{project}/{stack}",
+			),
+			Body: "",
+		}
+	case strings.HasSuffix(pattern, "/update/{update}"):
+		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindPreview, DryRun: false})
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		return accessTarget{Target: "/api/stacks/acme/web/prod/update/" + u.ID.String(), Body: "{}"}
+	default:
+		kind := strings.TrimPrefix(pattern, "POST /api/stacks/{namespace}/{project}/{stack}/")
+
+		return accessTarget{Target: "/api/stacks/acme/web/prod/" + kind, Body: "{}"}
+	}
+}
+
+// leaseBodies holds one valid body per lease route.
+func leaseBodies() map[string]string {
+	return map[string]string{
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  `{"duration":60}`,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": `{"events":[]}`,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     `{"status":"succeeded"}`,
+	}
+}
+
+// leaseTargets returns the renew, event and complete paths for one update.
+func leaseTargets(id stack.UpdateID) map[string]string {
+	paths := mintedPaths(id)
+
+	return map[string]string{
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  paths.Renew,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": paths.Events,
+		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     paths.Complete,
+	}
+}
+
+// checkLeaseRouteEnforcement proves one lease route answers 200 with a
+// valid lease whatever the Authorizer says, and 401 otherwise.
+func checkLeaseRouteEnforcement(t *testing.T, route pulumi.Route, pattern string) {
+	t.Helper()
+
+	body, ok := leaseBodies()[pattern]
+	if !ok {
+		t.Fatalf("no lease body for route %q", pattern)
+	}
+
+	// A valid lease answers 200, whether the Authorizer allows or denies.
+	for _, authz := range []identity.Authorizer{
+		allowAll(),
+		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWrite: true}},
+	} {
+		f := newUpdateFixture(t, authz)
+		id, lease := f.mintStarted(t)
+		target := leaseTargets(id)[pattern]
+		status, resp := f.doUpdate(t, leaseRequest(route.Method, target, lease, body))
+
+		if status != http.StatusOK {
+			t.Fatalf("leased request answers %d, want %d (%s)", status, http.StatusOK, resp)
+		}
+	}
+
+	// Without a usable lease the route answers 401.
+	f := newUpdateFixture(t, allowAll())
+	id, _ := f.mintStarted(t)
+	target := leaseTargets(id)[pattern]
+
+	foreign, err := token.New()
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+
+	requests := []updateRequest{
+		anonymousRequest(route.Method, target, body),
+		accessRequest(route.Method, target, body),
+		leaseRequest(route.Method, target, foreign.Reveal(), body),
+	}
+
+	for _, req := range requests {
+		status, resp := f.doUpdate(t, req)
+		if status != http.StatusUnauthorized {
+			t.Fatalf("unleased request answers %d, want %d (%s)", status, http.StatusUnauthorized, resp)
+		}
+	}
+}
+
+// historyEntry is one entry of the stack history as the tests decode it.
+type historyEntry struct {
+	Result  string `json:"result"`
+	Kind    string `json:"kind"`
+	Version int    `json:"version"`
+}
+
+// historyPayload is the stack history as the tests decode it.
+type historyPayload struct {
+	Updates []historyEntry `json:"updates"`
+}
+
+// TestHistoryShowsFinishedUpdates proves the history lists a finished
+// mutating update with its kind, result and version.
+func TestHistoryShowsFinishedUpdates(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.updates.Start(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if _, err := f.updates.Complete(t.Context(), f.ref, u.ID, started.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	status, body := f.doUpdate(
+		t,
+		accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""),
+	)
+	if status != http.StatusOK {
+		t.Fatalf("history answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var history historyPayload
+
+	if err := json.Unmarshal([]byte(body), &history); err != nil {
+		t.Fatalf("decode history: %v (%s)", err, body)
+	}
+
+	if len(history.Updates) != 1 {
+		t.Fatalf("history holds %d updates, want 1 (%s)", len(history.Updates), body)
+	}
+
+	got := history.Updates[0]
+	if got.Kind != "update" || got.Result != "succeeded" || got.Version != 1 {
+		t.Fatalf("history entry = %+v, want kind update result succeeded version 1", got)
+	}
+}
+
+// TestRenewLeaseEchoesToken proves a renewal keeps the token: the answer
+// carries the presented token and its new expiry.
+func TestRenewLeaseEchoesToken(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, lease := f.mintStarted(t)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPost, paths.Renew, lease, `{"duration":60}`))
+	if status != http.StatusOK {
+		t.Fatalf("renew answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var renewed struct {
+		Token           string `json:"token"`
+		TokenExpiration int64  `json:"tokenExpiration"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &renewed); err != nil {
+		t.Fatalf("decode renew: %v (%s)", err, body)
+	}
+
+	if renewed.Token != lease {
+		t.Fatal("renew answers a new token, want the presented one kept")
+	}
+
+	if renewed.TokenExpiration <= 0 {
+		t.Fatalf("renew answers no expiry (%s)", body)
+	}
+}
+
+// TestEventBatchBodyLimit proves an event batch over the size limit is
+// rejected before it reaches any store.
+func TestEventBatchBodyLimit(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, lease := f.mintStarted(t)
+	paths := mintedPaths(id)
+
+	big := strings.Repeat("a", 8<<20+1)
+	payload := `{"events":[{"sequence":0,"payload":"` + big + `"}]}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPost, paths.Events, lease, payload))
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	var decoded struct {
+		Code int `json:"code"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil || decoded.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("error = %q, want code 413", body)
+	}
+}

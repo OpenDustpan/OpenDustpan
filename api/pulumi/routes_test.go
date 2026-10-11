@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,8 @@ func checkRouteScope(t *testing.T, route pulumi.Route, public map[string]bool) {
 		checkPublicRoute(t, route, public)
 	case pulumi.ScopeAuthorized:
 		checkAuthorizedRoute(t, route, public)
+	case pulumi.ScopeUpdateLease:
+		checkLeaseRoute(t, route, public)
 	default:
 		t.Fatalf("route %q declares no scope", pattern)
 	}
@@ -391,6 +394,27 @@ func checkPublicRoute(t *testing.T, route pulumi.Route, public map[string]bool) 
 
 	if route.Resolve != nil {
 		t.Fatalf("public route %q declares a resolver", pattern)
+	}
+}
+
+// checkLeaseRoute fails for a lease route that is on the public list or
+// that declares no action or no resolver. The exact action is asserted by
+// TestUpdateRoutesDeclareUnitWrite: every lease route declares unit:write.
+func checkLeaseRoute(t *testing.T, route pulumi.Route, public map[string]bool) {
+	t.Helper()
+
+	pattern := route.Method + " " + route.Path
+
+	if public[pattern] {
+		t.Fatalf("route %q is on the public list but declares actions", pattern)
+	}
+
+	if len(route.Actions) == 0 {
+		t.Fatalf("route %q declares no action", pattern)
+	}
+
+	if route.Resolve == nil {
+		t.Fatalf("route %q declares actions but no resolver", pattern)
 	}
 }
 
@@ -440,6 +464,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{namespace}", "acme",
 		"{project}", "web",
 		"{stack}", "prod",
+		"{update}", "update0123456789abcdef",
 	).Replace(route.Path)
 
 	target := path
@@ -476,13 +501,18 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 // TestRoutesEnforceAuthorization proves the table is enforced: with an
 // Authorizer that denies a declared action each authorized route answers
 // 403, and each route answers 200 when allowed. Table-driven over all
-// routes.
+// routes. Update routes need live update state, so they are skipped here
+// and enforced by TestUpdateRoutesEnforce instead.
 func TestRoutesEnforceAuthorization(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
+		if slices.Contains(updatePatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteEnforcement(t, route)
