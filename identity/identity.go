@@ -3,7 +3,7 @@
 //
 // OpenDustpan always issues its own access tokens; single sign-on providers
 // (OIDC, SAML, CAS, LDAP, local users) only authenticate humans so that a token
-// can be minted. Requests from the Pulumi CLI are therefore always token-based.
+// can be minted. Requests from tools are therefore always token-based.
 package identity
 
 import (
@@ -11,7 +11,9 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"strings"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/namespace"
 )
 
@@ -23,6 +25,8 @@ var (
 	ErrDenied = errors.New("permission denied")
 	// ErrWeakToken reports a configured token that is too short to be safe.
 	ErrWeakToken = errors.New("token too short")
+	// ErrInvalidObject reports a malformed namespace or unit reference.
+	ErrInvalidObject = errors.New("invalid object reference")
 )
 
 // minTokenLength is the shortest static token accepted, in bytes.
@@ -34,7 +38,7 @@ type Principal struct {
 	Subject string
 	// DisplayName is a human-readable name.
 	DisplayName string
-	// Admin grants every action in every namespace.
+	// Admin grants every action on every object.
 	Admin bool
 }
 
@@ -45,9 +49,138 @@ type Action string
 const (
 	ActionNamespaceRead  Action = "namespace:read"
 	ActionNamespaceAdmin Action = "namespace:admin"
-	ActionStackRead      Action = "stack:read"
-	ActionStackWrite     Action = "stack:write"
+	ActionUnitRead       Action = "unit:read"
+	ActionUnitWrite      Action = "unit:write"
+	ActionUnitManage     Action = "unit:manage"
+	ActionUnitEncrypt    Action = "unit:encrypt"
+	ActionUnitDecrypt    Action = "unit:decrypt"
 )
+
+// Object limits for the tool and unit parts of a unit reference.
+const (
+	maxToolLength = 100
+	maxUnitLength = 300
+)
+
+// Object is a namespace or a unit reference. A namespace reference is the
+// namespace name. A unit reference is the tool, the namespace and the tool's
+// own name for the unit, written as <tool>:<namespace>/<name>. The core keeps
+// the tool-specific name opaque and never parses it.
+type Object struct {
+	raw    string
+	ns     namespace.Name
+	tool   string
+	unit   string
+	isUnit bool
+}
+
+// NamespaceObject returns the reference to the namespace ns.
+func NamespaceObject(ns namespace.Name) Object {
+	return Object{raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false}
+}
+
+// UnitObject returns the reference to the unit called name in the namespace ns
+// for the tool tool. The name is opaque to the core. Tool names match exactly:
+// "pulumi" and "Pulumi" name different tools.
+func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
+	if !ident.Valid(tool, maxToolLength) {
+		return Object{}, fmt.Errorf("%w: tool %q", ErrInvalidObject, tool)
+	}
+
+	if !validUnitName(name) {
+		return Object{}, fmt.Errorf("%w: unit %q", ErrInvalidObject, name)
+	}
+
+	raw := tool + ":" + ns.String() + "/" + name
+
+	return Object{raw: raw, ns: ns, tool: tool, unit: name, isUnit: true}, nil
+}
+
+// ParseObject parses s as a namespace or unit reference.
+func ParseObject(s string) (Object, error) {
+	if !strings.Contains(s, ":") {
+		ns, err := namespace.ParseName(s)
+		if err != nil {
+			return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+		}
+
+		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false}, nil
+	}
+
+	return parseUnitObject(s)
+}
+
+// parseUnitObject parses s as a unit reference of the form
+// <tool>:<namespace>/<name>.
+func parseUnitObject(s string) (Object, error) {
+	tool, rest, _ := strings.Cut(s, ":")
+
+	if strings.Contains(rest, ":") {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	if !ident.Valid(tool, maxToolLength) {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	nsPart, unitPart, ok := strings.Cut(rest, "/")
+	if !ok {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	ns, err := namespace.ParseName(nsPart)
+	if err != nil {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	if !validUnitName(unitPart) {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true}, nil
+}
+
+// validUnitName reports whether name is a usable opaque unit name.
+func validUnitName(name string) bool {
+	if name == "" || len(name) > maxUnitLength {
+		return false
+	}
+
+	if strings.Contains(name, ":") {
+		return false
+	}
+
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
+		return false
+	}
+
+	return !strings.Contains(name, "//")
+}
+
+// String returns the reference in its wire form.
+func (o Object) String() string {
+	return o.raw
+}
+
+// IsUnit reports whether the reference names a unit rather than a namespace.
+func (o Object) IsUnit() bool {
+	return o.isUnit
+}
+
+// Namespace returns the namespace that owns the object.
+func (o Object) Namespace() namespace.Name {
+	return o.ns
+}
+
+// Tool returns the tool that owns the unit, or "" for a namespace.
+func (o Object) Tool() string {
+	return o.tool
+}
+
+// UnitName returns the tool's own opaque name for the unit, or "" for a namespace.
+func (o Object) UnitName() string {
+	return o.unit
+}
 
 // Authenticator turns an access token into a Principal.
 type Authenticator interface {
@@ -55,10 +188,10 @@ type Authenticator interface {
 	AuthenticateToken(ctx context.Context, token string) (Principal, error)
 }
 
-// Authorizer decides whether a principal may perform an action in a namespace.
+// Authorizer decides whether a principal may perform an action on an object.
 type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
-	Authorize(ctx context.Context, p Principal, action Action, ns namespace.Name) error
+	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
 }
 
 // StaticToken authenticates exactly one token as one administrator. It exists
@@ -98,10 +231,10 @@ type AdminOnly struct{}
 var _ Authorizer = AdminOnly{}
 
 // Authorize allows the action only for administrators.
-func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, ns namespace.Name) error {
+func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Object) error {
 	if p.Admin {
 		return nil
 	}
 
-	return fmt.Errorf("%w: %s may not %s in %q", ErrDenied, p.Subject, action, ns)
+	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
 }
