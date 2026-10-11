@@ -42,6 +42,34 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestPingClosed checks Ping answers on an open store and returns exactly the
+// sentinel text, with no driver text, after Close.
+func TestPingClosed(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	s := open(t, base)
+
+	if err := s.Ping(t.Context()); err != nil {
+		t.Fatalf("ping open store: %v", err)
+	}
+
+	s.Close()
+
+	err := s.Ping(t.Context())
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("ping closed store: err = %v, want ErrUnavailable", err)
+	}
+
+	if want := "ping postgres database: database unavailable"; err.Error() != want {
+		t.Fatalf("ping closed store error = %q, want %q", err, want)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 

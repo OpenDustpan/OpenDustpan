@@ -33,6 +33,10 @@ var (
 	ErrFenced = errors.New("write fenced: stale namespace failover version")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrUnavailable reports that the database does not answer. Adapters
+	// return it without driver text. Callers must use errors.Is to check
+	// for it, not string matching.
+	ErrUnavailable = errors.New("database unavailable")
 )
 
 const maxNameLength = 100
@@ -92,7 +96,10 @@ type Fence struct {
 	FailoverVersion int64
 }
 
-// Store is the persistence port for namespaces.
+// Store is the persistence port for namespaces. It is the root of the data:
+// every SQL adapter serves all ports from one database connection, and
+// dustpan.go already holds this port, so the readiness check reaches the
+// database through it with no new option.
 type Store interface {
 	// CreateNamespace persists ns. It returns ErrAlreadyExists if the name is taken.
 	CreateNamespace(ctx context.Context, ns Namespace) error
@@ -100,6 +107,9 @@ type Store interface {
 	GetNamespace(ctx context.Context, name Name) (Namespace, error)
 	// ListNamespaces returns every namespace, ordered by name.
 	ListNamespaces(ctx context.Context) ([]Namespace, error)
+	// Ping returns nil when the database answers within ctx. It returns
+	// ErrUnavailable otherwise. It never returns driver text.
+	Ping(ctx context.Context) error
 }
 
 // Config holds the dependencies of a Service.

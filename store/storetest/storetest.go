@@ -48,6 +48,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "duplicate namespace is ErrAlreadyExists", test: testDuplicateNamespace},
 		{name: "missing namespace is ErrNotFound", test: testMissingNamespace},
 		{name: "list namespaces orders by name", test: testListNamespaces},
+		{name: "ping answers on an open store and fails after close", test: testPing},
 		{name: "stack round trip", test: testStackRoundTrip},
 		{name: "duplicate stack is ErrAlreadyExists", test: testDuplicateStack},
 		{name: "stale fence is ErrFenced", test: testStaleFence},
@@ -190,6 +191,53 @@ func names(namespaces []namespace.Namespace) []namespace.Name {
 	}
 
 	return out
+}
+
+// testPing checks Ping answers nil on an open store and maps any failure to
+// namespace.ErrUnavailable without driver text, here forced by Close.
+func testPing(t *testing.T, s Store) {
+	t.Helper()
+
+	if err := s.Ping(t.Context()); err != nil {
+		t.Fatalf("ping open store: %v", err)
+	}
+
+	closeStore(t, s)
+
+	err := s.Ping(t.Context())
+	if !errors.Is(err, namespace.ErrUnavailable) {
+		t.Fatalf("ping closed store: err = %v, want ErrUnavailable", err)
+	}
+
+	// The adapters drop the driver error, so none of the texts the drivers
+	// report may reach the caller. The adapter names stay: each adapter wraps
+	// the sentinel as "ping <adapter> database: database unavailable".
+	for _, text := range []string{"sql: database is closed", "closed pool", "SQLITE", "sqlite3", "pgx"} {
+		if strings.Contains(err.Error(), text) {
+			t.Fatalf("ping closed store error %q holds driver text %q", err, text)
+		}
+	}
+}
+
+// closeStore closes s. The built-in adapters close with different signatures,
+// so it accepts both.
+func closeStore(t *testing.T, s Store) {
+	t.Helper()
+
+	var err error
+
+	switch c := any(s).(type) {
+	case interface{ Close() error }:
+		err = c.Close()
+	case interface{ Close() }:
+		c.Close()
+	default:
+		t.Fatalf("close store of type %T: no Close method", s)
+	}
+
+	if err != nil {
+		t.Fatalf("close store: %v", err)
+	}
 }
 
 func testStackRoundTrip(t *testing.T, s Store) {

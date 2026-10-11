@@ -33,6 +33,10 @@ func (m *memNamespaces) ListNamespaces(_ context.Context) ([]namespace.Namespace
 	return []namespace.Namespace{m.ns}, nil
 }
 
+func (m *memNamespaces) Ping(context.Context) error {
+	return nil
+}
+
 // memUpdates implements the update, checkpoint and event ports in memory,
 // following their documented contracts.
 type memUpdates struct {

@@ -52,6 +52,10 @@ func (stubNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespa
 	return nil, nil
 }
 
+func (stubNamespaceStore) Ping(_ context.Context) error {
+	return nil
+}
+
 // homedNamespaceStore answers every namespace homed in the test region, so
 // stack writes pass the home-region check.
 type homedNamespaceStore struct{}
@@ -78,6 +82,10 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 	}
 
 	return []namespace.Namespace{ns}, nil
+}
+
+func (homedNamespaceStore) Ping(_ context.Context) error {
+	return nil
 }
 
 // stubStackStore answers no stack. It exists only to build a Handler.

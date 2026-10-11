@@ -138,6 +138,10 @@ func (oneNamespace) ListNamespaces(_ context.Context) ([]namespace.Namespace, er
 	return nil, nil
 }
 
+func (oneNamespace) Ping(_ context.Context) error {
+	return nil
+}
+
 type fixture struct {
 	svc     *secret.Service
 	keys    *memKeys
