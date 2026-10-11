@@ -101,6 +101,18 @@ func (stubStackStore) RenameStack(
 	return stack.ErrNotFound
 }
 
+func (stubStackStore) UpdateStackTags(
+	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
+) error {
+	return nil
+}
+
+// taggedStack is one UpdateStackTags call: the stack and its new tags.
+type taggedStack struct {
+	tags map[string]string
+	ref  stack.Ref
+}
+
 // renamedStack records one rename call: the old reference and the new name.
 type renamedStack struct {
 	old stack.Ref
@@ -111,6 +123,7 @@ type renamedStack struct {
 // reference and records every Create and Rename. It lets the enforcement tests prove
 // that allowed requests reach the service.
 type recordingStackStore struct {
+	tags    []taggedStack
 	created []stack.Stack
 	renamed []renamedStack
 }
@@ -125,6 +138,14 @@ func (s *recordingStackStore) RenameStack(
 	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence,
 ) error {
 	s.renamed = append(s.renamed, renamedStack{old: oldRef, new: newName})
+
+	return nil
+}
+
+func (s *recordingStackStore) UpdateStackTags(
+	_ context.Context, ref stack.Ref, tags map[string]string, _ time.Time, _ namespace.Fence,
+) error {
+	s.tags = append(s.tags, taggedStack{ref: ref, tags: tags})
 
 	return nil
 }
@@ -236,7 +257,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
@@ -432,6 +453,8 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		body = strings.NewReader(`{"newName":"renamed","newProject":"web"}`)
 	case route.Method == http.MethodPost:
 		body = strings.NewReader(`{"stackName":"prod"}`)
+	case route.Method == http.MethodPatch:
+		body = strings.NewReader(`{"team":"e2e"}`)
 	default:
 		body = strings.NewReader("")
 	}
@@ -576,6 +599,74 @@ func TestCreateStackThroughWrapperInvalidBody(t *testing.T) {
 
 	if len(stores.created) != 0 {
 		t.Fatalf("created %d stacks, want 0", len(stores.created))
+	}
+}
+
+// TestUpdateStackTagsThroughWrapper proves a tag update works end to end
+// through the registration wrapper: the resolver authorizes the stack in the
+// path and the handler replaces its tags with the sent map.
+func TestUpdateStackTagsThroughWrapper(t *testing.T) {
+	t.Parallel()
+
+	handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPatch,
+		"/api/stacks/acme/web/prod/tags",
+		strings.NewReader(`{"team":"e2e"}`),
+	)
+	req.Header.Set("Authorization", "token test-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update tags answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if len(stores.tags) != 1 {
+		t.Fatalf("updated tags %d times, want 1", len(stores.tags))
+	}
+
+	got := stores.tags[0]
+	if got.ref.Namespace.String() != "acme" || got.ref.Project.String() != "web" || got.ref.Stack.String() != "prod" {
+		t.Fatalf("updated stack %v, want acme/web/prod", got.ref)
+	}
+
+	if len(got.tags) != 1 || got.tags["team"] != "e2e" {
+		t.Fatalf("updated tags %v, want map[team:e2e]", got.tags)
+	}
+}
+
+// TestUpdateStackTagsThroughWrapperInvalidBody proves an invalid tag body
+// answers 400 and updates nothing.
+func TestUpdateStackTagsThroughWrapperInvalidBody(t *testing.T) {
+	t.Parallel()
+
+	handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPatch,
+		"/api/stacks/acme/web/prod/tags",
+		strings.NewReader(`{`),
+	)
+	req.Header.Set("Authorization", "token test-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid body answers %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	if !strings.Contains(rec.Body.String(), "invalid JSON body") {
+		t.Fatalf("invalid body answers %q, want invalid JSON body", rec.Body.String())
+	}
+
+	if len(stores.tags) != 0 {
+		t.Fatalf("updated tags %d times, want 0", len(stores.tags))
 	}
 }
 
@@ -957,6 +1048,35 @@ func TestResolveRenameStack(t *testing.T) {
 		http.MethodPost,
 		"/api/stacks/acme/web/prod/rename",
 		strings.NewReader(`{"newName":"renamed","newProject":"web"}`),
+	)
+	req.SetPathValue("namespace", "acme")
+	req.SetPathValue("project", "web")
+	req.SetPathValue("stack", "prod")
+
+	rec := httptest.NewRecorder()
+	obj, err := resolve(rec, req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if want := "pulumi:acme/web/prod"; obj.String() != want || !obj.IsUnit() {
+		t.Fatalf("object = %q (unit %v), want unit %q", obj.String(), obj.IsUnit(), want)
+	}
+}
+
+// TestResolveUpdateStackTags proves the tags route resolves the unit in the
+// path.
+func TestResolveUpdateStackTags(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	resolve := resolverFor(t, handler, "PATCH /api/stacks/{namespace}/{project}/{stack}/tags")
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPatch,
+		"/api/stacks/acme/web/prod/tags",
+		strings.NewReader(`{"team":"e2e"}`),
 	)
 	req.SetPathValue("namespace", "acme")
 	req.SetPathValue("project", "web")

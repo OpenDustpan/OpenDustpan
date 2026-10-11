@@ -19,26 +19,45 @@ FROM namespaces
 WHERE name = ?;
 
 -- name: CreateStack :execrows
-INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetStack :one
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ? AND project = ? AND name = ?;
 
 -- name: ListStacksInNamespace :many
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ?
 ORDER BY project, name;
 
 -- name: ListStacksInProject :many
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ? AND project = ?
 ORDER BY name;
+
+-- name: CreateStackTag :exec
+INSERT INTO stack_tags (stack_id, name, value)
+VALUES (?, ?, ?);
+
+-- name: GetStackTags :many
+SELECT name, value
+FROM stack_tags
+WHERE stack_id = ?
+ORDER BY name;
+
+-- name: DeleteStackTags :exec
+DELETE FROM stack_tags
+WHERE stack_id = ?;
+
+-- name: TouchStack :exec
+UPDATE stacks
+SET updated_at_ms = ?
+WHERE id = ?;
 
 -- name: RenameStack :execrows
 UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?;

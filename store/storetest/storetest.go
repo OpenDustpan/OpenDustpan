@@ -53,10 +53,15 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "stack ID is set and returned", test: testStackID},
 		{name: "stack IDs are unique", test: testStackIDsUnique},
 		{name: "delete then create gives a new ID", test: testStackIDAfterDelete},
+		{name: "update tags replaces all tags", test: testUpdateTags},
+		{name: "update tags clears all tags", test: testUpdateTagsClear},
+		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
+		{name: "update tags with stale fence is ErrFenced", test: testUpdateTagsStaleFence},
 		{name: "rename keeps the ID", test: testRenameKeepsID},
 		{name: "rename to a taken name is ErrAlreadyExists", test: testRenameTaken},
 		{name: "rename of a missing stack is ErrNotFound", test: testRenameMissing},
 		{name: "rename with a stale fence is ErrFenced", test: testRenameStaleFence},
+		{name: "rename keeps tags", test: testRenameKeepsTags},
 	}
 
 	for _, tc := range cases {
@@ -467,6 +472,159 @@ func testRenameStaleFence(t *testing.T, s Store) {
 	}
 
 	assertStack(t, got, st)
+}
+
+// testUpdateTags checks that a tag update replaces every tag, keys the rows
+// by the stack ID and stamps the given time.
+func testUpdateTags(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	updated := now().Add(time.Hour)
+	next := map[string]string{"team": "e2e", "owner": "sre"}
+
+	if err := s.UpdateStackTags(t.Context(), st.Ref, next, updated, ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), st.Ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if !maps.Equal(got.Tags, next) {
+		t.Fatalf("tags = %v, want %v", got.Tags, next)
+	}
+
+	if got.ID != st.ID {
+		t.Fatalf("stack ID = %q, want %q", got.ID, st.ID)
+	}
+
+	if !got.UpdatedAt.Equal(updated) {
+		t.Fatalf("updated at = %v, want %v", got.UpdatedAt, updated)
+	}
+
+	list, err := s.ListStacks(t.Context(), stack.Filter{Namespace: ns.Name, Project: ""})
+	if err != nil {
+		t.Fatalf("list stacks: %v", err)
+	}
+
+	if len(list) != 1 || !maps.Equal(list[0].Tags, next) {
+		t.Fatalf("listed tags = %v, want %v", list, next)
+	}
+}
+
+// testUpdateTagsClear checks that an empty map removes every tag row.
+func testUpdateTagsClear(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	if err := s.UpdateStackTags(t.Context(), st.Ref, map[string]string{}, now(), ns.Fence()); err != nil {
+		t.Fatalf("clear tags: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), st.Ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if len(got.Tags) != 0 {
+		t.Fatalf("tags = %v, want none", got.Tags)
+	}
+}
+
+func testUpdateTagsMissing(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	ref := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "prod"}
+
+	if err := s.UpdateStackTags(t.Context(), ref, map[string]string{"team": "e2e"}, now(), ns.Fence()); !errors.Is(
+		err, stack.ErrNotFound,
+	) {
+		t.Fatalf("update tags of missing stack: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testUpdateTagsStaleFence(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.UpdateStackTags(t.Context(), st.Ref, map[string]string{"team": "e2e"}, now(), stale); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
+		t.Fatalf("update tags with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	got, err := s.GetStack(t.Context(), st.Ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if !maps.Equal(got.Tags, st.Tags) {
+		t.Fatalf("tags = %v, want unchanged %v", got.Tags, st.Tags)
+	}
+}
+
+// testRenameKeepsTags checks that tags follow the stack ID through a rename.
+func testRenameKeepsTags(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	next := map[string]string{"team": "e2e"}
+
+	if err := s.UpdateStackTags(t.Context(), st.Ref, next, now(), ns.Fence()); err != nil {
+		t.Fatalf("update tags: %v", err)
+	}
+
+	if err := s.RenameStack(t.Context(), st.Ref, "renamed", ns.Fence()); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+
+	newRef := stack.Ref{Namespace: ns.Name, Project: st.Ref.Project, Stack: "renamed"}
+
+	got, err := s.GetStack(t.Context(), newRef)
+	if err != nil {
+		t.Fatalf("get renamed stack: %v", err)
+	}
+
+	if !maps.Equal(got.Tags, next) {
+		t.Fatalf("renamed tags = %v, want %v", got.Tags, next)
+	}
+
+	if got.ID != st.ID {
+		t.Fatalf("renamed stack ID = %q, want %q", got.ID, st.ID)
+	}
+
+	if _, getErr := s.GetStack(t.Context(), st.Ref); !errors.Is(getErr, stack.ErrNotFound) {
+		t.Fatalf("get old stack: err = %v, want ErrNotFound", getErr)
+	}
 }
 
 func assertRefs(t *testing.T, stacks []stack.Stack, want ...string) {

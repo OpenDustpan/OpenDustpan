@@ -11,8 +11,11 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
+	"slices"
+	"time"
 
 	// Registers the "sqlite3" database/sql driver.
 	_ "github.com/ncruces/go-sqlite3/driver"
@@ -131,12 +134,10 @@ func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, erro
 	return out, nil
 }
 
-// CreateStack implements stack.Store with a fenced insert.
+// CreateStack implements stack.Store with a fenced insert. Tags go to the
+// stack_tags table, keyed by the new stack ID.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
-	row, err := codec.ToStackRow(st)
-	if err != nil {
-		return err
-	}
+	row := codec.ToStackRow(st)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		n, err := q.CreateStack(ctx, db.CreateStackParams{
@@ -144,7 +145,6 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			Project:     row.Project,
 			Name:        row.Name,
 			ID:          row.ID,
-			TagsJson:    string(row.Tags),
 			Version:     row.Version,
 			CreatedAtMs: row.CreatedAtMs,
 			UpdatedAtMs: row.UpdatedAtMs,
@@ -157,7 +157,7 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 			return stack.ErrAlreadyExists
 		}
 
-		return nil
+		return insertStackTags(ctx, q, row.ID, st.Tags)
 	})
 }
 
@@ -176,16 +176,87 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 		return stack.Stack{}, fmt.Errorf("select stack: %w", err)
 	}
 
+	tags, err := stackTags(ctx, s.queries, row.ID)
+	if err != nil {
+		return stack.Stack{}, err
+	}
+
 	return codec.FromStackRow(codec.StackRow{
 		Namespace:   row.Namespace,
 		Project:     row.Project,
 		Name:        row.Name,
 		ID:          row.ID,
-		Tags:        []byte(row.TagsJson),
 		Version:     row.Version,
 		CreatedAtMs: row.CreatedAtMs,
 		UpdatedAtMs: row.UpdatedAtMs,
+	}, tags), nil
+}
+
+// UpdateStackTags implements stack.Store: it replaces every tag row of the
+// stack, keyed by its stable ID, and stamps updatedAt.
+func (s *Store) UpdateStackTags(
+	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		id, err := q.GetStackID(ctx, db.GetStackIDParams{
+			Namespace: ref.Namespace.String(),
+			Project:   ref.Project.String(),
+			Name:      ref.Stack.String(),
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return stack.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select stack ID: %w", err)
+		}
+
+		if err := q.DeleteStackTags(ctx, id); err != nil {
+			return fmt.Errorf("delete stack tags: %w", err)
+		}
+
+		touchErr := q.TouchStack(ctx, db.TouchStackParams{
+			UpdatedAtMs: codec.Millis(updatedAt),
+			ID:          id,
+		})
+		if touchErr != nil {
+			return fmt.Errorf("stamp stack: %w", touchErr)
+		}
+
+		return insertStackTags(ctx, q, id, tags)
 	})
+}
+
+// insertStackTags writes one row per tag, keyed by the stack ID. A nil or
+// empty map writes nothing, which clears the tags.
+func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[string]string) error {
+	for _, name := range slices.Sorted(maps.Keys(tags)) {
+		tagErr := q.CreateStackTag(ctx, db.CreateStackTagParams{
+			StackID: id,
+			Name:    name,
+			Value:   tags[name],
+		})
+		if tagErr != nil {
+			return fmt.Errorf("insert stack tag: %w", tagErr)
+		}
+	}
+
+	return nil
+}
+
+// stackTags reads the tag rows of one stack ID into a map.
+func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string, error) {
+	rows, err := q.GetStackTags(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("select stack tags: %w", err)
+	}
+
+	tags := make(map[string]string, len(rows))
+	for _, row := range rows {
+		tags[row.Name] = row.Value
+	}
+
+	return tags, nil
 }
 
 // RenameStack implements stack.Store. It renames the stack without moving its
@@ -286,21 +357,7 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 			return nil, fmt.Errorf("select stacks: %w", err)
 		}
 
-		converted := make([]codec.StackRow, 0, len(rows))
-		for _, row := range rows {
-			converted = append(converted, codec.StackRow{
-				Namespace:   row.Namespace,
-				Project:     row.Project,
-				Name:        row.Name,
-				ID:          row.ID,
-				Tags:        []byte(row.TagsJson),
-				Version:     row.Version,
-				CreatedAtMs: row.CreatedAtMs,
-				UpdatedAtMs: row.UpdatedAtMs,
-			})
-		}
-
-		return codec.FromStackRows(converted)
+		return s.hydrateStacks(ctx, rows)
 	}
 
 	rows, err := s.queries.ListStacksInProject(ctx, db.ListStacksInProjectParams{
@@ -311,21 +368,52 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 		return nil, fmt.Errorf("select stacks: %w", err)
 	}
 
-	converted := make([]codec.StackRow, 0, len(rows))
+	out := make([]stack.Stack, 0, len(rows))
+
 	for _, row := range rows {
-		converted = append(converted, codec.StackRow{
+		tags, tagsErr := stackTags(ctx, s.queries, row.ID)
+		if tagsErr != nil {
+			return nil, tagsErr
+		}
+
+		out = append(out, codec.FromStackRow(codec.StackRow{
 			Namespace:   row.Namespace,
 			Project:     row.Project,
 			Name:        row.Name,
 			ID:          row.ID,
-			Tags:        []byte(row.TagsJson),
 			Version:     row.Version,
 			CreatedAtMs: row.CreatedAtMs,
 			UpdatedAtMs: row.UpdatedAtMs,
-		})
+		}, tags))
 	}
 
-	return codec.FromStackRows(converted)
+	return out, nil
+}
+
+// hydrateStacks attaches the tag rows of every stack row, keyed by stack ID.
+func (s *Store) hydrateStacks(
+	ctx context.Context, rows []db.ListStacksInNamespaceRow,
+) ([]stack.Stack, error) {
+	out := make([]stack.Stack, 0, len(rows))
+
+	for _, row := range rows {
+		tags, err := stackTags(ctx, s.queries, row.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, codec.FromStackRow(codec.StackRow{
+			Namespace:   row.Namespace,
+			Project:     row.Project,
+			Name:        row.Name,
+			ID:          row.ID,
+			Version:     row.Version,
+			CreatedAtMs: row.CreatedAtMs,
+			UpdatedAtMs: row.UpdatedAtMs,
+		}, tags))
+	}
+
+	return out, nil
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
