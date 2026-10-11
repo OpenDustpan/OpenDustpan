@@ -31,6 +31,10 @@ import (
 const (
 	// Namespace is the namespace every Env creates; CLI stack names use it as the organization.
 	Namespace = "acme"
+	// Namespace2 is a second namespace a scenario creates to prove that
+	// listings span namespaces. NewEnv does not create it, so steps that
+	// need one readable namespace run first.
+	Namespace2 = "beta"
 	// Project is the project name written to the scratch Pulumi.yaml.
 	Project = "e2e-project"
 	// Workspace is the workspace name written to the scratch main.tf.
@@ -92,6 +96,7 @@ type Env struct {
 	Recorder *Recorder
 	cli      Install
 	store    Store
+	server   serverStore
 	token    string
 	home     string
 	project  string
@@ -120,9 +125,9 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	token := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 
-	ts := httptest.NewUnstartedServer(
-		rec.Middleware(newServer(ctx, tb, store, filepath.Join(dir, "dustpan.db"), token)),
-	)
+	handler, st := newServer(ctx, tb, store, filepath.Join(dir, "dustpan.db"), token)
+
+	ts := httptest.NewUnstartedServer(rec.Middleware(handler))
 	if cli.Tool == ToolTofu {
 		ts.StartTLS()
 	} else {
@@ -136,6 +141,7 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 		Recorder: rec,
 		cli:      cli,
 		store:    store,
+		server:   st,
 		token:    token,
 		home:     filepath.Join(dir, "home"),
 		project:  filepath.Join(dir, "project"),
@@ -175,8 +181,14 @@ func newToken(tb testing.TB) string {
 
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
 // PostgreSQL schema), creates the Namespace namespace and returns the server's
-// handler. The store and its schema are closed and removed when the test ends.
-func newServer(ctx context.Context, tb testing.TB, store Store, dbPath, token string) http.Handler {
+// handler and store. The store and its schema are closed and removed when the
+// test ends.
+// the environment needs the interface.
+//
+//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
+func newServer(
+	ctx context.Context, tb testing.TB, store Store, dbPath, token string,
+) (http.Handler, serverStore) {
 	tb.Helper()
 
 	var st serverStore
@@ -228,7 +240,28 @@ func newServer(ctx context.Context, tb testing.TB, store Store, dbPath, token st
 		tb.Fatalf("new server: %v", err)
 	}
 
-	return srv.Handler()
+	return srv.Handler(), st
+}
+
+// CreateNamespace creates a namespace homed in the test region, for steps
+// that need more than the Namespace namespace NewEnv creates.
+func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
+	tb.Helper()
+
+	nsName, err := namespace.ParseName(name)
+	if err != nil {
+		tb.Fatalf("parse namespace %q: %v", name, err)
+	}
+
+	err = e.server.CreateNamespace(ctx, namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            nsName,
+		HomeRegion:      region,
+		FailoverVersion: 1,
+	})
+	if err != nil {
+		tb.Fatalf("create namespace %q: %v", name, err)
+	}
 }
 
 // Steps returns the scenario steps run so far.
@@ -353,7 +386,7 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 
 // StepSpec describes one scenario step.
 type StepSpec struct {
-	// Check inspects a successful run; nil means a zero exit is enough.
+	// Check inspects the run; nil means the exit code is enough.
 	Check func(Result) error
 	// Name labels the subtest, the report row and the requests the step makes.
 	Name string
@@ -361,11 +394,15 @@ type StepSpec struct {
 	Args []string
 	// Env holds extra NAME=value pairs for this step only.
 	Env []string
+	// Fail expects a non-zero exit. Check then inspects the failed run,
+	// for steps that prove an error message.
+	Fail bool
 }
 
-// Step runs spec as a subtest. It fails the subtest on a non-zero exit or when
-// spec.Check returns an error, and records the outcome for the report. A
-// failing step does not stop later steps: the goal is to see every gap.
+// Step runs spec as a subtest. It fails the subtest on an unexpected exit
+// (non-zero, or zero when spec.Fail expects a failure) or when spec.Check
+// returns an error, and records the outcome for the report. A failing step
+// does not stop later steps: the goal is to see every gap.
 func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 	t.Helper()
 
@@ -383,7 +420,9 @@ func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 		switch {
 		case err != nil:
 			failure = err.Error()
-		case res.ExitCode != 0:
+		case spec.Fail && res.ExitCode == 0:
+			failure = "expected a non-zero exit"
+		case !spec.Fail && res.ExitCode != 0:
 			failure = fmt.Sprintf("exit code %d", res.ExitCode)
 		case spec.Check != nil:
 			if checkErr := spec.Check(res); checkErr != nil {

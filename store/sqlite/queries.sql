@@ -8,6 +8,11 @@ SELECT name, home_region, failover_version, created_at_ms
 FROM namespaces
 WHERE name = ?;
 
+-- name: ListNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms
+FROM namespaces
+ORDER BY name;
+
 -- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces

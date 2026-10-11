@@ -190,6 +190,7 @@ func NewServer(opts ...Option) (*Server, error) {
 	api, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       updates,
+		Namespaces:    namespaces,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
