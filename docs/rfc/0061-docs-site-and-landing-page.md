@@ -236,10 +236,16 @@ check. The site is small: under 10 GB of traffic a month.
 | Limits that matter | 100,000 Worker requests a day. Requests for static files are free | 1 GB site, 100 GB a month, no use for an online business | Each production deploy costs 15 credits, and at 0 credits all sites stop | 1 million requests and 100 GB a month |
 
 All four build in GitHub Actions. The GitHub Free plan includes 2,000
-Actions minutes a month for private repositories. At about 2 minutes a
-build, a deploy on each merge to `main` and each pull request fits. A deploy
-on every push may not. A public website repository has no limit on minutes
-for standard runners (unconfirmed).
+Actions minutes a month for private repositories, on runners that GitHub
+hosts. At about 2 minutes a build, a deploy on each merge to `main` and each
+pull request fits. A deploy on every push may not.
+
+CI of the project moves to runners that the project owner hosts. The
+repository variable `CI_RUNS_ON` names them. The workflows of the website
+repository, the Cloudflare deploy among them, take `runs-on` from the same
+variable, with the same expression as the workflows of this repository.
+They never name a runner such as `ubuntu-latest` directly. Jobs on the
+owner's runners use no GitHub minutes.
 
 Decision of the project owner: Cloudflare Workers static assets, deployed
 with `wrangler` from GitHub Actions. It costs nothing, works from a private
