@@ -37,6 +37,10 @@ const (
 	// invalidBodyMessage is the response text for a request body that is not
 	// valid JSON.
 	invalidBodyMessage = "invalid JSON body"
+	// decryptFailedMessage is the fixed response text for a decryption
+	// failure. It carries no scope and no key-encryption key fingerprint:
+	// the detail goes to the server log only.
+	decryptFailedMessage = "Cannot decrypt the value. The ciphertext does not belong to this stack, or the key changed."
 	// hasResourcesMessage is the response text when a delete without
 	// force meets a stack that still manages resources. The Pulumi CLI
 	// recognizes exactly this message and reports that removal is refused.
@@ -743,14 +747,24 @@ type errorResponse struct {
 
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
+
 	if status == http.StatusInternalServerError {
 		h.logger.ErrorContext(ctx, "request failed", slog.String("error", err.Error()))
+	} else if errors.Is(err, secret.ErrDecrypt) {
+		h.logger.WarnContext(ctx, "decrypt failed", slog.String("error", err.Error()))
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show callers.
+// Today only the secret package produces key-encryption key fingerprints
+// (builtin- IDs in its wrapper-mismatch detail), and that detail leaves
+// through ErrDecrypt, which classifySecret answers with the fixed message
+// below; the leak tests in secrets_test.go guard this. The remaining
+// err.Error() branches echo request names, counts, or backend detail that
+// holds no fingerprint; scopes there are the request's own names, not key
+// material.
 func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid):
@@ -782,19 +796,19 @@ func classify(err error) (int, string) {
 
 // classifySecret maps the secrets errors to an HTTP status and a message
 // safe to show callers: a missing key-encryption key is a 500 that names the
-// setting, an oversized batch is a 413, a decryption failure a 400 without
-// detail (ADR 23). A missing key wraps both ErrDecrypt and
-// ErrKeyNotConfigured, so the key check runs before the decrypt check.
+// setting only, an oversized batch is a 413, a decryption failure a 400 with
+// a fixed message and no detail (ADR 23). A missing key wraps both ErrDecrypt
+// and ErrKeyNotConfigured, so the key check runs before the decrypt check.
 func classifySecret(err error) (int, string) {
 	switch {
 	case errors.Is(err, secret.ErrKeyNotConfigured):
-		return http.StatusInternalServerError, err.Error()
+		return http.StatusInternalServerError, secret.ErrKeyNotConfigured.Error()
 	case errors.Is(err, secret.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error()
 	case errors.Is(err, secret.ErrDecrypt):
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, decryptFailedMessage
 	default:
-		return http.StatusInternalServerError, err.Error()
+		return http.StatusInternalServerError, "internal error"
 	}
 }
 
