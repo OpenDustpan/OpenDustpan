@@ -79,15 +79,36 @@ func (stubStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Sta
 	return nil, nil
 }
 
+func (stubStackStore) RenameStack(
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+) error {
+	return stack.ErrNotFound
+}
+
+// renamedStack records one rename call: the old reference and the new name.
+type renamedStack struct {
+	old stack.Ref
+	new stack.Name
+}
+
 // recordingStackStore answers every Get with a stack for the requested
-// reference and records every Create. It lets the enforcement tests prove
+// reference and records every Create and Rename. It lets the enforcement tests prove
 // that allowed requests reach the service.
 type recordingStackStore struct {
 	created []stack.Stack
+	renamed []renamedStack
 }
 
 func (s *recordingStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespace.Fence) error {
 	s.created = append(s.created, st)
+
+	return nil
+}
+
+func (s *recordingStackStore) RenameStack(
+	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence,
+) error {
+	s.renamed = append(s.renamed, renamedStack{old: oldRef, new: newName})
 
 	return nil
 }
@@ -198,7 +219,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {
@@ -389,6 +410,8 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 	switch {
 	case route.Method == http.MethodGet && route.Path == "/api/user/stacks":
 		target += "?organization=acme"
+	case route.Method == http.MethodPost && strings.HasSuffix(route.Path, "/rename"):
+		body = strings.NewReader(`{"newName":"renamed","newProject":"web"}`)
 	case route.Method == http.MethodPost:
 		body = strings.NewReader(`{"stackName":"prod"}`)
 	default:
@@ -535,6 +558,90 @@ func TestCreateStackThroughWrapperInvalidBody(t *testing.T) {
 
 	if len(stores.created) != 0 {
 		t.Fatalf("created %d stacks, want 0", len(stores.created))
+	}
+}
+
+// TestRenameStackThroughWrapper proves a stack rename still works end to end
+// through the registration wrapper: the resolver authorizes the old unit and
+// the handler renames it to the name in the body.
+func TestRenameStackThroughWrapper(t *testing.T) {
+	t.Parallel()
+
+	handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/stacks/acme/web/prod/rename",
+		strings.NewReader(`{"newName":"renamed","newProject":"web"}`),
+	)
+	req.Header.Set("Authorization", "token test-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if len(stores.renamed) != 1 {
+		t.Fatalf("renamed %d stacks, want 1", len(stores.renamed))
+	}
+
+	got := stores.renamed[0]
+	if got.old.Stack.String() != "prod" || got.new.String() != "renamed" {
+		t.Fatalf("renamed stack %v to %q, want prod to renamed", got.old, got.new)
+	}
+}
+
+// TestRenameStackThroughWrapperInvalid proves a rename rejects an invalid
+// body, an invalid name and a project change with 400 and renames nothing.
+func TestRenameStackThroughWrapperInvalid(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "invalid JSON", body: `{`, want: "invalid JSON body"},
+		{name: "invalid name", body: `{"newName":"../x"}`, want: "invalid project or stack name"},
+		{
+			name: "project change",
+			body: `{"newName":"renamed","newProject":"other"}`,
+			want: "invalid project or stack name",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+			req := httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				"/api/stacks/acme/web/prod/rename",
+				strings.NewReader(tc.body),
+			)
+			req.Header.Set("Authorization", "token test-token")
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("rename answers %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("rename answers %q, want %q", rec.Body.String(), tc.want)
+			}
+
+			if len(stores.renamed) != 0 {
+				t.Fatalf("renamed %d stacks, want 0", len(stores.renamed))
+			}
+		})
 	}
 }
 
@@ -792,6 +899,35 @@ func TestResolveGetStackInvalid(t *testing.T) {
 	rec := httptest.NewRecorder()
 	if _, err := resolve(rec, req); !errors.Is(err, stack.ErrInvalidName) {
 		t.Fatalf("error = %v, want %v", err, stack.ErrInvalidName)
+	}
+}
+
+// TestResolveRenameStack proves the rename route resolves the unit in the
+// path: the stack being renamed, not the new name in the body.
+func TestResolveRenameStack(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+	resolve := resolverFor(t, handler, "POST /api/stacks/{namespace}/{project}/{stack}/rename")
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/stacks/acme/web/prod/rename",
+		strings.NewReader(`{"newName":"renamed","newProject":"web"}`),
+	)
+	req.SetPathValue("namespace", "acme")
+	req.SetPathValue("project", "web")
+	req.SetPathValue("stack", "prod")
+
+	rec := httptest.NewRecorder()
+	obj, err := resolve(rec, req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if want := "pulumi:acme/web/prod"; obj.String() != want || !obj.IsUnit() {
+		t.Fatalf("object = %q (unit %v), want unit %q", obj.String(), obj.IsUnit(), want)
 	}
 }
 
