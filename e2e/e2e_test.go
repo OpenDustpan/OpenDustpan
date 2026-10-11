@@ -2996,6 +2996,40 @@ func checkRestoreConflict(body string) error {
 	return nil
 }
 
+// checkRestoreKeepsHistory proves a restore of an older version loses no
+// version: after the restore and the apply that follows it, the list holds
+// four versions, and the version that was newest before the restore is
+// still among them.
+func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, newest string) {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, stateVersionListBase(), "")
+	if err != nil {
+		t.Fatalf("list state versions after restore: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list state versions after restore answers %d: %s", status, body)
+	}
+
+	doc, err := decodeStateVersionList(body)
+	if err != nil {
+		t.Fatalf("decode state versions after restore: %v", err)
+	}
+
+	if len(doc.Data) != 4 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 4", len(doc.Data))
+	}
+
+	for _, version := range doc.Data {
+		if version.ID == newest {
+			return
+		}
+	}
+
+	t.Fatalf("list after the restore misses %s, the version that was newest before it", newest)
+}
+
 // tofuRestoreScenario proves the restore route after two applies: a restore
 // of the first version makes state pull match its MD5 with the restored-from
 // version and the message that no infrastructure changed, a new apply
@@ -3063,6 +3097,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		),
 	)
 	env.Step(ctx, t, step("apply after restore", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	checkRestoreKeepsHistory(ctx, t, env, newest)
 
 	entries, err := env.ListInventory(ctx, e2e.Namespace)
 	if err != nil {

@@ -192,6 +192,13 @@ trusts it. It is not part of `make check`.
 - **Stacks and workspaces**: each tool keeps its own model of deployable units
   and their state (Pulumi stacks, OpenTofu workspaces). They share
   namespaces, identity, storage and locking rules, not data models.
+- **History and restore**: each save of state makes a new version. A
+  restore copies an earlier version into a new version, and that new version
+  becomes current (ADR 28). The versions after the restored one stay in the
+  history, and you can restore them too. A restore changes no
+  infrastructure: the next `pulumi up` or `tofu apply` compares your code with
+  the restored state. Only the holder of the lock can restore a locked
+  OpenTofu workspace.
 - **Storage**: A single node uses SQLite and local disk. Larger installs use
   PostgreSQL and object storage. Every storage backend is a swappable adapter
   (ADR 2).
