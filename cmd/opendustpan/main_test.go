@@ -782,3 +782,372 @@ func newerSchemaDatabase(t *testing.T) (path string, dbVersion, binVersion int64
 
 	return path, dbVersion, binVersion
 }
+
+// runUpgradeCheck runs `upgrade check` on database and returns its stdout and
+// error. A nil error means exit code 0, a non-nil error means exit code 1.
+func runUpgradeCheck(t *testing.T, database string) (string, error) {
+	t.Helper()
+
+	var stdout, stderr bytes.Buffer
+
+	err := run(t.Context(), []string{"upgrade", "check", "--database", database}, &stdout, &stderr)
+
+	return stdout.String(), err
+}
+
+// wantUpgradeOutput holds the expected report of one upgrade check run:
+// the database and binary schema versions, whether pending migrations are
+// listed, and the verdict.
+type wantUpgradeOutput struct {
+	dbVersion  int64
+	binVersion int64
+	pending    bool
+	verdict    string
+}
+
+// checkUpgradeOutput proves that out names the binary version, the database
+// and binary schema versions, the pending state and the verdict.
+func checkUpgradeOutput(t *testing.T, out string, want wantUpgradeOutput) {
+	t.Helper()
+
+	for _, line := range []string{
+		"binary version: " + version,
+		fmt.Sprintf("database schema version: %d", want.dbVersion),
+		fmt.Sprintf("binary schema version: %d", want.binVersion),
+		"verdict: " + want.verdict,
+	} {
+		if !strings.Contains(out, line) {
+			t.Fatalf("upgrade check output lacks %q:\n%s", line, out)
+		}
+	}
+
+	if want.pending {
+		checkUpgradePending(t, out)
+	} else {
+		checkUpgradeNoPending(t, out)
+	}
+}
+
+// checkUpgradePending proves that out lists pending migrations with the
+// backup advice.
+func checkUpgradePending(t *testing.T, out string) {
+	t.Helper()
+
+	if !strings.Contains(out, "pending migrations:") || !strings.Contains(out, ".sql") {
+		t.Fatalf("upgrade check output lists no pending migration:\n%s", out)
+	}
+
+	for _, line := range []string{
+		"Back up the database before the upgrade.",
+		"No downgrade path exists.",
+	} {
+		if !strings.Contains(out, line) {
+			t.Fatalf("upgrade check output lacks %q:\n%s", line, out)
+		}
+	}
+}
+
+// checkUpgradeNoPending proves that out holds `pending migrations: none`
+// without backup advice.
+func checkUpgradeNoPending(t *testing.T, out string) {
+	t.Helper()
+
+	if !strings.Contains(out, "pending migrations: none") {
+		t.Fatalf("upgrade check output lacks `pending migrations: none`:\n%s", out)
+	}
+
+	if strings.Contains(out, "Back up the database") {
+		t.Fatalf("upgrade check output gives backup advice without pending migrations:\n%s", out)
+	}
+}
+
+// checkUpgradeUnchanged proves that upgrade check wrote nothing: the database
+// file at path is byte-identical to before.
+func checkUpgradeUnchanged(t *testing.T, path string, before []byte) {
+	t.Helper()
+
+	after, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file after check: %v", err)
+	}
+
+	if !bytes.Equal(after, before) {
+		t.Fatal("upgrade check changed the database file, want it unchanged")
+	}
+}
+
+// oldFixtureMaxVersion is the newest version in the fixed old-database
+// fixture. The fixture stays below the binary version, so the check reports
+// pending migrations. Bump it only with the fixture name and assertions.
+const oldFixtureMaxVersion = 8
+
+// seedOldDatabase creates a SQLite database at path with schema versions 1
+// through oldFixtureMaxVersion recorded, so upgrade check sees an old database.
+func seedOldDatabase(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty database: %v", err)
+	}
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	const createTable = `CREATE TABLE schema_migrations (
+		version INTEGER NOT NULL PRIMARY KEY,
+		name    TEXT    NOT NULL
+	) STRICT`
+
+	if _, err := conn.ExecContext(t.Context(), createTable); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+	for v := int64(1); v <= oldFixtureMaxVersion; v++ {
+		if _, err := conn.ExecContext(t.Context(), record, v, fmt.Sprintf("%04d_old.sql", v)); err != nil {
+			t.Fatalf("record version %d: %v", v, err)
+		}
+	}
+}
+
+// migratedDatabase opens and closes the SQLite store at path, so the database
+// holds every embedded migration, and returns the binary schema version.
+func migratedDatabase(t *testing.T, path string) int64 {
+	t.Helper()
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatalf("close store: %v", closeErr)
+	}
+
+	conn, err := sql.Open("sqlite3", "file:"+path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	var newest int64
+
+	row := conn.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`)
+	if scanErr := row.Scan(&newest); scanErr != nil {
+		t.Fatalf("read binary schema version: %v", scanErr)
+	}
+
+	return newest
+}
+
+func TestUpgradeCheck(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fresh database can upgrade", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeFresh(t)
+	})
+
+	t.Run("old database can upgrade", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeOld(t)
+	})
+
+	t.Run("up-to-date database is current", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeCurrent(t)
+	})
+
+	t.Run("newer database cannot start", func(t *testing.T) {
+		t.Parallel()
+		checkUpgradeNewer(t)
+	})
+}
+
+// checkUpgradeFresh proves upgrade check on an empty file exits with
+// `upgrade possible` and leaves the file unchanged.
+func checkUpgradeFresh(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write empty database: %v", err)
+	}
+
+	before, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file: %v", err)
+	}
+
+	out, checkErr := runUpgradeCheck(t, "sqlite:"+path)
+	if checkErr != nil {
+		t.Fatalf("upgrade check on a fresh database: %v", checkErr)
+	}
+
+	binVersion := migratedSchemaVersion(t)
+	checkUpgradeOutput(
+		t,
+		out,
+		wantUpgradeOutput{dbVersion: 0, binVersion: binVersion, pending: true, verdict: verdictUpgradePossible},
+	)
+	checkUpgradeUnchanged(t, path, before)
+}
+
+// checkUpgradeOld proves upgrade check on versions 1 through
+// oldFixtureMaxVersion exits with `upgrade possible` and leaves the file unchanged.
+func checkUpgradeOld(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	seedOldDatabase(t, path)
+
+	before, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file: %v", err)
+	}
+
+	out, checkErr := runUpgradeCheck(t, "sqlite:"+path)
+	if checkErr != nil {
+		t.Fatalf("upgrade check on an old database: %v", checkErr)
+	}
+
+	binVersion := migratedSchemaVersion(t)
+	checkUpgradeOutput(
+		t,
+		out,
+		wantUpgradeOutput{
+			dbVersion:  oldFixtureMaxVersion,
+			binVersion: binVersion,
+			pending:    true,
+			verdict:    verdictUpgradePossible,
+		},
+	)
+	checkUpgradeUnchanged(t, path, before)
+}
+
+// checkUpgradeCurrent proves upgrade check on a migrated database exits with
+// `up to date` and leaves the file unchanged.
+func checkUpgradeCurrent(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	binVersion := migratedDatabase(t, path)
+
+	before, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file: %v", err)
+	}
+
+	out, checkErr := runUpgradeCheck(t, "sqlite:"+path)
+	if checkErr != nil {
+		t.Fatalf("upgrade check on an up-to-date database: %v", checkErr)
+	}
+
+	checkUpgradeOutput(
+		t,
+		out,
+		wantUpgradeOutput{dbVersion: binVersion, binVersion: binVersion, pending: false, verdict: verdictUpToDate},
+	)
+	checkUpgradeUnchanged(t, path, before)
+}
+
+// checkUpgradeNewer proves upgrade check on a database with one future
+// version exits with ErrSchemaNewer and leaves the file unchanged.
+func checkUpgradeNewer(t *testing.T) {
+	t.Helper()
+
+	path, dbVersion, binVersion := newerSchemaDatabase(t)
+
+	before, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	if err != nil {
+		t.Fatalf("read database file: %v", err)
+	}
+
+	out, checkErr := runUpgradeCheck(t, "sqlite:"+path)
+	if checkErr == nil || !errors.Is(checkErr, schema.ErrSchemaNewer) {
+		t.Fatalf("upgrade check on a newer database: err = %v, want ErrSchemaNewer", checkErr)
+	}
+
+	checkUpgradeOutput(
+		t,
+		out,
+		wantUpgradeOutput{dbVersion: dbVersion, binVersion: binVersion, pending: false, verdict: verdictCannotStart},
+	)
+	checkUpgradeUnchanged(t, path, before)
+
+	for _, want := range []string{
+		strconv.FormatInt(dbVersion, 10),
+		strconv.FormatInt(binVersion, 10),
+		version,
+	} {
+		if !strings.Contains(checkErr.Error(), want) {
+			t.Fatalf("upgrade check error %q does not name %q", checkErr, want)
+		}
+	}
+}
+
+// migratedSchemaVersion returns the newest embedded migration version by
+// migrating a scratch database.
+func migratedSchemaVersion(t *testing.T) int64 {
+	t.Helper()
+
+	return migratedDatabase(t, filepath.Join(t.TempDir(), "probe.db"))
+}
+
+func TestUpgradeCheckUsage(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(errUsage.Error(), "upgrade check") {
+		t.Fatalf("usage = %q, want it to name upgrade check", errUsage.Error())
+	}
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"upgrade without check", []string{"upgrade"}},
+		{"upgrade check with a name", []string{"upgrade", "check", "--database", "sqlite:x.db", "extra"}},
+		{"unknown backend", []string{"upgrade", "check", "--database", "mysql://db"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+
+			if err := run(t.Context(), tc.args, &stdout, &stderr); err == nil {
+				t.Fatalf("run %v: err = nil, want an error", tc.args)
+			}
+		})
+	}
+
+	t.Run("missing file names the path", func(t *testing.T) {
+		t.Parallel()
+
+		missing := filepath.Join(t.TempDir(), "missing.db")
+
+		_, err := runUpgradeCheck(t, "sqlite:"+missing)
+		if err == nil || !strings.Contains(err.Error(), missing) {
+			t.Fatalf("upgrade check on a missing file: err = %v, want it to name %q", err, missing)
+		}
+
+		if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
+			t.Fatalf("stat missing file: err = %v, want file to stay absent", statErr)
+		}
+	})
+}
