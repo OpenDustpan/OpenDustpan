@@ -50,6 +50,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionCallerRead,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -90,6 +91,7 @@ func TestParseObjectInvalid(t *testing.T) {
 
 	invalid := []string{
 		"",
+		"@caller",
 		"pulumi:",
 		"pulumi:acme",
 		"pulumi:/web",
@@ -176,6 +178,52 @@ func TestObjectConstructors(t *testing.T) {
 	}
 }
 
+// TestCallerObject proves the caller reference names no namespace or unit,
+// that ParseObject rejects its wire form, and that a namespace named
+// "caller" never equals it.
+func TestCallerObject(t *testing.T) {
+	t.Parallel()
+
+	cobj := identity.CallerObject()
+	if cobj.IsUnit() {
+		t.Fatal("caller object reports IsUnit")
+	}
+
+	if !cobj.IsCaller() {
+		t.Fatal("caller object reports no caller")
+	}
+
+	if cobj.String() != "@caller" {
+		t.Fatalf("caller String() = %q", cobj.String())
+	}
+
+	if cobj.Namespace().String() != "" || cobj.Tool() != "" || cobj.UnitName() != "" {
+		t.Fatalf(
+			"caller object names %q/%q/%q, want no namespace, tool or unit",
+			cobj.Namespace().String(),
+			cobj.Tool(),
+			cobj.UnitName(),
+		)
+	}
+
+	if _, err := identity.ParseObject(cobj.String()); !errors.Is(err, identity.ErrInvalidObject) {
+		t.Fatalf("parse caller form %q = %v, want ErrInvalidObject", cobj.String(), err)
+	}
+
+	nsObj, err := identity.ParseObject("caller")
+	if err != nil {
+		t.Fatalf("parse namespace caller: %v", err)
+	}
+
+	if nsObj.IsCaller() {
+		t.Fatal("namespace caller reports caller")
+	}
+
+	if nsObj == cobj {
+		t.Fatal("namespace caller equals the caller object")
+	}
+}
+
 func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	t.Helper()
 
@@ -187,6 +235,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionCallerRead,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))
@@ -198,7 +247,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true}
 	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false}
 
-	for _, obj := range []identity.Object{nsObj, unitObj} {
+	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject()} {
 		for _, action := range actions {
 			if err := authorizer.Authorize(t.Context(), admin, action, obj); err != nil {
 				t.Fatalf("admin %s on %q: %v", action, obj.String(), err)
