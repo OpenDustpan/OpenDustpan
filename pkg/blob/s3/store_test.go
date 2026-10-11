@@ -935,3 +935,349 @@ func (r *failReader) Read(p []byte) (int, error) {
 
 	return n, nil
 }
+
+// probeServer is a fake S3 server with a real object map. When honor is true,
+// a PUT with If-None-Match: * on an existing object answers 412. When honor
+// is false, the PUT overwrites and answers 200. When failPut is true, every
+// PUT answers 403.
+type probeServer struct {
+	t     *testing.T
+	mu    sync.Mutex
+	holds map[string][]byte
+	honor bool
+	stuck bool
+	seen  []capturedRequest
+}
+
+// newProbeServer returns a probeServer that records every request.
+func newProbeServer(t *testing.T, honor, failPut bool) *probeServer {
+	t.Helper()
+
+	return &probeServer{t: t, mu: sync.Mutex{}, holds: map[string][]byte{}, honor: honor, stuck: failPut, seen: nil}
+}
+
+func (p *probeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		p.t.Errorf("read request body: %v", err)
+	}
+
+	_ = r.Body.Close() //nolint:errcheck // Test fake; the body was read above.
+
+	p.mu.Lock()
+	p.seen = append(p.seen, capturedRequest{
+		method:        r.Method,
+		path:          r.URL.Path,
+		rawQuery:      r.URL.RawQuery,
+		header:        r.Header.Clone(),
+		body:          body,
+		contentLength: r.ContentLength,
+	})
+	p.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/xml")
+
+	switch r.Method {
+	case http.MethodPut:
+		p.servePut(w, r, body)
+	case http.MethodDelete:
+		p.serveDelete(w, r)
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// servePut answers one PUT request against the object map.
+func (p *probeServer) servePut(w http.ResponseWriter, r *http.Request, body []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.stuck {
+		w.WriteHeader(http.StatusForbidden)
+		if _, err := io.WriteString(w, errorDoc("AccessDenied")); err != nil {
+			p.t.Errorf("write answer: %v", err)
+		}
+
+		return
+	}
+
+	if _, exists := p.holds[r.URL.Path]; exists && p.honor && r.Header.Get("If-None-Match") == "*" {
+		w.WriteHeader(http.StatusPreconditionFailed)
+
+		return
+	}
+
+	p.holds[r.URL.Path] = body
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// serveDelete removes one path from the object map. A missing path is success.
+func (p *probeServer) serveDelete(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	delete(p.holds, r.URL.Path)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// putPaths returns the path of every PUT request the server saw.
+func (p *probeServer) putPaths() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var out []string
+
+	for _, got := range p.seen {
+		if got.method == http.MethodPut {
+			out = append(out, got.path)
+		}
+	}
+
+	return out
+}
+
+// deletePaths returns the path of every DELETE request the server saw.
+func (p *probeServer) deletePaths() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var out []string
+
+	for _, got := range p.seen {
+		if got.method == http.MethodDelete {
+			out = append(out, got.path)
+		}
+	}
+
+	return out
+}
+
+// objectCount returns the number of objects the server still holds.
+func (p *probeServer) objectCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return len(p.holds)
+}
+
+// openProbe opens a Store through Open against server.
+func openProbe(t *testing.T, server *httptest.Server, signer *s3.Signer) (*s3.Store, error) {
+	t.Helper()
+
+	return s3.Open(
+		t.Context(),
+		signer,
+		"pfx",
+		server.Client(),
+		s3.WithSleep(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+}
+
+func TestOpenProbeSuccess(t *testing.T) {
+	t.Parallel()
+
+	fake := newProbeServer(t, true, false)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	s, err := openProbe(t, server, testSigner(server.URL, nil))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if s == nil {
+		t.Fatal("open returned a nil store")
+	}
+
+	puts := fake.putPaths()
+
+	if len(puts) != 2 {
+		t.Fatalf("server saw %d PUTs, want 2", len(puts))
+	}
+
+	if puts[0] != puts[1] {
+		t.Errorf("probe PUTs went to %q and %q, want one key", puts[0], puts[1])
+	}
+
+	if want := "/" + testBucket + "/pfx/probe-"; !strings.HasPrefix(puts[0], want) {
+		t.Errorf("probe path = %q, want prefix %q", puts[0], want)
+	}
+
+	deletes := fake.deletePaths()
+
+	if len(deletes) != 1 || deletes[0] != puts[0] {
+		t.Errorf("deletes = %v, want one delete of %q", deletes, puts[0])
+	}
+
+	if got := fake.objectCount(); got != 0 {
+		t.Errorf("server still holds %d objects, want none", got)
+	}
+}
+
+func TestOpenProbeWithoutConditionalWrites(t *testing.T) {
+	t.Parallel()
+
+	fake := newProbeServer(t, false, false)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	signer := testSigner(server.URL, nil)
+
+	s, err := openProbe(t, server, signer)
+	if err == nil {
+		t.Fatal("open succeeded, want an error")
+	}
+
+	if s != nil {
+		t.Error("open returned a store, want nil")
+	}
+
+	// A server without conditional writes stops at start with a clear error.
+	if !errors.Is(err, s3.ErrNoConditionalWrites) {
+		t.Errorf("err = %v, want ErrNoConditionalWrites", err)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "the store does not support conditional writes; use a store that does") {
+		t.Errorf("error %q lacks the fix", msg)
+	}
+
+	if !strings.Contains(msg, testBucket) || !strings.Contains(msg, signer.Endpoint) {
+		t.Errorf("error %q lacks the endpoint and the bucket", msg)
+	}
+
+	assertNoCredential(t, err)
+
+	if got := len(fake.putPaths()); got != 2 {
+		t.Errorf("server saw %d PUTs, want 2", got)
+	}
+
+	if got := len(fake.deletePaths()); got != 1 {
+		t.Errorf("server saw %d DELETEs, want 1", got)
+	}
+
+	if got := fake.objectCount(); got != 0 {
+		t.Errorf("server still holds %d objects, want none", got)
+	}
+}
+
+func TestOpenProbeFirstWriteFails(t *testing.T) {
+	t.Parallel()
+
+	fake := newProbeServer(t, true, true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	s, err := openProbe(t, server, testSigner(server.URL, nil))
+	if err == nil {
+		t.Fatal("open succeeded, want an error")
+	}
+
+	if s != nil {
+		t.Error("open returned a store, want nil")
+	}
+
+	if errors.Is(err, s3.ErrNoConditionalWrites) {
+		t.Errorf("err = %v, want a first-write error, not ErrNoConditionalWrites", err)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "probe first write") {
+		t.Errorf("error %q lacks the probe detail", msg)
+	}
+
+	if !strings.Contains(msg, "403") || !strings.Contains(msg, "AccessDenied") {
+		t.Errorf("error %q lacks the status and the code", msg)
+	}
+
+	assertNoCredential(t, err)
+
+	if got := fake.objectCount(); got != 0 {
+		t.Errorf("server still holds %d objects, want none", got)
+	}
+}
+
+func TestOpenProbeSecondWriteFails(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeServer(t, func(_ *http.Request, _ []byte, call int) (int, string) {
+		if call == 1 {
+			return http.StatusForbidden, errorDoc("AccessDenied")
+		}
+
+		return http.StatusOK, ""
+	})
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	s, err := s3.Open(
+		t.Context(),
+		testSigner(server.URL, nil),
+		"pfx",
+		server.Client(),
+		s3.WithSleep(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+	if err == nil {
+		t.Fatal("open succeeded, want an error")
+	}
+
+	if s != nil {
+		t.Error("open returned a store, want nil")
+	}
+
+	if errors.Is(err, s3.ErrNoConditionalWrites) {
+		t.Errorf("err = %v, want a second-write error, not ErrNoConditionalWrites", err)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "probe second write") {
+		t.Errorf("error %q lacks the probe detail", msg)
+	}
+
+	assertNoCredential(t, err)
+
+	if got := fake.calls(); got != 3 {
+		t.Errorf("server saw %d calls, want 2 PUTs and 1 DELETE", got)
+	}
+}
+
+func TestOpenProbeKeysAreUniqueUnderPrefix(t *testing.T) {
+	t.Parallel()
+
+	fake := newProbeServer(t, true, false)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	signer := testSigner(server.URL, nil)
+
+	if _, err := openProbe(t, server, signer); err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+
+	if _, err := openProbe(t, server, signer); err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+
+	puts := fake.putPaths()
+
+	if len(puts) != 4 {
+		t.Fatalf("server saw %d PUTs, want 4", len(puts))
+	}
+
+	first, second := puts[0], puts[2]
+	if first == second {
+		t.Errorf("both opens used %q, want unique keys", first)
+	}
+
+	for _, got := range []string{first, second} {
+		if want := "/" + testBucket + "/pfx/probe-"; !strings.HasPrefix(got, want) {
+			t.Errorf("probe path = %q, want prefix %q", got, want)
+		}
+	}
+
+	if got := fake.objectCount(); got != 0 {
+		t.Errorf("server still holds %d objects, want none", got)
+	}
+}
