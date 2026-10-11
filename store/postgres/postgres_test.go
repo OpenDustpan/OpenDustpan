@@ -72,6 +72,21 @@ func TestUpdatesConformance(t *testing.T) {
 	})
 }
 
+func TestWorkspaceConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunWorkspace(t, func(t *testing.T) storetest.WorkspaceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 // open returns a store in a fresh schema of the database at base.
 func open(t *testing.T, base string) *postgres.Store {
 	t.Helper()
