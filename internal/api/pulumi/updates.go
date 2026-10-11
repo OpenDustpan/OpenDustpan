@@ -115,8 +115,9 @@ type updateResultEvent struct{}
 // importStack replaces the stack's state with the deployment the client
 // sends, as `stack import` does. It runs as an update of kind import, so it
 // shows in history and respects the stack lock: while another update runs it
-// answers 409. The server always ends the update that it started.
-func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+// answers 409. The server always ends the update that it started. It records
+// the caller as the creator of the import update.
+func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -154,7 +155,7 @@ func (h *Handler) importStack(w http.ResponseWriter, r *http.Request, _ identity
 		Invalid:       false,
 	}
 
-	u, err := h.updates.Import(ctx, ref, in)
+	u, err := h.updates.Import(ctx, ref, p.Subject, in)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

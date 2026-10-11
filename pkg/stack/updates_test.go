@@ -602,6 +602,18 @@ func checkRetries(t *testing.T, f updatesFixture, s stack.Started, done stack.Up
 		t.Errorf("retried complete: revision %d, %v; want revision %d, nil", again.Revision, retryErr, done.Revision)
 	}
 
+	// A retry with a token that never held the lease fails, even for the
+	// status the update ended with.
+	foreign, tokErr := token.New()
+	if tokErr != nil {
+		t.Fatalf("new token: %v", tokErr)
+	}
+
+	_, foreignErr := f.svc.Complete(ctx, f.ref, s.Update.ID, foreign, stack.StatusSucceeded)
+	if !errors.Is(foreignErr, stack.ErrLeaseInvalid) {
+		t.Errorf("retried complete with a foreign token: %v, want ErrLeaseInvalid", foreignErr)
+	}
+
 	_, err := f.svc.Complete(ctx, f.ref, s.Update.ID, s.Token, stack.StatusFailed)
 	if !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Errorf("completing with another status: %v, want ErrWrongUpdateState", err)
@@ -848,7 +860,7 @@ func TestImportRecordsAnUpdate(t *testing.T) {
 	f := newUpdates(t)
 	ctx := t.Context()
 
-	u, err := f.svc.Import(ctx, f.ref, checkpoint(0, `{"imported":true}`))
+	u, err := f.svc.Import(ctx, f.ref, "carol@example.com", checkpoint(0, `{"imported":true}`))
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -857,9 +869,15 @@ func TestImportRecordsAnUpdate(t *testing.T) {
 		t.Errorf("import update: kind %q status %q", u.Kind, u.Status)
 	}
 
+	if u.CreatedBy != "carol@example.com" {
+		t.Errorf("import creator = %q, want %q", u.CreatedBy, "carol@example.com")
+	}
+
 	history, err := f.svc.History(ctx, f.ref, stack.Page{Limit: 0, Offset: 0})
 	if err != nil || len(history) != 1 {
 		t.Errorf("history: %d entries, %v; want 1", len(history), err)
+	} else if history[0].CreatedBy != "carol@example.com" {
+		t.Errorf("history creator = %q, want %q", history[0].CreatedBy, "carol@example.com")
 	}
 }
 
@@ -868,7 +886,7 @@ func TestImportRejectsInvalidInputWithoutAnUpdate(t *testing.T) {
 
 	f := newUpdates(t)
 
-	_, err := f.svc.Import(t.Context(), f.ref, checkpoint(0, string(make([]byte, 2048))))
+	_, err := f.svc.Import(t.Context(), f.ref, "", checkpoint(0, string(make([]byte, 2048))))
 	if !errors.Is(err, stack.ErrTooLarge) {
 		t.Fatalf("import oversized: %v, want ErrTooLarge", err)
 	}
@@ -893,7 +911,7 @@ func TestImportEndsItsUpdateWhenTheCallerGivesUp(t *testing.T) {
 	f.store.cancelOnPut = cancel
 	f.store.mu.Unlock()
 
-	if _, err := f.svc.Import(ctx, f.ref, checkpoint(0, "{}")); !errors.Is(err, context.Canceled) {
+	if _, err := f.svc.Import(ctx, f.ref, "", checkpoint(0, "{}")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("import: %v, want context.Canceled", err)
 	}
 
@@ -948,7 +966,7 @@ func abandonImport(t *testing.T, f updatesFixture) (stack.Update, error) {
 	f.store.cancelOnPut = cancel
 	f.store.mu.Unlock()
 
-	return f.svc.Import(abandoned, f.ref, checkpoint(0, `{"v":2}`))
+	return f.svc.Import(abandoned, f.ref, "", checkpoint(0, `{"v":2}`))
 }
 
 // checkFailedImport proves a failed import ended without state: nothing runs,

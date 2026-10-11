@@ -258,13 +258,20 @@ func (u Update) renew(tok token.Token, now time.Time, d time.Duration) (Update, 
 
 // complete ends a running update with a final status reported by its client.
 // The CLI retries completion when a response is lost, so repeating the status
-// an update already ended with succeeds and changes nothing.
+// an update already ended with succeeds and changes nothing. The retry still
+// carries the lease token: it must match the digest kept at completion, so a
+// wrong token cannot observe success for an update it never held. The digest
+// stays after the update ends; the expiry does not, so the check ignores it.
 func (u Update) complete(tok token.Token, now time.Time, status UpdateStatus) (Update, error) {
 	if !status.Terminal() {
 		return Update{}, fmt.Errorf("%w: %q is not a final status", ErrInvalidUpdate, status)
 	}
 
 	if u.Status == status {
+		if !u.Lease.Digest.IsZero() && !u.Lease.Digest.Matches(tok) {
+			return Update{}, ErrLeaseInvalid
+		}
+
 		return u, nil
 	}
 
@@ -293,7 +300,9 @@ func (u Update) cancel(now time.Time) (Update, error) {
 func (u Update) end(now time.Time, status UpdateStatus) Update {
 	u.Status = status
 	u.EndedAt = now
-	u.Lease = Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}}
+	// The digest stays so a retried completion can still prove it held the
+	// lease. The expiry goes, so no later write can use it.
+	u.Lease = Lease{ExpiresAt: time.Time{}, Digest: u.Lease.Digest}
 	u.Revision++
 
 	return u

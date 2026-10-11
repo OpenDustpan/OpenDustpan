@@ -1085,6 +1085,34 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
+SELECT t.stack_id, t.name, t.value
+FROM stack_tags AS t
+JOIN stacks AS s ON s.id = t.stack_id
+WHERE s.namespace = $1
+ORDER BY t.stack_id, t.name
+`
+
+func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string) ([]StackTag, error) {
+	rows, err := q.db.Query(ctx, listStackTagsInNamespace, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StackTag
+	for rows.Next() {
+		var i StackTag
+		if err := rows.Scan(&i.StackID, &i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
