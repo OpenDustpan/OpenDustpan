@@ -162,13 +162,22 @@ type updateResults struct {
 }
 
 // updateInfo is one entry of the stack history. Previews never appear: the
-// history holds started mutating updates only.
+// history holds started mutating updates only. RequestedBy is the subject of
+// the principal that created the update, never a token. CheckpointBytes is 0
+// when the update saved no checkpoint. LeaseExpiresAt is the lease expiry in
+// Unix seconds while the update runs, and 0 once it ended. RestoredFrom is
+// the stack version a restore copied, and 0 for any other update.
 type updateInfo struct {
-	Result    string `json:"result"`
-	Kind      string `json:"kind"`
-	Version   int    `json:"version"`
-	StartTime int64  `json:"startTime"`
-	EndTime   int64  `json:"endTime"`
+	Result          string `json:"result"`
+	Kind            string `json:"kind"`
+	Version         int    `json:"version"`
+	StartTime       int64  `json:"startTime"`
+	EndTime         int64  `json:"endTime"`
+	UpdateID        string `json:"updateID"`
+	RequestedBy     string `json:"requestedBy"`
+	CheckpointBytes int64  `json:"checkpointBytes"`
+	LeaseExpiresAt  int64  `json:"leaseExpiresAt"`
+	RestoredFrom    int64  `json:"restoredFrom"`
 }
 
 // historyResponse answers the stack history, newest first.
@@ -486,11 +495,16 @@ func (h *Handler) listHistory(w http.ResponseWriter, r *http.Request, _ identity
 	infos := make([]updateInfo, 0, len(list))
 	for i := range list {
 		infos = append(infos, updateInfo{
-			Result:    updateResult(list[i].Status),
-			Kind:      string(list[i].Kind),
-			Version:   int(list[i].Version),
-			StartTime: list[i].StartedAt.Unix(),
-			EndTime:   list[i].EndedAt.Unix(),
+			Result:          updateResult(list[i].Status),
+			Kind:            string(list[i].Kind),
+			Version:         int(list[i].Version),
+			StartTime:       list[i].StartedAt.Unix(),
+			EndTime:         list[i].EndedAt.Unix(),
+			UpdateID:        list[i].ID.String(),
+			RequestedBy:     list[i].CreatedBy,
+			CheckpointBytes: list[i].CheckpointBytes,
+			LeaseExpiresAt:  leaseExpiresAt(list[i]),
+			RestoredFrom:    list[i].RestoredFrom,
 		})
 	}
 
@@ -555,6 +569,18 @@ func (h *Handler) exportStackVersion(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, exportedDeployment{Deployment: cp.Deployment, Version: cp.SchemaVersion})
+}
+
+// leaseExpiresAt returns the lease expiry of the update in Unix seconds
+// while it runs, and 0 once it ended: a finished update holds no lease, so
+// only the running update shows an expiry (ADR 28 decision 7). The token
+// itself never leaves the start and renew answers.
+func leaseExpiresAt(u stack.Update) int64 {
+	if u.Status != stack.StatusRunning || u.Lease.ExpiresAt.IsZero() {
+		return 0
+	}
+
+	return u.Lease.ExpiresAt.Unix()
 }
 
 // updateResult maps an update status to the history wire value. The wire
