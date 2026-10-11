@@ -41,6 +41,7 @@ func cliEntry(method, path, userAgent string, status int) e2e.Entry {
 		Step:          "",
 		Method:        method,
 		Path:          path,
+		Host:          "",
 		Query:         "",
 		UserAgent:     userAgent,
 		Accept:        "",

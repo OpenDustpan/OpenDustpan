@@ -4299,6 +4299,586 @@ func checkPairReport(t *testing.T, pair *e2e.Pair) {
 	}
 }
 
+// TestPulumiServiceImport moves a stack with a secret from one service
+// backend to another through the CLI alone (ADR 29 source P1). With S as the
+// source and D as the destination, on every Pulumi CLI version in the matrix
+// and on every store: three ups on S, a read-only dry run, a pipe of the last
+// three versions into import updates on D, the checks on D, a second run that
+// moves nothing and a final proof that S is unchanged. It writes an -import
+// report that holds both servers.
+func TestPulumiServiceImport(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	for _, label := range versions {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+
+			installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+			defer cancel()
+
+			cli, err := fetcher.Install(installCtx, e2e.Pulumi(), label)
+			if err != nil {
+				t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, label, err)
+			}
+
+			for _, db := range databases {
+				t.Run(string(db), func(t *testing.T) {
+					t.Parallel()
+					runP1ImportOnStore(t, cli, db)
+				})
+			}
+		})
+	}
+}
+
+// p1VersionCount is how many source versions the P1 import replays: the last
+// three of the source history, oldest first.
+const p1VersionCount = 3
+
+// p1Snapshot holds the source export and history before the import. The
+// import must leave both unchanged.
+type p1Snapshot struct {
+	export  string
+	history string
+}
+
+// p1Fixture carries one P1 import run: the server pair and the stack names.
+type p1Fixture struct {
+	pair  *e2e.Pair
+	dev   string
+	other string
+}
+
+// runP1ImportOnStore moves a stack with a secret from the source server to
+// the destination server on one store and proves every step.
+func runP1ImportOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	pair := e2e.NewPair(ctx, t, cli, store)
+
+	t.Cleanup(func() {
+		writeReport(t, pair.NewPairRunAs(cli.Label+"-import"))
+	})
+
+	pair.SharePulumiHome()
+
+	fix := &p1Fixture{
+		pair:  pair,
+		dev:   fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName),
+		other: fmt.Sprintf("%s/%s/other", e2e.Namespace, e2e.Project),
+	}
+
+	before := fix.setupSource(ctx, t)
+	since := len(pair.Src.Recorder.Entries())
+
+	fix.dryRun(ctx, t, before)
+	fix.replay(ctx, t)
+	fix.checkDestination(ctx, t, before)
+	fix.secondRun(ctx, t)
+	fix.upOnDestination(ctx, t)
+	fix.checkSourceUnchanged(ctx, t, before, since)
+	fix.logoutSource(ctx, t)
+}
+
+// p1Program returns the Pulumi.yaml the P1 import moves: a stack reference
+// to the other stack and a secret output from config. The checkpoint holds a
+// service secret, so the import re-encrypts it on the destination. It needs
+// no provider download.
+func p1Program() string {
+	return "name: " + e2e.Project + "\nruntime: yaml\n" +
+		"config:\n" +
+		"  apiKey:\n" +
+		"    type: string\n" +
+		"    secret: true\n" +
+		"outputs:\n" +
+		"  apiKeyOut:\n" +
+		"    fn::secret: ${apiKey}\n" +
+		"resources:\n" +
+		"  ref:\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + e2e.Namespace + "/" + e2e.Project + "/other\n"
+}
+
+// setupSource writes the secret program and builds three versions on the
+// source, one up per secret value with the newest last. It saves both logins
+// and returns the source export and history before the import.
+func (f *p1Fixture) setupSource(ctx context.Context, t *testing.T) p1Snapshot {
+	t.Helper()
+
+	src := f.pair.Src
+	dst := f.pair.Dst
+	secrets := []string{"s3cr3t-1", "s3cr3t-2", "s3cr3t-3"}
+
+	src.WritePulumiProject(t, p1Program())
+
+	src.Step(ctx, t, step("login to source with token", contains(src.URL), "login"))
+	src.Step(ctx, t, step("init dev on source", nil, "stack", "init", f.dev))
+	src.Step(ctx, t, step("init other on source", nil, "stack", "init", f.other))
+	src.Step(ctx, t, step("select dev on source", nil, "stack", "select", f.dev))
+
+	for i, secret := range secrets {
+		version := strconv.Itoa(i + 1)
+		src.Step(
+			ctx,
+			t,
+			step("config set secret "+version+" on source", nil, "config", "set", "--secret", "apiKey", secret),
+		)
+		src.Step(ctx, t, step("up "+version+" on source", nil, "up", "--yes", "--non-interactive"))
+	}
+
+	f.pair.SavePulumiLogin(ctx, t, src, "save login for source")
+	f.pair.SavePulumiLogin(ctx, t, dst, "save login for destination")
+	f.pair.UsePulumiBackend(ctx, t, src, "use source")
+
+	exported := src.StepSavedLogin(ctx, t, step("export latest on source before import", nil, "stack", "export"))
+	history := src.StepSavedLogin(
+		ctx,
+		t,
+		step("history on source before import", p1HistoryIs("update"), "stack", "history", "--json"),
+	)
+
+	return p1Snapshot{export: exported.Stdout, history: history.Stdout}
+}
+
+// dryRun lists the stacks of the source and their versions without changing
+// anything: the export and the history still match the snapshot, and no step
+// sends a write request.
+func (f *p1Fixture) dryRun(ctx context.Context, t *testing.T, before p1Snapshot) {
+	t.Helper()
+
+	src := f.pair.Src
+	dry := []string{
+		"stack ls on source",
+		"select other on source",
+		"history of other on source",
+		"select dev on source",
+		"history of dev on source",
+		"export latest on source after dry run",
+	}
+
+	src.StepSavedLogin(ctx, t, step(dry[0], stackListed, "stack", "ls", "--json"))
+	src.StepSavedLogin(ctx, t, step(dry[1], nil, "stack", "select", f.other))
+	src.StepSavedLogin(ctx, t, step(dry[2], historyHidesPreviews, "stack", "history", "--json"))
+	src.StepSavedLogin(ctx, t, step(dry[3], nil, "stack", "select", f.dev))
+
+	history := src.StepSavedLogin(ctx, t, step(dry[4], p1HistoryIs("update"), "stack", "history", "--json"))
+	exported := src.StepSavedLogin(ctx, t, step(dry[5], nil, "stack", "export"))
+
+	if history.Stdout != before.history {
+		t.Error("dry run changed the source history")
+	}
+
+	if exported.Stdout != before.export {
+		t.Error("dry run changed the source export")
+	}
+
+	if writes := p1WritesInSteps(src.Recorder.Entries(), dry...); len(writes) != 0 {
+		t.Errorf(
+			"dry run sent %d write requests, want none (first is %s %s)",
+			len(writes),
+			writes[0].Method,
+			writes[0].Path,
+		)
+	}
+}
+
+// replay pipes the last three source versions into the destination, oldest
+// first, with no file: each export travels in memory into an import on
+// standard input.
+func (f *p1Fixture) replay(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	src := f.pair.Src
+	dst := f.pair.Dst
+	exports := make([]string, 0, 3)
+
+	for _, version := range []string{"1", "2", "3"} {
+		exported := src.StepSavedLogin(
+			ctx,
+			t,
+			step(
+				"export version "+version+" from source",
+				p1ExportHoldsSecret,
+				"stack",
+				"export",
+				"--version",
+				version,
+			),
+		)
+		exports = append(exports, exported.Stdout)
+	}
+
+	if exports[0] == exports[1] || exports[1] == exports[2] {
+		t.Error("source versions share one export, want one version per secret")
+	}
+
+	f.pair.UsePulumiBackend(ctx, t, dst, "use destination")
+
+	src.StepSavedLogin(ctx, t, step("init dev on destination", nil, "stack", "init", f.dev))
+	src.StepSavedLogin(ctx, t, step("init other on destination", nil, "stack", "init", f.other))
+	src.StepSavedLogin(ctx, t, step("select dev on destination", nil, "stack", "select", f.dev))
+	src.StepSavedLogin(
+		ctx,
+		t,
+		step("config set secret on destination", nil, "config", "set", "--secret", "apiKey", "s3cr3t-3"),
+	)
+
+	for i, exported := range exports {
+		version := strconv.Itoa(i + 1)
+		spec := step("import version "+version+" to destination", nil, "stack", "import")
+		spec.Stdin = exported
+		src.StepSavedLogin(ctx, t, spec)
+	}
+}
+
+// checkDestination proves the replay landed: the secret output decrypts, the
+// destination export matches the source latest except for the backend URL and
+// the re-encrypted secrets, and the history holds three imports. The import
+// time and kind replace the original update time and kind.
+func (f *p1Fixture) checkDestination(ctx context.Context, t *testing.T, before p1Snapshot) {
+	t.Helper()
+
+	src := f.pair.Src
+	dst := f.pair.Dst
+
+	src.StepSavedLogin(
+		ctx,
+		t,
+		step(
+			"stack output shows the secret on destination",
+			contains("s3cr3t-3"),
+			"stack",
+			"output",
+			"--show-secrets",
+		),
+	)
+
+	exported := src.StepSavedLogin(ctx, t, step("export latest on destination", nil, "stack", "export"))
+	history := src.StepSavedLogin(
+		ctx,
+		t,
+		step("history on destination shows imports", p1HistoryIs("import"), "stack", "history", "--json"),
+	)
+
+	normalizedSrc, srcSecrets := normalizeP1Export(t, before.export, src.URL, dst.URL)
+	normalizedDst, dstSecrets := normalizeP1Export(t, exported.Stdout, src.URL, dst.URL)
+
+	if normalizedSrc != normalizedDst {
+		t.Error("destination export differs from the source export except for the backend URL and secrets")
+	}
+
+	if slices.Equal(srcSecrets, dstSecrets) {
+		t.Error("destination kept the source ciphertexts, want secrets re-encrypted with its own key")
+	}
+
+	// The guide records what the replay loses: the original kind and time of
+	// each version. The destination history shows kind import with the time
+	// of the import.
+	t.Logf("source history before the import:\n%s", before.history)
+	t.Logf("destination history after the import:\n%s", history.Stdout)
+}
+
+// secondRun replays the import and moves nothing new: the destination latest
+// export already matches the source latest, so no version is missing and the
+// destination history and export stay identical. This is the resume rule: a
+// run after a failure moves only the versions the destination still lacks.
+func (f *p1Fixture) secondRun(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	src := f.pair.Src
+	dst := f.pair.Dst
+
+	latest := src.StepSavedLogin(
+		ctx,
+		t,
+		step("export latest on destination before second run", nil, "stack", "export"),
+	)
+	history := src.StepSavedLogin(
+		ctx,
+		t,
+		step("history on destination before second run", p1HistoryIs("import"), "stack", "history", "--json"),
+	)
+
+	normalizedLatest, _ := normalizeP1Export(t, latest.Stdout, src.URL, dst.URL)
+	exports := make([]string, 0, 3)
+
+	for _, version := range []string{"1", "2", "3"} {
+		exported := src.StepSavedLogin(
+			ctx,
+			t,
+			step("replay version "+version+" from source", nil, "stack", "export", "--version", version),
+		)
+		exports = append(exports, exported.Stdout)
+	}
+
+	// Resume from the newest source version the destination already holds:
+	// only newer versions still need an import. A run after a failure moves
+	// the remainder; a run after a full import moves nothing.
+	matched := 0
+
+	for i, exported := range exports {
+		normalized, _ := normalizeP1Export(t, exported, src.URL, dst.URL)
+		if normalized == normalizedLatest {
+			matched = i + 1
+		}
+	}
+
+	for i := matched; i < len(exports); i++ {
+		spec := step("import missing version "+strconv.Itoa(i+1)+" to destination", nil, "stack", "import")
+		spec.Stdin = exports[i]
+		src.StepSavedLogin(ctx, t, spec)
+	}
+
+	moved := len(exports) - matched
+
+	t.Logf("second import run moved %d of 3 versions", moved)
+
+	if moved != 0 {
+		t.Errorf("second import run moved %d versions, want none", moved)
+	}
+
+	afterExport := src.StepSavedLogin(
+		ctx,
+		t,
+		step("export latest on destination after second run", nil, "stack", "export"),
+	)
+	afterHistory := src.StepSavedLogin(
+		ctx,
+		t,
+		step("history on destination after second run", p1HistoryIs("import"), "stack", "history", "--json"),
+	)
+
+	if afterExport.Stdout != latest.Stdout {
+		t.Error("second import run changed the destination export")
+	}
+
+	if afterHistory.Stdout != history.Stdout {
+		t.Error("second import run changed the destination history")
+	}
+}
+
+// upOnDestination proves the moved state is current: an up changes nothing.
+func (f *p1Fixture) upOnDestination(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	f.pair.Src.StepSavedLogin(
+		ctx,
+		t,
+		step("up on destination shows no changes", upHasNoChanges, "up", "--yes", "--non-interactive"),
+	)
+}
+
+// checkSourceUnchanged proves the import left the source alone: the latest
+// export and the history still match the snapshot, and no write request
+// reached the source past entry since. Decrypt requests are reads: the CLI
+// decrypts through the source at import and encrypts through the destination.
+func (f *p1Fixture) checkSourceUnchanged(
+	ctx context.Context, t *testing.T, before p1Snapshot, since int,
+) {
+	t.Helper()
+
+	src := f.pair.Src
+
+	f.pair.UsePulumiBackend(ctx, t, src, "use source for final check")
+
+	exported := src.StepSavedLogin(ctx, t, step("export latest on source after import", nil, "stack", "export"))
+	history := src.StepSavedLogin(
+		ctx,
+		t,
+		step("history on source after import", p1HistoryIs("update"), "stack", "history", "--json"),
+	)
+
+	if exported.Stdout != before.export {
+		t.Error("import changed the source export")
+	}
+
+	if history.Stdout != before.history {
+		t.Error("import changed the source history")
+	}
+
+	entries := src.Recorder.Entries()
+
+	for i := since; i < len(entries); i++ {
+		if entry := &entries[i]; entry.Host == src.Host() && p1IsWrite(entry.Method, entry.Path) {
+			t.Errorf("import sent %s %s to the source, want no write request", entry.Method, entry.Path)
+
+			return
+		}
+	}
+}
+
+// logoutSource logs out of the source and proves the destination needs no
+// source login afterwards: the secret output and the config still decrypt
+// through the destination alone.
+func (f *p1Fixture) logoutSource(ctx context.Context, t *testing.T) {
+	t.Helper()
+
+	src := f.pair.Src
+	dst := f.pair.Dst
+
+	src.StepSavedLogin(ctx, t, step("logout of source", nil, "logout", src.URL))
+	f.pair.UsePulumiBackend(ctx, t, dst, "use destination after logout")
+	src.StepSavedLogin(
+		ctx,
+		t,
+		step("stack output after source logout", contains("s3cr3t-3"), "stack", "output", "--show-secrets"),
+	)
+	src.StepSavedLogin(
+		ctx,
+		t,
+		step("config get after source logout", contains("s3cr3t-3"), "config", "get", "apiKey"),
+	)
+}
+
+// p1HistoryIs proves stack history holds every replayed version, each of
+// kind.
+func p1HistoryIs(kind string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		var updates []struct {
+			Kind string `json:"kind"`
+		}
+
+		if err := json.Unmarshal([]byte(r.Stdout), &updates); err != nil {
+			return fmt.Errorf("%w: decode stack history: %w", errUnexpected, err)
+		}
+
+		if len(updates) != p1VersionCount {
+			return fmt.Errorf(
+				"%w: stack history holds %d updates, want %d",
+				errUnexpected,
+				len(updates),
+				p1VersionCount,
+			)
+		}
+
+		for _, u := range updates {
+			if u.Kind != kind {
+				return fmt.Errorf("%w: stack history holds kind %q, want %q", errUnexpected, u.Kind, kind)
+			}
+		}
+
+		return nil
+	}
+}
+
+// p1ExportHoldsSecret proves a version export holds the stack reference and
+// an encrypted secret, never its plaintext.
+func p1ExportHoldsSecret(r e2e.Result) error {
+	if err := exportHoldsReference(r); err != nil {
+		return err
+	}
+
+	if !strings.Contains(r.Stdout, "ciphertext") {
+		return fmt.Errorf("%w: export holds no encrypted secret", errUnexpected)
+	}
+
+	if strings.Contains(r.Stdout, "s3cr3t-") {
+		return fmt.Errorf("%w: export printed a plaintext secret", errUnexpected)
+	}
+
+	return nil
+}
+
+// normalizeP1Export blanks the server URLs and every ciphertext of an export
+// and returns the canonical form with the sorted ciphertexts. The URL names
+// the server and the destination re-encrypts every secret with its own key,
+// so both always differ between source and destination.
+func normalizeP1Export(t *testing.T, raw string, servers ...string) (string, []string) {
+	t.Helper()
+
+	for _, server := range servers {
+		raw = strings.ReplaceAll(raw, server, "")
+	}
+
+	var doc any
+
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("decode stack export: %v", err)
+	}
+
+	var ciphertexts []string
+
+	redactP1Ciphertexts(doc, &ciphertexts)
+
+	normalized, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode stack export: %v", err)
+	}
+
+	slices.Sort(ciphertexts)
+
+	return string(normalized), ciphertexts
+}
+
+// redactP1Ciphertexts replaces every ciphertext string under doc with "*" and
+// records the originals.
+func redactP1Ciphertexts(doc any, ciphertexts *[]string) {
+	switch doc := doc.(type) {
+	case map[string]any:
+		for key, item := range doc {
+			if key == "ciphertext" {
+				if text, ok := item.(string); ok {
+					*ciphertexts = append(*ciphertexts, text)
+					doc[key] = "*"
+				}
+
+				continue
+			}
+
+			redactP1Ciphertexts(item, ciphertexts)
+		}
+	case []any:
+		for _, item := range doc {
+			redactP1Ciphertexts(item, ciphertexts)
+		}
+	default:
+	}
+}
+
+// p1IsWrite reports whether a recorded request changes server state. The
+// encrypt and decrypt routes only wrap keys, so a decrypt through the source
+// during an import is not a write.
+func p1IsWrite(method, path string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return false
+	}
+
+	return !strings.Contains(path, "encrypt") && !strings.Contains(path, "decrypt")
+}
+
+// p1WritesInSteps returns the write requests in entries made during steps.
+func p1WritesInSteps(entries []e2e.Entry, steps ...string) []e2e.Entry {
+	var writes []e2e.Entry
+
+	for i := range entries {
+		if entry := &entries[i]; slices.Contains(steps, entry.Step) && p1IsWrite(entry.Method, entry.Path) {
+			writes = append(writes, *entry)
+		}
+	}
+
+	return writes
+}
+
 // TestTofuPairHosts proves one OpenTofu client addresses both servers in one
 // test: after the trust bundle and the merged credentials, init works in the
 // source project and in the destination project. It runs on Linux on every

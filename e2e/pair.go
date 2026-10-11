@@ -140,22 +140,30 @@ func (p *Pair) Steps() []StepResult {
 	return append(append([]StepResult(nil), p.Src.steps...), p.Dst.steps...)
 }
 
-// NewPairRun collects the results of a pair run. The label gains a -pair
-// suffix, so the file never overwrites a matrix report. The requests come
-// from the shared recorder and hold both servers; the step commands hold
-// both URLs.
-func (p *Pair) NewPairRun() Run {
+// NewPairRunAs collects the results of a pair run under label, so tests with
+// their own scope write reports that never overwrite another test's file.
+// The requests come from the shared recorder and hold both servers; the step
+// commands hold both URLs.
+func (p *Pair) NewPairRunAs(label string) Run {
 	cli := p.Src.cli
 
 	return Run{
 		Tool:           cli.Tool,
-		Label:          cli.Label + "-pair",
+		Label:          label,
 		Store:          p.Src.store,
 		Version:        cli.Version,
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          p.Steps(),
 		Requests:       p.Src.Recorder.Entries(),
 	}
+}
+
+// NewPairRun collects the results of a pair run. The label gains a -pair
+// suffix, so the file never overwrites a matrix report. The requests come
+// from the shared recorder and hold both servers; the step commands hold
+// both URLs.
+func (p *Pair) NewPairRun() Run {
+	return p.NewPairRunAs(p.Src.cli.Label + "-pair")
 }
 
 // readCert returns the PEM certificate Env trusts for its own server.

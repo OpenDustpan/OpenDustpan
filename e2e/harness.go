@@ -1256,6 +1256,14 @@ func (e *Env) WriteTofuConfig(tb testing.TB, content string) {
 	e.write(tb, filepath.Join(e.project, "main.tf"), content)
 }
 
+// WritePulumiProject replaces the scenario's Pulumi.yaml with content, so an
+// import test can use a program with a secret output while the default
+// scenario keeps its stack reference program.
+func (e *Env) WritePulumiProject(tb testing.TB, content string) {
+	tb.Helper()
+	e.write(tb, filepath.Join(e.project, "Pulumi.yaml"), content)
+}
+
 // StepSpec describes one scenario step.
 type StepSpec struct {
 	// Check inspects the run; nil means the exit code is enough.
@@ -1591,6 +1599,11 @@ func (e *Env) runWithEnv(
 	cmd := exec.CommandContext(ctx, e.cli.Binary(), args...)
 	cmd.Dir = dir
 	cmd.Env = env
+
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = waitDelay
