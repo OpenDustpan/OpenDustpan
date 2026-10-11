@@ -21,26 +21,45 @@ WHERE name = $1
 FOR SHARE;
 
 -- name: CreateStack :execrows
-INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT DO NOTHING;
 
 -- name: GetStack :one
-SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3;
 
 -- name: ListStacksInNamespace :many
-SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1
 ORDER BY project, name;
 
 -- name: ListStacksInProject :many
-SELECT namespace, project, name, id, tags, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = $1 AND project = $2
 ORDER BY name;
+
+-- name: CreateStackTag :exec
+INSERT INTO stack_tags (stack_id, name, value)
+VALUES ($1, $2, $3);
+
+-- name: GetStackTags :many
+SELECT name, value
+FROM stack_tags
+WHERE stack_id = $1
+ORDER BY name;
+
+-- name: DeleteStackTags :exec
+DELETE FROM stack_tags
+WHERE stack_id = $1;
+
+-- name: TouchStack :exec
+UPDATE stacks
+SET updated_at_ms = $1
+WHERE id = $2;
 
 -- name: RenameStack :execrows
 UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4;

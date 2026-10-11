@@ -194,6 +194,34 @@ func contains(want string) func(e2e.Result) error {
 	}
 }
 
+// tagListed checks that the tag table lists name with value: one line whose
+// first two fields are the name and the value.
+func tagListed(name, value string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		for line := range strings.Lines(r.Stdout) {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == name && fields[1] == value {
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: stdout lacks tag %q with value %q", errUnexpected, name, value)
+	}
+}
+
+// tagAbsent checks that the tag table lists no line for name.
+func tagAbsent(name string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		for line := range strings.Lines(r.Stdout) {
+			if fields := strings.Fields(line); len(fields) >= 1 && fields[0] == name {
+				return fmt.Errorf("%w: stdout still lists tag %q", errUnexpected, name)
+			}
+		}
+
+		return nil
+	}
+}
+
 // step is a scenario step with no extra environment.
 func step(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
 	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Fail: false}
@@ -245,6 +273,11 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		Fail:  false,
 	})
 
+	// Tags follow the stack through a rename.
+	env.Step(ctx, t, step("stack tag ls after rename", tagListed("team", "e2e"), "stack", "tag", "ls"))
+	env.Step(ctx, t, step("stack tag rm", nil, "stack", "tag", "rm", "team"))
+	env.Step(ctx, t, step("stack tag ls after rm", tagAbsent("team"), "stack", "tag", "ls"))
+
 	for _, s := range pulumiTeardownSteps(scratch) {
 		env.Step(ctx, t, s)
 	}
@@ -293,6 +326,7 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 		step("stack select", nil, "stack", "select", qualified),
 		step("stack show-name", contains(stackName), "stack", "--show-name"),
 		step("stack tag set", nil, "stack", "tag", "set", "team", "e2e"),
+		step("stack tag ls", tagListed("team", "e2e"), "stack", "tag", "ls"),
 		// The service backend encrypts secrets on the server, per stack.
 		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
 		step("stack export", nil, "stack", "export"),

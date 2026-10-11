@@ -28,11 +28,16 @@ type Stack struct {
 	Namespace   string
 	Project     string
 	Name        string
-	TagsJson    string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	ID          string
+}
+
+type StackTag struct {
+	StackID string
+	Name    string
+	Value   string
 }
 
 type Update struct {

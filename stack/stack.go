@@ -124,7 +124,8 @@ type Filter struct {
 	Project   ProjectName
 }
 
-// Store is the persistence port for stacks.
+// Store is the persistence port for stacks. Tags live in their own table
+// keyed by the stack ID, so a rename keeps them without moving any tag row.
 type Store interface {
 	// CreateStack persists st if fence matches the namespace's current failover
 	// version. It returns ErrAlreadyExists, namespace.ErrNotFound or
@@ -134,6 +135,12 @@ type Store interface {
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
 	// ListStacks returns the stacks matching filter, ordered by project then name.
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
+	// UpdateStackTags replaces the tags of the stack identified by ref with
+	// tags, keyed by its stable ID, and stamps updatedAt. It returns
+	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
+	UpdateStackTags(
+		ctx context.Context, ref Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
+	) error
 	// RenameStack changes the stack name of oldRef to newName if fence matches
 	// the namespace's current failover version. The stack ID and every child
 	// row stay with the stack. It returns ErrNotFound for a missing stack,
@@ -225,6 +232,37 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 	}
 
 	return stacks, nil
+}
+
+// UpdateTags replaces the tags of the stack identified by ref with tags, as
+// the Pulumi CLI sends them on PATCH, and returns the updated stack. An empty
+// or nil map clears every tag. The write is fenced on the namespace's
+// failover version and only allowed in its home region.
+func (s *Service) UpdateTags(
+	ctx context.Context, ref Ref, tags map[string]string,
+) (Stack, error) {
+	if len(tags) > maxTags {
+		return Stack{}, fmt.Errorf("%w: more than %d tags", ErrInvalidName, maxTags)
+	}
+
+	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
+	if err != nil {
+		return Stack{}, fmt.Errorf("update tags of %s: %w", ref, err)
+	}
+
+	now := s.now().UTC()
+
+	storeErr := s.store.UpdateStackTags(ctx, ref, maps.Clone(tags), now, ns.Fence())
+	if storeErr != nil {
+		return Stack{}, fmt.Errorf("update tags of %s: %w", ref, storeErr)
+	}
+
+	st, err := s.store.GetStack(ctx, ref)
+	if err != nil {
+		return Stack{}, fmt.Errorf("update tags of %s: %w", ref, err)
+	}
+
+	return st, nil
 }
 
 // Rename changes the stack name of oldRef to newName and returns the renamed

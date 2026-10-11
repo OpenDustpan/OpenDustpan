@@ -89,8 +89,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createStack = `-- name: CreateStack :execrows
-INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -99,7 +99,6 @@ type CreateStackParams struct {
 	Project     string
 	Name        string
 	ID          string
-	TagsJson    string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
@@ -111,7 +110,6 @@ func (q *Queries) CreateStack(ctx context.Context, arg CreateStackParams) (int64
 		arg.Project,
 		arg.Name,
 		arg.ID,
-		arg.TagsJson,
 		arg.Version,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
@@ -120,6 +118,22 @@ func (q *Queries) CreateStack(ctx context.Context, arg CreateStackParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const createStackTag = `-- name: CreateStackTag :exec
+INSERT INTO stack_tags (stack_id, name, value)
+VALUES (?, ?, ?)
+`
+
+type CreateStackTagParams struct {
+	StackID string
+	Name    string
+	Value   string
+}
+
+func (q *Queries) CreateStackTag(ctx context.Context, arg CreateStackTagParams) error {
+	_, err := q.db.ExecContext(ctx, createStackTag, arg.StackID, arg.Name, arg.Value)
+	return err
 }
 
 const createUpdate = `-- name: CreateUpdate :exec
@@ -175,6 +189,16 @@ type DeleteStackParams struct {
 
 func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) error {
 	_, err := q.db.ExecContext(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
+	return err
+}
+
+const deleteStackTags = `-- name: DeleteStackTags :exec
+DELETE FROM stack_tags
+WHERE stack_id = ?
+`
+
+func (q *Queries) DeleteStackTags(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteStackTags, stackID)
 	return err
 }
 
@@ -299,7 +323,7 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 }
 
 const getStack = `-- name: GetStack :one
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ? AND project = ? AND name = ?
 `
@@ -315,7 +339,6 @@ type GetStackRow struct {
 	Project     string
 	Name        string
 	ID          string
-	TagsJson    string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
@@ -329,7 +352,6 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 		&i.Project,
 		&i.Name,
 		&i.ID,
-		&i.TagsJson,
 		&i.Version,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
@@ -354,6 +376,41 @@ func (q *Queries) GetStackID(ctx context.Context, arg GetStackIDParams) (string,
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const getStackTags = `-- name: GetStackTags :many
+SELECT name, value
+FROM stack_tags
+WHERE stack_id = ?
+ORDER BY name
+`
+
+type GetStackTagsRow struct {
+	Name  string
+	Value string
+}
+
+func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackTagsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getStackTags, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetStackTagsRow
+	for rows.Next() {
+		var i GetStackTagsRow
+		if err := rows.Scan(&i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getStackVersion = `-- name: GetStackVersion :one
@@ -551,7 +608,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 }
 
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ?
 ORDER BY project, name
@@ -562,7 +619,6 @@ type ListStacksInNamespaceRow struct {
 	Project     string
 	Name        string
 	ID          string
-	TagsJson    string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
@@ -582,7 +638,6 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 			&i.Project,
 			&i.Name,
 			&i.ID,
-			&i.TagsJson,
 			&i.Version,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
@@ -601,7 +656,7 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 }
 
 const listStacksInProject = `-- name: ListStacksInProject :many
-SELECT namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms
+SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
 WHERE namespace = ? AND project = ?
 ORDER BY name
@@ -617,7 +672,6 @@ type ListStacksInProjectRow struct {
 	Project     string
 	Name        string
 	ID          string
-	TagsJson    string
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
@@ -637,7 +691,6 @@ func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProje
 			&i.Project,
 			&i.Name,
 			&i.ID,
-			&i.TagsJson,
 			&i.Version,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
@@ -855,5 +908,21 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 		arg.Project,
 		arg.Name,
 	)
+	return err
+}
+
+const touchStack = `-- name: TouchStack :exec
+UPDATE stacks
+SET updated_at_ms = ?
+WHERE id = ?
+`
+
+type TouchStackParams struct {
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
+	_, err := q.db.ExecContext(ctx, touchStack, arg.UpdatedAtMs, arg.ID)
 	return err
 }

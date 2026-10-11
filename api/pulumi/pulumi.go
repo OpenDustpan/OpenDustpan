@@ -399,6 +399,54 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 	h.writeJSON(ctx, w, http.StatusOK, createStackResponse{})
 }
 
+type updateStackTagsResponse struct{}
+
+func (h *Handler) updateStackTags(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		h.writeJSON(
+			ctx,
+			w,
+			http.StatusBadRequest,
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
+		)
+
+		return
+	}
+
+	// The Pulumi CLI replaces all tags with the map it sends
+	// (pkg/backend/httpstate/client/client.go UpdateStackTags): a missing key
+	// is a removed tag, and an empty object clears every tag.
+	var tags map[string]string
+	if err := json.Unmarshal(body, &tags); err != nil {
+		h.writeJSON(
+			ctx,
+			w,
+			http.StatusBadRequest,
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
+		)
+
+		return
+	}
+
+	if _, err := h.stacks.UpdateTags(ctx, ref, tags); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, updateStackTagsResponse{})
+}
+
 type stackResponse struct {
 	Tags         map[string]string `json:"tags"`
 	OrgName      string            `json:"orgName"`
