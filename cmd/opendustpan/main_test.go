@@ -684,7 +684,7 @@ func TestDefaultBlobDir(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // serve reads process environment, so this test sets it and runs its cases in order.
+// TestServeBlobDir sets the process environment, so it runs alone.
 func TestServeBlobDir(t *testing.T) {
 	setServeEnv(t, testKeyBase64())
 
@@ -700,6 +700,10 @@ func TestServeBlobDir(t *testing.T) {
 	}
 
 	checkBlobDir(t, filepath.Join(dir, "blobs"))
+
+	// serve clears DUSTPAN_ADMIN_TOKEN after the read, so the second start
+	// in this process needs it again.
+	t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
 
 	custom := filepath.Join(dir, "custom-blobs")
 	customArgs := []string{

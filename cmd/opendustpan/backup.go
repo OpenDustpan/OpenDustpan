@@ -7,8 +7,9 @@ package main
 //
 // The command starts a backup, waits until it leaves running, and prints
 // the ID, the state and the SQL size. The access token comes from
-// DUSTPAN_ADMIN_TOKEN only, never from a flag. When the variable holds
-// several comma-separated tokens, the command uses the first one. A TLS
+// DUSTPAN_ADMIN_TOKEN or from the file in DUSTPAN_ADMIN_TOKEN_FILE, never
+// from a flag. When the setting holds several tokens, the command uses the
+// first one. A TLS
 // server is trusted through the system store with an optional --ca-file
 // bundle. The exit code is 0 on a succeeded backup and 1 on a failed
 // backup or an error.
@@ -49,8 +50,8 @@ var (
 	errBackupNeedsServer = errors.New("backup needs --server")
 	// errBackupFailed reports a backup that left running without success.
 	errBackupFailed = errors.New("backup failed")
-	// errBackupNoToken reports a backup run without DUSTPAN_ADMIN_TOKEN.
-	errBackupNoToken = errors.New("DUSTPAN_ADMIN_TOKEN is not set")
+	// errBackupNoToken reports a backup run without an admin token.
+	errBackupNoToken = errors.New("no admin token is set")
 	// errBackupNoCA reports a CA bundle with no certificate.
 	errBackupNoCA = errors.New("no certificate found")
 	// errBackupTransport reports a backup HTTP transport of another type.
@@ -177,23 +178,27 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	return nil
 }
 
-// backupToken returns the access token from DUSTPAN_ADMIN_TOKEN: the first
-// comma-separated entry, as the server signs each entry in as a distinct
-// administrator. An empty variable is an error that names the setting and
-// the one command that helps.
+// backupToken returns the access token from DUSTPAN_ADMIN_TOKEN, or from the
+// file in DUSTPAN_ADMIN_TOKEN_FILE when the variable is empty: the first
+// token, as the server signs each token in as a distinct administrator. No
+// token is an error that names both settings and the one command that helps.
 func backupToken() (string, error) {
-	raw := os.Getenv(adminTokenEnvVar)
+	tokens, err := loadAdminTokensFrom(os.LookupEnv)
+	if err != nil && !errors.Is(err, errAdminTokenMissing) {
+		return "", err
+	}
 
-	for entry := range strings.SplitSeq(raw, ",") {
+	for _, entry := range tokens {
 		if token := strings.TrimSpace(entry); token != "" {
 			return token, nil
 		}
 	}
 
 	return "", fmt.Errorf(
-		"%w: set %s and run opendustpan backup again",
+		"%w: set %s or %s and run opendustpan backup again",
 		errBackupNoToken,
 		adminTokenEnvVar,
+		adminTokenFileEnvVar,
 	)
 }
 
