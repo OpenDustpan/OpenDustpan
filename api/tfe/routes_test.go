@@ -29,7 +29,20 @@ var packageSources embed.FS
 // publicPatterns lists the routes that need no sign-in. Every other route
 // must declare its actions in the route table.
 func publicPatterns() []string {
-	return []string{"GET /api/v2/test-public"}
+	return []string{
+		"GET /.well-known/terraform.json",
+		"GET /api/v2/ping",
+		"GET /api/v2/test-public",
+	}
+}
+
+// productionPublicPatterns lists the public routes of the production table:
+// every public route without a test-only path.
+func productionPublicPatterns() []string {
+	return []string{
+		"GET /.well-known/terraform.json",
+		"GET /api/v2/ping",
+	}
 }
 
 // stubAuthenticator denies every token. The declaration tests send no token,
@@ -127,6 +140,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -143,6 +157,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -161,6 +176,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
 		Workspaces:    stubWorkspaces{},
 	})
 	if err != nil {
@@ -168,6 +184,50 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 	}
 
 	return handler
+}
+
+// stubNamespaceStore holds only the acme namespace, so the entitlement set
+// answers 200 for acme and 404 for every other organization.
+type stubNamespaceStore struct{}
+
+func (stubNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Namespace) error {
+	return nil
+}
+
+func (stubNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	if name.String() != "acme" {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return namespace.Namespace{
+		CreatedAt:       time.Time{},
+		Name:            name,
+		HomeRegion:      "test-region",
+		FailoverVersion: 1,
+	}, nil
+}
+
+func (stubNamespaceStore) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	ns, err := stubNamespaceStore{}.GetNamespace(ctx, namespace.Name("acme"))
+	if err != nil {
+		return nil, err
+	}
+
+	return []namespace.Namespace{ns}, nil
+}
+
+// newTestNamespaces returns a namespace service over the stub store.
+func newTestNamespaces(t *testing.T) *namespace.Service {
+	t.Helper()
+
+	svc, err := namespace.NewService(
+		namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	return svc
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -184,7 +244,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 
 	t.Run("production table", func(t *testing.T) {
 		t.Parallel()
-		checkRoutesDeclareActions(t, newProductionHandler(t), nil)
+		checkRoutesDeclareActions(t, newProductionHandler(t), productionPublicPatterns())
 	})
 }
 
@@ -685,6 +745,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
 		Workspaces:    nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -906,4 +967,211 @@ func TestPublicRouteServesWithoutToken(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); got != "application/vnd.api+json" {
 		t.Fatalf("media type = %q, want %q", got, "application/vnd.api+json")
 	}
+}
+
+// TestDiscoveryAdvertisesTFE proves the discovery document advertises tfe.v2
+// at /api/v2/ and nothing else: there is no login.v1 service.
+func TestDiscoveryAdvertisesTFE(t *testing.T) {
+	t.Parallel()
+
+	handler := newProductionHandler(t)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/.well-known/terraform.json",
+		http.NoBody,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("discovery answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("media type = %q, want %q", got, "application/json")
+	}
+
+	var doc map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode discovery body: %v", err)
+	}
+
+	if len(doc) != 1 || doc["tfe.v2"] != "/api/v2/" {
+		t.Fatalf("discovery body = %v, want only tfe.v2 at /api/v2/", doc)
+	}
+}
+
+// TestPingSetsAPIVersion proves ping answers 200 with TFP-API-Version 2.5.
+func TestPingSetsAPIVersion(t *testing.T) {
+	t.Parallel()
+
+	handler := newProductionHandler(t)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/ping", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ping answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if got := rec.Header().Get("Tfp-Api-Version"); got != "2.5" {
+		t.Fatalf("TFP-API-Version = %q, want %q", got, "2.5")
+	}
+}
+
+// entitlementTestAttributes is the attributes object of an entitlement
+// document in tests.
+type entitlementTestAttributes struct {
+	Operations bool `json:"operations"`
+}
+
+// entitlementTestData is the data object of an entitlement document in tests.
+type entitlementTestData struct {
+	Type       string                    `json:"type"`
+	Attributes entitlementTestAttributes `json:"attributes"`
+}
+
+// entitlementTestDoc decodes an entitlement document in tests.
+type entitlementTestDoc struct {
+	Data entitlementTestData `json:"data"`
+}
+
+// TestEntitlementSetReportsLocal proves the entitlement set reports
+// operations false, so OpenTofu runs plans locally.
+func TestEntitlementSetReportsLocal(t *testing.T) {
+	t.Parallel()
+
+	allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/organizations/acme/entitlement-set",
+		http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	allowed.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("entitlement set answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var doc entitlementTestDoc
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode entitlement body: %v", err)
+	}
+
+	if doc.Data.Type != "entitlement-sets" {
+		t.Fatalf("entitlement type = %q, want %q", doc.Data.Type, "entitlement-sets")
+	}
+
+	if doc.Data.Attributes.Operations {
+		t.Fatal("entitlement operations is true, want false")
+	}
+}
+
+// TestEntitlementSetUnknownOrganization proves an unknown organization
+// answers 404 as a JSON:API error.
+func TestEntitlementSetUnknownOrganization(t *testing.T) {
+	t.Parallel()
+
+	allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/organizations/ghost/entitlement-set",
+		http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+
+	allowed.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown organization answers %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	checkJSONAPIError(t, rec, http.StatusNotFound)
+}
+
+// TestEntitlementSetDeclaresNamespaceRead proves the entitlement-set route
+// declares namespace:read on the namespace object.
+func TestEntitlementSetDeclaresNamespaceRead(t *testing.T) {
+	t.Parallel()
+
+	handler := newProductionHandler(t)
+
+	const pattern = "GET /api/v2/organizations/{organization}/entitlement-set"
+
+	var found *tfe.Route
+
+	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path == pattern {
+			found = &route
+
+			break
+		}
+	}
+
+	if found == nil {
+		t.Fatalf("route %q is not declared", pattern)
+	}
+
+	if len(found.Actions) != 1 || found.Actions[0] != identity.ActionNamespaceRead {
+		t.Fatalf("route %q actions = %v, want [namespace:read]", pattern, found.Actions)
+	}
+
+	if found.Resolve == nil {
+		t.Fatalf("route %q declares no resolver", pattern)
+	}
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/organizations/acme/entitlement-set",
+		http.NoBody,
+	)
+	req.SetPathValue("organization", "acme")
+
+	obj, err := found.Resolve(httptest.NewRecorder(), req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if obj.String() != "acme" || obj.IsUnit() {
+		t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), "acme")
+	}
+}
+
+// TestUnknownPathAnswersJSONAPI404 proves a path the table does not hold
+// answers 404 as a JSON:API error from this adapter.
+func TestUnknownPathAnswersJSONAPI404(t *testing.T) {
+	t.Parallel()
+
+	handler := newProductionHandler(t)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/no-such-route",
+		http.NoBody,
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown path answers %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	checkJSONAPIError(t, rec, http.StatusNotFound)
 }

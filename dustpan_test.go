@@ -384,6 +384,85 @@ func TestErrorStatuses(t *testing.T) {
 	}
 }
 
+// TestTFERouting proves /api/v2/ping reaches the TFE adapter, a Pulumi route
+// reaches the Pulumi adapter, and a /api/v2/ path the TFE table does not hold
+// answers 404 from the TFE adapter.
+func TestTFERouting(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	t.Run("ping reaches the TFE adapter", func(t *testing.T) {
+		t.Parallel()
+
+		status, header, _ := f.doRaw(t, http.MethodGet, "/api/v2/ping", "")
+		if status != http.StatusOK {
+			t.Fatalf("ping status %d, want %d", status, http.StatusOK)
+		}
+
+		if got := header.Get("Tfp-Api-Version"); got != "2.5" {
+			t.Fatalf("TFP-API-Version = %q, want %q", got, "2.5")
+		}
+	})
+
+	t.Run("a Pulumi route reaches the Pulumi adapter", func(t *testing.T) {
+		t.Parallel()
+
+		status, _, body := f.doRaw(t, http.MethodGet, "/api/user", "token "+adminToken)
+		if status != http.StatusOK || !strings.Contains(body, "admin") {
+			t.Fatalf("user route: status %d, body %s", status, body)
+		}
+	})
+
+	t.Run("an unknown v2 path answers 404 from the TFE adapter", func(t *testing.T) {
+		t.Parallel()
+
+		status, header, body := f.doRaw(t, http.MethodGet, "/api/v2/no-such-route", "")
+		if status != http.StatusNotFound {
+			t.Fatalf("unknown v2 path status %d, want %d", status, http.StatusNotFound)
+		}
+
+		if got := header.Get("Content-Type"); got != "application/vnd.api+json" {
+			t.Fatalf("media type = %q, want the TFE JSON:API error", got)
+		}
+
+		if !strings.Contains(body, `"errors"`) {
+			t.Fatalf("unknown v2 path body %s, want a JSON:API error", body)
+		}
+	})
+}
+
+// doRaw sends one request with auth as the whole Authorization header value
+// (empty for none) and returns its status, headers and body.
+func (f fixture) doRaw(t *testing.T, method, path, auth string) (int, http.Header, string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), method, f.server.URL+path, http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close body: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	return resp.StatusCode, resp.Header, string(data)
+}
+
 func TestCORS(t *testing.T) {
 	t.Parallel()
 

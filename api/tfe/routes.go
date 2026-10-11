@@ -60,12 +60,38 @@ type Route struct {
 	Serve RouteHandler
 }
 
-// buildRoutes returns the route table. No real route exists yet: every
-// endpoint lands with its e2e step first. The table stays empty until the
-// first real endpoint adds its row. Tests prove the wrapper through extra
-// routes that NewHandlerWithRoutes registers; see export_internal_test.go.
+// buildRoutes returns the route table. It is the single source of the
+// patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return nil
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/.well-known/terraform.json",
+			Scope:   ScopePublic,
+			Actions: nil,
+			Resolve: nil,
+			Serve:   h.discovery,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/v2/ping",
+			Scope:   ScopePublic,
+			Actions: nil,
+			Resolve: nil,
+			Serve:   h.ping,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/organizations/{organization}/entitlement-set",
+			// The organization is the namespace: the route reads it, so
+			// namespace:read stays the gate. The handler answers 404 for an
+			// unknown organization and never creates one.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveOrganization,
+			Serve:   h.entitlementSet,
+		},
+	}
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied
@@ -125,6 +151,16 @@ func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Patterns returns a copy of the recorded patterns.
 func (m *patternMux) Patterns() []string {
 	return append([]string(nil), m.patterns...)
+}
+
+// resolveOrganization returns the namespace in the organization path value.
+func resolveOrganization(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	ns, err := namespace.ParseName(r.PathValue("organization"))
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return identity.NamespaceObject(ns), nil
 }
 
 // resolveWorkspace returns the unit in the path values: the namespace in

@@ -843,7 +843,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 
 	for _, s := range []e2e.StepSpec{
-		step("init", nil, "init", "-input=false", "-no-color"),
+		// Init gets past service discovery but stops at the workspace
+		// endpoints that later issues own, so it expects a failure while
+		// the check pins the discovery calls.
+		failStep("init", checkTofuDiscovery(env), "init", "-input=false", "-no-color"),
 		step("workspace show", contains(e2e.Workspace), "workspace", "show"),
 		step("plan", nil, "plan", "-input=false", "-no-color"),
 		step("apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
@@ -851,5 +854,52 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		step("state pull", contains(`"greeting"`), "state", "pull"),
 	} {
 		env.Step(ctx, t, s)
+	}
+}
+
+// checkTofuDiscovery proves that init got past service discovery: the CLI
+// called discovery, ping and the entitlement set in order, and each answered
+// 200.
+func checkTofuDiscovery(env *e2e.Env) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		want := []struct {
+			method, path string
+		}{
+			{http.MethodGet, "/.well-known/terraform.json"},
+			{http.MethodGet, "/api/v2/ping"},
+			{http.MethodGet, "/api/v2/organizations/" + e2e.Namespace + "/entitlement-set"},
+		}
+
+		entries := env.Recorder.Entries()
+		next := 0
+
+		for i := range entries {
+			if entries[i].Step != "init" || next >= len(want) {
+				continue
+			}
+
+			if entries[i].Method != want[next].method || entries[i].Path != want[next].path {
+				continue
+			}
+
+			if entries[i].Status != http.StatusOK {
+				return fmt.Errorf(
+					"%w: %s %s answers %d, want %d",
+					errUnexpected,
+					entries[i].Method,
+					entries[i].Path,
+					entries[i].Status,
+					http.StatusOK,
+				)
+			}
+
+			next++
+		}
+
+		if next != len(want) {
+			return fmt.Errorf("%w: init missed a discovery call", errUnexpected)
+		}
+
+		return nil
 	}
 }
