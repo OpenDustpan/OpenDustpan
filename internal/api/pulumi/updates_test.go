@@ -843,7 +843,7 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 			Invalid:       false,
 		}
 
-		_, importErr := f.updates.Import(t.Context(), f.ref, input)
+		_, importErr := f.updates.Import(t.Context(), f.ref, "", input)
 		if importErr != nil {
 			t.Fatalf("import: %v", importErr)
 		}
@@ -1346,9 +1346,31 @@ func TestImportStackCycle(t *testing.T) {
 		t.Fatalf("history entry = %+v, want kind import result succeeded version 1", got)
 	}
 
+	checkImportCreator(t, f, imported.UpdateID)
+
 	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
 	if status != http.StatusOK || !strings.Contains(body, `"resources"`) {
 		t.Fatalf("export answers %d %q, want 200 with the imported deployment", status, body)
+	}
+}
+
+// checkImportCreator fails when the import update behind updateID records a
+// creator other than the caller of the import route.
+func checkImportCreator(t *testing.T, f updateFixture, updateID string) {
+	t.Helper()
+
+	id, err := stack.ParseUpdateID(updateID)
+	if err != nil {
+		t.Fatalf("parse update ID %q: %v", updateID, err)
+	}
+
+	u, err := f.updates.Get(t.Context(), f.ref, id)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if u.CreatedBy != "tester" {
+		t.Fatalf("CreatedBy = %q, want %q", u.CreatedBy, "tester")
 	}
 }
 

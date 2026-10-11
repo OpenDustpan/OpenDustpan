@@ -342,8 +342,9 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 	})
 }
 
-// ListEvents implements stack.EventStore. Updates are never deleted, so the
-// existence check and the read need no common snapshot.
+// ListEvents implements stack.EventStore. A stack delete removes its updates
+// with it, so a delete between the existence check and the read answers an
+// empty list.
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
 ) ([]stack.Event, error) {

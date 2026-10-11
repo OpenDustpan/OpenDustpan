@@ -319,17 +319,18 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 
 // Import replaces the stack's state with a deployment the user supplies, as
 // `pulumi stack import` does. It runs as an update of kind "import" so it
-// shows in history and respects the stack lock.
+// shows in history and respects the stack lock. It records subject as the
+// creator.
 //
 // Invalid input is rejected before any update exists. Once the import update
 // starts, only this call holds its lease, so it is always ended, even when ctx
 // is canceled: otherwise the stack would stay locked until `pulumi cancel`.
-func (s *Updates) Import(ctx context.Context, ref Ref, in CheckpointInput) (Update, error) {
+func (s *Updates) Import(ctx context.Context, ref Ref, subject string, in CheckpointInput) (Update, error) {
 	if err := s.validate(in); err != nil {
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0})
 	if err != nil {
 		return Update{}, err
 	}
