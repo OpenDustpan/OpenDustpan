@@ -591,6 +591,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendPort:   handle.port,
 		backendCmd:    handle.cmd,
 		backendLogs:   handle.logs,
+		certBundle:    "",
 	}
 
 	for _, d := range []string{env.home, env.project} {
