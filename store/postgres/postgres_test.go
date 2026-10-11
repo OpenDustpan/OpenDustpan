@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret/secrettest"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/postgres"
 	"opendustpan.org/opendustpan/store/storetest"
@@ -34,6 +35,21 @@ func TestConformance(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	secrettest.Run(t, func(t *testing.T) secrettest.Store {
 		t.Helper()
 
 		return open(t, base)

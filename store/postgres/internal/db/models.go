@@ -24,6 +24,14 @@ type Namespace struct {
 	CreatedAtMs     int64
 }
 
+type SecretKey struct {
+	Namespace   string
+	StackID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
+}
+
 type Stack struct {
 	Namespace   string
 	Project     string

@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret/secrettest"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 	"opendustpan.org/opendustpan/store/storetest"
@@ -21,6 +22,16 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.Run(t, func(t *testing.T) secrettest.Store {
 		t.Helper()
 
 		return open(t)
