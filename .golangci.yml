@@ -81,6 +81,8 @@ linters:
               desc: Deprecated; use io and os.
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
+          # api/inventory is an HTTP adapter, not the domain package
+          # inventory, so it is excluded below.
           files:
             - "**/namespace/**"
             - "**/stack/**"
@@ -90,6 +92,7 @@ linters:
             - "**/inventory/**"
             - "**/blob/*.go"
             - "!**/*_test.go"
+            - "!**/api/inventory/**"
           deny:
             - pkg: opendustpan.org/opendustpan/store
               desc: Domain code depends on ports, never on store adapters.

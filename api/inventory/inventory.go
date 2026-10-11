@@ -1,0 +1,252 @@
+// Package inventory serves the tool-neutral inventory API that the web
+// console reads for its cross-tool unit list. It exposes the entries of the
+// inventory.Reader projection of one namespace.
+//
+// It is an HTTP adapter with its own route table. It never imports another
+// API adapter: tools share concepts through the core alone (ADR 12).
+package inventory
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"opendustpan.org/opendustpan/identity"
+	coreinventory "opendustpan.org/opendustpan/inventory"
+	"opendustpan.org/opendustpan/namespace"
+)
+
+// ErrMissingDependency reports a Config without a required dependency.
+var ErrMissingDependency = errors.New("missing dependency")
+
+// errMissingOrganization reports a list request without the organization
+// query value. classify maps it to the 400 response the console expects.
+var errMissingOrganization = errors.New("missing organization query parameter")
+
+const tokenScheme = "token "
+
+// Config holds the dependencies of a Handler.
+type Config struct {
+	Namespaces    *namespace.Service
+	Units         coreinventory.Reader
+	Authenticator identity.Authenticator
+	Authorizer    identity.Authorizer
+	Logger        *slog.Logger
+}
+
+// Handler serves the inventory API under /api/inventory/.
+type Handler struct {
+	namespaces *namespace.Service
+	units      coreinventory.Reader
+	authn      identity.Authenticator
+	authz      identity.Authorizer
+	logger     *slog.Logger
+	mux        *patternMux
+	routes     []Route
+}
+
+// NewHandler returns a Handler. Every Config field is required.
+func NewHandler(cfg Config) (*Handler, error) {
+	switch {
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Units == nil:
+		return nil, fmt.Errorf("%w: inventory reader", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	}
+
+	h := &Handler{
+		namespaces: cfg.Namespaces,
+		units:      cfg.Units,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
+	}
+
+	h.routes = h.buildRoutes()
+	for _, route := range h.routes {
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	}
+
+	return h, nil
+}
+
+// ServeHTTP implements http.Handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
+}
+
+// unitEntry is one unit as the console reads it. Tool is the tool label of
+// the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
+// with the stored lowercase tool code ("pulumi:acme/web/prod"). Name is the
+// tool's own name for the unit. LastChange is the time of the unit's last
+// change in Unix seconds, as lastUpdate is in the stack list. Status is
+// omitted when unknown; ResourceCount is omitted when unknown.
+//
+// Contract: never remove or rename these fields. The console reads only this
+// API, and it ships on its own schedule, so a released console keeps working
+// only while every field stays.
+type unitEntry struct {
+	Tool          string `json:"tool"`
+	Reference     string `json:"reference"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	LastChange    int64  `json:"lastChange"`
+	Status        string `json:"status,omitempty"`
+	ResourceCount *int64 `json:"resourceCount,omitempty"`
+}
+
+// listUnitsResponse is the answered document of the unit list.
+//
+// Contract: never remove or rename the units field.
+type listUnitsResponse struct {
+	Units []unitEntry `json:"units"`
+}
+
+// toolLabel maps a stored lowercase tool code to the tool label of the
+// glossary that the console shows. The stores keep the lowercase code
+// ("pulumi", "opentofu"); the API answers the label ("Pulumi", "OpenTofu").
+// A code without a label answers unchanged, so a new tool still lists.
+func toolLabel(code string) string {
+	switch code {
+	case "pulumi":
+		return "Pulumi"
+	case "opentofu":
+		return "OpenTofu"
+	default:
+		return code
+	}
+}
+
+// toUnitEntry maps one projection entry to its wire shape.
+func toUnitEntry(e coreinventory.Entry) unitEntry {
+	return unitEntry{
+		Tool:          toolLabel(e.Tool),
+		Reference:     e.Reference(),
+		Namespace:     e.Namespace.String(),
+		Name:          e.Name,
+		LastChange:    e.LastChanged.Unix(),
+		Status:        e.Status,
+		ResourceCount: e.ResourceCount,
+	}
+}
+
+// listUnits answers GET /api/inventory/units with the entries of the
+// namespace that the caller may read. The route wrapper already allowed
+// namespace:read on the namespace; this removes every entry whose unit the
+// caller may not read (unit:read on the reference). An unknown namespace
+// answers 404.
+func (h *Handler) listUnits(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	entries, err := h.units.ListUnits(ctx, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	units := make([]unitEntry, 0, len(entries))
+
+	for i := range entries {
+		uobj, objErr := unitObject(entries[i])
+		if objErr != nil {
+			h.writeError(ctx, w, objErr)
+
+			return
+		}
+
+		if authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); authErr != nil {
+			if errors.Is(authErr, identity.ErrDenied) {
+				continue
+			}
+
+			h.writeError(ctx, w, authErr)
+
+			return
+		}
+		units = append(units, toUnitEntry(entries[i]))
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, listUnitsResponse{Units: units})
+}
+
+// unitObject maps one inventory entry to its tool-neutral unit reference. It
+// uses the stored lowercase tool code, so authorization matches the
+// references the tool adapters declare.
+func unitObject(e coreinventory.Entry) (identity.Object, error) {
+	return identity.UnitObject(e.Tool, e.Namespace, e.Name)
+}
+
+// authenticate resolves the "Authorization: token <t>" header to a principal.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	return h.authn.AuthenticateToken(r.Context(), raw)
+}
+
+// errorResponse is the error body the console expects, as in the API the
+// console reads today.
+type errorResponse struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+}
+
+func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	status, message := classify(err)
+	if status == http.StatusInternalServerError {
+		h.logger.ErrorContext(ctx, "request failed", slog.String("error", err.Error()))
+	}
+
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+}
+
+// classify maps domain errors to an HTTP status and a message safe to show callers.
+func classify(err error) (int, string) {
+	switch {
+	case errors.Is(err, identity.ErrUnauthenticated):
+		return http.StatusUnauthorized, "unauthenticated"
+	case errors.Is(err, identity.ErrDenied):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, errMissingOrganization):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrNotFound):
+		return http.StatusNotFound, err.Error()
+	default:
+		return http.StatusInternalServerError, "internal error"
+	}
+}
+
+func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
+	}
+}
