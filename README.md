@@ -209,7 +209,8 @@ trusts it. It is not part of `make check`.
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
-| | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes (comma-separated tokens sign in as distinct administrators: admin, admin-2, ...) |
+| | `DUSTPAN_ADMIN_TOKEN` | required when you set no token file, at least 32 bytes (comma-separated tokens sign in as distinct administrators: admin, admin-2, ...). The server clears it from its environment after the read |
+| | `DUSTPAN_ADMIN_TOKEN_FILE` | file holding the tokens, one per line or comma-separated, readable only by its owner. When you set both, `DUSTPAN_ADMIN_TOKEN` wins |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |
 
