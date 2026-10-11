@@ -3,7 +3,6 @@
 A self-hosted backend for infrastructure-as-code state. Works with the Pulumi
 CLI and works with OpenTofu.
 
-[![CI](https://github.com/OpenDustpan/OpenDustpan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/OpenDustpan/OpenDustpan/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 **Status: pre-alpha.** One node only. No release exists yet. Do not keep
