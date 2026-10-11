@@ -22,16 +22,19 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	dustpan "opendustpan.org/opendustpan"
+	blobfs "opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/postgres"
 	"opendustpan.org/opendustpan/store/sqlite"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 var (
@@ -63,6 +66,9 @@ const (
 	// keyFilePrivateBits are the permission bits the key file must not set:
 	// group or other access of any kind.
 	keyFilePrivateBits = 0o077
+	// blobDirPerm is the mode the server creates the blob directory with:
+	// owner only, so state content does not leak through shared directories.
+	blobDirPerm = 0o700
 )
 
 func main() {
@@ -142,6 +148,7 @@ type serveFlags struct {
 	tlsCert    string
 	tlsKey     string
 	publicURL  string
+	blobDir    string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -177,6 +184,12 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 		env("DUSTPAN_PUBLIC_URL", ""),
 		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
 	)
+	fs.StringVar(
+		&f.blobDir,
+		"blob-dir",
+		env("DUSTPAN_BLOB_DIR", ""),
+		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
+	)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -199,6 +212,23 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	}
 	defer st.close()
 
+	blobDir := defaultBlobDir(f.database, f.blobDir)
+
+	if mkdirErr := os.MkdirAll(blobDir, blobDirPerm); mkdirErr != nil {
+		return fmt.Errorf("create blob directory: %w", mkdirErr)
+	}
+
+	blobs, err := blobfs.Open(blobDir)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			logger.WarnContext(ctx, "close blob store", slog.String("error", closeErr.Error()))
+		}
+	}()
+
 	// The start-up check refuses a key-encryption key that matches none of
 	// the wrapped keys in the database (ADR 23).
 	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
@@ -214,6 +244,9 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
 		dustpan.WithSecretWrapper(wrapper),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(f.listen),
@@ -292,6 +325,8 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 }
 
 // store is the persistence adapter chosen by --database.
+//
+//nolint:interfacebloat // The binary needs every persistence port in one adapter.
 type store interface {
 	namespace.Store
 	stack.Store
@@ -299,6 +334,8 @@ type store interface {
 	stack.CheckpointStore
 	stack.EventStore
 	secret.KeyStore
+	workspace.Store
+	workspace.StateStore
 	close()
 }
 
@@ -342,6 +379,26 @@ func env(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+// defaultBlobDir returns the state content directory: the --blob-dir flag
+// when set, else a blobs directory next to the SQLite file, or blobs in the
+// working directory for PostgreSQL.
+func defaultBlobDir(database, flagDir string) string {
+	if strings.TrimSpace(flagDir) != "" {
+		return strings.TrimSpace(flagDir)
+	}
+
+	if rest, ok := strings.CutPrefix(database, "sqlite:"); ok {
+		path := strings.TrimSpace(rest)
+		if path == "" {
+			return "blobs"
+		}
+
+		return filepath.Join(filepath.Dir(path), "blobs")
+	}
+
+	return "blobs"
 }
 
 func splitList(s string) []string {
