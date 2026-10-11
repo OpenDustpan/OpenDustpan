@@ -7,7 +7,11 @@ created: 2026-10-10
 
 # RFC 32. Object storage adapters
 
-Status: draft. A stub opened from the competitor review in the research doc
+Status: accepted (ADR 31) for milestone 3: the S3-compatible adapter, with no
+new dependency. GCS, Azure Blob, a bucket for each namespace and cloud identity
+stay open.
+
+The rest stays a draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.
 
 ## Problem
