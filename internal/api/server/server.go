@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -24,24 +25,31 @@ var ErrMissingDependency = errors.New("missing dependency")
 // bearerScheme is the Authorization scheme the adapter reads.
 const bearerScheme = "Bearer "
 
-// Config holds the dependencies of a Handler. The skeleton needs only the
-// identity ports; later issues add the backup and metrics dependencies.
+// Config holds the dependencies of a Handler. The backup service is optional:
+// nil means no backup target is configured. Later issues add the metrics
+// dependencies.
 type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
+	// Backups runs installation backups against the configured target. Nil
+	// means no backup target is configured. The target comes only from this
+	// service: no request field, header or query value sets it.
+	Backups *backup.Service
 }
 
 // Handler serves the installation API under /api/server/.
 type Handler struct {
-	authn  identity.Authenticator
-	authz  identity.Authorizer
-	logger *slog.Logger
-	mux    *patternMux
-	routes []Route
+	authn   identity.Authenticator
+	authz   identity.Authorizer
+	logger  *slog.Logger
+	backups *backup.Service
+	mux     *patternMux
+	routes  []Route
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Authenticator, Authorizer and Logger are
+// required. Backups is optional: nil means no backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Authenticator == nil:
@@ -53,11 +61,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		authn:  cfg.Authenticator,
-		authz:  cfg.Authorizer,
-		logger: cfg.Logger,
-		mux:    newPatternMux(),
-		routes: nil,
+		authn:   cfg.Authenticator,
+		authz:   cfg.Authorizer,
+		logger:  cfg.Logger,
+		backups: cfg.Backups,
+		mux:     newPatternMux(),
+		routes:  nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -66,6 +75,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// Backups returns the backup service the handler was wired with, or nil when
+// no backup target is configured.
+func (h *Handler) Backups() *backup.Service {
+	return h.backups
 }
 
 // ServeHTTP implements http.Handler. A path the route table does not hold

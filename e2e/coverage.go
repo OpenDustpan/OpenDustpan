@@ -426,6 +426,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)

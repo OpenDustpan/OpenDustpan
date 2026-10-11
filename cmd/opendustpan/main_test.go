@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -1187,4 +1188,201 @@ func TestUpgradeCheckUsage(t *testing.T) {
 			t.Fatalf("stat missing file: err = %v, want file to stay absent", statErr)
 		}
 	})
+}
+
+func TestBackupTargetFlagPrecedence(t *testing.T) {
+	if err := os.Unsetenv("DUSTPAN_BACKUP_TARGET"); err != nil {
+		t.Fatalf("unset DUSTPAN_BACKUP_TARGET: %v", err)
+	}
+
+	var absent serveFlags
+
+	if err := newTestFlagSet(&absent).Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if absent.backupTarget != "" {
+		t.Fatalf("backup target = %q, want empty for no backups", absent.backupTarget)
+	}
+
+	t.Setenv("DUSTPAN_BACKUP_TARGET", "dir:/env-target")
+
+	var fromEnv serveFlags
+
+	if err := newTestFlagSet(&fromEnv).Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if fromEnv.backupTarget != "dir:/env-target" {
+		t.Fatalf("backup target = %q, want the variable dir:/env-target", fromEnv.backupTarget)
+	}
+
+	var flagWins serveFlags
+
+	if err := newTestFlagSet(&flagWins).Parse([]string{"--backup-target", "dir:/flag-target"}); err != nil {
+		t.Fatalf("parse --backup-target: %v", err)
+	}
+
+	if flagWins.backupTarget != "dir:/flag-target" {
+		t.Fatalf("backup target = %q, want the flag dir:/flag-target to win", flagWins.backupTarget)
+	}
+}
+
+func TestOpenBackupTarget(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{name: "empty means no backups", raw: "", wantErr: ""},
+		{name: "blank means no backups", raw: "   ", wantErr: ""},
+		{name: "no scheme", raw: "/tmp/backups", wantErr: "dir:/path"},
+		{name: "unknown scheme", raw: "file:/tmp/backups", wantErr: "dir:/path"},
+		{name: "missing path", raw: "dir:", wantErr: "dir:/path"},
+		{name: "blank path", raw: "dir:   ", wantErr: "dir:/path"},
+		{name: "s3 waits for a later change", raw: "s3://bucket/prefix", wantErr: "s3"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkBackupTargetCase(t, tc.raw, tc.wantErr)
+		})
+	}
+}
+
+// checkBackupTargetCase proves openBackupTarget answers wantErr for raw:
+// empty means no target without an error, else the error names wantErr and
+// shows the allowed forms.
+func checkBackupTargetCase(t *testing.T, raw, wantErr string) {
+	t.Helper()
+
+	target, err := openBackupTarget(raw)
+	if wantErr == "" {
+		if err != nil || target != nil {
+			t.Fatalf("open %q: target %v, err %v, want nil, nil", raw, target, err)
+		}
+
+		return
+	}
+
+	if target != nil {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}
+
+	if err == nil || !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("open %q: err = %v, want it to name %s", raw, err, wantErr)
+	}
+
+	if !strings.Contains(err.Error(), "dir:/path") {
+		t.Fatalf("open %q: err = %v, want it to show the allowed forms", raw, err)
+	}
+}
+
+func TestOpenBackupTargetDir(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "backups")
+
+	target, err := openBackupTarget("dir:" + dir)
+	if err != nil {
+		t.Fatalf("open dir target: %v", err)
+	}
+
+	if target == nil {
+		t.Fatal("open dir target = nil, want a store")
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	checkBackupTargetDir(t, dir)
+	checkBackupTargetRoundTrip(t, target)
+}
+
+// checkBackupTargetDir proves dir exists owner-only, so the plain-text state
+// in the target stays private.
+func checkBackupTargetDir(t *testing.T, dir string) {
+	t.Helper()
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat backup target directory: %v", err)
+	}
+
+	if perm := info.Mode().Perm(); perm != blobDirPerm {
+		t.Fatalf("backup target directory mode %04o, want %04o", perm, blobDirPerm)
+	}
+}
+
+// checkBackupTargetRoundTrip proves the opened target answers and stores one object.
+func checkBackupTargetRoundTrip(t *testing.T, target blob.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if err := target.Ping(ctx); err != nil {
+		t.Fatalf("ping backup target: %v", err)
+	}
+
+	key, err := blob.ParseKey("backups/probe")
+	if err != nil {
+		t.Fatalf("parse key: %v", err)
+	}
+
+	if err = target.Put(ctx, key, strings.NewReader("probe")); err != nil {
+		t.Fatalf("put probe: %v", err)
+	}
+
+	reader, err := target.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("get probe: %v", err)
+	}
+
+	got, err := io.ReadAll(reader)
+	if closeErr := reader.Close(); closeErr != nil {
+		t.Fatalf("close probe: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read probe: %v", err)
+	}
+
+	if string(got) != "probe" {
+		t.Fatalf("probe = %q, want %q", got, "probe")
+	}
+}
+
+func TestBackupOptions(t *testing.T) {
+	t.Parallel()
+
+	var f serveFlags
+
+	if opts := f.backupOptions(nil); opts != nil {
+		t.Fatalf("backup options without a target = %d options, want none", len(opts))
+	}
+
+	target, err := openBackupTarget("dir:" + filepath.Join(t.TempDir(), "backups"))
+	if err != nil {
+		t.Fatalf("open dir target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	f.backupTarget = "dir:/var/backups"
+
+	if opts := f.backupOptions(target); len(opts) != 1 {
+		t.Fatalf("backup options with a target = %d options, want one", len(opts))
+	}
 }

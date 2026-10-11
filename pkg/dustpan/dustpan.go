@@ -17,6 +17,7 @@
 //		dustpan.WithWorkspaceStore(myStore),
 //		dustpan.WithStateStore(myStore),
 //		dustpan.WithBlobStore(myBlobs),
+//		dustpan.WithBackupTarget(myBackupTarget, "dir:/var/backups"),
 //		dustpan.WithInventoryReader(myStore),
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
@@ -44,6 +45,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -56,12 +58,25 @@ import (
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
 
+var (
+	// errBackupNeedsExporter reports a backup target with a namespace store
+	// that cannot capture exports.
+	errBackupNeedsExporter = errors.New("backup target needs a namespace store that captures exports")
+	// errBackupNeedsRegistry reports a backup target with a namespace store
+	// that cannot track backups.
+	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+)
+
 const (
 	defaultListenAddr = ":8080"
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 30 * time.Second
 )
+
+// backupStoppedText marks a backup that was running when the server stopped.
+// FailRunningBackups writes it at the next start (ADR 30 decision 9).
+const backupStoppedText = "server stopped during backup"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
@@ -92,6 +107,8 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	maxBodyBytesInFlight int64
+	backupTarget         blob.Store
+	backupTargetName     string
 }
 
 // Option configures a Server.
@@ -239,19 +256,34 @@ func WithMaxBodyBytesInFlight(n int64) Option {
 	return func(o *settings) { o.maxBodyBytesInFlight = n }
 }
 
+// WithBackupTarget sets the backup target that holds blobs/<key>,
+// backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
+// target is the opened target store, for example a blob/fs store for
+// "dir:/path". name is the target setting for operators, for example
+// "dir:/var/backups": the backups table keeps it. Empty name with a target
+// keeps the empty name. Nil target means no backup target is configured and
+// NewServer builds no backup service. It is the only way the target gets in:
+// no request field, header or query value sets it.
+func WithBackupTarget(target blob.Store, name string) Option {
+	return func(o *settings) { o.backupTarget, o.backupTargetName = target, name }
+}
+
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler       http.Handler
-	logger        *slog.Logger
-	listenAddr    string
-	secrets       *secret.Service
-	secretKeys    secret.KeyStore
-	secretWrapper secret.Wrapper
-	workspaces    *workspace.Service
-	registry      *metrics.Registry
-	tlsCertFile   string
-	tlsKeyFile    string
-	observed      *metrics.ServerMetrics
+	handler        http.Handler
+	logger         *slog.Logger
+	listenAddr     string
+	secrets        *secret.Service
+	secretKeys     secret.KeyStore
+	secretWrapper  secret.Wrapper
+	workspaces     *workspace.Service
+	backups        *backup.Service
+	backupRegistry backup.Registry
+	now            func() time.Time
+	registry       *metrics.Registry
+	tlsCertFile    string
+	tlsKeyFile     string
+	observed       *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -293,6 +325,8 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxSecretBatchBytes:  0,
 		maxStateBytes:        0,
 		maxBodyBytesInFlight: 0,
+		backupTarget:         nil,
+		backupTargetName:     "",
 	}
 
 	for _, opt := range opts {
@@ -309,12 +343,24 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	backups, err := newBackupService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return assemble(cfg, base, svc, backups)
+}
+
+// assemble mounts the adapters and routes around the services. backups is
+// the installation backup service, or nil when no backup target is
+// configured.
+func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
 
-	adapters, err := newAdapters(svc, cfg, base, observed.ReadinessFailures())
+	adapters, err := newAdapters(svc, cfg, base, backups, observed.ReadinessFailures())
 	if err != nil {
 		return nil, err
 	}
@@ -324,18 +370,26 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	var backupRegistry backup.Registry
+	if reg, ok := cfg.namespaceStore.(backup.Registry); ok {
+		backupRegistry = reg
+	}
+
 	return &Server{
-		handler:       handler,
-		logger:        cfg.logger,
-		listenAddr:    cfg.listenAddr,
-		secrets:       svc.secrets,
-		secretKeys:    cfg.secretKeys,
-		secretWrapper: cfg.secretWrapper,
-		workspaces:    svc.workspaces,
-		registry:      registry,
-		tlsCertFile:   cfg.tlsCertFile,
-		tlsKeyFile:    cfg.tlsKeyFile,
-		observed:      observed,
+		handler:        handler,
+		logger:         cfg.logger,
+		listenAddr:     cfg.listenAddr,
+		secrets:        svc.secrets,
+		secretKeys:     cfg.secretKeys,
+		secretWrapper:  cfg.secretWrapper,
+		workspaces:     svc.workspaces,
+		backups:        backups,
+		backupRegistry: backupRegistry,
+		now:            cfg.now,
+		registry:       registry,
+		tlsCertFile:    cfg.tlsCertFile,
+		tlsKeyFile:     cfg.tlsKeyFile,
+		observed:       observed,
 	}, nil
 }
 
@@ -351,7 +405,13 @@ type adapters struct {
 // newAdapters builds every HTTP adapter from the services and settings. It
 // gives the readiness probe failures, the counter on the server registry
 // that the metrics route scrapes.
-func newAdapters(svc services, cfg settings, base baseurl.Resolver, failures *metrics.Counter) (adapters, error) {
+func newAdapters(
+	svc services,
+	cfg settings,
+	base baseurl.Resolver,
+	backups *backup.Service,
+	failures *metrics.Counter,
+) (adapters, error) {
 	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
 		return adapters{}, err
@@ -367,7 +427,7 @@ func newAdapters(svc services, cfg settings, base baseurl.Resolver, failures *me
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg)
+	serverAPI, err := newServerHandler(cfg, backups)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -515,6 +575,12 @@ func (s *Server) Workspaces() *workspace.Service {
 	return s.workspaces
 }
 
+// Backups returns the backup service the server was wired with, or nil when
+// no backup target is configured.
+func (s *Server) Backups() *backup.Service {
+	return s.backups
+}
+
 // Metrics returns the request, build, process, runtime and readiness
 // metrics the middleware records. The metrics route of issue #165 reads
 // through it.
@@ -527,10 +593,17 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // not loopback and serves plain HTTP anyway. Run first runs the start-up
 // check that refuses a key-encryption key that opens less than every wrapped
 // key in the database (ADR 23), so a program that embeds the server cannot
-// start with the wrong key.
+// start with the wrong key. It then marks every running backup failed: the
+// server stopped during it (ADR 30 decision 9).
 func (s *Server) Run(ctx context.Context) error {
 	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
 		return err
+	}
+
+	if s.backupRegistry != nil {
+		if err := s.backupRegistry.FailRunningBackups(ctx, s.now().UTC(), backupStoppedText); err != nil {
+			return fmt.Errorf("fail running backups: %w", err)
+		}
 	}
 
 	srv := &http.Server{
@@ -645,20 +718,60 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
-// newServerHandler builds the tool-neutral installation API. The skeleton
-// needs only the identity ports; later issues add the backup and metrics
-// dependencies.
-func newServerHandler(cfg settings) (http.Handler, error) {
+// newServerHandler builds the tool-neutral installation API. It carries the
+// backup service when a backup target is configured, else nil. Later issues
+// add the metrics dependencies.
+func newServerHandler(cfg settings, backups *backup.Service) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Backups:       backups,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// newBackupService builds the installation backup service when a backup
+// target is configured, else returns nil. The exporter and the registry come
+// from the namespace store: every SQL adapter serves all ports from one
+// database connection. A nil target means no backup target is configured.
+func newBackupService(cfg settings) (*backup.Service, error) {
+	if cfg.backupTarget == nil {
+		//nolint:nilnil // Nil without an error means no backup target is configured.
+		return nil, nil
+	}
+
+	exporter, ok := cfg.namespaceStore.(backup.Exporter)
+	if !ok {
+		return nil, errBackupNeedsExporter
+	}
+
+	registry, ok := cfg.namespaceStore.(backup.Registry)
+	if !ok {
+		return nil, errBackupNeedsRegistry
+	}
+
+	service, err := backup.NewService(backup.Config{
+		Exporter:   exporter,
+		Registry:   registry,
+		Blobs:      cfg.blobStore,
+		Target:     cfg.backupTarget,
+		TargetName: cfg.backupTargetName,
+		Now:        cfg.now,
+		Version:    cfg.version,
+		// MaxSQLBytes stays zero: a dir: target has no object limit.
+		// An s3:// target (issue #158) sets backup.S3ObjectLimit.
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("backup service: %w", err)
+	}
+
+	return service, nil
 }
 
 // requestIDHeader carries the request ID in each response. The server mints
