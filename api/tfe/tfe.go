@@ -2,10 +2,11 @@
 // backend (the TFE-compatible API). The web console uses the same API.
 //
 // Service discovery, ping, the entitlement set, the workspace read, create
-// and list routes, and the state read routes (current state, one state
-// version, its download and its outputs) exist so far. Every further
-// endpoint lands with its e2e step first, so no other route is served until
-// its issue adds it with the CLI coverage.
+// and list routes, the state read routes (current state, one state
+// version, its download and its outputs) and the state write routes (create
+// a state version and upload its content through a capability) exist so far.
+// Every further endpoint lands with its e2e step first, so no other route is
+// served until its issue adds it with the CLI coverage.
 package tfe
 
 import (
@@ -20,6 +21,7 @@ import (
 
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -37,12 +39,13 @@ const (
 )
 
 // WorkspaceService is the workspace use cases the TFE routes need: the
-// workspace documents, the locks and the state reads. Each part is its own
-// small interface; workspace.Service implements all three.
+// workspace documents, the locks, the state reads and the state writes. Each
+// part is its own small interface; workspace.Service implements all four.
 type WorkspaceService interface {
 	WorkspaceReader
 	WorkspaceLocker
 	StateReader
+	StateWriter
 }
 
 // WorkspaceReader is what the workspace routes need: create, read and list.
@@ -80,6 +83,37 @@ type StateReader interface {
 	ReadState(ctx context.Context, id workspace.StateVersionID) (workspace.StateVersion, error)
 	// Open returns the content of sv. The caller closes it.
 	Open(ctx context.Context, sv workspace.StateVersion) (io.ReadCloser, error)
+}
+
+// StateWriter is what the state write routes need: declare a version and
+// upload its content. The CLI uploads the state itself and its JSON
+// rendering through separate single-use capabilities minted at creation.
+type StateWriter interface {
+	// BeginState declares a new state version for the workspace. The caller
+	// must hold the lock; holder is the subject of the calling principal.
+	BeginState(
+		ctx context.Context,
+		id workspace.ID,
+		holder string,
+		in workspace.NewState,
+	) (workspace.PendingState, error)
+	// Upload stores the content of a pending state version and makes it
+	// current.
+	Upload(
+		ctx context.Context,
+		id workspace.StateVersionID,
+		tok token.Token,
+		content io.Reader,
+	) (workspace.StateVersion, error)
+	// DiscardJSONRendering accepts the JSON rendering uploaded with a state
+	// version and discards it: the server keeps the state itself and the
+	// outputs declared at creation.
+	DiscardJSONRendering(
+		ctx context.Context,
+		id workspace.StateVersionID,
+		tok token.Token,
+		content io.Reader,
+	) error
 }
 
 // Config holds the dependencies of a Handler.

@@ -35,10 +35,13 @@ const (
 
 // stateVersionAttributes are the attributes of a state version document: the
 // serial, lineage, MD5 and size the client declared at create, the status,
-// and the absolute download URL.
+// the absolute download URL and, only on the create response, the absolute
+// upload URLs of the capability the content follows through.
 type stateVersionAttributes struct {
-	CreatedAt          time.Time             `json:"created-at"`                //nolint:tagliatelle // The TFE wire name; it must not change.
-	DownloadURL        string                `json:"hosted-state-download-url"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	CreatedAt          time.Time             `json:"created-at"`                             //nolint:tagliatelle // The TFE wire name; it must not change.
+	DownloadURL        string                `json:"hosted-state-download-url"`              //nolint:tagliatelle // The TFE wire name; it must not change.
+	UploadURL          string                `json:"hosted-state-upload-url,omitempty"`      //nolint:tagliatelle // The TFE wire name; it must not change.
+	JSONUploadURL      string                `json:"hosted-json-state-upload-url,omitempty"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	Status             workspace.StateStatus `json:"status"`
 	Serial             int64                 `json:"serial"`
 	Lineage            string                `json:"lineage"`
@@ -103,6 +106,9 @@ type stateVersionOutputDocument struct {
 // storedOutputs is the json-state-outputs document the client sent at
 // create: the JSON rendering of the root outputs, kept opaque in the state
 // version. Each entry holds the cty value and its cty type in JSON form.
+// The CLI sends the flat map of outputs at the top level; the wrapped form
+// with an "outputs" key stays accepted for versions stored before the flat
+// shape was served.
 type storedOutputs struct {
 	Outputs map[string]storedOutput `json:"outputs"`
 }
@@ -131,6 +137,33 @@ func parseOutputID(id string) (workspace.StateVersionID, string, error) {
 	return workspace.StateVersionID(version), name, nil
 }
 
+// parseStoredOutputs reads the stored outputs document into the map of
+// outputs by name. It accepts the flat map the CLI sends and the wrapped
+// form with an "outputs" key. Anything else fails.
+func parseStoredOutputs(raw []byte) (map[string]storedOutput, error) {
+	var wrapped storedOutputs
+
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode stored outputs: %w", err)
+	}
+
+	if wrapped.Outputs != nil {
+		return wrapped.Outputs, nil
+	}
+
+	var flat map[string]storedOutput
+
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return nil, fmt.Errorf("decode stored outputs: %w", err)
+	}
+
+	if flat == nil {
+		return map[string]storedOutput{}, nil
+	}
+
+	return flat, nil
+}
+
 // stateOutputs renders the stored outputs of sv as TFE output resources,
 // ordered by name. A version without outputs renders an empty list. A
 // document that is not valid JSON fails, as the stored data is corrupt.
@@ -139,16 +172,15 @@ func stateOutputs(sv workspace.StateVersion) ([]stateVersionOutputResource, erro
 		return []stateVersionOutputResource{}, nil
 	}
 
-	var doc storedOutputs
-
-	if err := json.Unmarshal(sv.Outputs, &doc); err != nil {
+	outputs, err := parseStoredOutputs(sv.Outputs)
+	if err != nil {
 		return nil, fmt.Errorf("decode outputs of state %s: %w", sv.ID, err)
 	}
 
-	out := make([]stateVersionOutputResource, 0, len(doc.Outputs))
+	out := make([]stateVersionOutputResource, 0, len(outputs))
 
-	for _, name := range slices.Sorted(maps.Keys(doc.Outputs)) {
-		stored := doc.Outputs[name]
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		stored := outputs[name]
 
 		value, err := rawValue(stored.Value)
 		if err != nil {
@@ -277,6 +309,8 @@ func (h *Handler) stateVersionDocument(
 		Attributes: stateVersionAttributes{
 			CreatedAt:          sv.CreatedAt,
 			DownloadURL:        h.ExternalBaseURL(r) + "/api/v2/state-versions/" + sv.ID.String() + "/download",
+			UploadURL:          "",
+			JSONUploadURL:      "",
 			Status:             sv.Status,
 			Serial:             sv.Serial,
 			Lineage:            sv.Lineage,
