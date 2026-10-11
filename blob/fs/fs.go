@@ -58,7 +58,8 @@ func (s *Store) Close() error {
 	return nil
 }
 
-// Put writes r to a temporary file and renames it over key.
+// Put writes r to a temporary file and links it to key. It returns
+// blob.ErrExists when the key already holds an object.
 func (s *Store) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("put %s: %w", key, err)
@@ -79,8 +80,17 @@ func (s *Store) Put(ctx context.Context, key blob.Key, r io.Reader) error {
 		return errors.Join(fmt.Errorf("put %s: %w", key, err), s.removeIfExists(tmp))
 	}
 
-	if err := s.root.Rename(tmp, key.String()); err != nil {
-		return errors.Join(fmt.Errorf("put %s: %w", key, err), s.removeIfExists(tmp))
+	if err := s.root.Link(tmp, key.String()); err != nil {
+		cleanup := s.removeIfExists(tmp)
+		if errors.Is(err, fs.ErrExist) {
+			return errors.Join(fmt.Errorf("put %s: %w", key, blob.ErrExists), cleanup)
+		}
+
+		return errors.Join(fmt.Errorf("put %s: %w", key, err), cleanup)
+	}
+
+	if err := s.removeIfExists(tmp); err != nil {
+		return fmt.Errorf("put %s: %w", key, err)
 	}
 
 	return nil
