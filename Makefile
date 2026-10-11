@@ -42,8 +42,20 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
 # line in .trivyignore with its reason.
-trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile) and secrets in the tree.
+#
+# The license scan is a second run, because --severity applies to each scanner
+# of a run. Trivy gives each license a class and a severity. The scan fails on
+# a forbidden license (CRITICAL, for example AGPL), a restricted license
+# (HIGH, for example GPL) and an unknown license. It passes a notice license
+# (LOW: MIT, BSD, Apache-2.0) and a reciprocal license (MEDIUM: MPL-2.0),
+# which docs/research/licenses.md accepts. Trivy reads the license of a Go
+# module from the module cache, so go mod download runs first: with an empty
+# cache the scan finds no license and passes.
+trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
 	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
+		--disable-telemetry --skip-version-check --no-progress .
+	go mod download
+	trivy fs --scanners license --severity UNKNOWN,HIGH,CRITICAL --exit-code 1 \
 		--disable-telemetry --skip-version-check --no-progress .
 
 # Scans the commits of every local branch, not the uncommitted files. Each

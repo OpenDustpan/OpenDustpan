@@ -33,7 +33,8 @@ Consider a change done only when `make check` passes with zero findings:
 - `make semgrep` reports nothing. Allow a `// nosemgrep: <rule id>` only with
   the full rule id and a comment that gives a real reason.
 - `make trivy` reports nothing. Allow a line in `.trivyignore` only with a
-  comment that gives a real reason.
+  comment that gives a real reason. The target also fails on a dependency
+  with a forbidden, restricted or unknown license (for example GPL or AGPL).
 - `make trufflehog` finds no secret in the Git history.
 - `make licenses` finds a license file for each module that the binary links.
   The release archives and the container image ship these files.
