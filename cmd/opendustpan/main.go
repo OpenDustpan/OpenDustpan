@@ -280,6 +280,7 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
+		dustpan.WithVersion(version),
 	)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
