@@ -17,6 +17,7 @@
 //		dustpan.WithWorkspaceStore(myStore),
 //		dustpan.WithStateStore(myStore),
 //		dustpan.WithBlobStore(myBlobs),
+//		dustpan.WithInventoryReader(myStore),
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
@@ -35,10 +36,12 @@ import (
 	"strings"
 	"time"
 
+	inventoryapi "opendustpan.org/opendustpan/api/inventory"
 	"opendustpan.org/opendustpan/api/pulumi"
 	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
@@ -67,6 +70,7 @@ type settings struct {
 	workspaceStore  workspace.Store
 	stateStore      workspace.StateStore
 	blobStore       blob.Store
+	inventoryReader inventory.Reader
 	authenticator   identity.Authenticator
 	authorizer      identity.Authorizer
 	logger          *slog.Logger
@@ -134,6 +138,11 @@ func WithStateStore(s workspace.StateStore) Option {
 // WithBlobStore sets the state content persistence port. Required.
 func WithBlobStore(s blob.Store) Option {
 	return func(o *settings) { o.blobStore = s }
+}
+
+// WithInventoryReader sets the inventory projection reader. Required.
+func WithInventoryReader(r inventory.Reader) Option {
+	return func(o *settings) { o.inventoryReader = r }
 }
 
 // WithAuthenticator sets how access tokens are resolved to principals. Required.
@@ -226,6 +235,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		workspaceStore:  nil,
 		stateStore:      nil,
 		blobStore:       nil,
+		inventoryReader: nil,
 		authenticator:   nil,
 		authorizer:      identity.AdminOnly{},
 		logger:          slog.New(slog.DiscardHandler),
@@ -253,21 +263,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	api, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:        svc.stacks,
-		Updates:       svc.updates,
-		Secrets:       svc.secrets,
-		Namespaces:    svc.namespaces,
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		BaseURL:       base,
-	})
+	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
-		return nil, fmt.Errorf("api: %w", err)
+		return nil, err
 	}
 
-	handler, err := routes(api, cfg)
+	units, err := newInventoryHandler(svc, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	handler, err := routes(api, units, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +310,10 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 
 	if cfg.blobStore == nil {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithBlobStore", ErrMissingOption)
+	}
+
+	if cfg.inventoryReader == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	}
 
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
@@ -472,8 +482,47 @@ func isLoopbackListenAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
-func routes(api http.Handler, cfg settings) (http.Handler, error) {
+// newPulumiHandler builds the Pulumi CLI API from the domain services.
+func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
+	handler, err := pulumi.NewHandler(pulumi.Config{
+		Stacks:        svc.stacks,
+		Updates:       svc.updates,
+		Secrets:       svc.secrets,
+		Namespaces:    svc.namespaces,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		BaseURL:       base,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newInventoryHandler builds the tool-neutral inventory API from the
+// namespace service and the inventory reader.
+func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
+	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Namespaces:    svc.namespaces,
+		Units:         cfg.inventoryReader,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("inventory api: %w", err)
+	}
+
+	return handler, nil
+}
+
+func routes(api, units http.Handler, cfg settings) (http.Handler, error) {
 	mux := http.NewServeMux()
+	// /api/inventory/ is more specific than /api/, so the inventory units
+	// route wins over the Pulumi CLI handler for its own prefix.
+	mux.Handle("/api/inventory/", withCORS(units, cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(api, cfg.allowedOrigins))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

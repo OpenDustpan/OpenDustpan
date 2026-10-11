@@ -135,6 +135,7 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListenAddr(addr),
 	}
@@ -369,6 +370,7 @@ func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 	}
 
@@ -426,6 +428,7 @@ func TestNewServerRejectsBadPublicURL(t *testing.T) {
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithPublicURL("not a url"),
 	)

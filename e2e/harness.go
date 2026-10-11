@@ -25,6 +25,7 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	"opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
@@ -120,6 +121,8 @@ type Env struct {
 }
 
 // serverStore is every persistence port the server needs.
+//
+//nolint:interfacebloat // The harness needs every persistence port in one adapter.
 type serverStore interface {
 	namespace.Store
 	stack.Store
@@ -129,6 +132,7 @@ type serverStore interface {
 	secret.KeyStore
 	workspace.Store
 	workspace.StateStore
+	inventory.Reader
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -260,6 +264,7 @@ func newServer(
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 	)
 	if err != nil {

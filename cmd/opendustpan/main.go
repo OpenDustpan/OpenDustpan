@@ -29,6 +29,7 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	blobfs "opendustpan.org/opendustpan/blob/fs"
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
@@ -247,6 +248,7 @@ func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(f.listen),
@@ -336,6 +338,7 @@ type store interface {
 	secret.KeyStore
 	workspace.Store
 	workspace.StateStore
+	inventory.Reader
 	close()
 }
 

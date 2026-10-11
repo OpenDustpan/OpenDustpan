@@ -1,0 +1,669 @@
+package inventory_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	apiinventory "opendustpan.org/opendustpan/api/inventory"
+	"opendustpan.org/opendustpan/identity"
+	coreinventory "opendustpan.org/opendustpan/inventory"
+	"opendustpan.org/opendustpan/namespace"
+)
+
+// memNamespaceStore is an in-memory namespace.Store.
+type memNamespaceStore struct {
+	namespaces map[namespace.Name]namespace.Namespace
+}
+
+func (m *memNamespaceStore) CreateNamespace(_ context.Context, ns namespace.Namespace) error {
+	if _, ok := m.namespaces[ns.Name]; ok {
+		return namespace.ErrAlreadyExists
+	}
+
+	m.namespaces[ns.Name] = ns
+
+	return nil
+}
+
+func (m *memNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	ns, ok := m.namespaces[name]
+	if !ok {
+		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	return ns, nil
+}
+
+func (m *memNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {
+	out := make([]namespace.Namespace, 0, len(m.namespaces))
+	for _, ns := range m.namespaces {
+		out = append(out, ns)
+	}
+
+	slices.SortFunc(out, func(a, b namespace.Namespace) int {
+		return strings.Compare(a.Name.String(), b.Name.String())
+	})
+
+	return out, nil
+}
+
+// seedNamespace creates one namespace homed in the test region.
+func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
+	t.Helper()
+
+	n, err := namespace.ParseName(name)
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	ns := namespace.Namespace{CreatedAt: time.Now(), Name: n, HomeRegion: "test-region", FailoverVersion: 1}
+	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+}
+
+// memReader is an in-memory inventory.Reader. It sorts entries by tool, then
+// name on read, as the port contract requires of implementations.
+type memReader struct {
+	entries map[namespace.Name][]coreinventory.Entry
+	err     error
+}
+
+func (m *memReader) ListUnits(_ context.Context, ns namespace.Name) ([]coreinventory.Entry, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+
+	out := append([]coreinventory.Entry(nil), m.entries[ns]...)
+	slices.SortFunc(out, func(a, b coreinventory.Entry) int {
+		if a.Tool != b.Tool {
+			return strings.Compare(a.Tool, b.Tool)
+		}
+
+		return strings.Compare(a.Name, b.Name)
+	})
+
+	return out, nil
+}
+
+// stubAuthenticator denies every token. Tests that send no token never reach it.
+type stubAuthenticator struct{}
+
+func (stubAuthenticator) AuthenticateToken(_ context.Context, _ string) (identity.Principal, error) {
+	return identity.Principal{}, identity.ErrUnauthenticated
+}
+
+// tokenAuthenticator signs in exactly the test token.
+type tokenAuthenticator struct{}
+
+func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
+	if token != "test-token" {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false}, nil
+}
+
+// stubAuthorizer denies every action.
+type stubAuthorizer struct{}
+
+func (stubAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// selectiveAuthorizer denies exactly the actions in deny and allows the rest.
+type selectiveAuthorizer struct {
+	deny map[identity.Action]bool
+}
+
+func (s selectiveAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if s.deny[action] {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+// denyUnits denies unit:read on the references in deny and allows the rest.
+// It proves that the handler removes entries the caller may not read.
+type denyUnits struct {
+	deny map[string]bool
+}
+
+func (d denyUnits) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if action == identity.ActionUnitRead && d.deny[obj.String()] {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+func newBehaviorHandler(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
+) *apiinventory.Handler {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Namespaces:    namespaces,
+		Units:         reader,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+func authorizedGet(
+	t *testing.T, handler *apiinventory.Handler, target, token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+	if token != "" {
+		req.Header.Set("Authorization", "token "+token)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// unitBody is one decoded unit entry.
+type unitBody struct {
+	Tool          string `json:"tool"`
+	Reference     string `json:"reference"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	LastChange    int64  `json:"lastChange"`
+	Status        string `json:"status"`
+	ResourceCount *int64 `json:"resourceCount"`
+}
+
+// unitsBody is the decoded GET /api/inventory/units response.
+type unitsBody struct {
+	Units []unitBody `json:"units"`
+}
+
+// errorBody is the decoded error response.
+type errorBody struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+}
+
+func decodeUnits(t *testing.T, rec *httptest.ResponseRecorder) unitsBody {
+	t.Helper()
+
+	var got unitsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode units: %v (%s)", err, rec.Body.String())
+	}
+
+	if got.Units == nil {
+		t.Fatalf("units is null, want an array (%s)", rec.Body.String())
+	}
+
+	return got
+}
+
+// changeTime is the fixed last-change time of the seeded entries.
+func changeTime() time.Time {
+	return time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+}
+
+// seedEntries stores one namespace with a unit of each tool: an OpenTofu
+// workspace without status or count, a Pulumi stack with both, and a plain
+// Pulumi stack.
+func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
+	ns := namespace.Name("acme")
+	nsStore.namespaces[ns] = namespace.Namespace{
+		CreatedAt:       changeTime(),
+		Name:            ns,
+		HomeRegion:      "test-region",
+		FailoverVersion: 1,
+	}
+
+	var count int64 = 3
+
+	reader.entries[ns] = []coreinventory.Entry{
+		{
+			LastChanged:   changeTime(),
+			Namespace:     ns,
+			Tool:          "pulumi",
+			Name:          "web/prod",
+			UnitID:        "stk-1",
+			DisplayName:   "web/prod",
+			Status:        "",
+			ResourceCount: nil,
+		},
+		{
+			LastChanged:   changeTime(),
+			Namespace:     ns,
+			Tool:          "opentofu",
+			Name:          "network",
+			UnitID:        "ws-1",
+			DisplayName:   "network",
+			Status:        "",
+			ResourceCount: nil,
+		},
+		{
+			LastChanged:   changeTime(),
+			Namespace:     ns,
+			Tool:          "pulumi",
+			Name:          "api/dev",
+			UnitID:        "stk-2",
+			DisplayName:   "api/dev",
+			Status:        "deployed",
+			ResourceCount: &count,
+		},
+	}
+}
+
+func newSeededHandler(t *testing.T, authz identity.Authorizer) *apiinventory.Handler {
+	t.Helper()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
+	seedEntries(nsStore, reader)
+
+	return newBehaviorHandler(t, nsStore, reader, authz)
+}
+
+// TestRouteDeclaresNamespaceRead proves the unit list declares exactly
+// namespace:read: the wrapper allows the namespace, and the handler filters
+// units with unit:read itself.
+func TestRouteDeclaresNamespaceRead(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path != "GET /api/inventory/units" {
+			continue
+		}
+
+		if len(route.Actions) != 1 || route.Actions[0] != identity.ActionNamespaceRead {
+			t.Fatalf("actions = %v, want [namespace:read]", route.Actions)
+		}
+
+		return
+	}
+
+	t.Fatal("GET /api/inventory/units is not declared")
+}
+
+// TestListUnitsBothTools proves one response holds both tools, ordered by
+// tool then name, with the tool labels, references and change times the
+// console reads.
+func TestListUnitsBothTools(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := decodeUnits(t, rec)
+	if len(got.Units) != 3 {
+		t.Fatalf("units = %+v, want 3", got.Units)
+	}
+
+	var count int64 = 3
+
+	want := []unitBody{
+		{
+			Tool:          "OpenTofu",
+			Reference:     "opentofu:acme/network",
+			Namespace:     "acme",
+			Name:          "network",
+			LastChange:    changeTime().Unix(),
+			Status:        "",
+			ResourceCount: nil,
+		},
+		{
+			Tool:          "Pulumi",
+			Reference:     "pulumi:acme/api/dev",
+			Namespace:     "acme",
+			Name:          "api/dev",
+			LastChange:    changeTime().Unix(),
+			Status:        "deployed",
+			ResourceCount: &count,
+		},
+		{
+			Tool:          "Pulumi",
+			Reference:     "pulumi:acme/web/prod",
+			Namespace:     "acme",
+			Name:          "web/prod",
+			LastChange:    changeTime().Unix(),
+			Status:        "",
+			ResourceCount: nil,
+		},
+	}
+
+	for i := range want {
+		checkUnit(t, got.Units[i], want[i], i)
+	}
+}
+
+// checkUnit proves one listed unit matches its want: the tool label, the
+// reference, the namespace, the name, the change time, the status and the
+// resource count.
+func checkUnit(t *testing.T, got, want unitBody, i int) {
+	t.Helper()
+
+	if got.Tool != want.Tool ||
+		got.Reference != want.Reference ||
+		got.Namespace != want.Namespace ||
+		got.Name != want.Name ||
+		got.LastChange != want.LastChange ||
+		got.Status != want.Status {
+		t.Fatalf("units[%d] = %+v, want %+v", i, got, want)
+	}
+
+	checkCount(t, got.ResourceCount, want.ResourceCount, i)
+}
+
+// checkCount proves a listed resource count matches its want: omitted when
+// unknown, the value otherwise.
+func checkCount(t *testing.T, got, want *int64, i int) {
+	t.Helper()
+
+	switch {
+	case want == nil && got != nil:
+		t.Fatalf("units[%d] resourceCount = %d, want omitted", i, *got)
+	case want != nil && got == nil:
+		t.Fatalf("units[%d] resourceCount is omitted, want %d", i, *want)
+	case want != nil && got != nil && *got != *want:
+		t.Fatalf("units[%d] resourceCount = %d, want %d", i, *got, *want)
+	default:
+		return
+	}
+}
+
+// TestListUnitsOmitsUnknown proves status and resourceCount are absent from
+// the JSON when unknown, not empty or null.
+func TestListUnitsOmitsUnknown(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var doc struct {
+		Units []map[string]any `json:"units"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode units: %v", err)
+	}
+
+	byRef := map[string]map[string]any{}
+	for _, u := range doc.Units {
+		ref, ok := u["reference"].(string)
+		if !ok {
+			t.Fatalf("entry has no reference string: %v", u)
+		}
+
+		byRef[ref] = u
+	}
+
+	plain, ok := byRef["pulumi:acme/web/prod"]
+	if !ok {
+		t.Fatalf("no entry for pulumi:acme/web/prod in %s", rec.Body.String())
+	}
+
+	for _, key := range []string{"status", "resourceCount"} {
+		if _, present := plain[key]; present {
+			t.Fatalf("entry has %q = %v, want it omitted (%s)", key, plain[key], rec.Body.String())
+		}
+	}
+
+	known, ok := byRef["pulumi:acme/api/dev"]
+	if !ok {
+		t.Fatalf("no entry for pulumi:acme/api/dev in %s", rec.Body.String())
+	}
+
+	if known["status"] != "deployed" {
+		t.Fatalf("entry status = %v, want %q", known["status"], "deployed")
+	}
+
+	count, ok := known["resourceCount"].(float64)
+	if !ok || count != 3 {
+		t.Fatalf("entry resourceCount = %v, want 3", known["resourceCount"])
+	}
+}
+
+// TestListUnitsEmptyNamespace proves a namespace with no units reads as an
+// empty array, not null.
+func TestListUnitsEmptyNamespace(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	seedNamespace(t, nsStore, "acme")
+	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
+	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), `"units":[]`) {
+		t.Fatalf("body = %s, want an empty units array", rec.Body.String())
+	}
+}
+
+// TestListUnitsUnknownNamespace proves an unknown namespace answers 404.
+func TestListUnitsUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=ghost", "test-token")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+
+	var got errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("error code = %d, want %d", got.Code, http.StatusNotFound)
+	}
+}
+
+// TestListUnitsMissingOrganization proves a missing organization parameter
+// answers 400 with the error shape the console reads.
+func TestListUnitsMissingOrganization(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	for _, target := range []string{"/api/inventory/units", "/api/inventory/units?organization="} {
+		rec := authorizedGet(t, handler, target, "test-token")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s answers %d, want %d (%s)", target, rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+
+		var got errorBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode error: %v", err)
+		}
+
+		if got.Code != http.StatusBadRequest || got.Message == "" {
+			t.Fatalf("error body = %+v, want code %d with a message", got, http.StatusBadRequest)
+		}
+	}
+}
+
+// TestListUnitsInvalidOrganization proves an invalid organization value answers 400.
+func TestListUnitsInvalidOrganization(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=../x", "test-token")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestListUnitsFiltersDeniedUnits proves the handler removes entries whose
+// unit the caller may not read.
+func TestListUnitsFiltersDeniedUnits(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, denyUnits{deny: map[string]bool{"pulumi:acme/web/prod": true}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := decodeUnits(t, rec)
+	if len(got.Units) != 2 {
+		t.Fatalf("units = %+v, want 2", got.Units)
+	}
+
+	for _, u := range got.Units {
+		if u.Reference == "pulumi:acme/web/prod" {
+			t.Fatalf("units holds the denied reference %q", u.Reference)
+		}
+	}
+}
+
+// TestListUnitsDeniesAllUnits proves a caller that may read the namespace
+// but no unit reads an empty list.
+func TestListUnitsDeniesAllUnits(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, denyUnits{deny: map[string]bool{
+		"opentofu:acme/network": true,
+		"pulumi:acme/api/dev":   true,
+		"pulumi:acme/web/prod":  true,
+	}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := decodeUnits(t, rec)
+	if len(got.Units) != 0 {
+		t.Fatalf("units = %+v, want none", got.Units)
+	}
+}
+
+// TestListUnitsNeedsAuthentication proves a request without a token answers 401.
+func TestListUnitsNeedsAuthentication(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+// TestListUnitsDeniedNamespace proves a caller without namespace:read on the
+// namespace answers 403.
+func TestListUnitsDeniedNamespace(t *testing.T) {
+	t.Parallel()
+
+	handler := newSeededHandler(
+		t, selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionNamespaceRead: true}},
+	)
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+// TestNewHandlerRequiresDependencies proves NewHandler fails without each dependency.
+func TestNewHandlerRequiresDependencies(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	full := apiinventory.Config{
+		Namespaces:    namespaces,
+		Units:         reader,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+	}
+
+	cases := []struct {
+		name string
+		drop func(*apiinventory.Config)
+	}{
+		{name: "namespace service", drop: func(c *apiinventory.Config) { c.Namespaces = nil }},
+		{name: "inventory reader", drop: func(c *apiinventory.Config) { c.Units = nil }},
+		{name: "authenticator", drop: func(c *apiinventory.Config) { c.Authenticator = nil }},
+		{name: "authorizer", drop: func(c *apiinventory.Config) { c.Authorizer = nil }},
+		{name: "logger", drop: func(c *apiinventory.Config) { c.Logger = nil }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := full
+			tc.drop(&cfg)
+
+			if _, err := apiinventory.NewHandler(cfg); err == nil {
+				t.Fatalf("NewHandler without %s succeeded", tc.name)
+			}
+		})
+	}
+}
