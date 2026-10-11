@@ -160,7 +160,19 @@ func FromUpdateRows(rows []UpdateRow, ref stack.Ref) ([]stack.Update, error) {
 }
 
 // ToCheckpointRow converts a domain checkpoint into a row for the stack with stackID.
+// It counts the managed resources of the deployment inline; a caller that
+// holds a write lock uses ToCheckpointRowCounted with a count computed before
+// the lock instead, so the transaction holds only SQL statements.
 func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, error) {
+	return ToCheckpointRowCounted(cp, stackID, stack.CountManagedResources(cp.Deployment))
+}
+
+// ToCheckpointRowCounted converts a domain checkpoint into a row for the stack
+// with stackID, with resourceCount computed by the caller before any lock. The
+// count scans the deployment bytes, which costs about one second for a large
+// checkpoint under the race detector, so PutCheckpoint computes it before its
+// fenced transaction and passes the result here.
+func ToCheckpointRowCounted(cp stack.Checkpoint, stackID stack.ID, resourceCount int64) (CheckpointRow, error) {
 	features := cp.Features
 	if features == nil {
 		features = []string{}
@@ -195,7 +207,7 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 		Sequence:      cp.Sequence,
 		SavedAtMs:     Millis(cp.SavedAt),
 		Invalid:       cp.Invalid,
-		ResourceCount: stack.CountManagedResources(cp.Deployment),
+		ResourceCount: resourceCount,
 		BlobKey:       cp.BlobKey.String(),
 		Size:          int64(len(cp.Deployment)),
 		BlobSize:      cp.BlobSize,
