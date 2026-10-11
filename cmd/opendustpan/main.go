@@ -4,6 +4,7 @@
 //	opendustpan serve [flags]
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
+//	opendustpan backup check [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN only,
@@ -28,6 +29,7 @@ import (
 	"strings"
 	"syscall"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -44,7 +46,7 @@ import (
 var (
 	errUsage = errors.New(
 		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name> | " +
-			"opendustpan upgrade check",
+			"opendustpan upgrade check | opendustpan backup check",
 	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
@@ -73,6 +75,9 @@ var (
 	errBackupTarget = errors.New(
 		"backup target must be dir:/path: set --backup-target (DUSTPAN_BACKUP_TARGET)",
 	)
+	// errBackupID reports a backup check without a backup ID. It names the
+	// flag, so the operator knows what to set.
+	errBackupID = errors.New("backup id is missing: set --backup <id>")
 )
 
 // version is the server version. The build stamps it with
@@ -111,23 +116,43 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return errUsage
 	}
 
-	switch {
-	case args[0] == "--version":
+	switch args[0] {
+	case "--version":
 		_, err := fmt.Fprintln(stdout, version)
 		if err != nil {
 			return fmt.Errorf("write version: %w", err)
 		}
 
 		return nil
-	case args[0] == "serve":
+	case "serve":
 		return serve(ctx, args[1:], stderr)
-	case len(args) >= 2 && args[0] == "namespace" && args[1] == "create":
-		return createNamespace(ctx, args[2:], stdout, stderr)
-	case len(args) >= 2 && args[0] == "upgrade" && args[1] == "check":
-		return upgradeCheck(ctx, args[2:], stdout, stderr)
+	case "namespace":
+		return runNamespaceCommand(ctx, args[1:], stdout, stderr)
+	case "upgrade":
+		return runUpgradeCommand(ctx, args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(ctx, args[1:], stdout, stderr)
 	default:
 		return errUsage
 	}
+}
+
+// runNamespaceCommand runs the namespace subcommands: create only.
+func runNamespaceCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) >= 1 && args[0] == "create" {
+		return createNamespace(ctx, args[1:], stdout, stderr)
+	}
+
+	return errUsage
+}
+
+// runUpgradeCommand runs the upgrade subcommands: check only.
+func runUpgradeCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) >= 1 && args[0] == "check" {
+		return upgradeCheck(ctx, args[1:], stdout, stderr)
+	}
+
+	return errUsage
 }
 
 // common holds the flags shared by every subcommand.
@@ -688,6 +713,86 @@ func writeUpgradeReport(stdout io.Writer, inspection schema.Inspection) error {
 		if _, err := fmt.Fprintln(stdout, line); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// runBackup runs the backup subcommands. It shares one backup entry, so the
+// backup command of a later change and backup check never clash: check runs
+// when the first argument is check, anything else is usage for now.
+func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) >= 1 && args[0] == "check" {
+		return backupCheck(ctx, args[1:], stdout, stderr)
+	}
+
+	return errUsage
+}
+
+// backupCheckFlags holds the settings of the backup check subcommand. It
+// takes no database flag and reads no key: the check reads only the target.
+type backupCheckFlags struct {
+	target string
+	id     string
+}
+
+func (f *backupCheckFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(
+		&f.target,
+		"backup-target",
+		env("DUSTPAN_BACKUP_TARGET", ""),
+		"backup target dir:/path (DUSTPAN_BACKUP_TARGET)",
+	)
+	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
+}
+
+// backupCheck runs `opendustpan backup check --backup <id>`: it reads the
+// target and checks that it holds every object the manifest names with the
+// recorded size. It opens no database, starts no server and reads no key. It
+// prints one verdict and exits 0 when the backup is complete, else it returns
+// the first missing or short object by key with exit 1.
+func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var f backupCheckFlags
+
+	fs := flag.NewFlagSet("backup check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	f.register(fs)
+
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if fs.NArg() != 0 {
+		return errUsage
+	}
+
+	id := strings.TrimSpace(f.id)
+	if id == "" {
+		return errBackupID
+	}
+
+	target, err := openBackupTarget(f.target)
+	if err != nil {
+		return err
+	}
+
+	if target == nil {
+		return errBackupTarget
+	}
+
+	checkErr := backup.Check(ctx, target, backup.ID(id))
+	closeErr := target.Close()
+
+	if checkErr != nil {
+		return checkErr
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("close backup target: %w", closeErr)
+	}
+
+	if _, err := fmt.Fprintf(stdout, "backup %s is complete\n", id); err != nil {
+		return fmt.Errorf("write output: %w", err)
 	}
 
 	return nil

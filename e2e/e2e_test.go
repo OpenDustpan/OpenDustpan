@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,9 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 
 	"opendustpan.org/opendustpan/e2e"
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 )
 
 const (
@@ -1552,8 +1556,8 @@ func checkImportPlan(r e2e.Result) error {
 // checkImportBackup proves the local source is unchanged: its backup keeps
 // the state the source phase wrote, with the same serial and lineage.
 func checkImportBackup(dir string, before importStateDoc) error {
-	backup := filepath.Join(dir, "terraform.tfstate.backup")
-	raw, err := os.ReadFile(backup) //nolint:gosec // The test reads the state file it wrote.
+	backupFile := filepath.Join(dir, "terraform.tfstate.backup")
+	raw, err := os.ReadFile(backupFile) //nolint:gosec // The test reads the state file it wrote.
 	if err != nil {
 		return fmt.Errorf("%w: read the local backup: %w", errUnexpected, err)
 	}
@@ -1672,9 +1676,9 @@ func checkImportEncryptedBackup(
 	t.Helper()
 
 	return func() error {
-		backup := filepath.Join(dir, "terraform.tfstate.backup")
+		backupFile := filepath.Join(dir, "terraform.tfstate.backup")
 		// The test reads the state file it wrote.
-		raw, err := os.ReadFile(backup) //nolint:gosec // Test file with a fixed name.
+		raw, err := os.ReadFile(backupFile) //nolint:gosec // Test file with a fixed name.
 		if err != nil {
 			return fmt.Errorf("%w: read the encrypted backup: %w", errUnexpected, err)
 		}
@@ -5287,6 +5291,160 @@ func migratePostgresViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, s
 			created.Stderr,
 		)
 	}
+}
+
+// TestBackupCheck proves `opendustpan backup check` with RunBinary: it takes
+// a backup into a target directory, the check exits 0 with one verdict, then
+// one deleted blob file makes the check exit 1 naming the key. It runs only
+// with E2E_SERVER=binary, on every store under test.
+func TestBackupCheck(t *testing.T) {
+	t.Parallel()
+
+	if !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary")
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runBackupCheckOnStore(t, cli, db)
+		})
+	}
+}
+
+// runBackupCheckOnStore runs the backup check steps on one store: a backup
+// into a target directory, a check with exit 0, a deleted blob file, and a
+// check with exit 1 naming the key.
+func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	const id = "bkp-e2e-check"
+
+	targetDir := writeE2EBackup(t, id)
+	blobKey := "blobs/tofu/ws1/sv1/a1"
+
+	complete := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", "dir:"+targetDir)
+	if complete.ExitCode != 0 {
+		t.Fatalf(
+			"backup check exits with status %d, want 0:\n%s%s",
+			complete.ExitCode,
+			complete.Stdout,
+			complete.Stderr,
+		)
+	}
+
+	if !strings.Contains(complete.Stdout, "backup "+id+" is complete") {
+		t.Fatalf("backup check output lacks the verdict:\n%s%s", complete.Stdout, complete.Stderr)
+	}
+
+	if err := os.Remove(filepath.Join(targetDir, filepath.FromSlash(blobKey))); err != nil {
+		t.Fatalf("delete blob file: %v", err)
+	}
+
+	broken := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", "dir:"+targetDir)
+	if broken.ExitCode != 1 {
+		t.Fatalf(
+			"backup check after the delete exits with status %d, want 1:\n%s%s",
+			broken.ExitCode,
+			broken.Stdout,
+			broken.Stderr,
+		)
+	}
+
+	if out := broken.Stdout + broken.Stderr; !strings.Contains(out, blobKey) {
+		t.Fatalf("backup check output lacks the key %q:\n%s", blobKey, out)
+	}
+}
+
+// writeE2EBackup writes a complete backup with id into a new target directory:
+// the SQL part, one blob and the manifest last. It returns the target directory.
+func writeE2EBackup(t *testing.T, id string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	target, err := blobfs.Open(dir)
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	db := []byte("e2e backup database part")
+	content := []byte(`{"state":1}`)
+	blobKey := "tofu/ws1/sv1/a1"
+	md5Sum := md5.Sum(content) //nolint:gosec // The test computes the MD5 the manifest records.
+	shaSum := sha256.Sum256(db)
+
+	manifest := backup.Manifest{
+		CreatedAt:   time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		ID:          backup.ID(id),
+		Dialect:     backup.DialectSQLite,
+		HomeRegions: []string{"e2e"},
+		WrapperIDs:  nil,
+		RowCounts:   nil,
+		Blobs: []backup.ManifestBlob{
+			{Key: blobKey, Size: int64(len(content)), MD5: hex.EncodeToString(md5Sum[:])},
+		},
+		Version:       "e2e",
+		SQLSHA256:     hex.EncodeToString(shaSum[:]),
+		Format:        backup.FormatVersion,
+		SchemaVersion: 1,
+		SQLSize:       int64(len(db)),
+	}
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+
+	ctx := t.Context()
+
+	for key, body := range map[string][]byte{
+		"backups/" + id + "/db":            db,
+		"blobs/" + blobKey:                 content,
+		"backups/" + id + "/manifest.json": data,
+	} {
+		parsed, err := blob.ParseKey(key)
+		if err != nil {
+			t.Fatalf("parse key %q: %v", key, err)
+		}
+
+		if err := target.Put(ctx, parsed, bytes.NewReader(body)); err != nil {
+			t.Fatalf("put %q: %v", key, err)
+		}
+	}
+
+	if err := target.Close(); err != nil {
+		t.Fatalf("close backup target: %v", err)
+	}
+
+	return dir
 }
 
 // insertFuturePostgres records one version above the newest in schemaURL, so
