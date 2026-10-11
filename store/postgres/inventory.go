@@ -11,12 +11,16 @@ import (
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/internal/codec"
 	"opendustpan.org/opendustpan/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/workspace"
 )
 
 var _ inventory.Reader = (*Store)(nil)
 
 // inventoryTool names the Pulumi CLI in inventory entries.
 const inventoryTool = "pulumi"
+
+// inventoryToolOpenTofu names OpenTofu in inventory entries.
+const inventoryToolOpenTofu = "opentofu"
 
 // stackUnitName returns the tool's own name for a stack: project/stack.
 func stackUnitName(ref stack.Ref) string {
@@ -57,6 +61,31 @@ func removeStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref) err
 	})
 	if err != nil {
 		return fmt.Errorf("delete inventory entry: %w", err)
+	}
+
+	return nil
+}
+
+// publishWorkspaceInventory writes the OpenTofu entry for ref with the given
+// unit ID and change time. Status and resource count stay unknown: OpenTofu
+// reports no status vocabulary and the server never reads state.
+func publishWorkspaceInventory(
+	ctx context.Context, q *db.Queries, ref workspace.Ref, unitID string, lastChangedMs int64,
+) error {
+	name := ref.Name.String()
+
+	err := q.UpsertInventory(ctx, db.UpsertInventoryParams{
+		Namespace:     ref.Namespace.String(),
+		Tool:          inventoryToolOpenTofu,
+		Name:          name,
+		UnitID:        unitID,
+		DisplayName:   name,
+		LastChangedMs: lastChangedMs,
+		Status:        "",
+		ResourceCount: pgtype.Int8{Int64: 0, Valid: false},
+	})
+	if err != nil {
+		return fmt.Errorf("upsert inventory entry: %w", err)
 	}
 
 	return nil
