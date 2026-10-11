@@ -28,6 +28,9 @@ Pulumi CLI versions in the suite, on SQLite and on PostgreSQL. The stack
 steps that the scenario already runs (`stack rename`, `stack rm`, `stack tag
 set`) pass too. Delta checkpoints and journaling are not part of it.
 
+**Status.** Met on 2026-10-11. The e2e suite passes all 59 Pulumi steps on
+the three versions and both stores (issue #58).
+
 | Where | Item | Part | State |
 | --- | --- | --- | --- |
 | server | [RFC 2](rfc/0002-organizations-are-namespaces.md) Organizations are namespaces | all | accepted (ADR 18) |
