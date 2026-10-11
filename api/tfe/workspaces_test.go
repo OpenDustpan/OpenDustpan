@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/api/tfe"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/workspace"
 )
@@ -701,6 +702,24 @@ func (p pagingWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (worksp
 
 func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrNoState
+}
+
+func (p pagingWorkspaces) BeginState(
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState,
+) (workspace.PendingState, error) {
+	return workspace.PendingState{}, workspace.ErrNotLocked
+}
+
+func (p pagingWorkspaces) Upload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrUploadDenied
+}
+
+func (p pagingWorkspaces) DiscardJSONRendering(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) error {
+	return workspace.ErrUploadDenied
 }
 
 func (p pagingWorkspaces) ReadState(

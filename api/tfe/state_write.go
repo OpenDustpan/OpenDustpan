@@ -1,0 +1,261 @@
+package tfe
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+
+	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/workspace"
+)
+
+const (
+	// maxStateCreateBytes bounds a state version create body: the base64
+	// outputs document alone may hold 16 MiB.
+	maxStateCreateBytes = 32 << 20
+	// inlineStateDetail is the 422 detail when a client sends the inline
+	// state attribute, which the server never serves: state always follows
+	// through the upload capability.
+	inlineStateDetail = "inline state is not supported: upload through hosted-state-upload-url"
+)
+
+// stateVersionCreateAttributes are the attributes of a state version create:
+// the serial, lineage, MD5 and force flag the server checks, the base64
+// json-state-outputs document it keeps, and the inline state attributes it
+// never serves. The json-state rendering is ignored by design: the server
+// keeps the state itself from the upload and the outputs from this create.
+type stateVersionCreateAttributes struct {
+	Serial           *int64  `json:"serial"`
+	Lineage          *string `json:"lineage"`
+	MD5              *string `json:"md5"`
+	Force            *bool   `json:"force"`
+	State            *string `json:"state"`
+	JSONState        *string `json:"json-state"`         //nolint:tagliatelle // The TFE wire name; it must not change.
+	JSONStateOutputs *string `json:"json-state-outputs"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// stateVersionCreateData holds the data object of a state version create.
+type stateVersionCreateData struct {
+	Attributes stateVersionCreateAttributes `json:"attributes"`
+}
+
+// stateVersionCreateRequest is the body of a state version create.
+type stateVersionCreateRequest struct {
+	Data stateVersionCreateData `json:"data"`
+}
+
+// parseStateVersionCreate reads a state version create body into the NewState
+// the service declares. The inline state attribute is not served: a client
+// that sends it gets 422. Missing attributes get 422 too; the service checks
+// the values.
+func parseStateVersionCreate(body []byte) (workspace.NewState, error) {
+	var req stateVersionCreateRequest
+
+	if err := json.Unmarshal(body, &req); err != nil {
+		return workspace.NewState{}, errInvalidBody
+	}
+
+	attrs := req.Data.Attributes
+
+	if attrs.State != nil && *attrs.State != "" {
+		return workspace.NewState{}, fmt.Errorf("%w: %s", errInvalidBody, inlineStateDetail)
+	}
+
+	if attrs.Serial == nil || attrs.Lineage == nil || attrs.MD5 == nil {
+		return workspace.NewState{}, fmt.Errorf(
+			"%w: state version needs serial, lineage and md5",
+			workspace.ErrInvalidState,
+		)
+	}
+
+	outputs, err := decodeStateOutputs(attrs.JSONStateOutputs)
+	if err != nil {
+		return workspace.NewState{}, err
+	}
+
+	force := attrs.Force != nil && *attrs.Force
+
+	return workspace.NewState{
+		Lineage: *attrs.Lineage,
+		MD5:     *attrs.MD5,
+		Outputs: outputs,
+		Serial:  *attrs.Serial,
+		Force:   force,
+	}, nil
+}
+
+// decodeStateOutputs decodes the base64 json-state-outputs attribute into
+// the opaque outputs document the state version keeps. A missing attribute
+// means no outputs. Anything else that does not decode, or that is not the
+// outputs shape the read routes render, fails with a 422 error. The CLI
+// sends the flat map of outputs at the top level; the wrapped form stays
+// accepted for versions stored before the flat shape was served.
+func decodeStateOutputs(raw *string) ([]byte, error) {
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(*raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: json-state-outputs is not valid base64", workspace.ErrInvalidState)
+	}
+
+	if _, err := parseStoredOutputs(decoded); err != nil {
+		return nil, fmt.Errorf("%w: json-state-outputs is not valid: %w", workspace.ErrInvalidState, err)
+	}
+
+	return decoded, nil
+}
+
+// readCreateBody reads a state version create body, bounded by
+// maxStateCreateBytes. An oversized body answers 413, an unreadable one 422.
+func (h *Handler) readCreateBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(
+		io.LimitReader(http.MaxBytesReader(w, r.Body, maxStateCreateBytes), maxStateCreateBytes+1),
+	)
+	if err != nil {
+		if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok && tooLarge != nil {
+			h.writeError(
+				r.Context(),
+				w,
+				fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, maxStateCreateBytes),
+			)
+		} else {
+			h.writeError(r.Context(), w, errInvalidBody)
+		}
+
+		return nil, false
+	}
+
+	if int64(len(body)) > maxStateCreateBytes {
+		h.writeError(
+			r.Context(),
+			w,
+			fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, maxStateCreateBytes),
+		)
+
+		return nil, false
+	}
+
+	return body, true
+}
+
+// createStateVersion serves POST /api/v2/workspaces/{id}/state-versions. It
+// declares the version with the caller as the holder and answers 201 with
+// the state version document holding the absolute upload URLs. A caller
+// without the lock gets 409.
+func (h *Handler) createStateVersion(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	body, ok := h.readCreateBody(w, r)
+	if !ok {
+		return
+	}
+
+	in, err := parseStateVersionCreate(body)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	pending, err := h.workspaces.BeginState(ctx, workspace.ID(r.PathValue("id")), p.Subject, in)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeStateVersionCreate(ctx, w, r, pending)
+}
+
+// writeStateVersionCreate writes the 201 create response: the state version
+// document with the absolute upload URLs of the minted capability.
+func (h *Handler) writeStateVersionCreate(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, pending workspace.PendingState,
+) {
+	doc, err := h.stateVersionDocument(r, pending.Version)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	base := h.ExternalBaseURL(r)
+	id := pending.Version.ID.String()
+	revealed := pending.Upload.Reveal()
+	doc.Attributes.UploadURL = base + "/api/v2/state-uploads/" + id + "/" + revealed
+	doc.Attributes.JSONUploadURL = base + "/api/v2/json-state-uploads/" + id + "/" + revealed
+
+	h.writeJSON(ctx, w, http.StatusCreated, stateVersionDocument{Data: doc})
+}
+
+// parseUploadToken reads the capability in the token path value. A malformed
+// token is denied as a 403, like a wrong one.
+func parseUploadToken(r *http.Request) (token.Token, error) {
+	tok, err := token.Parse(r.PathValue("token"))
+	if err != nil {
+		return token.Token{}, fmt.Errorf("%w: upload capability is not valid", workspace.ErrUploadDenied)
+	}
+
+	return tok, nil
+}
+
+// uploadState serves PUT /api/v2/state-uploads/{id}/{token}. It carries no
+// Authorization header: the token in the path is the credential. A retry of
+// a finalized upload with the same capability and the same content answers
+// 200. A wrong capability answers 403, a lost lock 409 and a checksum
+// mismatch 422.
+func (h *Handler) uploadState(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, err := parseUploadToken(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := h.workspaces.Upload(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// uploadJSONState serves PUT /api/v2/json-state-uploads/{id}/{token}. It
+// carries no Authorization header: the token in the path is the credential.
+// The server accepts the JSON rendering and discards it: it keeps the state
+// itself and the outputs declared at creation.
+func (h *Handler) uploadJSONState(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, err := parseUploadToken(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	discardErr := h.workspaces.DiscardJSONRendering(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body)
+	if discardErr != nil {
+		h.writeError(ctx, w, discardErr)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}

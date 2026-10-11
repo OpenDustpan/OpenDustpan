@@ -306,6 +306,40 @@ func (s *Service) Upload(
 	return sv, nil
 }
 
+// DiscardJSONRendering accepts the JSON rendering the CLI uploads alongside
+// a state version and discards it: the server keeps the state itself and the
+// outputs declared at creation, never the rendering. The capability rules
+// match Upload, except that a retry of a finalized version with the same
+// capability succeeds whatever the rendering holds: the two PUTs of one
+// upload carry other content by design. Unlike Upload it never finalizes and
+// never consumes the capability, so the state upload with the same
+// capability still works afterwards.
+func (s *Service) DiscardJSONRendering(
+	ctx context.Context,
+	id StateVersionID,
+	tok token.Token,
+	content io.Reader,
+) error {
+	sv, err := s.states.GetStateVersion(ctx, id)
+	if err != nil {
+		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+	}
+
+	if !sv.Upload.Matches(tok) {
+		return fmt.Errorf("%w: wrong capability for state version %s", ErrUploadDenied, id)
+	}
+
+	if sv.Status == StatusPending && !s.clock().Before(sv.UploadExpiresAt) {
+		return fmt.Errorf("%w: capability for state version %s expired", ErrUploadDenied, id)
+	}
+
+	if _, err := io.Copy(io.Discard, content); err != nil {
+		return fmt.Errorf("read JSON rendering of %s: %w", id, err)
+	}
+
+	return nil
+}
+
 // Current returns the workspace's current state version, or ErrNoState.
 func (s *Service) Current(ctx context.Context, id ID) (StateVersion, error) {
 	sv, err := s.states.CurrentStateVersion(ctx, id)

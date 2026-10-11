@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // The test fixture uses MD5 as the protocol does.
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -209,6 +210,62 @@ func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.Sta
 	return stubStateVersion(), nil
 }
 
+// BeginState declares a pending version with a fresh capability. The stub
+// ignores the lock and echoes the declared values: route tests prove
+// authorization, not the state rules.
+func (stubWorkspaces) BeginState(
+	_ context.Context, id workspace.ID, holder string, in workspace.NewState,
+) (workspace.PendingState, error) {
+	upload, err := token.New()
+	if err != nil {
+		return workspace.PendingState{}, err
+	}
+
+	var sum [16]byte
+
+	if raw, err := hex.DecodeString(in.MD5); err == nil && len(raw) == len(sum) {
+		copy(sum[:], raw)
+	}
+
+	return workspace.PendingState{
+		Upload: upload,
+		Version: workspace.StateVersion{
+			CreatedAt:       stubWorkspaceTime(),
+			FinalizedAt:     time.Time{},
+			UploadExpiresAt: stubWorkspaceTime().Add(time.Hour),
+			Upload:          token.Digest{},
+			ID:              workspace.StateVersionID("sv-new123"),
+			Workspace:       id,
+			Holder:          holder,
+			LockID:          "lock-test",
+			Lineage:         in.Lineage,
+			Status:          workspace.StatusPending,
+			Content:         "",
+			Outputs:         in.Outputs,
+			MD5:             sum,
+			Serial:          in.Serial,
+			Size:            0,
+			Force:           in.Force,
+		},
+	}, nil
+}
+
+// Upload denies every content upload: route tests never reach it with a
+// valid capability.
+func (stubWorkspaces) Upload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrUploadDenied
+}
+
+// DiscardJSONRendering denies every rendering upload: route tests never
+// reach it with a valid capability.
+func (stubWorkspaces) DiscardJSONRendering(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) error {
+	return workspace.ErrUploadDenied
+}
+
 // stubStateContent is the state the stub download serves: a tfstate document
 // with a greeting output.
 func stubStateContent() string {
@@ -217,9 +274,10 @@ func stubStateContent() string {
 }
 
 // stubStateOutputs is the json-state-outputs document of the stub state: the
-// greeting output with its cty value and type.
+// flat map of outputs the CLI sends, with the greeting output and its cty
+// value and type.
 func stubStateOutputs() string {
-	return `{"outputs":{"greeting":{"sensitive":false,"value":"hello","type":"string"}}}`
+	return `{"greeting":{"sensitive":false,"value":"hello","type":"string"}}`
 }
 
 // stubStateVersion is the finalized current state of ws-test123: serial 3 of
@@ -530,14 +588,16 @@ func TestNoPulumiImport(t *testing.T) {
 // errInvalidRoute reports a route table row that fails the scope check.
 var errInvalidRoute = errors.New("invalid route")
 
-// validateRoute fails for a route that is neither public nor authorized with
-// actions and a resolver.
+// validateRoute fails for a route that is neither public, authorized with
+// actions and a resolver, nor an upload route with the capability scope.
 func validateRoute(route tfe.Route, public map[string]bool) error {
 	switch route.Scope {
 	case tfe.ScopePublic:
 		return validatePublicRoute(route, public)
 	case tfe.ScopeAuthorized:
 		return validateAuthorizedRoute(route, public)
+	case tfe.ScopeUpload:
+		return validateUploadRoute(route, public)
 	default:
 		return fmt.Errorf("%w: %q declares no scope", errInvalidRoute, route.Method+" "+route.Path)
 	}
@@ -578,6 +638,33 @@ func validateAuthorizedRoute(route tfe.Route, public map[string]bool) error {
 
 	if route.Resolve == nil {
 		return fmt.Errorf("%w: %q declares actions but no resolver", errInvalidRoute, pattern)
+	}
+
+	return nil
+}
+
+// validateUploadRoute fails for an upload route that is on the public list,
+// that declares anything but unit:write, or that declares a resolver. The
+// capability in the path stands in for unit:write granted at creation, so
+// the Authorizer does not run and no resolver is needed.
+func validateUploadRoute(route tfe.Route, public map[string]bool) error {
+	pattern := route.Method + " " + route.Path
+
+	if public[pattern] {
+		return fmt.Errorf("%w: %q is on the public list but declares the upload scope", errInvalidRoute, pattern)
+	}
+
+	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionUnitWrite {
+		return fmt.Errorf(
+			"%w: upload route %q declares %v, want exactly [unit:write]",
+			errInvalidRoute,
+			pattern,
+			route.Actions,
+		)
+	}
+
+	if route.Resolve != nil {
+		return fmt.Errorf("%w: upload route %q declares a resolver", errInvalidRoute, pattern)
 	}
 
 	return nil
@@ -657,6 +744,7 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		"{id}", "ws-test123",
 		"{state_version_id}", "sv-test123",
 		"{output_id}", "sv-test123.greeting",
+		"{token}", "wrong-token",
 	).Replace(route.Path)
 
 	body := ""
@@ -664,6 +752,11 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		body = `{"data":{}}`
 		if strings.HasSuffix(route.Path, "/workspaces") {
 			body = `{"data":{"type":"workspaces","attributes":{"name":"fresh"}}}`
+		}
+
+		if strings.HasSuffix(route.Path, "/state-versions") {
+			body = `{"data":{"type":"state-versions","attributes":{` +
+				`"serial":4,"lineage":"seed-lineage","md5":"d41d8cd98f00b204e9800998ecf8427e"}}}`
 		}
 	}
 
@@ -723,6 +816,16 @@ func TestRoutesEnforceAuthentication(t *testing.T) {
 func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 	t.Helper()
 
+	checkRouteAuthenticationUnauthorized(t, route)
+	checkRouteAuthenticationDenied(t, route)
+	checkRouteAuthenticationAllowed(t, route)
+}
+
+// checkRouteAuthenticationUnauthorized proves one authorized route answers
+// 401 without a token and with a wrong token.
+func checkRouteAuthenticationUnauthorized(t *testing.T, route tfe.Route) {
+	t.Helper()
+
 	cases := []struct {
 		name  string
 		token string
@@ -748,6 +851,12 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 			checkJSONAPIError(t, rec, tc.want)
 		})
 	}
+}
+
+// checkRouteAuthenticationDenied proves one authorized route answers 403
+// when the Authorizer denies it.
+func checkRouteAuthenticationDenied(t *testing.T, route tfe.Route) {
+	t.Helper()
 
 	t.Run("denied", func(t *testing.T) {
 		t.Parallel()
@@ -768,6 +877,12 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 
 		checkJSONAPIError(t, rec, http.StatusForbidden)
 	})
+}
+
+// checkRouteAuthenticationAllowed proves one authorized route serves when the
+// Authorizer allows it: a creation answers 201 and every other route 200.
+func checkRouteAuthenticationAllowed(t *testing.T, route tfe.Route) {
+	t.Helper()
 
 	t.Run("allowed", func(t *testing.T) {
 		t.Parallel()
@@ -777,11 +892,7 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 		rec := httptest.NewRecorder()
 		allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-		// Workspace creation answers 201; every other route answers 200.
-		want := http.StatusOK
-		if route.Method == http.MethodPost && strings.HasSuffix(route.Path, "/workspaces") {
-			want = http.StatusCreated
-		}
+		want := wantSuccessStatus(route)
 
 		if rec.Code != want {
 			t.Fatalf("allowed request answers %d, want %d", rec.Code, want)
@@ -791,6 +902,17 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 			t.Fatalf("media type = %q, want %q", got, wantMediaType(route))
 		}
 	})
+}
+
+// wantSuccessStatus returns the success status of route: a creation answers
+// 201 and every other route answers 200.
+func wantSuccessStatus(route tfe.Route) int {
+	if route.Method == http.MethodPost &&
+		(strings.HasSuffix(route.Path, "/workspaces") || strings.HasSuffix(route.Path, "/state-versions")) {
+		return http.StatusCreated
+	}
+
+	return http.StatusOK
 }
 
 // wantMediaType returns the media type route serves on success: the download
@@ -980,6 +1102,24 @@ func (errorWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace
 
 func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, errTestInternal
+}
+
+func (errorWorkspaces) BeginState(
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState,
+) (workspace.PendingState, error) {
+	return workspace.PendingState{}, errTestInternal
+}
+
+func (errorWorkspaces) Upload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, errTestInternal
+}
+
+func (errorWorkspaces) DiscardJSONRendering(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) error {
+	return errTestInternal
 }
 
 func (errorWorkspaces) ReadState(
