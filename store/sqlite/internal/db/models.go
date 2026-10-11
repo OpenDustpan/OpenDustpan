@@ -34,6 +34,7 @@ type Stack struct {
 	Version     int64
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	ID          string
 }
 
 type Update struct {
