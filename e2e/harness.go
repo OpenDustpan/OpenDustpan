@@ -826,6 +826,55 @@ func (e *Env) TofuEnvB() []string {
 	return []string{"TF_CLI_CONFIG_FILE=" + filepath.Join(e.home, "tofurc-b")}
 }
 
+// TokenA returns the access token of principal A, the principal the CLI
+// configuration uses. Tests that drive the import script pass it to the
+// script through the environment, never as an argument.
+func (e *Env) TokenA() string {
+	return e.token
+}
+
+// CABundle returns the PEM bundle that trusts this server: both certificates
+// of a pair after MergeTofuPair, else this server's own certificate. Tests
+// pass it to the import script, which hands it to curl.
+func (e *Env) CABundle() string {
+	if e.certBundle != "" {
+		return e.certBundle
+	}
+
+	return filepath.Join(e.home, "server.pem")
+}
+
+// ExternalResult is the outcome of a command a test runs outside the CLI,
+// like the import script.
+type ExternalResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// RecordExternalStep records an external command as a scenario step for the
+// report. failure holds the check failure, or "" when the step passed. A
+// failing step does not stop later steps: the goal is to see every gap.
+func (e *Env) RecordExternalStep(t *testing.T, name, command string, res ExternalResult, failure string) {
+	t.Helper()
+
+	e.steps = append(e.steps, StepResult{
+		Name:     name,
+		Command:  command,
+		Failure:  failure,
+		Stderr:   clip(res.Stderr),
+		ExitCode: res.ExitCode,
+		Passed:   failure == "",
+		Skipped:  false,
+	})
+
+	t.Logf("%s (exit %d)\nstdout:\n%s\nstderr:\n%s", command, res.ExitCode, clip(res.Stdout), clip(res.Stderr))
+
+	if failure != "" {
+		t.Errorf("%s: %s", name, failure)
+	}
+}
+
 // workspaceIDData holds the data object of a workspace read document.
 type workspaceIDData struct {
 	ID string `json:"id"`
