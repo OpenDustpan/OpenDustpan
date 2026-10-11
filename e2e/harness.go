@@ -180,6 +180,9 @@ type Env struct {
 	// certBundle holds a PEM bundle with the certificates of both servers
 	// of a pair. Empty for a single server, which trusts server.pem.
 	certBundle string
+	// dbProxy fronts PostgreSQL for the server, so closing it stops the
+	// database for this environment only. It is nil on SQLite.
+	dbProxy *DBProxy
 }
 
 // serverStore is every persistence port the server needs.
@@ -195,6 +198,15 @@ type serverStore interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+}
+
+// serverBuild groups the handler, stores and database proxy newServer opens,
+// so the constructor stays within the result limit.
+type serverBuild struct {
+	handler    http.Handler
+	store      serverStore
+	workspaces *workspace.Service
+	dbProxy    *DBProxy
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -229,7 +241,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
-	handler, st, workspaces := newServer(
+	build := newServer(
 		ctx,
 		tb,
 		in.store,
@@ -237,7 +249,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		serverTokens{tokenA: in.token, tokenB: in.tokenB},
 	)
 
-	ts := httptest.NewUnstartedServer(in.rec.Middleware(handler))
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
 	if in.cli.Tool == ToolTofu {
 		ts.StartTLS()
 	} else {
@@ -254,9 +266,9 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
-		server:        st,
+		server:        build.store,
 		client:        client,
-		workspaces:    workspaces,
+		workspaces:    build.workspaces,
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
@@ -270,6 +282,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendCmd:    nil,
 		backendLogs:   nil,
 		certBundle:    "",
+		dbProxy:       build.dbProxy,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -317,31 +330,41 @@ type serverTokens struct {
 }
 
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
-// PostgreSQL schema), creates the Namespace namespace and returns the server's
-// handler, store and workspace service. The store and its schema are closed
-// and removed when the test ends.
+// PostgreSQL schema through a TCP proxy), creates the Namespace namespace and
+// returns the build with the server's handler, store, workspace service and
+// database proxy. The proxy is nil on SQLite. The store and its schema are
+// closed and removed when the test ends.
 // the environment needs the interface.
+// openServerStore opens the store under test. PostgreSQL goes through a
+// DBProxy, so a step can stop the database for this environment only; the
+// proxy is nil on SQLite.
 //
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
+//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
+func openServerStore(ctx context.Context, tb testing.TB, store Store, dbPath string) (serverStore, *DBProxy) {
+	tb.Helper()
+
+	switch store {
+	case StoreSQLite:
+		return openSQLiteStore(ctx, tb, dbPath), nil
+	case StorePostgres:
+		return openProxiedPostgresStore(ctx, tb, PostgresURL())
+	default:
+		tb.Fatalf("unknown store: %s", store)
+
+		return nil, nil
+	}
+}
+
 func newServer(
 	ctx context.Context,
 	tb testing.TB,
 	store Store,
 	dbPath string,
 	tokens serverTokens,
-) (http.Handler, serverStore, *workspace.Service) {
+) serverBuild {
 	tb.Helper()
 
-	var st serverStore
-
-	switch store {
-	case StoreSQLite:
-		st = openSQLiteStore(ctx, tb, dbPath)
-	case StorePostgres:
-		st = openPostgresStore(ctx, tb, PostgresURL())
-	default:
-		tb.Fatalf("unknown store: %s", store)
-	}
+	st, dbProxy := openServerStore(ctx, tb, store, dbPath)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
 	if err != nil {
@@ -394,7 +417,7 @@ func newServer(
 		tb.Fatalf("new server: %v", err)
 	}
 
-	return srv.Handler(), st, workspaces
+	return serverBuild{handler: srv.Handler(), store: st, workspaces: workspaces, dbProxy: dbProxy}
 }
 
 // openBackupTarget opens a backup target directory next to the database at
