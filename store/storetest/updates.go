@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -72,6 +73,46 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 	}
 }
 
+// HistoryStore is the port surface the history cases need: namespaces and
+// stacks for their fixtures, and the update cycle for the history itself.
+type HistoryStore interface {
+	namespace.Store
+	stack.UpdateStore
+	stack.CheckpointStore
+	CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error
+	GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error)
+}
+
+// HistoryFactory returns a fresh, empty store for one history subtest.
+type HistoryFactory func(t *testing.T) HistoryStore
+
+// RunUpdateHistory runs the history cases of ADR 28 decision 4: the creator
+// and the restore source of each update, the checkpoint size in history, and
+// the import and restore kinds. The SQL adapters grow the matching columns in
+// issues #135 and #136, which move these cases into RunUpdates. Until then
+// the stack package runs them on its in-memory store.
+func RunUpdateHistory(t *testing.T, newStore HistoryFactory) {
+	t.Helper()
+
+	cases := []struct {
+		test func(t *testing.T, f historyFixture)
+		name string
+	}{
+		{name: "creator and restore source survive create, start, save and list", test: testHistoryCreator},
+		{name: "history reports the checkpoint size, zero without a checkpoint", test: testHistoryCheckpointSize},
+		{name: "a later checkpoint write changes the history size", test: testHistorySizeFollowsRewrite},
+		{name: "import and restore updates appear in history with their kinds", test: testHistoryKinds},
+		{name: "a fenced create writes nothing", test: testHistoryCreateFenced},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.test(t, newHistoryFixture(t, newStore(t)))
+		})
+	}
+}
+
 // fixture is a store holding namespace "acme" and stack "acme/web/prod".
 type fixture struct {
 	s     UpdatesStore
@@ -108,25 +149,34 @@ func (f fixture) other(t *testing.T) stack.Ref {
 func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan) stack.Update {
 	t.Helper()
 
-	u := stack.Update{
-		CreatedAt: now(),
-		StartedAt: time.Time{},
-		EndedAt:   time.Time{},
-		Lease:     stack.Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}},
-		ID:        stack.UpdateID(id),
-		Kind:      plan.Kind,
-		Status:    stack.StatusNotStarted,
-		Ref:       ref,
-		DryRun:    plan.DryRun,
-		Version:   0,
-		Revision:  1,
-	}
+	u := newUpdate(ref, id, plan, "", 0)
 
 	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
 	}
 
 	return u
+}
+
+// newUpdate returns a new, not-started update of ref with the given creator
+// and restore source, not yet persisted.
+func newUpdate(ref stack.Ref, id string, plan stack.Plan, createdBy string, restoredFrom int64) stack.Update {
+	return stack.Update{
+		CreatedAt:       now(),
+		StartedAt:       time.Time{},
+		EndedAt:         time.Time{},
+		Lease:           stack.Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}},
+		ID:              stack.UpdateID(id),
+		Kind:            plan.Kind,
+		Status:          stack.StatusNotStarted,
+		Ref:             ref,
+		DryRun:          plan.DryRun,
+		Version:         0,
+		Revision:        1,
+		CreatedBy:       createdBy,
+		RestoredFrom:    restoredFrom,
+		CheckpointBytes: 0,
+	}
 }
 
 // started returns u moved to running under a fresh lease, not yet persisted.
@@ -205,6 +255,127 @@ func preview() stack.Plan { return stack.Plan{Kind: stack.KindPreview, DryRun: f
 // dryRun is the preview phase of `pulumi up`: the real kind, not mutating.
 func dryRun() stack.Plan { return stack.Plan{Kind: stack.KindUpdate, DryRun: true} }
 
+// historyFixture is a store holding namespace "acme" and stack
+// "acme/web/prod", for the staged history cases of RunUpdateHistory.
+type historyFixture struct {
+	s     HistoryStore
+	ref   stack.Ref
+	fence namespace.Fence
+}
+
+func newHistoryFixture(t *testing.T, s HistoryStore) historyFixture {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	return historyFixture{s: s, ref: st.Ref, fence: ns.Fence()}
+}
+
+// create persists a new, not-started update with the given creator and
+// restore source.
+func (f historyFixture) create(
+	t *testing.T, id string, plan stack.Plan, createdBy string, restoredFrom int64,
+) stack.Update {
+	t.Helper()
+
+	u := newUpdate(f.ref, id, plan, createdBy, restoredFrom)
+
+	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
+		t.Fatalf("create update %s: %v", id, err)
+	}
+
+	return u
+}
+
+// start persists u as started and returns it with its version.
+func (f historyFixture) start(t *testing.T, u stack.Update) stack.Update {
+	t.Helper()
+
+	got, err := f.s.StartUpdate(t.Context(), started(t, u), f.fence)
+	if err != nil {
+		t.Fatalf("start update %s: %v", u.ID, err)
+	}
+
+	return got
+}
+
+// run creates and starts an update with the given creator and restore source.
+func (f historyFixture) run(
+	t *testing.T, id string, plan stack.Plan, createdBy string, restoredFrom int64,
+) stack.Update {
+	t.Helper()
+
+	return f.start(t, f.create(t, id, plan, createdBy, restoredFrom))
+}
+
+// end persists u as ended with status.
+func (f historyFixture) end(t *testing.T, u stack.Update, status stack.UpdateStatus) stack.Update {
+	t.Helper()
+
+	u = ended(u, status)
+	if err := f.s.SaveUpdate(t.Context(), u, f.fence); err != nil {
+		t.Fatalf("end update %s: %v", u.ID, err)
+	}
+
+	return u
+}
+
+// putCheckpoint saves body as the checkpoint of u.
+func (f historyFixture) putCheckpoint(t *testing.T, u stack.Update, body string) {
+	t.Helper()
+
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, body), f.fence); err != nil {
+		t.Fatalf("put checkpoint of %s: %v", u.ID, err)
+	}
+}
+
+// history returns the stack history, newest first.
+func (f historyFixture) history(t *testing.T) []stack.Update {
+	t.Helper()
+
+	list, err := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	return list
+}
+
+// assertUpdate checks that the store holds want.
+func (f historyFixture) assertUpdate(t *testing.T, want stack.Update) {
+	t.Helper()
+
+	got, err := f.s.GetUpdate(t.Context(), want.Ref, want.ID)
+	if err != nil {
+		t.Fatalf("get update %s: %v", want.ID, err)
+	}
+
+	if !sameUpdate(got, want) {
+		t.Fatalf("update %s = %+v, want %+v", want.ID, got, want)
+	}
+}
+
+// historySize returns the CheckpointBytes history reports for id.
+func (f historyFixture) historySize(t *testing.T, id stack.UpdateID) int64 {
+	t.Helper()
+
+	history := f.history(t)
+	for i := range history {
+		if history[i].ID == id {
+			return history[i].CheckpointBytes
+		}
+	}
+
+	t.Fatalf("update %s is missing from history", id)
+
+	return 0
+}
+
 func testUpdateRoundTrip(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -241,19 +412,7 @@ func testUpdateMissingStack(t *testing.T, f fixture) {
 	t.Helper()
 
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
-	u := stack.Update{
-		CreatedAt: now(),
-		StartedAt: time.Time{},
-		EndedAt:   time.Time{},
-		Lease:     stack.Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}},
-		ID:        "u1",
-		Kind:      stack.KindUpdate,
-		Status:    stack.StatusNotStarted,
-		Ref:       ghost,
-		DryRun:    false,
-		Version:   0,
-		Revision:  1,
-	}
+	u := newUpdate(ghost, "u1", mutating(), "", 0)
 
 	if err := f.s.CreateUpdate(t.Context(), u, f.fence); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("create update of missing stack: err = %v, want stack.ErrNotFound", err)
@@ -587,6 +746,130 @@ func testListUpdates(t *testing.T, f fixture) {
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("list updates %+v = %v, want %v", tc.page, got, tc.want)
 		}
+	}
+}
+
+// testHistoryCreator checks that CreatedBy and RestoredFrom survive create,
+// start, save and list.
+func testHistoryCreator(t *testing.T, f historyFixture) {
+	t.Helper()
+
+	want := f.create(t, "u1", mutating(), "alice@example.com", 0)
+	f.assertUpdate(t, want)
+
+	want = f.start(t, want)
+	f.assertUpdate(t, want)
+
+	want = f.end(t, want, stack.StatusSucceeded)
+	f.assertUpdate(t, want)
+
+	// A restore records the version it copied. Each update keeps its own creator.
+	restored := f.create(t, "u2", stack.Plan{Kind: stack.KindRestore, DryRun: false}, "bob@example.com", want.Version)
+	restored = f.end(t, f.start(t, restored), stack.StatusSucceeded)
+	f.assertUpdate(t, restored)
+
+	history := f.history(t)
+	if len(history) != 2 || !sameUpdate(history[0], restored) || !sameUpdate(history[1], want) {
+		t.Fatalf("history = %+v, want [u2 u1] with creator and restore source", history)
+	}
+}
+
+// testHistoryCheckpointSize checks that history reports the size of the
+// checkpoint each update saved, and 0 for an update with no checkpoint and
+// for a preview.
+func testHistoryCheckpointSize(t *testing.T, f historyFixture) {
+	t.Helper()
+
+	withCheckpoint := f.run(t, "u1", mutating(), "", 0)
+	body := `{"v":1}`
+	f.putCheckpoint(t, withCheckpoint, body)
+	withCheckpoint = f.end(t, withCheckpoint, stack.StatusSucceeded)
+	withCheckpoint.CheckpointBytes = int64(len(body))
+
+	withoutCheckpoint := f.end(t, f.run(t, "u2", mutating(), "", 0), stack.StatusSucceeded)
+
+	// The preview ends failed to show the status does not matter: previews
+	// are never history and never carry a size.
+	preview := f.end(t, f.run(t, "p1", preview(), "", 0), stack.StatusFailed)
+
+	history := f.history(t)
+	if len(history) != 2 || !sameUpdate(history[0], withoutCheckpoint) || !sameUpdate(history[1], withCheckpoint) {
+		t.Fatalf("history = %+v, want [u2 u1] with checkpoint sizes", history)
+	}
+
+	// GetUpdate reports the same sizes, including 0 for the preview.
+	wants := []stack.Update{withCheckpoint, withoutCheckpoint, preview}
+	for i := range wants {
+		got, err := f.s.GetUpdate(t.Context(), f.ref, wants[i].ID)
+		if err != nil {
+			t.Fatalf("get update %s: %v", wants[i].ID, err)
+		}
+
+		if !sameUpdate(got, wants[i]) {
+			t.Fatalf("update %s = %+v, want %+v", wants[i].ID, got, wants[i])
+		}
+	}
+}
+
+// testHistorySizeFollowsRewrite checks that a later checkpoint write of the
+// running update changes the size history reports.
+func testHistorySizeFollowsRewrite(t *testing.T, f historyFixture) {
+	t.Helper()
+
+	u := f.run(t, "u1", mutating(), "", 0)
+
+	for _, body := range []string{`{"v":1}`, `{"v":1,"more":"a longer deployment"}`} {
+		f.putCheckpoint(t, u, body)
+
+		if got := f.historySize(t, u.ID); got != int64(len(body)) {
+			t.Fatalf("history size of %s = %d, want %d", u.ID, got, len(body))
+		}
+	}
+
+	done := f.end(t, u, stack.StatusSucceeded)
+	done.CheckpointBytes = int64(len(`{"v":1,"more":"a longer deployment"}`))
+	f.assertUpdate(t, done)
+}
+
+// testHistoryKinds checks that an import and a restore update appear in
+// history with their kinds.
+func testHistoryKinds(t *testing.T, f historyFixture) {
+	t.Helper()
+
+	f.end(
+		t,
+		f.run(t, "u1", stack.Plan{Kind: stack.KindImport, DryRun: false}, "alice@example.com", 0),
+		stack.StatusSucceeded,
+	)
+
+	restored := f.run(t, "u2", stack.Plan{Kind: stack.KindRestore, DryRun: false}, "", 1)
+	f.end(t, restored, stack.StatusSucceeded)
+
+	history := f.history(t)
+	if len(history) != 2 || history[0].ID != "u2" || history[0].Kind != stack.KindRestore ||
+		history[0].RestoredFrom != 1 || history[1].ID != "u1" || history[1].Kind != stack.KindImport {
+		t.Fatalf("history kinds = %+v, want [restore u2, import u1]", history)
+	}
+}
+
+// testHistoryCreateFenced checks that a create with a stale fence writes
+// nothing.
+func testHistoryCreateFenced(t *testing.T, f historyFixture) {
+	t.Helper()
+
+	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
+	u := newUpdate(f.ref, "fenced", mutating(), "alice@example.com", 0)
+
+	if err := f.s.CreateUpdate(t.Context(), u, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("create update with stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if _, err := f.s.GetUpdate(t.Context(), f.ref, "fenced"); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Fatalf("fenced update was created: err = %v, want ErrUpdateNotFound", err)
+	}
+
+	if history := f.history(t); len(history) != 0 {
+		t.Fatalf("history after a fenced create = %+v, want empty", history)
 	}
 }
 
@@ -1257,8 +1540,17 @@ func assertUpdate(t *testing.T, f fixture, want stack.Update) {
 func sameUpdate(a, b stack.Update) bool {
 	return a.ID == b.ID && a.Ref == b.Ref && a.Kind == b.Kind && a.Status == b.Status &&
 		a.DryRun == b.DryRun && a.Version == b.Version && a.Revision == b.Revision &&
-		a.Lease.Digest == b.Lease.Digest && sameTime(a.Lease.ExpiresAt, b.Lease.ExpiresAt) &&
-		sameTime(a.CreatedAt, b.CreatedAt) && sameTime(a.StartedAt, b.StartedAt) && sameTime(a.EndedAt, b.EndedAt)
+		a.CreatedBy == b.CreatedBy && a.RestoredFrom == b.RestoredFrom &&
+		a.CheckpointBytes == b.CheckpointBytes && sameLease(a.Lease, b.Lease) &&
+		sameUpdateTimes(a, b)
+}
+
+func sameLease(a, b stack.Lease) bool {
+	return a.Digest == b.Digest && sameTime(a.ExpiresAt, b.ExpiresAt)
+}
+
+func sameUpdateTimes(a, b stack.Update) bool {
+	return sameTime(a.CreatedAt, b.CreatedAt) && sameTime(a.StartedAt, b.StartedAt) && sameTime(a.EndedAt, b.EndedAt)
 }
 
 // sameTime compares instants, and requires a zero time to stay zero.

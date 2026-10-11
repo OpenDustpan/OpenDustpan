@@ -91,7 +91,7 @@ func now() time.Time {
 	return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC)
 }
 
-func newNamespace(t *testing.T, s Store, name string) namespace.Namespace {
+func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{

@@ -61,12 +61,17 @@ const (
 	KindDestroy        UpdateKind = "destroy"
 	KindImport         UpdateKind = "import"
 	KindResourceImport UpdateKind = "resource-import"
+	// KindRestore marks an update that copies the checkpoint of an older
+	// stack version into a new one. A restore mutates: it takes a version,
+	// holds the stack lock and appears in history. Issue #139 checks this
+	// wire value against the supported CLI versions.
+	KindRestore UpdateKind = "restore"
 )
 
 // ParseUpdateKind validates s as an update kind.
 func ParseUpdateKind(s string) (UpdateKind, error) {
 	switch k := UpdateKind(s); k {
-	case KindUpdate, KindPreview, KindRefresh, KindDestroy, KindImport, KindResourceImport:
+	case KindUpdate, KindPreview, KindRefresh, KindDestroy, KindImport, KindResourceImport, KindRestore:
 		return k, nil
 	default:
 		return "", fmt.Errorf("%w: kind %q", ErrInvalidUpdate, s)
@@ -184,6 +189,18 @@ type Update struct {
 	// Revision increases with every change. Stores accept a write only if they
 	// hold Revision-1, which makes every transition a compare-and-swap.
 	Revision int64
+	// CreatedBy is the subject of the principal that created the update. It
+	// is empty when the caller gave none, as with rows from before this
+	// field existed.
+	CreatedBy string
+	// RestoredFrom is the stack version that a restore copied. It is 0 for
+	// any update that is not a restore.
+	RestoredFrom int64
+	// CheckpointBytes is the size in bytes of the checkpoint the update
+	// saved. It is 0 when the update saved no checkpoint. ListUpdates and
+	// GetUpdate fill it from the update's checkpoint row; it is not stored
+	// on the update itself.
+	CheckpointBytes int64
 }
 
 // Mutates reports whether the update may change the stack's state: neither a
