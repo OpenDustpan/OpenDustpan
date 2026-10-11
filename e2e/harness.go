@@ -25,6 +25,7 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 )
@@ -49,6 +50,10 @@ const (
 	waitDelay      = 5 * time.Second
 	maxShown       = 2000
 	baseEnvEntries = 8
+	// testKeyEncryptionKey is the fixed key-encryption key every e2e server
+	// wraps data keys with. It is a test value only; operators configure a
+	// random key (ADR 23).
+	testKeyEncryptionKey = "0123456789abcdef0123456789abcdef"
 	// pulumiProject is the scratch YAML program. Its one resource is a stack
 	// reference to the other stack, which the engine serves from its built-in
 	// provider, so no provider plugin is downloaded.
@@ -119,6 +124,7 @@ type serverStore interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	secret.KeyStore
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -236,6 +242,17 @@ func newServer(
 		tb.Fatalf("authenticator: %v", err)
 	}
 
+	wrapper, err := secret.NewBuiltinWrapper([]byte(testKeyEncryptionKey))
+	if err != nil {
+		tb.Fatalf("key wrapper: %v", err)
+	}
+
+	// The start-up check refuses a key-encryption key that matches none of
+	// the wrapped keys in the database (ADR 23).
+	if checkErr := secret.CheckWrapper(ctx, st, wrapper); checkErr != nil {
+		tb.Fatalf("check key wrapper: %v", checkErr)
+	}
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -243,6 +260,8 @@ func newServer(
 		dustpan.WithUpdateStore(st),
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithAuthenticator(authn),
 	)
 	if err != nil {

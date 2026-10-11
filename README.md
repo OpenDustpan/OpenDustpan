@@ -75,6 +75,8 @@ value of `DUSTPAN_ADMIN_TOKEN`.
 | `--console-dir` | `DUSTPAN_CONSOLE_DIR` | (none) |
 | `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | (none) |
 | | `DUSTPAN_ADMIN_TOKEN` | required, at least 32 bytes |
+| | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
+| | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |
 
 ## Development
 

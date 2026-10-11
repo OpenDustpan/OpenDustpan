@@ -57,6 +57,7 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithUpdateStore(st),
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAllowedOrigins(origin),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
@@ -283,6 +284,7 @@ func TestNewServerRequiresPorts(t *testing.T) {
 		dustpan.WithUpdateStore(st),
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
 		dustpan.WithAuthenticator(authn),
 	}
 
@@ -295,7 +297,8 @@ func TestNewServerRequiresPorts(t *testing.T) {
 		{name: "update store", drop: 3},
 		{name: "checkpoint store", drop: 4},
 		{name: "event store", drop: 5},
-		{name: "authenticator", drop: 6},
+		{name: "secret key store", drop: 6},
+		{name: "authenticator", drop: 7},
 	}
 
 	for _, tc := range cases {
@@ -350,6 +353,7 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithUpdateStore(st),
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithConsoleDir(dir),
 	)
