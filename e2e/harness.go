@@ -372,6 +372,7 @@ func newServer(
 
 	blobs := openTestBlobStore(tb, dbPath)
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
+	target, targetName := openBackupTarget(tb, dbPath)
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
@@ -385,6 +386,7 @@ func newServer(
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithBackupTarget(target, targetName),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 	)
@@ -393,6 +395,29 @@ func newServer(
 	}
 
 	return srv.Handler(), st, workspaces
+}
+
+// openBackupTarget opens a backup target directory next to the database at
+// dbPath and returns it with its target name (dir:<path>), so the backup
+// routes write real backups in every environment. The directory is removed
+// when the test ends.
+func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
+	tb.Helper()
+
+	path := filepath.Join(filepath.Dir(dbPath), "backup-target")
+
+	target, err := fs.Open(path)
+	if err != nil {
+		tb.Fatalf("open backup target: %v", err)
+	}
+
+	tb.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			tb.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	return target, "dir:" + path
 }
 
 // newWorkspaceService returns the workspace use cases over st and blobs,
@@ -770,6 +795,21 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 	return resp.StatusCode, string(respBody), nil
 }
 
+// ServerAPIStatus sends one request to the installation API with the
+// environment's token as a Bearer credential and returns its status and
+// body. The installation API reads Bearer credentials, as OpenTofu sends
+// them.
+func (e *Env) ServerAPIStatus(ctx context.Context, method, path, body string) (int, string, error) {
+	return e.serverStatus(ctx, e.token, method, path, body)
+}
+
+// ServerAPIStatusBare sends one installation API request without credentials
+// and returns its status and body, for steps that prove a route needs a
+// token.
+func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int, string, error) {
+	return e.serverStatus(ctx, "", method, path, "")
+}
+
 // TFEStatus sends one request to the TFE-compatible API as the given token
 // and returns its status and body. The token travels as a Bearer credential,
 // as OpenTofu sends it. It uses the test server's client, which trusts the
@@ -1028,36 +1068,19 @@ func (e *Env) StartHeldUpdate(ctx context.Context, tb testing.TB, ns, project, n
 // snapshot while the export after cancel proves cancel kept the checkpoint.
 func (e *Env) SaveHeldCheckpoint(ctx context.Context, tb testing.TB, held HeldUpdate, exportStdout string) {
 	tb.Helper()
+	e.saveHeldDeployment(ctx, tb, held, exportStdout, map[string]string{"crashMarker": "crash-marker"})
+}
 
-	var doc struct {
-		Deployment map[string]any `json:"deployment"`
-		Version    int            `json:"version"`
-	}
-
-	if err := json.Unmarshal([]byte(exportStdout), &doc); err != nil {
-		tb.Fatalf("decode stack export: %v", err)
-	}
-
-	if doc.Deployment == nil {
-		tb.Fatalf("decode stack export: no deployment to save")
-	}
-
-	doc.Deployment["crashMarker"] = "crash-marker"
-
-	raw, err := json.Marshal(doc.Deployment)
-	if err != nil {
-		tb.Fatalf("encode crash checkpoint: %v", err)
-	}
-
-	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
-
-	e.apiCall(ctx, tb, apiRequest{
-		Method: http.MethodPatch,
-		Path:   prefix + "/update/" + held.ID + "/checkpoint",
-		Auth:   "update-token " + held.Lease,
-		Body:   fmt.Sprintf(`{"version":%d,"deployment":%s}`, doc.Version, raw),
-		Out:    nil,
-	})
+// SaveHeldPaddedCheckpoint saves the exported deployment into the held
+// update with the given extra deployment fields merged in, as the engine
+// would have before the CLI vanished. Tests use a large padding field to grow
+// the database, so a backup holds still running while the test starts another
+// one or stops the server.
+func (e *Env) SaveHeldPaddedCheckpoint(
+	ctx context.Context, tb testing.TB, held HeldUpdate, exportStdout string, extra map[string]string,
+) {
+	tb.Helper()
+	e.saveHeldDeployment(ctx, tb, held, exportStdout, extra)
 }
 
 // EndHeldUpdate completes the held update with status, releasing the stack
@@ -1741,6 +1764,86 @@ func (e *Env) savedLoginEnv(extra []string) []string {
 	}
 
 	return append(env, extra...)
+}
+
+// saveHeldDeployment saves the exported deployment with extra fields merged
+// into it through the checkpoint route with the held update's lease token.
+func (e *Env) saveHeldDeployment(
+	ctx context.Context, tb testing.TB, held HeldUpdate, exportStdout string, extra map[string]string,
+) {
+	tb.Helper()
+
+	var doc struct {
+		Deployment map[string]any `json:"deployment"`
+		Version    int            `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(exportStdout), &doc); err != nil {
+		tb.Fatalf("decode stack export: %v", err)
+	}
+
+	if doc.Deployment == nil {
+		tb.Fatalf("decode stack export: no deployment to save")
+	}
+
+	for key, value := range extra {
+		doc.Deployment[key] = value
+	}
+
+	raw, err := json.Marshal(doc.Deployment)
+	if err != nil {
+		tb.Fatalf("encode checkpoint: %v", err)
+	}
+
+	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
+
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPatch,
+		Path:   prefix + "/update/" + held.ID + "/checkpoint",
+		Auth:   "update-token " + held.Lease,
+		Body:   fmt.Sprintf(`{"version":%d,"deployment":%s}`, doc.Version, raw),
+		Out:    nil,
+	})
+}
+
+// serverStatus sends one installation API request and returns its status and
+// body. An empty token sends no Authorization header.
+func (e *Env) serverStatus(
+	ctx context.Context, token, method, path, body string,
+) (int, string, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return resp.StatusCode, string(respBody), nil
 }
 
 // clip shortens s for logs and reports.

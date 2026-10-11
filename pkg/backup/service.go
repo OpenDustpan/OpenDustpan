@@ -146,26 +146,111 @@ func NewService(cfg Config) (*Service, error) {
 // and writes backups/<id>/manifest.json last. A blob the target already holds
 // is not copied again. It returns ErrAlreadyRunning while another backup
 // runs. A failed backup marks its registry row failed with the error text and
-// leaves no manifest. It returns the finished registry row.
+// leaves no manifest. It returns the finished registry row. Run blocks until
+// the backup ends; Start begins one in the background instead.
 func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
-	if err := ctx.Err(); err != nil {
-		return Record{}, fmt.Errorf("run backup %s: %w", id, err)
-	}
-
-	if err := s.claim(); err != nil {
-		return Record{}, fmt.Errorf("run backup %s: %w", id, err)
+	started, err := s.begin(ctx, id)
+	if err != nil {
+		return Record{}, err
 	}
 
 	defer s.release()
 
+	if backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey); backupErr != nil {
+		return Record{}, s.markFailed(ctx, id, backupErr)
+	}
+
+	done, err := s.registry.FinishBackup(ctx, id, StateSucceeded, "", s.now().UTC())
+	if err != nil {
+		return Record{}, fmt.Errorf("finish backup %s: %w", id, err)
+	}
+
+	return done, nil
+}
+
+// Start begins backup id in the background and returns at once, so an HTTP
+// handler answers 202 before the backup ends. It claims the single backup
+// slot and stores id as a running row before it returns, so a second Start
+// while one runs answers ErrAlreadyRunning and a GET sees the row at once.
+// The background work detaches from ctx: a canceled request never stops the
+// backup. The result lands in the registry row, where Get and ReadManifest
+// show it: callers poll until the row leaves running.
+func (s *Service) Start(ctx context.Context, id ID) error {
+	started, err := s.begin(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	go s.finish(context.WithoutCancel(ctx), id, started)
+
+	return nil
+}
+
+// List returns every backup row, newest first, from the registry.
+func (s *Service) List(ctx context.Context) ([]Record, error) {
+	records, err := s.registry.ListBackups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list backups: %w", err)
+	}
+
+	return records, nil
+}
+
+// Get returns the backup row id, or ErrNotFound.
+func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
+	record, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return Record{}, fmt.Errorf("get backup %s: %w", id, err)
+	}
+
+	return record, nil
+}
+
+// ReadManifest returns the manifest of backup id from the target. A backup
+// without a readable manifest reports ErrCorrupt: only a complete backup
+// counts.
+func (s *Service) ReadManifest(ctx context.Context, id ID) (Manifest, error) {
+	manifest, err := readManifest(ctx, s.target, id)
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
+}
+
+// startedBackup holds the keys and start time of a claimed backup row. Run
+// uses them at once; Start hands them to its background work.
+type startedBackup struct {
+	dbKey       blob.Key
+	manifestKey blob.Key
+	startedAt   time.Time
+}
+
+// begin claims the single backup slot and stores id as a running row,
+// returning the keys and start time the backup writes. The caller holds the
+// slot: Run releases it when it returns, Start when its background work ends.
+// A begin error holds no slot, so the caller releases nothing.
+func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
+	if err := ctx.Err(); err != nil {
+		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
+	if err := s.claim(); err != nil {
+		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
+	}
+
 	dbKey, err := blob.ParseKey("backups/" + id.String() + "/db")
 	if err != nil {
-		return Record{}, fmt.Errorf("run backup %s: %w", id, err)
+		s.release()
+
+		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	manifestKey, err := blob.ParseKey("backups/" + id.String() + "/manifest.json")
 	if err != nil {
-		return Record{}, fmt.Errorf("run backup %s: %w", id, err)
+		s.release()
+
+		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
 	startedAt := s.now().UTC()
@@ -180,19 +265,33 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 	}
 
 	if createErr := s.registry.CreateBackup(ctx, create); createErr != nil {
-		return Record{}, fmt.Errorf("create backup %s: %w", id, createErr)
+		s.release()
+
+		return startedBackup{}, fmt.Errorf("create backup %s: %w", id, createErr)
 	}
 
-	if backupErr := s.backup(ctx, id, startedAt, dbKey, manifestKey); backupErr != nil {
-		return Record{}, s.markFailed(ctx, id, backupErr)
+	return startedBackup{dbKey: dbKey, manifestKey: manifestKey, startedAt: startedAt}, nil
+}
+
+// finish completes a backup that Start began: it exports the SQL part, copies
+// the named blobs, writes the manifest last, and records the result in the
+// registry row. It releases the slot when done. Errors land in the row, where
+// Get shows them to the operator.
+func (s *Service) finish(ctx context.Context, id ID, started startedBackup) {
+	defer s.release()
+
+	if backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey); backupErr != nil {
+		// Background result: the registry row records the outcome, and a
+		// finish failure leaves the row running for the next server start
+		// to mark failed.
+		_ = s.markFailed(ctx, id, backupErr) //nolint:errcheck // The row is the record.
+
+		return
 	}
 
-	done, err := s.registry.FinishBackup(ctx, id, StateSucceeded, "", s.now().UTC())
-	if err != nil {
-		return Record{}, fmt.Errorf("finish backup %s: %w", id, err)
-	}
-
-	return done, nil
+	// Background result, as above.
+	end := s.now().UTC()
+	_, _ = s.registry.FinishBackup(ctx, id, StateSucceeded, "", end) //nolint:errcheck // The row is the record.
 }
 
 // markFailed marks backup id failed with the error text. It returns the

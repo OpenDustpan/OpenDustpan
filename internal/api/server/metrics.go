@@ -20,8 +20,8 @@ type MetricsWriter interface {
 	Write(w io.Writer) error
 }
 
-// resolveServer returns the installation itself: the metrics route acts on
-// no namespace or unit.
+// resolveServer returns the installation itself: the metrics and backup
+// routes act on no namespace or unit.
 func resolveServer(_ http.ResponseWriter, _ *http.Request) (identity.Object, error) {
 	return identity.ServerObject(), nil
 }

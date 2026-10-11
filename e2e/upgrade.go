@@ -203,12 +203,13 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	}, os.Environ())
 
 	cfg := backendConfig{
-		bin:      binPath,
-		dbURL:    dbURL,
-		blobDir:  blobDir,
-		certFile: cert.cert,
-		keyFile:  cert.key,
-		tokens:   in.token + "," + in.tokenB,
+		bin:          binPath,
+		dbURL:        dbURL,
+		blobDir:      blobDir,
+		backupTarget: "",
+		certFile:     cert.cert,
+		keyFile:      cert.key,
+		tokens:       in.token + "," + in.tokenB,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 	proxy := startRecordingProxy(tb, in.rec, backendURL)

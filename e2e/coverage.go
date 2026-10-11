@@ -424,7 +424,8 @@ func (coverageMetrics) Write(_ io.Writer) error {
 	return nil
 }
 
-// coverageServerRoutes returns the installation adapter's route table.
+// coverageServerRoutes returns the installation adapter's route table: the
+// backup routes (ADR 30) and the metrics route (ADR 32).
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -510,7 +511,7 @@ type AllowEntry struct {
 // CLI version in the matrix can reach it; when the CLI gains a caller, the
 // entry goes and an e2e step proves the route.
 func CoverageAllowlist() []AllowEntry {
-	return []AllowEntry{
+	allowed := []AllowEntry{
 		{
 			Method: http.MethodGet, Path: "/api/inventory/units",
 			CoveringTest: "TestListUnitsBothTools",
@@ -573,6 +574,37 @@ func CoverageAllowlist() []AllowEntry {
 			Method: http.MethodGet, Path: "/health/ready",
 			CoveringTest: "TestHealthReadyOK",
 			Reason:       "Operator probe: no CLI calls it.",
+		},
+	}
+
+	return slices.Concat(allowed, backupAllowEntries())
+}
+
+// backupCoveringTest names the test that proves the backup routes instead of
+// a CLI: no CLI version in the matrix calls them.
+const backupCoveringTest = "TestBackups"
+
+// backupAllowEntries returns the operator backup routes that no CLI calls.
+// The harness steps of backupCoveringTest drive them directly.
+func backupAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/server/backups",
+			CoveringTest: backupCoveringTest,
+			Reason: "Operator route: no CLI starts a backup. The harness step " +
+				"starts one and checks the second start conflicts.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/backups",
+			CoveringTest: backupCoveringTest,
+			Reason: "Operator route: no CLI lists backups. The harness step " +
+				"lists them newest first.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/backups/{id}",
+			CoveringTest: backupCoveringTest,
+			Reason: "Operator route: no CLI reads a backup. The harness step " +
+				"polls it until it succeeds and checks the manifest.",
 		},
 	}
 }
