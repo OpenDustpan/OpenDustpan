@@ -103,6 +103,34 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 	return result.RowsAffected(), nil
 }
 
+const createSecretKey = `-- name: CreateSecretKey :execrows
+INSERT INTO secret_keys (namespace, stack_id, wrapper_id, ciphertext, created_at_ms)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT DO NOTHING
+`
+
+type CreateSecretKeyParams struct {
+	Namespace   string
+	StackID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
+}
+
+func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createSecretKey,
+		arg.Namespace,
+		arg.StackID,
+		arg.WrapperID,
+		arg.Ciphertext,
+		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createStack = `-- name: CreateStack :execrows
 INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -188,6 +216,16 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.StartedAtMs,
 		arg.EndedAtMs,
 	)
+	return err
+}
+
+const deleteSecretKeysOfStack = `-- name: DeleteSecretKeysOfStack :exec
+DELETE FROM secret_keys
+WHERE stack_id = $1
+`
+
+func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.Exec(ctx, deleteSecretKeysOfStack, stackID)
 	return err
 }
 
@@ -376,6 +414,30 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 		&i.Name,
 		&i.HomeRegion,
 		&i.FailoverVersion,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getSecretKey = `-- name: GetSecretKey :one
+SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
+FROM secret_keys
+WHERE namespace = $1 AND stack_id = $2
+`
+
+type GetSecretKeyParams struct {
+	Namespace string
+	StackID   string
+}
+
+func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (SecretKey, error) {
+	row := q.db.QueryRow(ctx, getSecretKey, arg.Namespace, arg.StackID)
+	var i SecretKey
+	err := row.Scan(
+		&i.Namespace,
+		&i.StackID,
+		&i.WrapperID,
+		&i.Ciphertext,
 		&i.CreatedAtMs,
 	)
 	return i, err
@@ -650,6 +712,32 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSecretWrapperIDs = `-- name: ListSecretWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM secret_keys
+ORDER BY wrapper_id
+`
+
+func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSecretWrapperIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var wrapper_id string
+		if err := rows.Scan(&wrapper_id); err != nil {
+			return nil, err
+		}
+		items = append(items, wrapper_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

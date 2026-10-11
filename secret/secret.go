@@ -112,6 +112,10 @@ type KeyStore interface {
 	CreateKey(ctx context.Context, k WrappedKey, fence namespace.Fence) (WrappedKey, error)
 	// GetKey returns the scope's key, or ErrKeyNotFound.
 	GetKey(ctx context.Context, scope Scope) (WrappedKey, error)
+	// ListWrapperIDs returns the distinct wrapper IDs of stored keys, ordered,
+	// for the start-up check that refuses a key-encryption key that matches
+	// none of them. It returns an empty list when no key exists.
+	ListWrapperIDs(ctx context.Context) ([]string, error)
 }
 
 // Config holds the dependencies of a Service.

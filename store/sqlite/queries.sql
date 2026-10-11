@@ -189,3 +189,22 @@ FROM update_events
 WHERE stack_id = ? AND update_id = ? AND sequence > ?
 ORDER BY sequence
 LIMIT ?;
+
+-- name: CreateSecretKey :execrows
+INSERT INTO secret_keys (namespace, stack_id, wrapper_id, ciphertext, created_at_ms)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetSecretKey :one
+SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
+FROM secret_keys
+WHERE namespace = ? AND stack_id = ?;
+
+-- name: ListSecretWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM secret_keys
+ORDER BY wrapper_id;
+
+-- name: DeleteSecretKeysOfStack :exec
+DELETE FROM secret_keys
+WHERE stack_id = ?;

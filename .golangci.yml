@@ -320,7 +320,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^store/storetest/|^blob/blobtest/)
+      - path: (_test\.go$|^store/storetest/|^blob/blobtest/|^secret/secrettest/)
         linters:
           - mnd
           - funlen
