@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -62,6 +63,13 @@ const (
 	tokenBytes     = 24
 	commandTimeout = 2 * time.Minute
 	waitDelay      = 5 * time.Second
+	// killWait bounds the wait for the recorded request that triggers the
+	// kill of a running CLI. It stays well under commandTimeout, so the
+	// kill and the reap always finish before the step times out.
+	killWait = time.Minute
+	// killPoll is how often the kill helper checks the recorder for the
+	// request it waits for.
+	killPoll       = 20 * time.Millisecond
 	maxShown       = 2000
 	baseEnvEntries = 8
 	// testKeyEncryptionKey is the fixed key-encryption key every e2e server
@@ -1054,6 +1062,100 @@ func (e *Env) RunIn(ctx context.Context, dir string, extra []string, args ...str
 	return res, nil
 }
 
+// KillSpec describes one CLI invocation killed at a recorded request: the
+// harness starts the CLI, waits until the recorder shows the request, kills
+// the process with SIGKILL and reaps it. The wait uses the recorder, never a
+// fixed sleep.
+type KillSpec struct {
+	// Name labels the subtest, the report row and the requests the run makes.
+	Name string
+	// Args are the CLI arguments.
+	Args []string
+	// Env holds extra NAME=value pairs for this run only.
+	Env []string
+	// Method is the HTTP method to wait for, for example POST.
+	Method string
+	// PathSuffix is the suffix of the request path to wait for, for example
+	// /actions/lock.
+	PathSuffix string
+}
+
+// WaitForRequest reports whether the recorder shows a request with method and
+// path suffix during step before ctx ends. It polls the recorder, never
+// sleeps a fixed time.
+func (e *Env) WaitForRequest(ctx context.Context, step, method, suffix string) bool {
+	for {
+		entries := e.Recorder.Entries()
+		for i := range entries {
+			if entries[i].Step == step && entries[i].Method == method &&
+				strings.HasSuffix(entries[i].Path, suffix) {
+				return true
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(killPoll):
+		}
+	}
+}
+
+// KillAtRequest runs the CLI with spec.Args and kills it with SIGKILL once
+// the recorder shows spec.Method with spec.PathSuffix during spec.Name. It
+// reaps the process, so no process stays behind, and records the run as the
+// spec.Name step. The step passes when the request arrived and the process
+// was reaped; the exit code of the killed process is reported, not checked.
+func (e *Env) KillAtRequest(ctx context.Context, t *testing.T, spec KillSpec) Result {
+	t.Helper()
+
+	var res Result
+
+	t.Run(spec.Name, func(t *testing.T) {
+		e.Recorder.SetStep(spec.Name)
+
+		var failure string
+
+		res, failure = e.runAndKill(ctx, spec)
+
+		e.steps = append(e.steps, StepResult{
+			Name:     spec.Name,
+			Command:  res.Command,
+			Failure:  failure,
+			Stderr:   clip(res.Stderr),
+			ExitCode: res.ExitCode,
+			Passed:   failure == "",
+			Skipped:  false,
+		})
+
+		t.Logf("%s (%s)\nstdout:\n%s\nstderr:\n%s", res.Command, res.Duration.Round(time.Millisecond),
+			clip(res.Stdout), clip(res.Stderr))
+
+		if failure != "" {
+			t.Errorf("%s: %s", spec.Name, failure)
+		}
+	})
+
+	return res
+}
+
+// joinFailure joins two failure texts without a leading separator.
+func joinFailure(first, second string) string {
+	if first == "" {
+		return second
+	}
+
+	return first + "; " + second
+}
+
+// WriteTofuConfig replaces the scenario's main.tf with content, so a step
+// can change the configuration without a new environment. Callers that add a
+// resource needing no provider download keep the run free of downloads.
+func (e *Env) WriteTofuConfig(tb testing.TB, content string) {
+	tb.Helper()
+	e.write(tb, filepath.Join(e.project, "main.tf"), content)
+}
+
 // StepSpec describes one scenario step.
 type StepSpec struct {
 	// Check inspects the run; nil means the exit code is enough.
@@ -1276,6 +1378,66 @@ func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpe
 	})
 
 	return res
+}
+
+// runAndKill starts the CLI with spec.Args, waits for the recorded request,
+// kills the process with SIGKILL and reaps it, so no process stays behind.
+// It returns the run and the step failure, or "" when the request arrived
+// and the process was reaped. The exit code of the killed process is
+// reported, not checked.
+func (e *Env) runAndKill(ctx context.Context, spec KillSpec) (Result, string) {
+	killCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+
+	//nolint:gosec // The binary is the CLI this suite downloaded and checksum-verified.
+	cmd := exec.CommandContext(killCtx, e.cli.Binary(), spec.Args...)
+	cmd.Dir = e.project
+	cmd.Env = e.cliEnv(spec.Env)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = waitDelay
+
+	res := Result{
+		Command:  e.cli.Tool + " " + strings.Join(spec.Args, " "),
+		Stdout:   "",
+		Stderr:   "",
+		Duration: 0,
+		ExitCode: 1,
+	}
+
+	start := time.Now()
+
+	if err := cmd.Start(); err != nil {
+		return res, fmt.Sprintf("start %s: %v", spec.Args, err)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(killCtx, killWait)
+	seen := e.WaitForRequest(waitCtx, spec.Name, spec.Method, spec.PathSuffix)
+	waitCancel()
+
+	failure := ""
+	if !seen {
+		failure = fmt.Sprintf("no %s %q recorded within %s", spec.Method, spec.PathSuffix, killWait)
+	}
+
+	if killErr := cmd.Process.Signal(syscall.SIGKILL); killErr != nil {
+		failure = joinFailure(failure, fmt.Sprintf("kill: %v", killErr))
+	}
+
+	// Reap the process, so the kill leaves none behind. The exit error of a
+	// killed process is the expected outcome, not a failure.
+	_ = cmd.Wait() //nolint:errcheck // The exit of a killed process is recorded below.
+	res.Stdout = stdout.String()
+	res.Stderr = stderr.String()
+	res.Duration = time.Since(start)
+
+	if cmd.ProcessState != nil {
+		res.ExitCode = cmd.ProcessState.ExitCode()
+	}
+
+	return res, failure
 }
 
 // apiCall sends one authenticated request and decodes a 200 JSON response
