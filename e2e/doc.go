@@ -23,6 +23,18 @@
 // proof for the milestone 2 exit test. Without the variable the suite runs
 // the same scenarios against an in-process TLS server for fast runs.
 //
+// In the binary mode the environment keeps the binary path, the backend
+// settings (database URL, blob directory, certificate and key files, tokens)
+// and the backend port. Env.DatabaseURL and Env.BlobDir offer the flag
+// values, so a test does not rebuild them. Env.RunBinary runs any
+// `opendustpan` subcommand as a child process against that database and blob
+// directory and returns its stdout, stderr and exit code; a non-zero exit is
+// a result, not a test failure. Env.StopServer ends the child with SIGTERM
+// and checks exit status 0. Env.StartServer starts the same binary again on
+// the same port, database, blob directory and certificate, so the recording
+// proxy target and the saved CLI logins stay valid. RunBinary, StopServer
+// and StartServer need E2E_SERVER=binary and fail the test otherwise.
+//
 // Environment variables:
 //
 //	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)

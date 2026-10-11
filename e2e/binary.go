@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,14 +240,26 @@ func runBinary(ctx context.Context, tb testing.TB, bin string, args, env []strin
 	}
 }
 
-// startBinaryBackend starts `opendustpan serve` with TLS on loopback and
-// returns its base URL. It fails the test when /healthz never answers 204.
-func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) string {
-	tb.Helper()
+// BinaryResult is the outcome of one server binary invocation. A non-zero
+// exit code is a result and not a test failure.
+type BinaryResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
 
-	port := freeBackendPort(ctx, tb)
+// binaryHandle is one running binary backend: its process, loopback port,
+// combined output and base URL.
+type binaryHandle struct {
+	cmd  *exec.Cmd
+	port string
+	logs *bytes.Buffer
+	url  string
+}
 
-	args := []string{
+// serveArgs returns the `serve` arguments for cfg on port.
+func serveArgs(cfg backendConfig, port string) []string {
+	return []string{
 		"serve",
 		"--database", cfg.dbURL,
 		"--listen", "127.0.0.1:" + port,
@@ -254,9 +268,16 @@ func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) s
 		"--blob-dir", cfg.blobDir,
 		"--region", region,
 	}
+}
+
+// launchBinaryBackend starts `opendustpan serve` for cfg on port and waits
+// until /healthz answers 204. It registers a cleanup that kills a child that
+// still runs, and logs the process output.
+func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, port string) *binaryHandle {
+	tb.Helper()
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
-	cmd := exec.CommandContext(ctx, cfg.bin, args...)
+	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = backendEnv(cfg.tokens)
 
 	var out bytes.Buffer
@@ -271,13 +292,143 @@ func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) s
 	tb.Cleanup(func() {
 		_ = cmd.Process.Kill() //nolint:errcheck // The serve process ends with the kill signal.
 		_ = cmd.Wait()         //nolint:errcheck // The killed process always reports an error.
+		tb.Logf("server binary output:\n%s", out.String())
 	})
 
 	backendURL := "https://127.0.0.1:" + port
 
 	waitForBackend(ctx, tb, backendURL, &out)
 
-	return backendURL
+	return &binaryHandle{cmd: cmd, port: port, logs: &out, url: backendURL}
+}
+
+// startBinaryBackend picks a loopback port, starts `opendustpan serve` with
+// TLS on it and returns the handle and its base URL. It fails the test when
+// /healthz never answers 204.
+func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) (*binaryHandle, string) {
+	tb.Helper()
+
+	port := freeBackendPort(ctx, tb)
+	handle := launchBinaryBackend(ctx, tb, cfg, port)
+
+	return handle, handle.url
+}
+
+// DatabaseURL returns the --database value of the binary environment, so a
+// test does not rebuild it for RunBinary. It needs E2E_SERVER=binary.
+func (e *Env) DatabaseURL(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("DatabaseURL needs E2E_SERVER=binary")
+	}
+
+	return e.backendCfg.dbURL
+}
+
+// BlobDir returns the --blob-dir value of the binary environment, so a test
+// does not rebuild it for RunBinary. It needs E2E_SERVER=binary.
+func (e *Env) BlobDir(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BlobDir needs E2E_SERVER=binary")
+	}
+
+	return e.backendCfg.blobDir
+}
+
+// RunBinary runs `opendustpan <args>` as a child process against the database
+// and the blob directory of the environment. It reuses the binary that
+// serverBinary built and the environment that backendEnv builds. Callers pass
+// the --database and --blob-dir flags the subcommand needs; DatabaseURL and
+// BlobDir offer the values. It needs E2E_SERVER=binary.
+func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) BinaryResult {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("RunBinary needs E2E_SERVER=binary")
+	}
+
+	//nolint:gosec // The binary is built from this repository by the suite itself.
+	cmd := exec.CommandContext(ctx, e.binPath, args...)
+	cmd.Env = backendEnv(e.backendCfg.tokens)
+
+	var stdout, stderr bytes.Buffer
+
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			tb.Fatalf("run binary %s: context done: %v", strings.Join(args, " "), err)
+		}
+
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			return BinaryResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitErr.ExitCode()}
+		}
+
+		tb.Fatalf("start binary %s: %v", strings.Join(args, " "), err)
+	}
+
+	return BinaryResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+}
+
+// StopServer ends the binary server with SIGTERM and checks that it exits
+// with status 0. The process output goes to the test log. It needs
+// E2E_SERVER=binary.
+func (e *Env) StopServer(ctx context.Context, tb testing.TB) {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("StopServer needs E2E_SERVER=binary")
+	}
+
+	if e.backendCmd == nil || e.backendCmd.Process == nil {
+		tb.Fatalf("StopServer: the server is not running")
+	}
+
+	cmd := e.backendCmd
+	logs := e.backendLogs
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		tb.Fatalf("stop server: %v", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			tb.Fatalf("context done while stopping the server: %v\n%s", err, logs.String())
+		}
+
+		tb.Fatalf("server did not exit with status 0: %v\n%s", err, logs.String())
+	}
+
+	tb.Logf("server binary output:\n%s", logs.String())
+
+	if code := cmd.ProcessState.ExitCode(); code != 0 {
+		tb.Fatalf("server exits with status %d, want 0\n%s", code, logs.String())
+	}
+
+	e.backendCmd = nil
+}
+
+// StartServer starts the same binary again on the same database, blob
+// directory, certificate and port, and waits for GET /healthz to answer 204.
+// It needs E2E_SERVER=binary.
+func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("StartServer needs E2E_SERVER=binary")
+	}
+
+	if e.backendCmd != nil {
+		tb.Fatalf("StartServer: the server still runs")
+	}
+
+	handle := launchBinaryBackend(ctx, tb, e.backendCfg, e.backendPort)
+	e.backendCmd = handle.cmd
+	e.backendLogs = handle.logs
 }
 
 // waitForBackend waits until the backend answers /healthz with 204.
@@ -401,14 +552,15 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		Namespace,
 	}, os.Environ())
 
-	backendURL := startBinaryBackend(ctx, tb, backendConfig{
+	cfg := backendConfig{
 		bin:      bin,
 		dbURL:    dbURL,
 		blobDir:  blobDir,
 		certFile: cert.cert,
 		keyFile:  cert.key,
 		tokens:   in.token + "," + in.tokenB,
-	})
+	}
+	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 	proxy := startRecordingProxy(tb, in.rec, backendURL)
 
 	client := proxy.Client()
@@ -434,6 +586,11 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		remoteProject: "",
 		steps:         nil,
 		tls:           true,
+		binPath:       bin,
+		backendCfg:    cfg,
+		backendPort:   handle.port,
+		backendCmd:    handle.cmd,
+		backendLogs:   handle.logs,
 	}
 
 	for _, d := range []string{env.home, env.project} {
