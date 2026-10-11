@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,7 @@ func updatePatterns() []string {
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
 		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
@@ -270,6 +272,15 @@ type updateFixture struct {
 func newUpdateFixture(t *testing.T, authz identity.Authorizer) updateFixture {
 	t.Helper()
 
+	return newUpdateFixtureWithLimit(t, authz, 0)
+}
+
+// newUpdateFixtureWithLimit builds a Handler as newUpdateFixture does, with
+// checkpoints bounded by limit bytes (zero means the domain default). Tests
+// for the checkpoint size limit use a small bound.
+func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit int) updateFixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -292,7 +303,7 @@ func newUpdateFixture(t *testing.T, authz identity.Authorizer) updateFixture {
 		Events:             mem,
 		Namespaces:         namespaces,
 		Now:                nil,
-		MaxCheckpointBytes: 0,
+		MaxCheckpointBytes: limit,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -392,38 +403,87 @@ func (f updateFixture) mintStarted(t *testing.T) (stack.UpdateID, string) {
 	return u.ID, started.Token.Reveal()
 }
 
-// updatePaths holds the start, lease and get paths for one update.
-type updatePaths struct {
-	Start    string
-	Renew    string
-	Events   string
-	Complete string
-	Get      string
+// mintStartedMutating creates and starts a mutating update and returns its
+// ID and lease token. Only mutating updates save checkpoints.
+func (f updateFixture) mintStartedMutating(t *testing.T) (stack.UpdateID, string) {
+	t.Helper()
+
+	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	started, err := f.updates.Start(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	return u.ID, started.Token.Reveal()
 }
 
-// mintedPaths returns the start, lease and get paths for one update.
+// updatePaths holds the lease, checkpoint and get paths for one update.
+type updatePaths struct {
+	Start      string
+	Renew      string
+	Events     string
+	Checkpoint string
+	Complete   string
+	Get        string
+}
+
+// mintedPaths returns the start, lease, checkpoint and get paths for one update.
 func mintedPaths(id stack.UpdateID) updatePaths {
 	base := "/api/stacks/acme/web/prod/update/" + id.String()
 
 	return updatePaths{
-		Start:    base,
-		Renew:    base + "/renew_lease",
-		Events:   base + "/events/batch",
-		Complete: base + "/complete",
-		Get:      base,
+		Start:      base,
+		Renew:      base + "/renew_lease",
+		Events:     base + "/events/batch",
+		Checkpoint: base + "/checkpoint",
+		Complete:   base + "/complete",
+		Get:        base,
 	}
 }
 
 // isLeasePattern reports whether pattern is a lease route: the lease token
 // stands in for sign-in on these routes only.
 func isLeasePattern(pattern string) bool {
-	for _, suffix := range []string{"/renew_lease", "/events/batch", "/complete"} {
+	for _, suffix := range []string{"/renew_lease", "/events/batch", "/checkpoint", "/complete"} {
 		if strings.HasSuffix(pattern, suffix) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// wantUpdateAction maps every update route to the action it must declare:
+// reads need unit:read, writes need unit:write.
+func wantUpdateAction() map[string]identity.Action {
+	write := map[string]bool{}
+	for _, pattern := range updatePatterns() {
+		write[pattern] = true
+	}
+
+	for _, pattern := range []string{
+		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
+		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
+		"GET /api/stacks/{namespace}/{project}/{stack}/export",
+	} {
+		write[pattern] = false
+	}
+
+	want := map[string]identity.Action{}
+
+	for pattern, isWrite := range write {
+		if isWrite {
+			want[pattern] = identity.ActionUnitWrite
+		} else {
+			want[pattern] = identity.ActionUnitRead
+		}
+	}
+
+	return want
 }
 
 // wantUpdateScope maps every update route to the scope it must declare.
@@ -441,13 +501,15 @@ func wantUpdateScope() map[string]pulumi.Scope {
 	return want
 }
 
-// checkUpdateRoute proves one route declares exactly unit:write with a
-// resolver and the expected scope.
-func checkUpdateRoute(t *testing.T, route pulumi.Route, want map[string]pulumi.Scope) {
+// checkUpdateRoute proves one route declares its action with a resolver and
+// the expected scope.
+func checkUpdateRoute(
+	t *testing.T, route pulumi.Route, wantScope map[string]pulumi.Scope, wantAction map[string]identity.Action,
+) {
 	t.Helper()
 
 	pattern := route.Method + " " + route.Path
-	scope, ok := want[pattern]
+	scope, ok := wantScope[pattern]
 
 	if !ok {
 		return
@@ -457,8 +519,8 @@ func checkUpdateRoute(t *testing.T, route pulumi.Route, want map[string]pulumi.S
 		t.Errorf("route %q scope = %v, want %v", pattern, route.Scope, scope)
 	}
 
-	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionUnitWrite {
-		t.Errorf("route %q actions = %v, want exactly [unit:write]", pattern, route.Actions)
+	if len(route.Actions) != 1 || route.Actions[0] != wantAction[pattern] {
+		t.Errorf("route %q actions = %v, want exactly [%s]", pattern, route.Actions, wantAction[pattern])
 	}
 
 	if route.Resolve == nil {
@@ -466,23 +528,25 @@ func checkUpdateRoute(t *testing.T, route pulumi.Route, want map[string]pulumi.S
 	}
 }
 
-// TestUpdateRoutesDeclareUnitWrite proves every update route declares
-// exactly unit:write on the unit, with a resolver and the expected scope:
-// the lease token stands in for sign-in on the lease routes only.
-func TestUpdateRoutesDeclareUnitWrite(t *testing.T) {
+// TestUpdateRoutesDeclareActions proves every update route declares its
+// action on the unit, with a resolver and the expected scope: reads declare
+// unit:read, writes declare unit:write, and the lease token stands in for
+// sign-in on the lease routes only.
+func TestUpdateRoutesDeclareActions(t *testing.T) {
 	t.Parallel()
 
 	f := newUpdateFixture(t, allowAll())
-	want := wantUpdateScope()
+	wantScope := wantUpdateScope()
+	wantAction := wantUpdateAction()
 	seen := map[string]bool{}
 
 	for _, route := range f.handler.Routes() {
 		pattern := route.Method + " " + route.Path
-		if _, ok := want[pattern]; ok {
+		if _, ok := wantScope[pattern]; ok {
 			seen[pattern] = true
 		}
 
-		checkUpdateRoute(t, route, want)
+		checkUpdateRoute(t, route, wantScope, wantAction)
 	}
 
 	for _, pattern := range updatePatterns() {
@@ -712,7 +776,7 @@ func checkUpdateRouteEnforcement(t *testing.T, pattern string) {
 		t.Fatalf("allowed request answers %d, want %d (%s)", status, http.StatusOK, resp)
 	}
 
-	denied := newUpdateFixture(t, selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWrite: true}})
+	denied := newUpdateFixture(t, selectiveAuthorizer{deny: map[identity.Action]bool{route.Actions[0]: true}})
 
 	status, resp = denied.doUpdate(t, accessRequest(route.Method, at.Target, at.Body))
 	if status != http.StatusForbidden {
@@ -779,19 +843,34 @@ func leaseBodies() map[string]string {
 	return map[string]string{
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  `{"duration":60}`,
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": `{"events":[]}`,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":  `{"version":3,"deployment":{}}`,
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     `{"status":"succeeded"}`,
 	}
 }
 
-// leaseTargets returns the renew, event and complete paths for one update.
+// leaseTargets returns the renew, event, checkpoint and complete paths for one update.
 func leaseTargets(id stack.UpdateID) map[string]string {
 	paths := mintedPaths(id)
 
 	return map[string]string{
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease":  paths.Renew,
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch": paths.Events,
+		"PATCH /api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint":  paths.Checkpoint,
 		"POST /api/stacks/{namespace}/{project}/{stack}/update/{update}/complete":     paths.Complete,
 	}
+}
+
+// mintForLease creates and starts the update that pattern needs: a mutating
+// update for the checkpoint route, which a preview never saves, and a preview
+// otherwise.
+func mintForLease(t *testing.T, f updateFixture, pattern string) (stack.UpdateID, string) {
+	t.Helper()
+
+	if strings.HasSuffix(pattern, "/checkpoint") {
+		return f.mintStartedMutating(t)
+	}
+
+	return f.mintStarted(t)
 }
 
 // checkLeaseRouteEnforcement proves one lease route answers 200 with a
@@ -810,7 +889,7 @@ func checkLeaseRouteEnforcement(t *testing.T, route pulumi.Route, pattern string
 		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitWrite: true}},
 	} {
 		f := newUpdateFixture(t, authz)
-		id, lease := f.mintStarted(t)
+		id, lease := mintForLease(t, f, pattern)
 		target := leaseTargets(id)[pattern]
 		status, resp := f.doUpdate(t, leaseRequest(route.Method, target, lease, body))
 
@@ -821,7 +900,7 @@ func checkLeaseRouteEnforcement(t *testing.T, route pulumi.Route, pattern string
 
 	// Without a usable lease the route answers 401.
 	f := newUpdateFixture(t, allowAll())
-	id, _ := f.mintStarted(t)
+	id, _ := mintForLease(t, f, pattern)
 	target := leaseTargets(id)[pattern]
 
 	foreign, err := token.New()
@@ -930,6 +1009,112 @@ func TestRenewLeaseEchoesToken(t *testing.T) {
 
 	if renewed.TokenExpiration <= 0 {
 		t.Fatalf("renew answers no expiry (%s)", body)
+	}
+}
+
+// checkpointPaths starts a mutating update and returns its paths with its
+// lease token.
+func checkpointPaths(t *testing.T, f updateFixture) (updatePaths, string) {
+	t.Helper()
+
+	id, lease := f.mintStartedMutating(t)
+
+	return mintedPaths(id), lease
+}
+
+// TestCheckpointCycle saves two checkpoints to a mutating update and proves
+// the last write wins: export returns the second deployment.
+func TestCheckpointCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	paths, lease := checkpointPaths(t, f)
+
+	first := `{"version":3,"deployment":{"resources":[{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"}]}}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Checkpoint, lease, first))
+	if status != http.StatusOK {
+		t.Fatalf("first checkpoint answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	const second = `{"resources":[]}`
+
+	status, body = f.doUpdate(
+		t,
+		leaseRequest(http.MethodPatch, paths.Checkpoint, lease, `{"version":3,"deployment":`+second+`}`),
+	)
+	if status != http.StatusOK {
+		t.Fatalf("second checkpoint answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK {
+		t.Fatalf("export answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var exported struct {
+		Deployment json.RawMessage `json:"deployment"`
+		Version    int             `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &exported); err != nil {
+		t.Fatalf("decode export: %v (%s)", err, body)
+	}
+
+	if exported.Version != 3 || string(exported.Deployment) != second {
+		t.Fatalf(
+			"export = version %d %s, want version 3 with the second deployment",
+			exported.Version,
+			exported.Deployment,
+		)
+	}
+}
+
+// TestCheckpointPreviewRejected proves a preview saves no checkpoint.
+func TestCheckpointPreviewRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	id, lease := f.mintStarted(t)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(
+		t,
+		leaseRequest(http.MethodPatch, paths.Checkpoint, lease, `{"version":3,"deployment":{}}`),
+	)
+	if status != http.StatusConflict {
+		t.Fatalf("preview checkpoint answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+}
+
+// TestCheckpointBodyLimit proves a checkpoint over the size limit answers
+// 413 with the limit in the message.
+func TestCheckpointBodyLimit(t *testing.T) {
+	t.Parallel()
+
+	const limit = 64
+
+	f := newUpdateFixtureWithLimit(t, allowAll(), limit)
+	paths, lease := checkpointPaths(t, f)
+
+	big := strings.Repeat("a", limit+1)
+	payload := `{"version":3,"deployment":"` + big + `"}`
+	status, body := f.doUpdate(t, leaseRequest(http.MethodPatch, paths.Checkpoint, lease, payload))
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	var decoded struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("decode error: %v (%s)", err, body)
+	}
+
+	if decoded.Code != http.StatusRequestEntityTooLarge || !strings.Contains(decoded.Message, strconv.Itoa(limit)) {
+		t.Fatalf("error = %+v, want code 413 with limit %d in the message", decoded, limit)
 	}
 }
 

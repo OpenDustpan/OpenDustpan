@@ -205,8 +205,8 @@ func (h *Handler) updateCreateRoutes() []Route {
 	return routes
 }
 
-// updateRunRoutes returns the start, lease, read, history and export routes
-// for an update.
+// updateRunRoutes returns the start, lease, checkpoint, read, history and
+// export routes for an update. Reads need unit:read; writes need unit:write.
 func (h *Handler) updateRunRoutes() []Route {
 	return []Route{
 		{
@@ -234,6 +234,17 @@ func (h *Handler) updateRunRoutes() []Route {
 			Serve:   h.recordEvents,
 		},
 		{
+			// The CLI sends whole checkpoints, and the last write wins. The
+			// server advertises no delta capability, so no sequence number
+			// arrives.
+			Method:  http.MethodPatch,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpoint",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.saveCheckpoint,
+		},
+		{
 			Method:  http.MethodPost,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
 			Scope:   ScopeUpdateLease,
@@ -245,7 +256,7 @@ func (h *Handler) updateRunRoutes() []Route {
 			Method:  http.MethodGet,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}",
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitWrite},
+			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.getUpdate,
 		},
@@ -253,7 +264,7 @@ func (h *Handler) updateRunRoutes() []Route {
 			Method:  http.MethodGet,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/updates",
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitWrite},
+			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.listHistory,
 		},
@@ -261,7 +272,7 @@ func (h *Handler) updateRunRoutes() []Route {
 			Method:  http.MethodGet,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/export",
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitWrite},
+			Actions: []identity.Action{identity.ActionUnitRead},
 			Resolve: resolveGetStack,
 			Serve:   h.exportStack,
 		},
