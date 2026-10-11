@@ -45,6 +45,7 @@ import (
 	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/inventory"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
@@ -213,6 +214,7 @@ type Server struct {
 	listenAddr  string
 	secrets     *secret.Service
 	workspaces  *workspace.Service
+	registry    *metrics.Registry
 	tlsCertFile string
 	tlsKeyFile  string
 }
@@ -267,12 +269,14 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	adapters, err := newAdapters(svc, cfg, base)
+	registry := metrics.NewRegistry()
+
+	adapters, err := newAdapters(svc, cfg, base, registry)
 	if err != nil {
 		return nil, err
 	}
 
-	handler, err := routes(adapters.pulumi, adapters.inventory, adapters.tfe, adapters.server, cfg)
+	handler, err := routes(adapters, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +287,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listenAddr:  cfg.listenAddr,
 		secrets:     svc.secrets,
 		workspaces:  svc.workspaces,
+		registry:    registry,
 		tlsCertFile: cfg.tlsCertFile,
 		tlsKeyFile:  cfg.tlsKeyFile,
 	}, nil
@@ -294,10 +299,13 @@ type adapters struct {
 	inventory http.Handler
 	tfe       http.Handler
 	server    http.Handler
+	ready     http.Handler
 }
 
-// newAdapters builds every HTTP adapter from the services and settings.
-func newAdapters(svc services, cfg settings, base baseurl.Resolver) (adapters, error) {
+// newAdapters builds every HTTP adapter from the services and settings. It
+// registers the readiness failure counter on registry; the metrics route of a
+// later issue scrapes the same registry.
+func newAdapters(svc services, cfg settings, base baseurl.Resolver, registry *metrics.Registry) (adapters, error) {
 	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
 		return adapters{}, err
@@ -318,7 +326,10 @@ func newAdapters(svc services, cfg settings, base baseurl.Resolver) (adapters, e
 		return adapters{}, err
 	}
 
-	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI}, nil
+	failures := registry.NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0)
+	ready := newReadinessHandler(cfg.namespaceStore, cfg.blobStore, readinessTimeout, failures, cfg.logger)
+
+	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI, ready: ready}, nil
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
@@ -344,6 +355,10 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	if cfg.authenticator == nil {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithAuthenticator", ErrMissingOption)
+	}
+
+	if cfg.namespaceStore == nil {
+		return baseurl.Resolver{}, fmt.Errorf("%w: WithNamespaceStore", ErrMissingOption)
 	}
 
 	if cfg.secretKeys == nil {
@@ -780,24 +795,27 @@ func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authe
 	})
 }
 
-func routes(api, units, tfeAPI, serverAPI http.Handler, cfg settings) (http.Handler, error) {
+func routes(a adapters, cfg settings) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory units route, the OpenTofu routes and the
 	// installation routes reach their own adapters while every other /api/
 	// route reaches Pulumi.
-	mux.Handle("/api/inventory/", withCORS(units, cfg.allowedOrigins))
-	mux.Handle("/api/v2/", withCORS(tfeAPI, cfg.allowedOrigins))
-	mux.Handle("/api/server/", withCORS(serverAPI, cfg.allowedOrigins))
-	mux.Handle("/api/", withCORS(api, cfg.allowedOrigins))
+	mux.Handle("/api/inventory/", withCORS(a.inventory, cfg.allowedOrigins))
+	mux.Handle("/api/v2/", withCORS(a.tfe, cfg.allowedOrigins))
+	mux.Handle("/api/server/", withCORS(a.server, cfg.allowedOrigins))
+	mux.Handle("/api/", withCORS(a.pulumi, cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter.
-	mux.Handle("GET /.well-known/terraform.json", tfeAPI)
+	mux.Handle("GET /.well-known/terraform.json", a.tfe)
 	// The probes have their own prefix, so that ingress controllers that serve
-	// /healthz themselves cannot answer for this server (ADR 34).
+	// /healthz themselves cannot answer for this server (ADR 34). Liveness
+	// checks nothing; readiness pings the store and the blob store. Both stay
+	// public.
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.Handle("GET /health/ready", a.ready)
 
 	if cfg.consoleDir != "" {
 		console, err := consoleHandler(cfg.consoleDir)
