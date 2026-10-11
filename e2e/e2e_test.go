@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -864,6 +865,12 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
+	// A crashed apply leaves the lock behind, and force-unlock recovers.
+	tofuCrashScenario(t, env)
+
+	// Destroy removes every resource and output with a new, higher serial.
+	tofuDestroyScenario(t, env)
+
 	tofuRemoteScenario(t, env)
 }
 
@@ -1155,4 +1162,419 @@ func checkTofuDiscovery(env *e2e.Env) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// tofuSlowConfig is the crash configuration: the built-in terraform_data
+// resource with a local-exec provisioner that sleeps, so an apply takes time
+// without a provider download. The greeting output stays, so the state after
+// recovery still holds it.
+func tofuSlowConfig(host string) string {
+	return `terraform {
+  cloud {
+    hostname     = ` + strconv.Quote(host) + `
+    organization = ` + strconv.Quote(e2e.Namespace) + `
+    workspaces {
+      name = ` + strconv.Quote(e2e.Workspace) + `
+    }
+  }
+}
+
+resource "terraform_data" "slow" {
+  provisioner "local-exec" {
+    command = "sleep 10"
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+`
+}
+
+// tofuCrashScenario proves recovery after a crashed apply: the harness kills
+// an apply at its lock request, the workspace stays locked, a plan fails on
+// the lock, force-unlock releases it, the next apply passes and no pending
+// version is current.
+func tofuCrashScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+
+	env.WriteTofuConfig(t, tofuSlowConfig(env.Host()))
+
+	// The harness kills the apply once the recorder shows its lock request,
+	// then reaps it, so no process stays behind.
+	env.KillAtRequest(ctx, t, e2e.KillSpec{
+		Name:       "crashed apply",
+		Args:       []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:        nil,
+		Method:     http.MethodPost,
+		PathSuffix: "/actions/lock",
+	})
+
+	// The killed apply never unlocked: the workspace is still locked.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkWorkspaceLocked,
+		Name:   "workspace still locked",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	// A plan now fails on the held lock: the CLI prints the lock failure and
+	// the lock request it made answers 409 with "is locked by User".
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: checkPlanLockedAfterCrash(env),
+		Name:  "plan fails on the crashed lock",
+		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
+		Env:   nil,
+		Fail:  true,
+	})
+
+	// Force-unlock as another principal releases the crashed lock.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check: nil,
+		Name:  "force-unlock after crash",
+		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:   env.TofuEnvB(),
+		Fail:  false,
+	})
+
+	// The next apply passes and the state holds the slow resource.
+	env.Step(ctx, t, step("apply after crash", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	env.Step(ctx, t, step("state pull after crash", checkStateHasSlowResource, "state", "pull"))
+
+	// No pending version is current: the current state version is finalized.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkCurrentFinalized,
+		Name:   "current state is finalized",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+}
+
+// tofuDestroyScenario proves destroy: it locks, uploads a new state version
+// with a higher serial and unlocks, leaving no resources and no outputs.
+func tofuDestroyScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+	before := currentSerial(ctx, t, env, wsID)
+
+	env.Step(
+		ctx,
+		t,
+		step("destroy", checkDestroyUploadsNewSerial(ctx, env, wsID, before), "destroy", "-auto-approve", "-no-color"),
+	)
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkWorkspaceUnlocked,
+		Name:   "workspace unlocked after destroy",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.Step(ctx, t, step("state pull after destroy", checkStateDestroyed, "state", "pull"))
+	env.Step(ctx, t, step("output after destroy", checkOutputDestroyed, "output", "-json", "-no-color"))
+}
+
+// workspaceLockedAttributes holds the locked flag of a workspace document.
+type workspaceLockedAttributes struct {
+	Locked bool `json:"locked"`
+}
+
+// workspaceLockedData holds the data object of a workspace document.
+type workspaceLockedData struct {
+	Attributes workspaceLockedAttributes `json:"attributes"`
+}
+
+// workspaceLockedDoc decodes a workspace document in tests.
+type workspaceLockedDoc struct {
+	Data workspaceLockedData `json:"data"`
+}
+
+// statePullResource is one resource of a pulled state.
+type statePullResource struct {
+	Type string `json:"type"`
+}
+
+// statePullDoc decodes a pulled state in tests.
+type statePullDoc struct {
+	Outputs   map[string]any      `json:"outputs"`
+	Resources []statePullResource `json:"resources"`
+}
+
+// currentStateAttributes holds the status and serial of a state version
+// document.
+type currentStateAttributes struct {
+	Status string `json:"status"`
+	Serial int64  `json:"serial"`
+}
+
+// currentStateData holds the data object of a state version document.
+type currentStateData struct {
+	Attributes currentStateAttributes `json:"attributes"`
+}
+
+// currentStateDoc decodes a state version document in tests.
+type currentStateDoc struct {
+	Data currentStateData `json:"data"`
+}
+
+// decodeWorkspaceLocked returns the locked flag of a workspace document.
+func decodeWorkspaceLocked(body string) (bool, error) {
+	var doc workspaceLockedDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return false, fmt.Errorf("%w: decode workspace: %w", errUnexpected, err)
+	}
+
+	return doc.Data.Attributes.Locked, nil
+}
+
+// checkWorkspaceLocked proves a workspace document holds locked true.
+func checkWorkspaceLocked(body string) error {
+	locked, err := decodeWorkspaceLocked(body)
+	if err != nil {
+		return err
+	}
+
+	if !locked {
+		return fmt.Errorf("%w: locked is false, want true", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkWorkspaceUnlocked proves a workspace document holds locked false.
+func checkWorkspaceUnlocked(body string) error {
+	locked, err := decodeWorkspaceLocked(body)
+	if err != nil {
+		return err
+	}
+
+	if locked {
+		return fmt.Errorf("%w: locked is true, want false", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkPlanLockedAfterCrash proves a plan fails on the crashed lock: the CLI
+// prints the lock failure and its lock request answers 409 with the holder.
+func checkPlanLockedAfterCrash(env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if out := r.Stdout + r.Stderr; !strings.Contains(out, "locked") {
+			return fmt.Errorf("%w: plan output lacks the lock failure: %s", errUnexpected, out)
+		}
+
+		entries := env.Recorder.Entries()
+		for i := range entries {
+			e := &entries[i]
+			if e.Step != "plan fails on the crashed lock" || e.Method != http.MethodPost ||
+				!strings.HasSuffix(e.Path, "/actions/lock") {
+				continue
+			}
+
+			if e.Status != http.StatusConflict {
+				return fmt.Errorf(
+					"%w: lock during plan answers %d, want %d",
+					errUnexpected,
+					e.Status,
+					http.StatusConflict,
+				)
+			}
+
+			if !strings.Contains(e.ResponseBody, "is locked by User") {
+				return fmt.Errorf("%w: lock detail lacks %q: %s", errUnexpected, "is locked by User", e.ResponseBody)
+			}
+
+			return nil
+		}
+
+		return fmt.Errorf("%w: plan made no lock request", errUnexpected)
+	}
+}
+
+// checkStateHasSlowResource proves the state after recovery holds the slow
+// resource and the greeting output.
+func checkStateHasSlowResource(r e2e.Result) error {
+	var doc statePullDoc
+
+	if err := json.Unmarshal([]byte(r.Stdout), &doc); err != nil {
+		return fmt.Errorf("%w: decode state: %w", errUnexpected, err)
+	}
+
+	slow := false
+
+	for _, res := range doc.Resources {
+		if res.Type == "terraform_data" {
+			slow = true
+		}
+	}
+
+	if !slow {
+		return fmt.Errorf("%w: state holds no terraform_data resource: %s", errUnexpected, r.Stdout)
+	}
+
+	if _, ok := doc.Outputs["greeting"]; !ok {
+		return fmt.Errorf("%w: state holds no greeting output: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
+}
+
+// checkCurrentFinalized proves the current state version is finalized: no
+// pending version is current.
+func checkCurrentFinalized(body string) error {
+	var doc currentStateDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode current state: %w", errUnexpected, err)
+	}
+
+	if doc.Data.Attributes.Status != "finalized" {
+		return fmt.Errorf("%w: current state is %q, want finalized", errUnexpected, doc.Data.Attributes.Status)
+	}
+
+	return nil
+}
+
+// fetchCurrentSerial returns the serial of the workspace's current state
+// version.
+func fetchCurrentSerial(ctx context.Context, env *e2e.Env, wsID string) (int64, error) {
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, "/api/v2/workspaces/"+wsID+"/current-state-version", "")
+	if err != nil {
+		return 0, err
+	}
+
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("%w: current state answers %d: %s", errUnexpected, status, body)
+	}
+
+	var doc currentStateDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return 0, fmt.Errorf("%w: decode current state: %w", errUnexpected, err)
+	}
+
+	return doc.Data.Attributes.Serial, nil
+}
+
+// currentSerial returns the serial of the workspace's current state version,
+// failing the test when the workspace has none.
+func currentSerial(ctx context.Context, t *testing.T, env *e2e.Env, wsID string) int64 {
+	t.Helper()
+
+	serial, err := fetchCurrentSerial(ctx, env, wsID)
+	if err != nil {
+		t.Fatalf("get current state: %v", err)
+	}
+
+	return serial
+}
+
+// destroyLocked reports whether the destroy step locked the workspace.
+func destroyLocked(env *e2e.Env) bool {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		if entries[i].Step == "destroy" && entries[i].Method == http.MethodPost &&
+			strings.HasSuffix(entries[i].Path, "/actions/lock") && entries[i].Status == http.StatusOK {
+			return true
+		}
+	}
+
+	return false
+}
+
+// destroyCreatedState reports whether the destroy step created a state
+// version.
+func destroyCreatedState(env *e2e.Env) bool {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		if entries[i].Step == "destroy" && entries[i].Method == http.MethodPost &&
+			strings.HasSuffix(entries[i].Path, "/state-versions") && entries[i].Status == http.StatusCreated {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkDestroyUploadsNewSerial proves destroy uploaded a new state version:
+// the current serial is higher than before, and the destroy step locked and
+// created a state version.
+func checkDestroyUploadsNewSerial(
+	ctx context.Context, env *e2e.Env, wsID string, before int64,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		after, err := fetchCurrentSerial(ctx, env, wsID)
+		if err != nil {
+			return err
+		}
+
+		if after <= before {
+			return fmt.Errorf("%w: serial %d after destroy, want higher than %d", errUnexpected, after, before)
+		}
+
+		if !destroyLocked(env) {
+			return fmt.Errorf("%w: destroy made no lock request", errUnexpected)
+		}
+
+		if !destroyCreatedState(env) {
+			return fmt.Errorf("%w: destroy created no state version", errUnexpected)
+		}
+
+		return nil
+	}
+}
+
+// checkStateDestroyed proves destroy emptied the state: no resources and no
+// outputs remain.
+func checkStateDestroyed(r e2e.Result) error {
+	var doc statePullDoc
+
+	if err := json.Unmarshal([]byte(r.Stdout), &doc); err != nil {
+		return fmt.Errorf("%w: decode state: %w", errUnexpected, err)
+	}
+
+	if len(doc.Resources) != 0 {
+		return fmt.Errorf("%w: state still holds %d resources: %s", errUnexpected, len(doc.Resources), r.Stdout)
+	}
+
+	if len(doc.Outputs) != 0 {
+		return fmt.Errorf("%w: state still holds outputs: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
+}
+
+// checkOutputDestroyed proves destroy removed every output: output -json
+// prints an empty object.
+func checkOutputDestroyed(r e2e.Result) error {
+	trimmed := strings.TrimSpace(r.Stdout)
+	if trimmed == "" {
+		trimmed = strings.TrimSpace(r.Stderr)
+	}
+
+	var outputs map[string]any
+
+	if err := json.Unmarshal([]byte(trimmed), &outputs); err != nil {
+		return fmt.Errorf("%w: decode output: %w (%s)", errUnexpected, err, r.Stdout)
+	}
+
+	if len(outputs) != 0 {
+		return fmt.Errorf("%w: output still holds %d entries: %s", errUnexpected, len(outputs), r.Stdout)
+	}
+
+	return nil
 }
