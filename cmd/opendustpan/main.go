@@ -112,6 +112,9 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		dustpan.WithRegion(namespace.Region(c.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(listen),
@@ -176,6 +179,9 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 type store interface {
 	namespace.Store
 	stack.Store
+	stack.UpdateStore
+	stack.CheckpointStore
+	stack.EventStore
 	close()
 }
 

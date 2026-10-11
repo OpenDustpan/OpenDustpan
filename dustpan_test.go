@@ -2,6 +2,7 @@ package dustpan_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	dustpan "opendustpan.org/opendustpan"
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/sqlite"
 )
 
@@ -52,6 +54,9 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAllowedOrigins(origin),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
@@ -254,6 +259,64 @@ func TestNewServerRequiresPorts(t *testing.T) {
 	if _, err := dustpan.NewServer(dustpan.WithRegion(region)); err == nil {
 		t.Fatal("NewServer without stores or authenticator succeeded")
 	}
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	authn, err := identity.NewStaticToken("admin", adminToken)
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	full := []dustpan.Option{
+		dustpan.WithRegion(region),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithAuthenticator(authn),
+	}
+
+	cases := []struct {
+		name string
+		drop int
+	}{
+		{name: "namespace store", drop: 1},
+		{name: "stack store", drop: 2},
+		{name: "update store", drop: 3},
+		{name: "checkpoint store", drop: 4},
+		{name: "event store", drop: 5},
+		{name: "authenticator", drop: 6},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := append([]dustpan.Option(nil), full[:tc.drop]...)
+			opts = append(opts, full[tc.drop+1:]...)
+
+			_, err := dustpan.NewServer(opts...)
+			if err == nil {
+				t.Fatalf("NewServer without %s succeeded", tc.name)
+			}
+
+			if !errors.Is(err, dustpan.ErrMissingOption) &&
+				!errors.Is(err, namespace.ErrMissingDependency) &&
+				!errors.Is(err, stack.ErrMissingDependency) {
+				t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption or ErrMissingDependency", tc.name, err)
+			}
+		})
+	}
 }
 
 func TestConsoleDir(t *testing.T) {
@@ -284,6 +347,9 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithConsoleDir(dir),
 	)
