@@ -85,6 +85,21 @@ func (r *Recorder) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// RedactSteps replaces the captured bodies of steps with a marker, so a
+// secret the CLI sent or received never reaches the report. Method, path,
+// status and step names stay, so the request log still shows what ran.
+func (r *Recorder) RedactSteps(steps ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.entries {
+		if slices.Contains(steps, r.entries[i].Step) {
+			r.entries[i].RequestBody = redacted
+			r.entries[i].ResponseBody = redacted
+		}
+	}
+}
+
 // record appends one finished request to the log.
 func (r *Recorder) record(seq int, step string, req *http.Request, in *capture, out *captureWriter) {
 	r.mu.Lock()

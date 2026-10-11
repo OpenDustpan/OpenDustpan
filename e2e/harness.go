@@ -723,6 +723,12 @@ func (e *Env) Store() Store {
 	return e.store
 }
 
+// ProjectDir returns the scratch project directory the CLI runs in, so tests
+// that read the stack file can find it.
+func (e *Env) ProjectDir() string {
+	return e.project
+}
+
 // Requested reports whether the CLI sent method path during step.
 func (e *Env) Requested(step, method, path string) bool {
 	entries := e.Recorder.Entries()
@@ -1266,6 +1272,40 @@ type StepSpec struct {
 	// Fail expects a non-zero exit. Check then inspects the failed run,
 	// for steps that prove an error message.
 	Fail bool
+	// Redact hides the step output from the log and the report, for steps
+	// that carry secrets. The check still sees the full Result.
+	Redact bool
+}
+
+// redacted marks a redacted step in logs, reports and recorded bodies, so a
+// secret value never reaches them.
+const redacted = "[redacted]"
+
+// loggedStdout returns what the test log shows for res under spec.
+func loggedStdout(res Result, spec StepSpec) string {
+	if spec.Redact {
+		return redacted
+	}
+
+	return clip(res.Stdout)
+}
+
+// loggedStderr returns what the test log shows for res under spec.
+func loggedStderr(res Result, spec StepSpec) string {
+	if spec.Redact {
+		return redacted
+	}
+
+	return clip(res.Stderr)
+}
+
+// storedStderr returns what the report stores for res under spec.
+func storedStderr(res Result, spec StepSpec) string {
+	if spec.Redact {
+		return redacted
+	}
+
+	return clip(res.Stderr)
 }
 
 // ParallelSpec describes one scenario step that runs several CLI invocations
@@ -1511,18 +1551,22 @@ func (e *Env) stepInWith(
 		default:
 		}
 
+		if spec.Redact {
+			e.Recorder.RedactSteps(spec.Name)
+		}
+
 		e.steps = append(e.steps, StepResult{
 			Name:     spec.Name,
 			Command:  res.Command,
 			Failure:  failure,
-			Stderr:   clip(res.Stderr),
+			Stderr:   storedStderr(res, spec),
 			ExitCode: res.ExitCode,
 			Passed:   failure == "",
 			Skipped:  false,
 		})
 
 		t.Logf("%s (%s)\nstdout:\n%s\nstderr:\n%s", res.Command, res.Duration.Round(time.Millisecond),
-			clip(res.Stdout), clip(res.Stderr))
+			loggedStdout(res, spec), loggedStderr(res, spec))
 
 		if failure != "" {
 			t.Errorf("%s: %s", res.Command, failure)
