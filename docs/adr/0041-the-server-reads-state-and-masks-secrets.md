@@ -163,13 +163,14 @@ with its fixed list of fields, is not part of this decision.
       terminal on purpose. It never overwrites a file that exists.
     - **Error.** When no key and no key file exist, no terminal is present
       and the opt-in is not set, `serve` stops before it opens the database.
-      The error names `--generate-key-encryption-key`,
-      `--key-encryption-key-file` and `DUSTPAN_KEY_ENCRYPTION_KEY`. The
-      server never makes a key without the prompt or the opt-in.
+      The error names each setting that helps: `--generate-key-encryption-key`
+      (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY`), `--key-encryption-key-file`
+      (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and `DUSTPAN_KEY_ENCRYPTION_KEY`.
+      The server never makes a key without the prompt or the opt-in.
     - **Made file.** The server writes 32 random bytes in base64 (ADR 23
       decision 2), readable by the owner only. At each start, a log line
-      names the path of the key file that the server uses. No log line holds
-      the key.
+      names the path of the key file that the server uses, also when the
+      opt-in made it. No log line holds the key.
     - **Containers.** The server does not block the single binary in a
       container. The documents for the reference container deployment
       strongly recommend a mounted key file or the environment variable.
