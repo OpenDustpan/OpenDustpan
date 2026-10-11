@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
+	"opendustpan.org/opendustpan/secret"
 	"opendustpan.org/opendustpan/stack"
 )
 
@@ -50,6 +51,7 @@ const (
 type Config struct {
 	Stacks        *stack.Service
 	Updates       *stack.Updates
+	Secrets       *secret.Service
 	Namespaces    *namespace.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
@@ -60,6 +62,7 @@ type Config struct {
 type Handler struct {
 	stacks     *stack.Service
 	updates    *stack.Updates
+	secrets    *secret.Service
 	namespaces *namespace.Service
 	authn      identity.Authenticator
 	authz      identity.Authorizer
@@ -75,6 +78,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: stack service", ErrMissingDependency)
 	case cfg.Updates == nil:
 		return nil, fmt.Errorf("%w: update service", ErrMissingDependency)
+	case cfg.Secrets == nil:
+		return nil, fmt.Errorf("%w: secret service", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Authenticator == nil:
@@ -88,6 +93,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		stacks:     cfg.Stacks,
 		updates:    cfg.Updates,
+		secrets:    cfg.Secrets,
 		namespaces: cfg.Namespaces,
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
@@ -109,12 +115,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-type capabilitiesResponse struct {
-	Capabilities []string `json:"capabilities"`
+type apiCapabilityConfig struct {
+	Capability string `json:"capability"`
 }
 
+type capabilitiesResponse struct {
+	Capabilities []apiCapabilityConfig `json:"capabilities"`
+}
+
+// batchEncryptionCapability advertises that the server encrypts and decrypts
+// secrets in batches. The CLI reads it as batch-encrypt and batches its
+// secrets calls when it sees it, falling back to one value per call when it
+// does not.
+const batchEncryptionCapability = "batch-encrypt"
+
 func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
-	h.writeJSON(r.Context(), w, http.StatusOK, capabilitiesResponse{Capabilities: []string{}})
+	h.writeJSON(r.Context(), w, http.StatusOK, capabilitiesResponse{
+		Capabilities: []apiCapabilityConfig{{Capability: batchEncryptionCapability}},
+	})
 }
 
 // organizationSummary is one namespace as the Pulumi CLI reads it: an
@@ -741,8 +759,30 @@ func classify(err error) (int, string) {
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, err.Error()
+	case errors.Is(err, secret.ErrTooLarge),
+		errors.Is(err, secret.ErrDecrypt),
+		errors.Is(err, secret.ErrKeyNotConfigured):
+		return classifySecret(err)
 	default:
 		return classifyUpdate(err)
+	}
+}
+
+// classifySecret maps the secrets errors to an HTTP status and a message
+// safe to show callers: a missing key-encryption key is a 500 that names the
+// setting, an oversized batch is a 413, a decryption failure a 400 without
+// detail (ADR 23). A missing key wraps both ErrDecrypt and
+// ErrKeyNotConfigured, so the key check runs before the decrypt check.
+func classifySecret(err error) (int, string) {
+	switch {
+	case errors.Is(err, secret.ErrKeyNotConfigured):
+		return http.StatusInternalServerError, err.Error()
+	case errors.Is(err, secret.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, err.Error()
+	case errors.Is(err, secret.ErrDecrypt):
+		return http.StatusBadRequest, err.Error()
+	default:
+		return http.StatusInternalServerError, err.Error()
 	}
 }
 

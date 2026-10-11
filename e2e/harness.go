@@ -434,6 +434,44 @@ func (e *Env) StackID(
 	return got.ID, resp.StatusCode, nil
 }
 
+// APIStatus sends one authenticated request and returns its status and body.
+// Checks that expect an error status use it: a decrypt with a foreign
+// ciphertext returns 400 with no test failure.
+func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, string, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "token "+e.token)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	client := &http.Client{Timeout: commandTimeout}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return resp.StatusCode, string(respBody), nil
+}
+
 // HeldUpdate is one update a scenario holds open through the API to prove
 // that a second update cannot start while it runs.
 type HeldUpdate struct {

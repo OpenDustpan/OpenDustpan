@@ -245,6 +245,7 @@ func newTestHandler(t *testing.T) *pulumi.Handler {
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       newUnusedUpdates(t, namespaces),
+		Secrets:       newTestSecrets(t, namespaces),
 		Namespaces:    namespaces,
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
@@ -280,6 +281,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       newEnforcingUpdates(t, namespaces),
+		Secrets:       newTestSecrets(t, namespaces),
 		Namespaces:    namespaces,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
@@ -515,7 +517,9 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 // Authorizer that denies a declared action each authorized route answers
 // 403, and each route answers 200 when allowed. Table-driven over all
 // routes. Update routes need live update state, so they are skipped here
-// and enforced by TestUpdateRoutesEnforce instead.
+// and enforced by TestUpdateRoutesEnforce instead. Secrets routes need live
+// stack state, so they are skipped here and enforced by
+// TestSecretsEnforceAuthorization instead.
 func TestRoutesEnforceAuthorization(t *testing.T) {
 	t.Parallel()
 
@@ -523,6 +527,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 
 	for _, route := range handler.Routes() {
 		if slices.Contains(updatePatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
@@ -1159,6 +1167,7 @@ func newDeleteHandler(
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       updates,
+		Secrets:       newTestSecrets(t, namespaces),
 		Namespaces:    namespaces,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},

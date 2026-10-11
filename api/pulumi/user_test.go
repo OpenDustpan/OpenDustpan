@@ -155,6 +155,7 @@ func newUserHandler(
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        stacks,
 		Updates:       newUnusedUpdates(t, namespaces),
+		Secrets:       newTestSecrets(t, namespaces),
 		Namespaces:    namespaces,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
