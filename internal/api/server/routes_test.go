@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can
@@ -92,18 +94,7 @@ func (stubMetrics) Write(w io.Writer) error {
 func newTestHandler(t *testing.T) *apiserver.Handler {
 	t.Helper()
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Backups:       nil,
-		Metrics:       stubMetrics{},
-	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-
-	return handler
+	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, runningSeed())
 }
 
 // newEnforcingHandler builds a Handler whose authorization the caller
@@ -112,11 +103,96 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
 	t.Helper()
 
+	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, runningSeed())
+}
+
+// testBackupID is the running backup the handler builders seed, so the
+// GET-by-id route answers 200 in the generic enforcement tests.
+const testBackupID = backup.ID("bkp-test00000000000001")
+
+// runningSeed returns a running backup row: the state a killed backup leaves,
+// which the next server start marks failed.
+func runningSeed() backup.Record {
+	return backup.Record{
+		StartedAt: time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		EndedAt:   time.Time{},
+		ID:        testBackupID,
+		Target:    "dir:test",
+		Error:     "",
+		State:     backup.StateRunning,
+	}
+}
+
+// newServiceBackedHandler builds a Handler with a real SQLite-backed backup
+// service over fresh stores, seeded with seeds. The registry starts with the
+// seeds, so tests that need rows pass them and tests that need an empty
+// registry pass none.
+func newServiceBackedHandler(
+	t *testing.T,
+	authn identity.Authenticator,
+	authz identity.Authorizer,
+	seeds ...backup.Record,
+) *apiserver.Handler {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	live, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open live store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := live.Close(); closeErr != nil {
+			t.Errorf("close live store: %v", closeErr)
+		}
+	})
+
+	target, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	service, err := backup.NewService(backup.Config{
+		Exporter:    st,
+		Registry:    st,
+		Blobs:       live,
+		Target:      target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	for _, seed := range seeds {
+		if seedErr := st.CreateBackup(t.Context(), seed); seedErr != nil {
+			t.Fatalf("seed backup %s: %v", seed.ID, seedErr)
+		}
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
+		Authenticator: authn,
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
-		Backups:       nil,
+		Backups:       service,
 		Metrics:       stubMetrics{},
 	})
 	if err != nil {
@@ -129,8 +205,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 // TestRoutesDeclareActions walks every registered route and fails for a
 // route with no declared action. It checks both directions: every served
 // pattern has a table row that passes the scope check, and every table row
-// is served. The table is empty at first, so the test passes vacuously; a
-// row without actions or a resolver still fails.
+// is served. A row without actions or a resolver still fails.
 func TestRoutesDeclareActions(t *testing.T) {
 	t.Parallel()
 
@@ -267,12 +342,14 @@ func probeRoute(t *testing.T, handler *apiserver.Handler, route apiserver.Route)
 	}
 }
 
-// routeRequest builds a valid request for route. token is sent as the
-// Authorization Bearer header when not empty.
+// routeRequest builds a valid request for route: the {id} placeholder holds
+// the seeded running backup, so the GET-by-id route answers 200 when allowed.
+// token is sent as the Authorization Bearer header when not empty.
 func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Request {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), route.Method, route.Path, http.NoBody)
+	path := strings.ReplaceAll(route.Path, "{id}", string(testBackupID))
+	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, http.NoBody)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -281,10 +358,20 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	return req
 }
 
+// wantSuccessStatus answers the success status of route: POST
+// /api/server/backups starts a backup in the background and answers 202,
+// every other route answers 200.
+func wantSuccessStatus(route apiserver.Route) int {
+	if route.Method == http.MethodPost && route.Path == "/api/server/backups" {
+		return http.StatusAccepted
+	}
+
+	return http.StatusOK
+}
+
 // TestRoutesEnforceAuthorization proves the table is enforced: with an
 // Authorizer that denies a declared action the route answers 403, and it
-// answers 200 when allowed. Table-driven over all routes. The table is empty
-// at first, so the test passes vacuously.
+// answers its success status when allowed. Table-driven over all routes.
 func TestRoutesEnforceAuthorization(t *testing.T) {
 	t.Parallel()
 
@@ -298,9 +385,9 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 	}
 }
 
-// checkRouteEnforcement proves one route enforces its row: it answers 200
-// when allowed, and an authorized route answers 403 when its actions are
-// denied.
+// checkRouteEnforcement proves one route enforces its row: it answers its
+// success status when allowed, and an authorized route answers 403 when its
+// actions are denied.
 func checkRouteEnforcement(t *testing.T, route apiserver.Route) {
 	t.Helper()
 
@@ -322,8 +409,8 @@ func checkRouteEnforcement(t *testing.T, route apiserver.Route) {
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	if want := wantSuccessStatus(route); rec.Code != want {
+		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
 	}
 
 	deny := map[identity.Action]bool{}
@@ -381,8 +468,7 @@ func (d denyObjectAuthorizer) Authorize(
 // TestRoutesAuthorizeDeclaredObject proves every authorized route asks for
 // its declared actions on the object its resolver returns: the recording
 // Authorizer sees each declared action on the resolved object, and denying
-// that object answers 403. The table is empty at first, so the test passes
-// vacuously; a row that authorizes another object still fails.
+// that object answers 403. A row that authorizes another object still fails.
 func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	t.Parallel()
 
@@ -449,8 +535,8 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 	rec = httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	if want := wantSuccessStatus(route); rec.Code != want {
+		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
 	}
 
 	for _, action := range route.Actions {
@@ -636,7 +722,18 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		t.Fatal("handler keeps another backup service, want the configured one")
 	}
 
-	if newTestHandler(t).Backups() != nil {
+	without, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: stubAuthenticator{},
+		Authorizer:    stubAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Backups:       nil,
+		Metrics:       stubMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("handler without a target: %v", err)
+	}
+
+	if without.Backups() != nil {
 		t.Fatal("handler without a backup target builds a backup service, want nil")
 	}
 }

@@ -77,12 +77,13 @@ type envInput struct {
 
 // backendConfig groups the settings of one backend process.
 type backendConfig struct {
-	bin      string
-	dbURL    string
-	blobDir  string
-	certFile string
-	keyFile  string
-	tokens   string
+	bin          string
+	dbURL        string
+	blobDir      string
+	backupTarget string
+	certFile     string
+	keyFile      string
+	tokens       string
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -263,9 +264,11 @@ type binaryHandle struct {
 	url  string
 }
 
-// serveArgs returns the `serve` arguments for cfg on port.
+// serveArgs returns the `serve` arguments for cfg on port. A backup target
+// joins them only when the environment configures one: the binary creates
+// the directory, so the test passes dir:<path> without creating it first.
 func serveArgs(cfg backendConfig, port string) []string {
-	return []string{
+	args := []string{
 		"serve",
 		databaseFlag, cfg.dbURL,
 		"--listen", "127.0.0.1:" + port,
@@ -274,6 +277,12 @@ func serveArgs(cfg backendConfig, port string) []string {
 		"--blob-dir", cfg.blobDir,
 		regionFlag, region,
 	}
+
+	if cfg.backupTarget != "" {
+		args = append(args, "--backup-target", cfg.backupTarget)
+	}
+
+	return args
 }
 
 // launchBinaryBackend starts `opendustpan serve` for cfg on port and waits
@@ -561,12 +570,13 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	}, os.Environ())
 
 	cfg := backendConfig{
-		bin:      bin,
-		dbURL:    dbURL,
-		blobDir:  blobDir,
-		certFile: cert.cert,
-		keyFile:  cert.key,
-		tokens:   in.token + "," + in.tokenB,
+		bin:          bin,
+		dbURL:        dbURL,
+		blobDir:      blobDir,
+		backupTarget: "dir:" + filepath.Join(in.dir, "backup-target"),
+		certFile:     cert.cert,
+		keyFile:      cert.key,
+		tokens:       in.token + "," + in.tokenB,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 	proxy := startRecordingProxy(tb, in.rec, backendURL)

@@ -170,7 +170,10 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show
-// callers.
+// callers. Backup errors carry fixed messages: registry and target failures
+// may hold driver text, so only the sentinel decides the status and the
+// message. A missing backup answers 404, a second start 409, and a server
+// with no backup target 500 that names the setting.
 func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -179,6 +182,15 @@ func classify(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, backup.ErrAlreadyRunning):
+		return http.StatusConflict, "a backup is already running"
+	case errors.Is(err, backup.ErrAlreadyExists):
+		return http.StatusConflict, "backup already exists"
+	case errors.Is(err, backup.ErrNotFound):
+		return http.StatusNotFound, "backup not found"
+	case errors.Is(err, errNoBackupTarget):
+		// No target is a setup problem of the server, not a bad request.
+		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
