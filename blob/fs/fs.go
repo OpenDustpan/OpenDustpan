@@ -24,6 +24,10 @@ const (
 	tmpNameSize = 16
 )
 
+// errPing reports that the blob directory does not answer. It holds no
+// credential and no path, so callers can log it.
+var errPing = errors.New("ping blob store: store not reachable")
+
 // Store is a blob.Store rooted at a local directory.
 type Store struct {
 	root *os.Root
@@ -122,6 +126,33 @@ func (s *Store) Delete(ctx context.Context, key blob.Key) error {
 
 	if err := s.removeIfExists(key.String()); err != nil {
 		return fmt.Errorf("delete %s: %w", key, err)
+	}
+
+	return nil
+}
+
+// Ping reports whether the directory exists and accepts writes. It writes a
+// temporary file and removes it, so no file is left behind.
+func (s *Store) Ping(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ping blob store: %w", err)
+	}
+
+	name, err := tempName()
+	if err != nil {
+		return errPing
+	}
+
+	f, err := s.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm)
+	if err != nil {
+		return errPing
+	}
+
+	closeErr := f.Close()
+	removeErr := s.removeIfExists(name)
+
+	if closeErr != nil || removeErr != nil {
+		return errPing
 	}
 
 	return nil

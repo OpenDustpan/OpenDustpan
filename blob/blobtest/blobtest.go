@@ -9,6 +9,7 @@ package blobtest
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -41,6 +42,11 @@ func Run(t *testing.T, newStore Factory) {
 	t.Run("delete removes and is idempotent", func(t *testing.T) {
 		t.Parallel()
 		testDelete(t, newStore(t))
+	})
+
+	t.Run("ping answers on a healthy store and fails on a canceled context", func(t *testing.T) {
+		t.Parallel()
+		testPing(t, newStore(t))
 	})
 }
 
@@ -94,6 +100,21 @@ func testDelete(t *testing.T, s blob.Store) {
 
 	if _, err := s.Get(t.Context(), key); !errors.Is(err, blob.ErrNotFound) {
 		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testPing(t *testing.T, s blob.Store) {
+	t.Helper()
+
+	if err := s.Ping(t.Context()); err != nil {
+		t.Fatalf("ping healthy store: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := s.Ping(ctx); err == nil {
+		t.Fatal("ping with canceled context = nil, want error")
 	}
 }
 
