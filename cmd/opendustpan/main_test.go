@@ -481,15 +481,32 @@ func startWithoutKeyOnEmptyDatabase(t *testing.T) {
 
 	setServeEnv(t, "")
 
-	err := startServer(
-		t,
-		"--database",
-		"sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"),
-		"--listen",
-		"127.0.0.1:0",
-	)
-	if err != nil {
-		t.Fatalf("serve without a key on an empty database: %v", err)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "dustpan.db")
+
+	err := serve(t.Context(), []string{"--database", "sqlite:" + dbPath}, io.Discard)
+	if err == nil || !errors.Is(err, errKeyGenerateRequired) {
+		t.Fatalf("serve without a key on an empty database: err = %v, want errKeyGenerateRequired", err)
+	}
+
+	for _, want := range []string{
+		"--generate-key-encryption-key",
+		"DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
+		"--key-encryption-key-file",
+		"DUSTPAN_KEY_ENCRYPTION_KEY_FILE",
+		keyEnvVar,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("serve without a key: err = %v, want it to name %s", err, want)
+		}
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "dustpan.key")); !os.IsNotExist(statErr) {
+		t.Fatal("serve without a key made the key file, want no file without the prompt or the opt-in")
+	}
+
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatal("serve without a key opened the database, want it to stop before the database opens")
 	}
 }
 
@@ -704,9 +721,10 @@ func TestServeBlobDir(t *testing.T) {
 
 	checkBlobDir(t, filepath.Join(dir, "blobs"))
 
-	// serve clears DUSTPAN_ADMIN_TOKEN after the read, so the second start
-	// in this process needs it again.
+	// serve clears DUSTPAN_ADMIN_TOKEN and DUSTPAN_KEY_ENCRYPTION_KEY after
+	// the read, so the second start in this process needs them again.
 	t.Setenv("DUSTPAN_ADMIN_TOKEN", adminTestToken)
+	t.Setenv(keyEnvVar, testKeyBase64())
 
 	custom := filepath.Join(dir, "custom-blobs")
 	customArgs := []string{
@@ -2510,7 +2528,7 @@ func setS3EnvForTest(t *testing.T) {
 
 //nolint:paralleltest // Serve reads process environment and binds a port.
 func TestServeWithS3BlobStore(t *testing.T) {
-	setServeEnv(t, "")
+	setServeEnv(t, testKeyBase64())
 	setS3Env(t)
 
 	fake := newS3Fake(true)
@@ -2566,7 +2584,7 @@ func TestServeWithS3BlobStore(t *testing.T) {
 
 //nolint:paralleltest // Serve reads process environment and binds a port.
 func TestServeRefusesS3WithoutConditionalWrites(t *testing.T) {
-	setServeEnv(t, "")
+	setServeEnv(t, testKeyBase64())
 	setS3Env(t)
 
 	fake := newS3Fake(false)

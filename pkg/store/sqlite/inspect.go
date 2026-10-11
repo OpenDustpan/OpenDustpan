@@ -56,7 +56,41 @@ func Inspect(ctx context.Context, path string) (schema.Inspection, error) {
 		return schema.Inspection{}, err
 	}
 
-	return migrate.Inspect(recorded, all), nil
+	holds, err := inspectHoldsOpenTofuState(ctx, conn)
+	if err != nil {
+		return schema.Inspection{}, err
+	}
+
+	inspection := migrate.Inspect(recorded, all)
+	inspection.HoldsOpenTofuState = holds
+
+	return inspection, nil
+}
+
+// inspectHoldsOpenTofuState reports whether the state_versions table exists
+// and holds at least one row. A database without that table holds no
+// OpenTofu state.
+func inspectHoldsOpenTofuState(ctx context.Context, conn *sql.DB) (bool, error) {
+	var exists int64
+
+	err := conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'state_versions'`,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check state_versions: %w", err)
+	}
+
+	if exists == 0 {
+		return false, nil
+	}
+
+	var count int64
+
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM state_versions`).Scan(&count); err != nil {
+		return false, fmt.Errorf("count state versions: %w", err)
+	}
+
+	return count > 0, nil
 }
 
 // inspectRecorded returns the recorded versions, ordered. It returns nothing

@@ -34,23 +34,10 @@ func Inspect(ctx context.Context, databaseURL string) (schema.Inspection, error)
 		return schema.Inspection{}, err
 	}
 
-	recorded, err := inspectRecorded(ctx, pool)
-	if err != nil {
-		return schema.Inspection{}, err
-	}
-
-	return migrate.Inspect(recorded, all), nil
-}
-
-// inspectRecorded returns the recorded versions, ordered, in one read-only
-// transaction. It returns nothing when the database has no
-// schema_migrations table, and it takes no migration lock.
-func inspectRecorded(ctx context.Context, pool *pgxpool.Pool) ([]int64, error) {
 	//nolint:exhaustruct_v5 // A read-only inspection sets only the access mode.
-	// Isolation, deferrability and begin text stay at the pgx defaults.
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, fmt.Errorf("begin read-only transaction: %w", err)
+		return schema.Inspection{}, fmt.Errorf("begin read-only transaction: %w", err)
 	}
 
 	defer func() {
@@ -59,9 +46,56 @@ func inspectRecorded(ctx context.Context, pool *pgxpool.Pool) ([]int64, error) {
 		}
 	}()
 
+	recorded, err := inspectRecorded(ctx, tx)
+	if err != nil {
+		return schema.Inspection{}, err
+	}
+
+	holds, err := inspectHoldsOpenTofuState(ctx, tx)
+	if err != nil {
+		return schema.Inspection{}, err
+	}
+
+	inspection := migrate.Inspect(recorded, all)
+	inspection.HoldsOpenTofuState = holds
+
+	return inspection, nil
+}
+
+// inspectHoldsOpenTofuState reports whether the state_versions table exists
+// and holds at least one row. A database without that table holds no
+// OpenTofu state.
+func inspectHoldsOpenTofuState(ctx context.Context, tx pgx.Tx) (bool, error) {
 	var exists bool
 
-	err = tx.QueryRow(ctx, `SELECT EXISTS (
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_name = 'state_versions'
+	)`).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check state_versions: %w", err)
+	}
+
+	if !exists {
+		return false, nil
+	}
+
+	var count int64
+
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM state_versions`).Scan(&count); err != nil {
+		return false, fmt.Errorf("count state versions: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// inspectRecorded returns the recorded versions, ordered, in the read-only
+// transaction. It returns nothing when the database has no
+// schema_migrations table, and it takes no migration lock.
+func inspectRecorded(ctx context.Context, tx pgx.Tx) ([]int64, error) {
+	var exists bool
+
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
 		SELECT 1 FROM information_schema.tables
 		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
 	)`).Scan(&exists)

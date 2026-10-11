@@ -33,6 +33,17 @@ protects secret values. Keep both values outside the server's data directory.
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
 `:8080`.
 
+Without `DUSTPAN_KEY_ENCRYPTION_KEY`, the server uses a key file. The default
+file is `dustpan.key` next to the database. On a terminal, `serve` asks for an
+explicit yes before it makes the file. Without a terminal, set
+`--generate-key-encryption-key`
+(`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`) to make the file with no prompt.
+The server never makes a key silently. An operator who loses the key file
+loses every secret that the key encrypts, and nobody can recover them. The
+default key file is in the data directory, so for production set
+`--key-encryption-key-file` to a path outside it, or set
+`DUSTPAN_KEY_ENCRYPTION_KEY`.
+
 ### Pulumi CLI
 
 Start the server:
@@ -270,6 +281,21 @@ docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
   -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY opendustpan:dev
 docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --server http://localhost:8080 acme
 ```
+
+For the reference container deployment, mount a key file or pass the
+environment variable. A mounted file outside the data volume needs the file
+flag to point at it:
+
+```sh
+docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
+  -v ./dustpan.key:/run/secrets/dustpan.key:ro \
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY_FILE=/run/secrets/dustpan.key \
+  opendustpan:dev
+```
+
+A key file next to the data does not protect a backup of that data. A backup
+without the key cannot restore secrets or OpenTofu state. Keep the key apart
+from the data and the backups.
 
 `make image-smoke` builds the image and runs the local smoke test. The test
 starts the container over TLS, checks the API (`/api/capabilities`) and the

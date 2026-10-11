@@ -96,4 +96,7 @@ type Inspection struct {
 	// Unknown holds the recorded versions the binary does not embed,
 	// ordered. It is empty when the database is equal or older.
 	Unknown []int64
+	// HoldsOpenTofuState reports whether the state_versions table exists
+	// and holds at least one row.
+	HoldsOpenTofuState bool
 }
