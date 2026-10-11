@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -166,8 +167,11 @@ type restoreStackResponse struct {
 // respects the stack lock, answering 409 while another update runs. A version
 // with no checkpoint answers 404. The version is a positive integer: any
 // other value answers 400. The update records the subject of the caller as
-// its creator (ADR 28 decision 5).
-func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+// its creator (ADR 28 decision 5). A success writes one info log line with
+// the action, the unit and the principal and an empty released value, and
+// never with the request path or query (ADR 28 decision 10, ADR 32 decision
+// 7). The handler owns the logger through its Config.
+func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, ok := h.updateRef(w, r)
@@ -192,6 +196,15 @@ func (h *Handler) restoreStack(w http.ResponseWriter, r *http.Request, p identit
 
 		return
 	}
+
+	h.logger.InfoContext(
+		ctx,
+		"restore completed",
+		slog.String("action", "restore"),
+		slog.String("object", obj.String()),
+		slog.String("principal", p.Subject),
+		slog.String("released", ""),
+	)
 
 	h.writeJSON(ctx, w, http.StatusOK, restoreStackResponse{UpdateID: u.ID.String()})
 }
@@ -425,8 +438,11 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 // cancelUpdate ends the update without its lease, as `pulumi cancel` does.
 // It is the only way to release a stack whose client vanished. Canceling an
 // already canceled update succeeds. The CLI authorizes with its access token,
-// so this route needs no lease token.
-func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+// so this route needs no lease token. A success writes one info log line with
+// the action, the unit, the principal and the freed update ID, and never with
+// the request path or query (ADR 28 decision 10, ADR 32 decision 7). The
+// handler owns the logger through its Config.
+func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
@@ -439,6 +455,15 @@ func (h *Handler) cancelUpdate(w http.ResponseWriter, r *http.Request, _ identit
 
 		return
 	}
+
+	h.logger.InfoContext(
+		ctx,
+		"cancel completed",
+		slog.String("action", "cancel"),
+		slog.String("object", obj.String()),
+		slog.String("principal", p.Subject),
+		slog.String("released", id.String()),
+	)
 
 	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
 }

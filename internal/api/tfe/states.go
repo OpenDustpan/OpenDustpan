@@ -439,9 +439,12 @@ func (h *Handler) downloadState(
 // with the new version and the message that no infrastructure changed. An
 // unknown ID and a version that is not finalized answer 404. A lock that
 // another principal holds answers 409 with a detail holding "is locked by
-// User" and the holder.
+// User" and the holder. A success writes one info log line with the action,
+// the unit and the principal and an empty released value, and never with the
+// request path or query (ADR 28 decision 10, ADR 32 decision 7). The handler
+// owns the logger through its Config.
 func (h *Handler) restoreStateVersion(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 	from := workspace.StateVersionID(r.PathValue("state_version_id"))
@@ -479,6 +482,15 @@ func (h *Handler) restoreStateVersion(
 
 		return
 	}
+
+	h.logger.InfoContext(
+		ctx,
+		"restore completed",
+		slog.String("action", "restore"),
+		slog.String("object", obj.String()),
+		slog.String("principal", p.Subject),
+		slog.String("released", ""),
+	)
 
 	h.writeJSON(ctx, w, http.StatusOK, restoreStateVersionDocument{
 		Data: doc,
