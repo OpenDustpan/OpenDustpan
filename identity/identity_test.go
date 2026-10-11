@@ -274,3 +274,113 @@ func TestAuthorizerConformance(t *testing.T) {
 
 	checkAuthorizer(t, testAuthorizer{})
 }
+
+// TestStaticTokensSingle proves one bootstrap token signs in as admin.
+func TestStaticTokensSingle(t *testing.T) {
+	t.Parallel()
+
+	token := strings.Repeat("a", 32)
+
+	authn, err := identity.NewStaticTokens(token)
+	if err != nil {
+		t.Fatalf("one token: %v", err)
+	}
+
+	got, err := authn.AuthenticateToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("one token signs in: %v", err)
+	}
+
+	if got.Subject != "admin" || got.DisplayName != "admin" || !got.Admin {
+		t.Fatalf("one token signs in as %+v, want admin", got)
+	}
+}
+
+// TestStaticTokensTwo proves two bootstrap tokens sign in as two distinct
+// administrators, and a third token signs in as admin-3.
+func TestStaticTokensTwo(t *testing.T) {
+	t.Parallel()
+
+	first := strings.Repeat("a", 32)
+	second := strings.Repeat("b", 32)
+	third := strings.Repeat("c", 32)
+
+	authn, err := identity.NewStaticTokens(first, second, third)
+	if err != nil {
+		t.Fatalf("three tokens: %v", err)
+	}
+
+	gotA, err := authn.AuthenticateToken(t.Context(), first)
+	if err != nil {
+		t.Fatalf("first token signs in: %v", err)
+	}
+
+	gotB, err := authn.AuthenticateToken(t.Context(), second)
+	if err != nil {
+		t.Fatalf("second token signs in: %v", err)
+	}
+
+	gotC, err := authn.AuthenticateToken(t.Context(), third)
+	if err != nil {
+		t.Fatalf("third token signs in: %v", err)
+	}
+
+	if gotA.Subject != "admin" || !gotA.Admin {
+		t.Fatalf("first token signs in as %+v, want admin", gotA)
+	}
+
+	if gotB.Subject != "admin-2" || !gotB.Admin {
+		t.Fatalf("second token signs in as %+v, want admin-2", gotB)
+	}
+
+	if gotC.Subject != "admin-3" || !gotC.Admin {
+		t.Fatalf("third token signs in as %+v, want admin-3", gotC)
+	}
+
+	if gotA.Subject == gotB.Subject {
+		t.Fatalf("both tokens sign in as %q, want distinct subjects", gotA.Subject)
+	}
+}
+
+// TestStaticTokensUnknown proves a wrong token is ErrUnauthenticated.
+func TestStaticTokensUnknown(t *testing.T) {
+	t.Parallel()
+
+	authn, err := identity.NewStaticTokens(strings.Repeat("a", 32))
+	if err != nil {
+		t.Fatalf("one token: %v", err)
+	}
+
+	if _, err := authn.AuthenticateToken(t.Context(), strings.Repeat("z", 32)); !errors.Is(
+		err,
+		identity.ErrUnauthenticated,
+	) {
+		t.Fatalf("wrong token = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// TestStaticTokensWeak proves a short token, an empty entry from a
+// trailing comma, and a duplicate token are ErrWeakToken.
+func TestStaticTokensWeak(t *testing.T) {
+	t.Parallel()
+
+	first := strings.Repeat("a", 32)
+	second := strings.Repeat("b", 32)
+
+	if _, err := identity.NewStaticTokens("short"); !errors.Is(err, identity.ErrWeakToken) {
+		t.Fatalf("short token = %v, want ErrWeakToken", err)
+	}
+
+	trailing := strings.Split(first+",", ",")
+	if _, err := identity.NewStaticTokens(trailing...); !errors.Is(err, identity.ErrWeakToken) {
+		t.Fatalf("trailing comma = %v, want ErrWeakToken", err)
+	}
+
+	if _, err := identity.NewStaticTokens(first, second, first); !errors.Is(err, identity.ErrWeakToken) {
+		t.Fatalf("duplicate token = %v, want ErrWeakToken", err)
+	}
+
+	if _, err := identity.NewStaticTokens(); !errors.Is(err, identity.ErrWeakToken) {
+		t.Fatalf("no token = %v, want ErrWeakToken", err)
+	}
+}

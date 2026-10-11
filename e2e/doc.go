@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e drives real Pulumi CLI and OpenTofu binaries against an
-// in-process OpenDustpan server and records every HTTP request they make.
+// OpenDustpan server and records every HTTP request they make.
 //
 // Neither the Pulumi CLI API nor the TFE-compatible API that OpenTofu's cloud
 // block speaks is a published specification, so this suite is the only
@@ -16,6 +16,13 @@
 // only. CLI archives are downloaded once into a cache directory and verified
 // against sha256 checksums before use.
 //
+// With E2E_SERVER=binary the server is the real cmd/opendustpan binary,
+// built once and run with --tls-cert, --tls-key, a database and a blob
+// directory, fronted by a recording proxy. The CLI trusts the proxy through
+// SSL_CERT_FILE with a generated certificate. The binary variant is the
+// proof for the milestone 2 exit test. Without the variable the suite runs
+// the same scenarios against an in-process TLS server for fast runs.
+//
 // Environment variables:
 //
 //	E2E_PULUMI_VERSIONS  comma-separated versions, or "latest" (default: see Pulumi)
@@ -26,4 +33,6 @@
 //	                           schema (default: postgres runs are skipped)
 //	E2E_CACHE_DIR        where CLI archives are cached (default: user cache dir)
 //	E2E_REPORT_DIR       where the request log and summary are written (default: ./report)
+//	E2E_SERVER           "binary" runs the real server binary with TLS flags (default:
+//	                     in-process server; the binary variant is the exit-test proof)
 package e2e
