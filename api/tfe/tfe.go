@@ -239,13 +239,16 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 }
 
 // discovery serves GET /.well-known/terraform.json. It advertises tfe.v2
-// at /api/v2/ and nothing else: there is no login.v1 service. OpenTofu
-// requires the application/json media type.
+// and tfe.v2.1 at /api/v2/ and nothing else: the cloud block reads tfe.v2,
+// the remote backend reads tfe.v2.1, and there is no login.v1 service.
+// OpenTofu requires the application/json media type.
 func (h *Handler) discovery(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
-	if err := json.NewEncoder(w).Encode(map[string]string{"tfe.v2": "/api/v2/"}); err != nil {
+	doc := map[string]string{"tfe.v2": "/api/v2/", "tfe.v2.1": "/api/v2/"}
+
+	if err := json.NewEncoder(w).Encode(doc); err != nil {
 		h.logger.WarnContext(r.Context(), "write response failed", slog.String("error", err.Error()))
 	}
 }

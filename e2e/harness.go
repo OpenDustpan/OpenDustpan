@@ -48,6 +48,12 @@ const (
 	Workspace = "e2e-workspace"
 	// Subject is the principal the access token authenticates as.
 	Subject = "admin"
+	// RemotePrefix is the workspace prefix the remote-backend part uses.
+	RemotePrefix = "e2e-"
+	// RemoteDev is the short name of the first remote workspace.
+	RemoteDev = "dev"
+	// RemoteProd is the short name of the second remote workspace.
+	RemoteProd = "prod"
 	// SubjectB is the second principal for lock tests. Both principals are
 	// administrators, so the AdminOnly authorizer allows both.
 	SubjectB = "member"
@@ -79,6 +85,23 @@ const (
     organization = %q
     workspaces {
       name = %q
+    }
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+`
+	// tofuRemoteConfig uses the remote backend with a workspace prefix, so
+	// workspace new, list and select run without tags. It declares no
+	// providers so nothing is downloaded.
+	tofuRemoteConfig = `terraform {
+  backend "remote" {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      prefix = %q
     }
   }
 }
@@ -126,7 +149,9 @@ type Env struct {
 	tokenB     string
 	home       string
 	project    string
-	steps      []StepResult
+	// remoteProject holds the remote-backend part in its own directory.
+	remoteProject string
+	steps         []StepResult
 }
 
 // serverStore is every persistence port the server needs.
@@ -179,18 +204,19 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	client.Timeout = commandTimeout
 
 	env := &Env{
-		URL:        ts.URL,
-		Recorder:   rec,
-		cli:        cli,
-		store:      store,
-		server:     st,
-		client:     client,
-		workspaces: workspaces,
-		token:      token,
-		tokenB:     tokenB,
-		home:       filepath.Join(dir, "home"),
-		project:    filepath.Join(dir, "project"),
-		steps:      nil,
+		URL:           ts.URL,
+		Recorder:      rec,
+		cli:           cli,
+		store:         store,
+		server:        st,
+		client:        client,
+		workspaces:    workspaces,
+		token:         token,
+		tokenB:        tokenB,
+		home:          filepath.Join(dir, "home"),
+		project:       filepath.Join(dir, "project"),
+		remoteProject: "",
+		steps:         nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -979,6 +1005,13 @@ type apiRequest struct {
 // NAME=value pairs added to the environment. A non-zero exit is reported in the
 // Result, not as an error.
 func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, error) {
+	return e.RunIn(ctx, e.project, extra, args...)
+}
+
+// RunIn executes the CLI in dir and returns what it printed. extra holds
+// NAME=value pairs added to the environment. A non-zero exit is reported in
+// the Result, not as an error.
+func (e *Env) RunIn(ctx context.Context, dir string, extra []string, args ...string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
@@ -986,7 +1019,7 @@ func (e *Env) Run(ctx context.Context, extra []string, args ...string) (Result, 
 
 	//nolint:gosec // The binary is the CLI this suite downloaded and checksum-verified.
 	cmd := exec.CommandContext(ctx, e.cli.Binary(), args...)
-	cmd.Dir = e.project
+	cmd.Dir = dir
 	cmd.Env = e.cliEnv(extra)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1162,6 +1195,43 @@ func parallelExit(res []Result, failure string) int {
 func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 	t.Helper()
 
+	return e.StepIn(ctx, t, e.project, spec)
+}
+
+// RemoteStep runs spec in the remote-backend directory as a subtest. It
+// fails the same way as Step.
+func (e *Env) RemoteStep(ctx context.Context, t *testing.T, spec StepSpec) Result {
+	t.Helper()
+
+	if e.remoteProject == "" {
+		t.Fatal("remote project is not written")
+	}
+
+	return e.StepIn(ctx, t, e.remoteProject, spec)
+}
+
+// WriteRemoteProject writes the remote-backend part in its own directory, so
+// workspace new, list and select run apart from the cloud-block part.
+func (e *Env) WriteRemoteProject(tb testing.TB) string {
+	tb.Helper()
+
+	dir := filepath.Join(filepath.Dir(e.project), "project-remote")
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		tb.Fatalf("create %s: %v", dir, err)
+	}
+
+	e.write(tb, filepath.Join(dir, "main.tf"), fmt.Sprintf(tofuRemoteConfig, e.Host(), Namespace, RemotePrefix))
+	e.remoteProject = dir
+
+	return dir
+}
+
+// StepIn runs spec in dir as a subtest. It fails the subtest on an
+// unexpected exit or when spec.Check returns an error, and records the
+// outcome for the report. A failing step does not stop later steps.
+func (e *Env) StepIn(ctx context.Context, t *testing.T, dir string, spec StepSpec) Result {
+	t.Helper()
+
 	var res Result
 
 	t.Run(spec.Name, func(t *testing.T) {
@@ -1171,7 +1241,7 @@ func (e *Env) Step(ctx context.Context, t *testing.T, spec StepSpec) Result {
 
 		var err error
 
-		res, err = e.Run(ctx, spec.Env, spec.Args...)
+		res, err = e.RunIn(ctx, dir, spec.Env, spec.Args...)
 
 		switch {
 		case err != nil:
