@@ -764,8 +764,9 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
-// backup target is configured, else nil, the maintenance service, and the
-// registry that the metrics route writes.
+// backup target is configured, else nil, the maintenance service, the
+// registry that the metrics route writes, the server version and the schema
+// store that the upgrade check reads.
 func newServerHandler(
 	cfg settings,
 	svc services,
@@ -781,12 +782,30 @@ func newServerHandler(
 		Backups:       backups,
 		Maintenance:   maint,
 		Metrics:       observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// schemaReporterOf returns the schema reporter of the namespace store, or
+// nil when the store does not report applied migrations. Both SQL adapters
+// report them.
+//
+// caller keeps the interface the installation API consumes.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
+	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
 }
 
 // newBackupService builds the installation backup service when a backup

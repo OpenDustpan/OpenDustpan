@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -41,6 +42,10 @@ const (
 	backupPollInterval = 200 * time.Millisecond
 	// backupRequestTimeout bounds one backup API request.
 	backupRequestTimeout = 30 * time.Second
+	// maxClientBodyBytes caps one installation API answer a client command
+	// reads: 1 MiB, far above the small JSON documents the routes answer. A
+	// hostile or broken server cannot grow the client without bound.
+	maxClientBodyBytes = 1 << 20
 )
 
 // Sentinel errors of the backup subcommand. Each error text names what
@@ -60,6 +65,10 @@ var (
 	errBackupStart = errors.New("start backup failed")
 	// errBackupRead reports a backup row that never arrived.
 	errBackupRead = errors.New("read backup failed")
+	// errResponseTooLarge reports a server answer above maxClientBodyBytes.
+	// The body may come from a hostile or broken server, so the client
+	// refuses it instead of growing without bound.
+	errResponseTooLarge = errors.New("server answered more data than the client reads")
 )
 
 // rerunHelp names the one command that helps after a backup error: the
@@ -257,12 +266,41 @@ func backupAuth(req *http.Request, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 }
 
+// decodeCappedJSON decodes one installation API answer from r, reading at
+// most maxClientBodyBytes. A larger body is an error wrapping
+// errResponseTooLarge, never a silent truncation.
+func decodeCappedJSON(r io.Reader, doc any) error {
+	raw, err := io.ReadAll(io.LimitReader(r, maxClientBodyBytes+1))
+	if err != nil {
+		return fmt.Errorf("read server answer: %w", err)
+	}
+
+	if len(raw) > maxClientBodyBytes {
+		return fmt.Errorf(
+			"%w: over %d bytes: check the server log",
+			errResponseTooLarge,
+			maxClientBodyBytes,
+		)
+	}
+
+	if err := json.Unmarshal(raw, doc); err != nil {
+		return fmt.Errorf("decode server answer: %w", err)
+	}
+
+	return nil
+}
+
 // decodeBackupError reads an error body of the installation API: the
 // message with its code, or the status alone when the body has no JSON
-// error.
+// error. The body is capped at maxClientBodyBytes: an oversized body answers
+// the status alone.
 func decodeBackupError(resp *http.Response) string {
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxClientBodyBytes+1))
 	if err != nil {
+		return resp.Status
+	}
+
+	if len(raw) > maxClientBodyBytes {
 		return resp.Status
 	}
 
@@ -282,9 +320,9 @@ func decodeBackupError(resp *http.Response) string {
 // startBackup starts a backup and answers its ID. A second start while one
 // runs names the running backup and the one command that helps.
 func startBackup(ctx context.Context, client *http.Client, server, token string) (string, error) {
-	url := backupEndpoint(server, "/api/server/backups")
+	endpoint := backupEndpoint(server, "/api/server/backups")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
 		return "", fmt.Errorf(
 			"start backup: %w: check --server and "+rerunHelp,
@@ -319,7 +357,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 
 	var doc backupStartResponse
 
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil || strings.TrimSpace(doc.ID) == "" {
+	if err := decodeCappedJSON(resp.Body, &doc); err != nil || strings.TrimSpace(doc.ID) == "" {
 		return "", fmt.Errorf(
 			"%w: the server answered no backup ID: check the server log and "+rerunHelp,
 			errBackupStart,
@@ -334,9 +372,9 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 func readBackup(
 	ctx context.Context, client *http.Client, server, token, id string,
 ) (backupStatusResponse, error) {
-	url := backupEndpoint(server, "/api/server/backups/"+id)
+	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return backupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
@@ -376,7 +414,7 @@ func readBackup(
 
 	var doc backupStatusResponse
 
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+	if err := decodeCappedJSON(resp.Body, &doc); err != nil {
 		return backupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
 			errBackupRead,
