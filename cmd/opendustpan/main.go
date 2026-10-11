@@ -933,49 +933,6 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
 }
 
-func createNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var c common
-
-	fs := flag.NewFlagSet("namespace create", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	c.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 1 {
-		return errUsage
-	}
-
-	name, err := namespace.ParseName(fs.Arg(0))
-	if err != nil {
-		return fmt.Errorf("namespace name: %w", err)
-	}
-
-	st, err := openStore(ctx, c.database)
-	if err != nil {
-		return err
-	}
-	defer st.close()
-
-	svc, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: namespace.Region(c.region)})
-	if err != nil {
-		return fmt.Errorf("namespace service: %w", err)
-	}
-
-	ns, err := svc.Create(ctx, name)
-	if err != nil {
-		return fmt.Errorf("create namespace: %w", err)
-	}
-
-	if _, err := fmt.Fprintf(stdout, "created namespace %s in region %s\n", ns.Name, ns.HomeRegion); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
-}
-
 // Upgrade verdicts of the upgrade check subcommand.
 const (
 	// verdictUpToDate reports a database with no pending and no unknown migrations.

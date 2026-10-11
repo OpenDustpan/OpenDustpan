@@ -1,0 +1,253 @@
+package server_test
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+)
+
+// namespaceDoc decodes a created namespace in tests.
+type namespaceDoc struct {
+	Name            string `json:"name"`
+	HomeRegion      string `json:"homeRegion"`
+	FailoverVersion int64  `json:"failoverVersion"`
+	CreatedAt       string `json:"createdAt"`
+}
+
+// newNamespaceHandler builds a Handler with a SQLite-backed namespace service
+// over a fresh store in region test. The store starts empty, so the first
+// create proves the bootstrap call on an empty installation.
+func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       nil,
+		Metrics:       stubMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// serveNamespace sends one namespace create request with the test token and
+// returns its status and body.
+func serveNamespace(t *testing.T, handler *apiserver.Handler, body string) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/server/namespaces",
+		strings.NewReader(body),
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// TestNamespaceRouteDeclaresAdmin proves the namespace create route declares
+// exactly the action namespace:admin, with a resolver that returns the
+// namespace the body names.
+func TestNamespaceRouteDeclaresAdmin(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+
+	route, ok := findNamespaceRoute(t, handler)
+	if !ok {
+		t.Fatal("no POST /api/server/namespaces route")
+	}
+
+	checkNamespaceRouteAdmin(t, route)
+}
+
+// findNamespaceRoute returns the namespace create route, or false when the
+// table holds none.
+func findNamespaceRoute(
+	t *testing.T, handler *apiserver.Handler,
+) (apiserver.Route, bool) {
+	t.Helper()
+
+	for _, route := range handler.Routes() {
+		if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
+			return route, true
+		}
+	}
+
+	//nolint:exhaustruct_v5 // No route to return, so the zero value signals absence with false.
+	return apiserver.Route{}, false
+}
+
+// checkNamespaceRouteAdmin proves one route row declares namespace:admin on
+// the namespace the body names.
+func checkNamespaceRouteAdmin(t *testing.T, route apiserver.Route) {
+	t.Helper()
+
+	if route.Scope != apiserver.ScopeAuthorized {
+		t.Fatalf("route scope = %d, want authorized", route.Scope)
+	}
+
+	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionNamespaceAdmin {
+		t.Fatalf("route actions = %v, want [namespace:admin]", route.Actions)
+	}
+
+	if route.Resolve == nil {
+		t.Fatal("route declares actions but no resolver")
+	}
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/server/namespaces",
+		strings.NewReader(`{"name":"acme"}`),
+	)
+
+	obj, err := route.Resolve(httptest.NewRecorder(), req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if obj.String() != "acme" {
+		t.Fatalf("resolver returns %q, want the namespace acme", obj.String())
+	}
+}
+
+// TestNamespaceCreateOnEmpty proves the bootstrap call on an empty
+// installation creates a namespace homed in the region of the server and
+// answers 201 with it.
+func TestNamespaceCreateOnEmpty(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	status, body := serveNamespace(t, handler, `{"name":"acme"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST namespaces answers %d, want %d (%s)", status, http.StatusCreated, body)
+	}
+
+	var doc namespaceDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode namespace %q: %v", body, err)
+	}
+
+	if doc.Name != "acme" || doc.HomeRegion != "test" || doc.FailoverVersion != 1 || doc.CreatedAt == "" {
+		t.Fatalf("namespace answers %+v, want acme in test at version 1 with a time", doc)
+	}
+}
+
+// TestNamespaceCreateDuplicate proves a second create of the same name
+// answers 409 with the one JSON error shape.
+func TestNamespaceCreateDuplicate(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	if status, body := serveNamespace(t, handler, `{"name":"acme"}`); status != http.StatusCreated {
+		t.Fatalf("first POST answers %d, want %d (%s)", status, http.StatusCreated, body)
+	}
+
+	status, body := serveNamespace(t, handler, `{"name":"acme"}`)
+	if status != http.StatusConflict {
+		t.Fatalf("second POST answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	if doc := decodeError(t, body); doc.Code != http.StatusConflict || doc.Message == "" {
+		t.Fatalf("duplicate error = %+v, want code 409 with a message", doc)
+	}
+}
+
+// TestNamespaceCreateInvalid proves a bad name and a bad body answer 400 with
+// the one JSON error shape.
+func TestNamespaceCreateInvalid(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	for _, body := range []string{`{"name":"../x"}`, `{}`, `not json`} {
+		status, resp := serveNamespace(t, handler, body)
+		if status != http.StatusBadRequest {
+			t.Fatalf("POST %q answers %d, want %d (%s)", body, status, http.StatusBadRequest, resp)
+		}
+
+		if doc := decodeError(t, resp); doc.Code != http.StatusBadRequest || doc.Message == "" {
+			t.Fatalf("POST %q error = %+v, want code 400 with a message", body, doc)
+		}
+	}
+}
+
+// TestNamespaceCreateNeedsToken proves the route answers 401 without a token,
+// with the one JSON error shape.
+func TestNamespaceCreateNeedsToken(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/server/namespaces",
+		strings.NewReader(`{"name":"acme"}`),
+	)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("POST without a token answers %d, want %d (%s)", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+
+	if doc := decodeError(t, rec.Body.String()); doc.Code != http.StatusUnauthorized || doc.Message == "" {
+		t.Fatalf("missing token error = %+v, want code 401 with a message", doc)
+	}
+}
+
+// TestNamespaceCreateDenied proves a caller without namespace:admin on the
+// namespace answers 403.
+func TestNamespaceCreateDenied(t *testing.T) {
+	t.Parallel()
+
+	handler := newNamespaceHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionNamespaceAdmin: true}},
+	)
+
+	status, body := serveNamespace(t, handler, `{"name":"acme"}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("denied POST answers %d, want %d (%s)", status, http.StatusForbidden, body)
+	}
+}

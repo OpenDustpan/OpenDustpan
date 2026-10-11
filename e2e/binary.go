@@ -49,12 +49,14 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
-	// databaseFlag names the database flag every serve and namespace
-	// command takes.
+	// databaseFlag names the database flag serve takes.
 	databaseFlag = "--database"
-	// regionFlag names the region flag every serve and namespace command
-	// takes.
+	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
+	// namespaceSubcommand names the namespace subcommand of the server binary.
+	namespaceSubcommand = "namespace"
+	// createSubcommand names the create verb of the namespace subcommand.
+	createSubcommand = "create"
 )
 
 // UseBinaryServer reports whether the suite runs the real server binary.
@@ -366,11 +368,93 @@ func (e *Env) BlobDir(tb testing.TB) string {
 	return e.backendCfg.blobDir
 }
 
-// RunBinary runs `opendustpan <args>` as a child process against the database
-// and the blob directory of the environment. It reuses the binary that
-// serverBinary built and the environment that backendEnv builds. Callers pass
-// the --database and --blob-dir flags the subcommand needs; DatabaseURL and
-// BlobDir offer the values. It needs E2E_SERVER=binary.
+// BackendURL returns the base URL of the binary backend itself, so a client
+// command proves the API without going through the recording proxy. It needs
+// E2E_SERVER=binary.
+func (e *Env) BackendURL(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BackendURL needs E2E_SERVER=binary")
+	}
+
+	return "https://127.0.0.1:" + e.backendPort
+}
+
+// BackendCertFile returns the certificate file of the binary backend, so a
+// client command trusts it through --ca-file. It needs E2E_SERVER=binary.
+func (e *Env) BackendCertFile(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BackendCertFile needs E2E_SERVER=binary")
+	}
+
+	return e.backendCfg.certFile
+}
+
+// MigrateDatabase migrates the database at dbURL to the schema of the
+// environment binary and creates the Namespace namespace in it. It starts a
+// temporary server on dbURL so the server applies the migrations, creates the
+// namespace through `opendustpan namespace create --server` with the
+// environment tokens, then stops the server. It never opens the database from
+// a command: only the server opens the data (ADR 39). It needs
+// E2E_SERVER=binary.
+func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("MigrateDatabase needs E2E_SERVER=binary")
+	}
+
+	dir := tb.TempDir()
+	cert := writeBackendCert(tb, dir)
+	blobDir := filepath.Join(dir, "blobs")
+	port := freeBackendPort(ctx, tb)
+
+	cfg := backendConfig{
+		bin:          e.binPath,
+		dbURL:        dbURL,
+		blobDir:      blobDir,
+		backupTarget: "",
+		certFile:     cert.cert,
+		keyFile:      cert.key,
+		tokens:       e.backendCfg.tokens,
+	}
+
+	handle := launchBinaryBackend(ctx, tb, cfg, port)
+
+	runBinary(ctx, tb, cfg.bin, []string{
+		namespaceSubcommand, createSubcommand,
+		"--server", handle.url,
+		"--ca-file", cert.cert,
+		Namespace,
+	}, backendEnv(cfg.tokens))
+
+	cmd := handle.cmd
+	if cmd == nil || cmd.Process == nil {
+		tb.Fatal("migration server is not running")
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		tb.Fatalf("stop migration server: %v", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		tb.Fatalf("migration server did not exit with status 0: %v\n%s", err, handle.logs.String())
+	}
+
+	if code := cmd.ProcessState.ExitCode(); code != 0 {
+		tb.Fatalf("migration server exits with status %d, want 0\n%s", code, handle.logs.String())
+	}
+
+	tb.Logf("migration server output:\n%s", handle.logs.String())
+}
+
+// RunBinary runs `opendustpan <args>` as a child process with the environment
+// tokens. It reuses the binary that serverBinary built and the environment
+// that backendEnv builds. Callers pass the flags the subcommand needs. It
+// needs E2E_SERVER=binary.
 func (e *Env) RunBinary(ctx context.Context, tb testing.TB, args ...string) BinaryResult {
 	tb.Helper()
 
@@ -604,7 +688,10 @@ func openBinaryStore(
 
 // newBinaryEnv starts the real server binary with TLS behind a recording
 // proxy and returns the environment. The CLI trusts the proxy through
-// SSL_CERT_FILE, as with the in-process TLS server.
+// SSL_CERT_FILE, as with the in-process TLS server. A new installation holds
+// no namespace: the first one is created with `opendustpan namespace create
+// --server` through the installation API, so the command as a client is
+// proven before any CLI logs in.
 func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
@@ -614,13 +701,6 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	blobDir := filepath.Join(in.dir, "blobs")
 	dbURL, st, dbProxy := openBinaryStore(ctx, tb, in.store, in.dir)
 	blobs := openBlobStoreAt(tb, blobDir)
-
-	runBinary(ctx, tb, bin, []string{
-		"namespace", "create",
-		"--database", dbURL,
-		"--region", region,
-		Namespace,
-	}, os.Environ())
 
 	cfg := backendConfig{
 		bin:          bin,
@@ -632,6 +712,9 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		tokens:       in.token + "," + in.tokenB,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
+
+	createFirstNamespaceViaBinary(ctx, tb, cfg, backendURL)
+
 	proxy := startRecordingProxy(tb, in.rec, backendURL)
 
 	client := proxy.Client()
@@ -676,4 +759,19 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	env.writeTofuFiles(tb, proxy)
 
 	return env
+}
+
+// createFirstNamespaceViaBinary creates the first namespace on an empty
+// installation with `opendustpan namespace create --server` through the API.
+// The command trusts the backend through its certificate file, so the run
+// proves the command as a client with the bootstrap admin token.
+func createFirstNamespaceViaBinary(ctx context.Context, tb testing.TB, cfg backendConfig, backendURL string) {
+	tb.Helper()
+
+	runBinary(ctx, tb, cfg.bin, []string{
+		namespaceSubcommand, createSubcommand,
+		"--server", backendURL,
+		"--ca-file", cfg.certFile,
+		Namespace,
+	}, backendEnv(cfg.tokens))
 }

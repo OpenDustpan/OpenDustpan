@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -130,10 +131,16 @@ func newBackupFixture(
 		t.Fatalf("new backup service: %v", err)
 	}
 
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       service,
 		Metrics:       stubMetrics{},
 	})
@@ -522,10 +529,27 @@ func TestBackupListNewestFirst(t *testing.T) {
 func TestBackupWithoutTarget(t *testing.T) {
 	t.Parallel()
 
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       nil,
 		Metrics:       stubMetrics{},
 	})

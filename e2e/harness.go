@@ -297,6 +297,11 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		env.writeTofuFiles(tb, ts)
 	}
 
+	// A new installation holds no namespace: the first one is created through
+	// the installation API with the bootstrap admin token, so the route is
+	// proven before any CLI logs in.
+	env.createNamespaceThroughAPI(ctx, tb, Namespace)
+
 	return env
 }
 
@@ -371,9 +376,10 @@ func newServer(
 		tb.Fatalf("namespace service: %v", err)
 	}
 
-	if _, err = namespaces.Create(ctx, Namespace); err != nil {
-		tb.Fatalf("create namespace: %v", err)
-	}
+	// The first namespace is created through POST /api/server/namespaces
+	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
+	// new installation is proven through the API with the bootstrap admin
+	// token, not through a direct store call.
 
 	authn, err := identity.NewStaticTokens(tokens.tokenA, tokens.tokenB)
 	if err != nil {
@@ -671,25 +677,13 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateV
 	return sv
 }
 
-// CreateNamespace creates a namespace homed in the test region, for steps
-// that need more than the Namespace namespace NewEnv creates.
+// CreateNamespace creates a namespace homed in the test region through the
+// installation API, for steps that need more than the Namespace namespace
+// NewEnv creates. It proves the namespace create route with the bootstrap
+// admin token.
 func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	tb.Helper()
-
-	nsName, err := namespace.ParseName(name)
-	if err != nil {
-		tb.Fatalf("parse namespace %q: %v", name, err)
-	}
-
-	err = e.server.CreateNamespace(ctx, namespace.Namespace{
-		CreatedAt:       time.Now(),
-		Name:            nsName,
-		HomeRegion:      region,
-		FailoverVersion: 1,
-	})
-	if err != nil {
-		tb.Fatalf("create namespace %q: %v", name, err)
-	}
+	e.createNamespaceThroughAPI(ctx, tb, name)
 }
 
 // ListInventory returns the inventory entries of ns, so scenarios can prove
@@ -1954,6 +1948,43 @@ func (e *Env) serverStatus(
 	}
 
 	return resp.StatusCode, string(respBody), nil
+}
+
+// createNamespaceThroughAPI creates name through POST /api/server/namespaces
+// with the environment token and fails the test on any other status. A new
+// installation holds no namespace, so the first call proves the bootstrap
+// admin token works on an empty installation.
+func (e *Env) createNamespaceThroughAPI(ctx context.Context, tb testing.TB, name string) {
+	tb.Helper()
+
+	status, body, err := e.serverStatus(
+		ctx,
+		e.token,
+		http.MethodPost,
+		"/api/server/namespaces",
+		`{"name":`+strconv.Quote(name)+`}`,
+	)
+	if err != nil {
+		tb.Fatalf("POST /api/server/namespaces %q: %v", name, err)
+	}
+
+	if status != http.StatusCreated {
+		tb.Fatalf("POST /api/server/namespaces %q answers %d, want %d (%s)", name, status, http.StatusCreated, body)
+	}
+
+	var doc struct {
+		Name            string `json:"name"`
+		HomeRegion      string `json:"homeRegion"`
+		FailoverVersion int64  `json:"failoverVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		tb.Fatalf("decode namespace %q %q: %v", name, body, err)
+	}
+
+	if doc.Name != name || doc.HomeRegion != region || doc.FailoverVersion != 1 {
+		tb.Fatalf("namespace answers %+v, want %q in %q at version 1", doc, name, region)
+	}
 }
 
 // clip shortens s for logs and reports.

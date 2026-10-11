@@ -11,6 +11,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // adminAuthenticator signs in exactly the admin token as an administrator.
@@ -47,10 +48,16 @@ func newMetricsHandler(
 ) *apiserver.Handler {
 	t.Helper()
 
+	namespaces, err := namespace.NewService(namespace.Config{Store: stubNamespaceStore{}, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator: authn,
 		Authorizer:    identity.AdminOnly{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
 		Backups:       nil,
 		Metrics:       metrics,
 	})
