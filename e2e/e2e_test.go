@@ -265,13 +265,13 @@ func tagAbsent(name string) func(e2e.Result) error {
 
 // step is a scenario step with no extra environment.
 func step(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
-	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: false}
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: false, Redact: false}
 }
 
 // failStep is a scenario step that expects the CLI to fail, for steps that
 // prove an error message.
 func failStep(name string, check func(e2e.Result) error, args ...string) e2e.StepSpec {
-	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: true}
+	return e2e.StepSpec{Check: check, Name: name, Args: args, Env: nil, Stdin: "", Fail: true, Redact: false}
 }
 
 // outputContains reports whether stdout or stderr holds want. Failing CLI
@@ -551,12 +551,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	beforeID := stackIDBeforeRename(t, env, org)
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkRenameKeptID(ctx, env, org, renamePath, beforeID),
-		Name:  "stack rename",
-		Args:  []string{"stack", "rename", renamedQualified, "--stack", qualified},
-		Env:   nil,
-		Stdin: "",
-		Fail:  false,
+		Check:  checkRenameKeptID(ctx, env, org, renamePath, beforeID),
+		Name:   "stack rename",
+		Args:   []string{"stack", "rename", renamedQualified, "--stack", qualified},
+		Env:    nil,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	// A rename keeps the stack ID, so its secrets still decrypt.
@@ -762,11 +763,12 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 
 				return nil
 			},
-			Name:  "stack init default org",
-			Args:  []string{"stack", "init", "other"},
-			Env:   nil,
-			Stdin: "",
-			Fail:  false,
+			Name:   "stack init default org",
+			Args:   []string{"stack", "init", "other"},
+			Env:    nil,
+			Stdin:  "",
+			Fail:   false,
+			Redact: false,
 		},
 	}
 }
@@ -799,11 +801,12 @@ func pulumiResourcedRemoveSteps(env *e2e.Env, resourced, resourcedPath string) [
 
 				return nil
 			},
-			Name:  "stack rm with resources without force",
-			Args:  []string{"stack", "rm", "--yes", "--stack", resourced},
-			Env:   nil,
-			Stdin: "",
-			Fail:  true,
+			Name:   "stack rm with resources without force",
+			Args:   []string{"stack", "rm", "--yes", "--stack", resourced},
+			Env:    nil,
+			Stdin:  "",
+			Fail:   true,
+			Redact: false,
 		},
 		step("stack rm with resources with force",
 			func(_ e2e.Result) error {
@@ -1353,17 +1356,19 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		Args:  []string{"login"},
 		// The fake host does not resolve, so the CLI sends its requests through the
 		// test server acting as an HTTP proxy; the server routes on the request path.
-		Env:   []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
-		Stdin: "",
-		Fail:  false,
+		Env:    []string{"PULUMI_BACKEND_URL=" + apiURL, "HTTP_PROXY=" + env.URL},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: contains("(" + overrideURL + ")"),
-		Name:  "console url from PULUMI_CONSOLE_DOMAIN",
-		Args:  []string{"login"},
-		Env:   []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
-		Stdin: "",
-		Fail:  false,
+		Check:  contains("(" + overrideURL + ")"),
+		Name:   "console url from PULUMI_CONSOLE_DOMAIN",
+		Args:   []string{"login"},
+		Env:    []string{"PULUMI_CONSOLE_DOMAIN=console.example.test:3000"},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 }
 
@@ -1652,12 +1657,13 @@ func writeImportConfig(t *testing.T, dir, content string) {
 // into a cloud backend is an interactive prompt instead.
 func importMigrateStep(name string) e2e.StepSpec {
 	return e2e.StepSpec{
-		Check: nil,
-		Name:  name,
-		Args:  []string{"init", "-no-color"},
-		Env:   []string{"TF_INPUT=1"},
-		Stdin: "yes\n",
-		Fail:  false,
+		Check:  nil,
+		Name:   name,
+		Args:   []string{"init", "-no-color"},
+		Env:    []string{"TF_INPUT=1"},
+		Stdin:  "yes\n",
+		Fail:   false,
+		Redact: false,
 	}
 }
 
@@ -2288,12 +2294,13 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	// the lock request the plan made answers 409 with "is locked by User"
 	// and the holder of A.
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkPlanLockedByAnother(ctx, env),
-		Name:  "plan locked by another",
-		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
-		Env:   env.TofuEnvB(),
-		Stdin: "",
-		Fail:  true,
+		Check:  checkPlanLockedByAnother(ctx, env),
+		Name:   "plan locked by another",
+		Args:   []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
+		Env:    env.TofuEnvB(),
+		Stdin:  "",
+		Fail:   true,
+		Redact: false,
 	})
 
 	// A second lock by B answers 409.
@@ -2319,22 +2326,24 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	// A force-unlock as B succeeds. The CLI sends no lock ID that the
 	// server uses: the workspace ID in the path names the workspace.
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: nil,
-		Name:  "force-unlock by B",
-		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
-		Env:   env.TofuEnvB(),
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   "force-unlock by B",
+		Args:   []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:    env.TofuEnvB(),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	// A plan as B now passes.
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: nil,
-		Name:  "plan after force-unlock",
-		Args:  []string{"plan", "-input=false", "-no-color"},
-		Env:   env.TofuEnvB(),
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   "plan after force-unlock",
+		Args:   []string{"plan", "-input=false", "-no-color"},
+		Env:    env.TofuEnvB(),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	// With the workspace locked by B, a read as A shows the holder, time
@@ -3089,12 +3098,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: nil,
-		Name:  "force-unlock for restore",
-		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
-		Env:   env.TofuEnvB(),
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   "force-unlock for restore",
+		Args:   []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:    env.TofuEnvB(),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -3169,22 +3179,24 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 	// A plan now fails on the held lock: the CLI prints the lock failure and
 	// the lock request it made answers 409 with "is locked by User".
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkPlanLockedAfterCrash(env),
-		Name:  "plan fails on the crashed lock",
-		Args:  []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
-		Env:   nil,
-		Stdin: "",
-		Fail:  true,
+		Check:  checkPlanLockedAfterCrash(env),
+		Name:   "plan fails on the crashed lock",
+		Args:   []string{"plan", "-input=false", "-no-color", "-lock-timeout=0s"},
+		Env:    nil,
+		Stdin:  "",
+		Fail:   true,
+		Redact: false,
 	})
 
 	// Force-unlock as another principal releases the crashed lock.
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: nil,
-		Name:  "force-unlock after crash",
-		Args:  []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
-		Env:   env.TofuEnvB(),
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   "force-unlock after crash",
+		Args:   []string{"force-unlock", "-force", e2e.Namespace + "/" + e2e.Workspace},
+		Env:    env.TofuEnvB(),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	// The next apply passes and the state holds the slow resource.

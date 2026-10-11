@@ -83,12 +83,13 @@ func (p *Pair) SavePulumiLogin(ctx context.Context, t *testing.T, target *Env, s
 	t.Helper()
 
 	return p.Src.StepSavedLogin(ctx, t, StepSpec{
-		Check: nil,
-		Name:  stepName,
-		Args:  []string{"login", target.URL},
-		Env:   []string{"PULUMI_ACCESS_TOKEN=" + target.token},
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   stepName,
+		Args:   []string{"login", target.URL},
+		Env:    []string{"PULUMI_ACCESS_TOKEN=" + target.token},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 }
 
@@ -98,12 +99,13 @@ func (p *Pair) UsePulumiBackend(ctx context.Context, t *testing.T, target *Env, 
 	t.Helper()
 
 	return p.Src.StepSavedLogin(ctx, t, StepSpec{
-		Check: nil,
-		Name:  stepName,
-		Args:  []string{"login", target.URL},
-		Env:   nil,
-		Stdin: "",
-		Fail:  false,
+		Check:  nil,
+		Name:   stepName,
+		Args:   []string{"login", target.URL},
+		Env:    nil,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 }
 
