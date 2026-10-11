@@ -243,6 +243,74 @@ func newServer(
 	return srv.Handler(), st
 }
 
+// seedSchemaVersion is the deployment format version SeedResources saves.
+// The server never interprets the deployment, so any version 1 or higher
+// passes validation.
+const seedSchemaVersion = 3
+
+// seedDeployment is the checkpoint SeedResources saves: the automatic stack
+// resource and one managed resource, so the stack counts as having resources.
+const seedDeployment = `{"manifest":{},"resources":[` +
+	`{"urn":"urn:pulumi:stack::e2e-project::pulumi:pulumi:Stack::e2e-project-resourced",` +
+	`"type":"pulumi:pulumi:Stack"},` +
+	`{"urn":"urn:pulumi:stack::e2e-project::custom:resource:Type::res1",` +
+	`"type":"custom:resource:Type","custom":true,"id":"res1-id"}]}`
+
+// SeedResources records a finished update with one managed resource as the
+// latest checkpoint of the stack named stackName in Project. It exists so
+// delete tests can set up a stack with resources without driving a full
+// update through routes that later issues own.
+func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string) {
+	tb.Helper()
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: e.server, Now: nil, Region: region})
+	if err != nil {
+		tb.Fatalf("namespace service: %v", err)
+	}
+
+	ref, err := stack.ParseRef(Namespace, Project, stackName)
+	if err != nil {
+		tb.Fatalf("parse ref: %v", err)
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            e.server,
+		Checkpoints:        e.server,
+		Events:             e.server,
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		tb.Fatalf("updates service: %v", err)
+	}
+
+	u, err := updates.Create(ctx, ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	if err != nil {
+		tb.Fatalf("create update: %v", err)
+	}
+
+	started, err := updates.Start(ctx, ref, u.ID)
+	if err != nil {
+		tb.Fatalf("start update: %v", err)
+	}
+
+	err = updates.SaveCheckpoint(ctx, ref, u.ID, started.Token, stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(seedDeployment),
+		SchemaVersion: seedSchemaVersion,
+		Sequence:      0,
+		Invalid:       false,
+	})
+	if err != nil {
+		tb.Fatalf("save checkpoint: %v", err)
+	}
+
+	if _, err := updates.Complete(ctx, ref, u.ID, started.Token, stack.StatusSucceeded); err != nil {
+		tb.Fatalf("complete update: %v", err)
+	}
+}
+
 // CreateNamespace creates a namespace homed in the test region, for steps
 // that need more than the Namespace namespace NewEnv creates.
 func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {

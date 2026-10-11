@@ -191,7 +191,7 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 	return err
 }
 
-const deleteStack = `-- name: DeleteStack :exec
+const deleteStack = `-- name: DeleteStack :execrows
 DELETE FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3
 `
@@ -202,9 +202,12 @@ type DeleteStackParams struct {
 	Name      string
 }
 
-func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) error {
-	_, err := q.db.Exec(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
-	return err
+func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteStackTags = `-- name: DeleteStackTags :exec

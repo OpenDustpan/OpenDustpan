@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -27,12 +26,6 @@ type UpdatesStore interface {
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
 type UpdatesFactory func(t *testing.T) UpdatesStore
-
-// DeleteStore deletes a stack for tests until issue #49 adds the port. The
-// delete removes its updates, checkpoints and events.
-type DeleteStore interface {
-	DeleteStackForTest(ctx context.Context, ref stack.Ref, fence namespace.Fence) error
-}
 
 // RunUpdates executes the conformance suite of the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) against stores
@@ -63,7 +56,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
 		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
-		{name: "delete of the stack deletes its checkpoints", test: testDeleteStackDeletesCheckpoints},
+		{name: "delete of the stack deletes its children", test: testDeleteStackDeletesChildren},
+		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
@@ -882,25 +876,38 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	assertCheckpointVersion(t, f, f.ref, canceled.Version, canceledCP)
 }
 
-// testDeleteStackDeletesCheckpoints checks that the final delete of a stack
-// removes its checkpoints.
-func testDeleteStackDeletesCheckpoints(t *testing.T, f fixture) {
+// testDeleteStackDeletesChildren checks that the final delete of a stack
+// removes the stack with its updates, checkpoints and events, so no child
+// row remains.
+func testDeleteStackDeletesChildren(t *testing.T, f fixture) {
 	t.Helper()
-
-	deleter, ok := f.s.(DeleteStore)
-	if !ok {
-		t.Skip("store does not implement DeleteStackForTest until issue #49")
-	}
 
 	u := f.run(t, f.ref, "u1", mutating())
 	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
 	}
 
+	if err := f.s.AppendEvents(t.Context(), newEvents(u, 1, 0, 1), f.fence); err != nil {
+		t.Fatalf("append events: %v", err)
+	}
+
 	f.end(t, u, stack.StatusSucceeded)
 
-	if err := deleter.DeleteStackForTest(t.Context(), f.ref, f.fence); err != nil {
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); err != nil {
 		t.Fatalf("delete stack: %v", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
+		t.Errorf("get deleted stack: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.s.GetUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Errorf("get update after delete: err = %v, want ErrUpdateNotFound", err)
+	}
+
+	if history, err := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 100, Offset: 0}); err != nil ||
+		len(history) != 0 {
+		t.Errorf("history after delete = %v, %v; want empty", history, err)
 	}
 
 	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, stack.ErrNoState) {
@@ -909,6 +916,37 @@ func testDeleteStackDeletesCheckpoints(t *testing.T, f fixture) {
 
 	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, u.Version); !errors.Is(err, stack.ErrNoState) {
 		t.Errorf("checkpoint of version %d after delete: err = %v, want ErrNoState", u.Version, err)
+	}
+
+	if _, err := f.s.ListEvents(t.Context(), f.ref, u.ID, -1, 100); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Errorf("events after delete: err = %v, want ErrUpdateNotFound", err)
+	}
+}
+
+// testDeleteDuringRunningUpdate checks that the final delete waits for the
+// stack lock: while a mutating update runs it fails with ErrUpdateConflict
+// and removes nothing.
+func testDeleteDuringRunningUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	running := f.run(t, f.ref, "u1", mutating())
+
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); !errors.Is(err, stack.ErrUpdateConflict) {
+		t.Fatalf("delete during a running update: err = %v, want ErrUpdateConflict", err)
+	}
+
+	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
+		t.Errorf("get stack after a refused delete: %v", err)
+	}
+
+	if _, err := f.s.ActiveUpdate(t.Context(), f.ref); err != nil {
+		t.Errorf("active update after a refused delete: %v", err)
+	}
+
+	f.end(t, running, stack.StatusSucceeded)
+
+	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence); err != nil {
+		t.Errorf("delete after the update ended: %v", err)
 	}
 }
 

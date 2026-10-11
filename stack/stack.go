@@ -24,6 +24,9 @@ var (
 	ErrInvalidName = errors.New("invalid project or stack name")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrHasResources reports that a stack still manages resources, so a
+	// delete without force is refused.
+	ErrHasResources = errors.New("stack still contains resources")
 )
 
 const (
@@ -135,6 +138,12 @@ type Store interface {
 	GetStack(ctx context.Context, ref Ref) (Stack, error)
 	// ListStacks returns the stacks matching filter, ordered by project then name.
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
+	// DeleteStack removes the stack identified by ref with its updates, events
+	// and checkpoints in one fenced transaction. It returns ErrNotFound if the
+	// stack does not exist, ErrUpdateConflict while a mutating update of the
+	// stack runs, namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale.
+	DeleteStack(ctx context.Context, ref Ref, fence namespace.Fence) error
 	// UpdateStackTags replaces the tags of the stack identified by ref with
 	// tags, keyed by its stable ID, and stamps updatedAt. It returns
 	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
@@ -232,6 +241,23 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 	}
 
 	return stacks, nil
+}
+
+// Delete removes the stack identified by ref with its updates, events and
+// checkpoints. The write is fenced on the namespace's failover version and
+// only allowed in its home region. It returns ErrNotFound if the stack does
+// not exist, and ErrUpdateConflict while a mutating update of the stack runs.
+func (s *Service) Delete(ctx context.Context, ref Ref) error {
+	ns, err := s.namespaces.WritableHere(ctx, ref.Namespace)
+	if err != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	if err := s.store.DeleteStack(ctx, ref, ns.Fence()); err != nil {
+		return fmt.Errorf("delete stack %s: %w", ref, err)
+	}
+
+	return nil
 }
 
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
