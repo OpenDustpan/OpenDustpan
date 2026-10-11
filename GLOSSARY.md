@@ -44,6 +44,10 @@ _Avoid_: Migration (it means a SQL schema migration), transfer, onboarding
 The backend or product that holds the state of a unit before an import. Examples: a Pulumi service backend, an OpenTofu backend or HCP Terraform.
 _Avoid_: Origin, legacy backend
 
+**Backup**:
+The copy of the SQL data of a whole installation with the blob references that the data names. A backup loads only into an empty store of the same dialect and schema version.
+_Avoid_: Dump, snapshot
+
 ### Regions
 
 **Home region**:
