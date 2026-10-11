@@ -1,10 +1,11 @@
 // Fake backup store: an in-memory BackupStore for the RunBackup conformance
 // suite. The SQL adapters run the suite once they implement the ports (issues
 // #143 and #144); until then this fake runs it. Its knobs (tear, dropTable,
-// extraSchemaTable, omitSchemaTable, skipEmptyCheck, ignoreManifest,
-// allowDuplicate, allowRefinish, oldestFirst, noopFailRunning, dropOnClose,
-// peekTampered, peekAnyWrapper, peekNoCorrupt) break the store on purpose, so
-// the tests below prove that each suite case can fail.
+// extraSchemaTable, omitSchemaTable, skipEmptyCheck, skipReferences,
+// ignoreManifest, allowDuplicate, allowRefinish, oldestFirst,
+// noopFailRunning, dropOnClose, peekTampered, peekAnyWrapper, peekNoCorrupt)
+// break the store on purpose, so the tests below prove that each suite case
+// can fail.
 package storetest_test
 
 import (
@@ -96,6 +97,10 @@ func newFakeData() *fakeData {
 type fakeBackupStore struct {
 	mu               sync.RWMutex
 	data             *fakeData
+	staged           *fakeData
+	stageNext        int
+	stageCurrent     int
+	stageLive        map[int]bool
 	betweenTables    func(table string)
 	dialect          backup.Dialect
 	version          int
@@ -104,6 +109,7 @@ type fakeBackupStore struct {
 	omitSchemaTable  string
 	tear             bool
 	skipEmptyCheck   bool
+	skipReferences   bool
 	ignoreManifest   bool
 	allowDuplicate   bool
 	allowRefinish    bool
@@ -117,10 +123,13 @@ type fakeBackupStore struct {
 }
 
 var (
-	_ storetest.BackupStore = (*fakeBackupStore)(nil)
-	_ storetest.Reopener    = (*fakeBackupStore)(nil)
-	_ backup.KeyPeeker      = (*fakeBackupStore)(nil)
-	_ backup.RestoreStore   = (*fakeBackupStore)(nil)
+	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
+	_ storetest.Reopener       = (*fakeBackupStore)(nil)
+	_ storetest.ExportTamperer = (*fakeBackupStore)(nil)
+	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
+	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
+	_ backup.RestoreStore      = (*fakeBackupStore)(nil)
+	_ backup.Stager            = (*fakeBackupStore)(nil)
 )
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
@@ -128,6 +137,10 @@ var (
 func newFakeBackupStore() *fakeBackupStore {
 	return &fakeBackupStore{
 		data:             newFakeData(),
+		staged:           nil,
+		stageNext:        0,
+		stageCurrent:     0,
+		stageLive:        map[int]bool{},
 		dialect:          backup.DialectSQLite,
 		version:          10,
 		mu:               sync.RWMutex{},
@@ -137,6 +150,7 @@ func newFakeBackupStore() *fakeBackupStore {
 		omitSchemaTable:  "",
 		tear:             false,
 		skipEmptyCheck:   false,
+		skipReferences:   false,
 		ignoreManifest:   false,
 		allowDuplicate:   false,
 		allowRefinish:    false,
@@ -1735,6 +1749,10 @@ func (s *fakeBackupStore) Close() error {
 func (s *fakeBackupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reopener returns a new handle as the interface.
 	return &fakeBackupStore{
 		data:             s.data,
+		staged:           nil,
+		stageNext:        s.stageNext,
+		stageCurrent:     0,
+		stageLive:        map[int]bool{},
 		dialect:          s.dialect,
 		version:          s.version,
 		mu:               sync.RWMutex{},
@@ -1744,6 +1762,7 @@ func (s *fakeBackupStore) Reopen() storetest.BackupStore { //nolint:ireturn // R
 		omitSchemaTable:  s.omitSchemaTable,
 		tear:             s.tear,
 		skipEmptyCheck:   s.skipEmptyCheck,
+		skipReferences:   s.skipReferences,
 		ignoreManifest:   s.ignoreManifest,
 		allowDuplicate:   s.allowDuplicate,
 		allowRefinish:    s.allowRefinish,
@@ -1924,6 +1943,354 @@ func (s *fakeBackupStore) Import(
 	}
 
 	return s.swapLoaded(loaded)
+}
+
+// StageRestore implements backup.Stager: it decodes the stream into a staging
+// copy and checks it (foreign keys, row counts, blob references), without
+// touching the live tables. A failed stage keeps no staging copy.
+func (s *fakeBackupStore) StageRestore(
+	_ context.Context, r io.Reader, want backup.Summary,
+) (backup.Summary, error) {
+	if s.isClosed() {
+		return backup.Summary{}, errFakeClosed
+	}
+
+	if err := s.checkManifest(want); err != nil {
+		return backup.Summary{}, err
+	}
+
+	loaded, err := decodeBackup(r)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if !s.skipReferences {
+		if err := checkStagedReferences(loaded); err != nil {
+			return backup.Summary{}, err
+		}
+	}
+
+	if err := checkRowCounts(loaded, want); err != nil {
+		return backup.Summary{}, err
+	}
+
+	staged := fakeSummaryOf(loaded, s.dialect, s.version, rowCountsOf(loaded))
+
+	if err := checkStagedBlobRefs(staged.Blobs, want.Blobs); err != nil {
+		return backup.Summary{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stageCurrent != 0 {
+		delete(s.stageLive, s.stageCurrent)
+	}
+
+	s.stageNext++
+	s.stageCurrent = s.stageNext
+
+	if s.stageLive == nil {
+		s.stageLive = map[int]bool{}
+	}
+
+	s.stageLive[s.stageCurrent] = true
+	s.staged = loaded
+
+	return staged, nil
+}
+
+// DiscardStaging implements backup.Stager: it drops the staging copy, if any.
+// It leaves the live tables unchanged.
+func (s *fakeBackupStore) DiscardStaging(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if s.stageCurrent != 0 {
+		delete(s.stageLive, s.stageCurrent)
+		s.stageCurrent = 0
+	}
+
+	s.staged = nil
+
+	return nil
+}
+
+// CurrentStagingID implements storetest.StagingWitness: the generation of the
+// current staging copy, or empty when none exists.
+func (s *fakeBackupStore) CurrentStagingID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.stageCurrent == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("stage-%d", s.stageCurrent)
+}
+
+// StagingAlive implements storetest.StagingWitness: whether the staging copy
+// with id still exists. Only the current staging area is alive: a new stage
+// discards the previous one.
+func (s *fakeBackupStore) StagingAlive(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for live := range s.stageLive {
+		if fmt.Sprintf("stage-%d", live) == id {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TamperNamespaces implements storetest.ExportTamperer: it empties the
+// namespaces frame of the export and returns the tampered bytes with a
+// manifest whose namespace count matches them, so only the foreign-key check
+// of the stage can fail.
+func (s *fakeBackupStore) TamperNamespaces(
+	t *testing.T, data []byte, sum backup.Summary,
+) ([]byte, backup.Summary) {
+	t.Helper()
+
+	frames := decodeFrames(t, data)
+
+	var empty bytes.Buffer
+
+	if err := gob.NewEncoder(&empty).Encode(map[string]namespace.Namespace{}); err != nil {
+		t.Fatalf("encode empty namespaces: %v", err)
+	}
+
+	var out bytes.Buffer
+
+	enc := gob.NewEncoder(&out)
+
+	for _, frame := range frames {
+		if frame.Table == "namespaces" {
+			frame.Rows = empty.Bytes()
+		}
+
+		if err := enc.Encode(frame); err != nil {
+			t.Fatalf("write table %s: %v", frame.Table, err)
+		}
+	}
+
+	sum.RowCounts = maps.Clone(sum.RowCounts)
+	sum.RowCounts["namespaces"] = 0
+
+	return out.Bytes(), sum
+}
+
+// decodeFrames decodes every frame of the export stream in order, failing on
+// error.
+func decodeFrames(t *testing.T, data []byte) []fakeTableFrame {
+	t.Helper()
+
+	var frames []fakeTableFrame
+
+	dec := gob.NewDecoder(bytes.NewReader(data))
+
+	for {
+		var frame fakeTableFrame
+
+		if err := dec.Decode(&frame); err != nil {
+			if errors.Is(err, io.EOF) {
+				return frames
+			}
+
+			t.Fatalf("decode export: %v", err)
+		}
+
+		frames = append(frames, frame)
+	}
+}
+
+// checkStagedReferences reports a child row without its parent as corruption:
+// stacks need their namespace, updates their stack, checkpoints and events
+// their update, keys their namespace and stack, inventory and workspaces their
+// namespace, state versions their workspace, and the current pointer both.
+func checkStagedReferences(loaded *fakeData) error {
+	stackIDs, err := checkStagedStacks(loaded)
+	if err != nil {
+		return err
+	}
+
+	if err := checkStagedUpdates(loaded, stackIDs); err != nil {
+		return err
+	}
+
+	if err := checkStagedKeys(loaded, stackIDs); err != nil {
+		return err
+	}
+
+	if err := checkStagedUnits(loaded); err != nil {
+		return err
+	}
+
+	return checkStagedStates(loaded)
+}
+
+// checkStagedStacks reports a staged stack without its namespace as corruption.
+// It returns the staged stack IDs for the child checks.
+func checkStagedStacks(loaded *fakeData) (map[string]bool, error) {
+	stackIDs := make(map[string]bool, len(loaded.stacks))
+
+	for ref := range loaded.stacks {
+		st := loaded.stacks[ref]
+		stackIDs[st.ID.String()] = true
+
+		if _, ok := loaded.namespaces[st.Ref.Namespace.String()]; !ok {
+			return nil, fmt.Errorf(
+				"staged stack %s misses namespace %q: %w",
+				st.Ref,
+				st.Ref.Namespace,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	return stackIDs, nil
+}
+
+// checkStagedUpdates reports staged updates without their stack and staged
+// checkpoints and events without their update as corruption.
+func checkStagedUpdates(loaded *fakeData, stackIDs map[string]bool) error {
+	for stackID, byUpdate := range loaded.updates {
+		if !stackIDs[stackID] {
+			return fmt.Errorf("staged updates miss stack %q: %w", stackID, backup.ErrCorrupt)
+		}
+
+		if err := checkStagedHistory(loaded, stackID, byUpdate); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkStagedKeys reports a staged data key without its namespace or stack as
+// corruption.
+func checkStagedKeys(loaded *fakeData, stackIDs map[string]bool) error {
+	for scope := range loaded.keys {
+		k := loaded.keys[scope]
+
+		if _, ok := loaded.namespaces[k.Scope.Namespace.String()]; !ok {
+			return fmt.Errorf("staged key %s misses namespace %q: %w",
+				scope, k.Scope.Namespace, backup.ErrCorrupt)
+		}
+
+		if !stackIDs[k.Scope.ID] {
+			return fmt.Errorf("staged key %s misses stack %q: %w", scope, k.Scope.ID, backup.ErrCorrupt)
+		}
+	}
+
+	return nil
+}
+
+// checkStagedUnits reports a staged inventory entry or workspace without its
+// namespace as corruption.
+func checkStagedUnits(loaded *fakeData) error {
+	for key := range loaded.entries {
+		if _, ok := loaded.namespaces[loaded.entries[key].Namespace.String()]; !ok {
+			return fmt.Errorf(
+				"staged inventory entry %q misses namespace %q: %w",
+				key,
+				loaded.entries[key].Namespace,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	for id := range loaded.workspaces {
+		if _, ok := loaded.namespaces[loaded.workspaces[id].Ref.Namespace.String()]; !ok {
+			return fmt.Errorf(
+				"staged workspace %s misses namespace %q: %w",
+				loaded.workspaces[id].Ref,
+				loaded.workspaces[id].Ref.Namespace,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	return nil
+}
+
+// checkStagedStates reports a staged state version without its workspace and a
+// staged current pointer without its workspace or state version as corruption.
+func checkStagedStates(loaded *fakeData) error {
+	for id := range loaded.states {
+		if _, ok := loaded.workspaces[loaded.states[id].Workspace.String()]; !ok {
+			return fmt.Errorf(
+				"staged state version %s misses workspace %q: %w",
+				loaded.states[id].ID,
+				loaded.states[id].Workspace,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	for workspaceID, stateID := range loaded.current {
+		if _, ok := loaded.workspaces[workspaceID]; !ok {
+			return fmt.Errorf("staged current pointer misses workspace %q: %w", workspaceID, backup.ErrCorrupt)
+		}
+
+		if _, ok := loaded.states[stateID]; !ok {
+			return fmt.Errorf("staged current pointer misses state version %q: %w", stateID, backup.ErrCorrupt)
+		}
+	}
+
+	return nil
+}
+
+// checkStagedHistory reports the checkpoints and events of one staged stack
+// without their update row as corruption.
+func checkStagedHistory(loaded *fakeData, stackID string, byUpdate map[string]stack.Update) error {
+	for id := range loaded.checkpoints[stackID] {
+		if _, ok := byUpdate[id]; !ok {
+			return fmt.Errorf("staged checkpoints miss update %q: %w", id, backup.ErrCorrupt)
+		}
+	}
+
+	for id := range loaded.events[stackID] {
+		if _, ok := byUpdate[id]; !ok {
+			return fmt.Errorf("staged events miss update %q: %w", id, backup.ErrCorrupt)
+		}
+	}
+
+	return nil
+}
+
+// checkStagedBlobRefs compares the blob references of the staged data with the
+// manifest: the staged data must name exactly the keys of the manifest, each
+// with its size and checksum.
+func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
+	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
+
+	ordered := slices.Clone(staged)
+	slices.SortFunc(ordered, byKey)
+
+	wanted := slices.Clone(want)
+	slices.SortFunc(wanted, byKey)
+
+	same := func(a, b backup.BlobRef) bool {
+		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+	}
+
+	if !slices.EqualFunc(ordered, wanted, same) {
+		return fmt.Errorf(
+			"staged backup names %d blob references, the manifest names %d: %w",
+			len(ordered),
+			len(wanted),
+			backup.ErrCorrupt,
+		)
+	}
+
+	return nil
 }
 
 // PeekKey implements backup.KeyPeeker: it decodes the export stream frame by
@@ -2123,11 +2490,17 @@ func decodeBackup(r io.Reader) (*fakeData, error) {
 // checkRowCounts compares the loaded row counts with the manifest. A table
 // the export does not cover reads as zero rows, so an exporter that drops a
 // table still loads: the round trip then shows the missing rows. A count that
-// differs from the manifest is corruption.
+// differs from the manifest, a table outside backup.Tables, or a table the
+// manifest omits is corruption: an omitted empty table cannot slip through,
+// matching both SQL adapters.
 func checkRowCounts(loaded *fakeData, want backup.Summary) error {
 	counts := rowCountsOf(loaded)
 
 	for _, table := range backup.Tables {
+		if _, ok := want.RowCounts[table]; !ok {
+			return fmt.Errorf("import manifest omits table %q: %w", table, backup.ErrCorrupt)
+		}
+
 		if counts[table] != want.RowCounts[table] {
 			return fmt.Errorf(
 				"import row counts %v differ from manifest %v: %w",
@@ -2618,9 +2991,9 @@ func fakeScope(t *testing.T, ns namespace.Namespace, st stack.Stack) secret.Scop
 }
 
 // TestBackupDetectsDroppedTable breaks the exporter so it skips secret_keys.
-// The export then misses the table from its row counts, and the import loads
-// a store whose key is gone: the table-list case and the round-trip case of
-// RunBackup both fail on this fake.
+// The export then misses the table from its row counts, and the import
+// refuses the omitted table with ErrCorrupt: the table-list case and the
+// round-trip case of RunBackup both fail on this fake.
 func TestBackupDetectsDroppedTable(t *testing.T) {
 	t.Parallel()
 
@@ -2639,24 +3012,12 @@ func TestBackupDetectsDroppedTable(t *testing.T) {
 
 	dst := newFakeBackupStore()
 
-	got, err := dst.Import(t.Context(), bytes.NewReader(data), sum)
-	if err != nil {
-		t.Fatalf("import: %v", err)
-	}
-
-	// The import describes its destination, so it counts the table with zero
-	// rows: the counts differ from the manifest, as the row-counts case of
-	// RunBackup checks.
-	if got.RowCounts["secret_keys"] != 0 {
-		t.Fatalf("import row counts = %v, want zero secret_keys", got.RowCounts)
-	}
-
-	if maps.Equal(got.RowCounts, sum.RowCounts) {
-		t.Fatal("import row counts equal the manifest, want a mismatch")
+	if _, err := dst.Import(t.Context(), bytes.NewReader(data), sum); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("import of an export that drops secret_keys: err = %v, want ErrCorrupt", err)
 	}
 
 	if _, err := dst.GetKey(t.Context(), fakeScope(t, ns, st)); !errors.Is(err, secret.ErrKeyNotFound) {
-		t.Fatalf("get key after import: err = %v, want ErrKeyNotFound", err)
+		t.Fatalf("get key after a refused import: err = %v, want ErrKeyNotFound", err)
 	}
 }
 
@@ -3110,5 +3471,103 @@ func TestBackupDetectsPeekNoCorrupt(t *testing.T) {
 
 	if _, err := dst.PeekKey(t.Context(), bytes.NewReader(data[:len(data)/2]), "kek-1"); err != nil {
 		t.Fatalf("peek key of truncated data with the knob: err = %v, want no error", err)
+	}
+}
+
+// TestBackupDetectsSkippedReferences breaks the stager so it skips the
+// reference checks. Staging an export whose stacks miss their namespace
+// succeeds instead of reporting ErrCorrupt, so the "staging refuses stacks
+// without their namespace" case of RunBackup fails on this fake.
+func TestBackupDetectsSkippedReferences(t *testing.T) {
+	t.Parallel()
+
+	src := newFakeBackupStore()
+	ns := fakeNamespace(t, src, "acme", "eu-west")
+	fakeStack(t, src, ns, "prod", map[string]string{})
+
+	sum, data := fakeExport(t, src)
+
+	dst := newFakeBackupStore()
+	dst.skipReferences = true
+
+	tampered, want := dst.TamperNamespaces(t, data, sum)
+
+	staged, err := dst.StageRestore(t.Context(), bytes.NewReader(tampered), want)
+	if err != nil {
+		t.Fatalf("stage backup without the reference checks: %v", err)
+	}
+
+	// The orphan stacks stage: the check is what refuses them.
+	if staged.RowCounts["stacks"] != 1 || staged.RowCounts["namespaces"] != 0 {
+		t.Fatalf("staged row counts = %v, want the orphan stack without its namespace", staged.RowCounts)
+	}
+}
+
+// TestFakeStagingRefusesForeignKeys stages a stream whose stack misses its
+// namespace and expects ErrCorrupt, with the live tables still empty. No port
+// writes an orphan, so this test encodes the stream by hand. The conformance
+// suite covers the same check through the ExportTamperer hook.
+func TestFakeStagingRefusesForeignKeys(t *testing.T) {
+	t.Parallel()
+
+	st := stack.Stack{
+		CreatedAt: fakeTime(),
+		UpdatedAt: fakeTime(),
+		Tags:      map[string]string{},
+		Ref: stack.Ref{
+			Namespace: namespace.Name("acme"),
+			Project:   "web",
+			Stack:     stack.Name("prod"),
+		},
+		ID:      stack.ID(ident.NewID("stk-")),
+		Version: 0,
+	}
+
+	var buf bytes.Buffer
+
+	enc := gob.NewEncoder(&buf)
+	encodeFakeFrame(t, enc, "namespaces", map[string]namespace.Namespace{})
+	encodeFakeFrame(t, enc, "stacks", map[string]stack.Stack{st.Ref.String(): st})
+
+	want := backup.Summary{
+		Dialect:     backup.DialectSQLite,
+		HomeRegions: []string{},
+		WrapperIDs:  []string{},
+		RowCounts: map[string]int64{
+			"namespaces": 0, "stacks": 1, "stack_tags": 0, "updates": 0,
+			"checkpoints": 0, "update_events": 0, "secret_keys": 0,
+			"inventory": 0, "workspaces": 0, "state_versions": 0, "backups": 0,
+		},
+		Blobs:         nil,
+		SchemaVersion: 10,
+	}
+
+	s := newFakeBackupStore()
+
+	if _, err := s.StageRestore(t.Context(), &buf, want); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage backup of a stack without its namespace: err = %v, want ErrCorrupt", err)
+	}
+
+	if namespaces, err := s.ListNamespaces(t.Context()); err != nil || len(namespaces) != 0 {
+		t.Fatalf("namespaces after a refused stage = %+v, %v; want none", namespaces, err)
+	}
+
+	if err := s.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging area after a refused stage: %v", err)
+	}
+}
+
+// encodeFakeFrame gob-encodes one export frame of table with value.
+func encodeFakeFrame(t *testing.T, enc *gob.Encoder, table string, value any) {
+	t.Helper()
+
+	var rows bytes.Buffer
+
+	if err := gob.NewEncoder(&rows).Encode(value); err != nil {
+		t.Fatalf("encode table %s: %v", table, err)
+	}
+
+	if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows.Bytes()}); err != nil {
+		t.Fatalf("write table %s: %v", table, err)
 	}
 }
