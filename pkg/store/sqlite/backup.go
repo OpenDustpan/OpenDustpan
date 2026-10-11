@@ -679,10 +679,15 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 }
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
-// MD5 of every state version that names content, ordered by key. A pending
-// version names no content, so only finalized versions appear.
+// MD5 of every state version that names content, with the blob key, size and
+// MD5 of every checkpoint kept in blobs, ordered by key. A pending version
+// names no content, so only finalized versions appear.
 func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
-	const query = `SELECT content_key, size, md5 FROM state_versions WHERE content_key <> '' ORDER BY content_key`
+	const query = `SELECT content_key, size, md5 FROM state_versions WHERE content_key <> ''
+		UNION ALL
+		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5 FROM checkpoints
+		WHERE blob_key IS NOT NULL AND blob_key <> ''
+		ORDER BY content_key`
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
@@ -710,7 +715,7 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 
 		if len(raw) != md5.Size {
 			return nil, fmt.Errorf(
-				"%w: state version with key %q has an MD5 of %d bytes",
+				"%w: blob with key %q has an MD5 of %d bytes",
 				codec.ErrCorruptRow,
 				key,
 				len(raw),

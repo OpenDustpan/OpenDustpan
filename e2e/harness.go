@@ -153,10 +153,13 @@ type Env struct {
 	client   *http.Client
 	// workspaces runs the workspace use cases the seed helpers need.
 	workspaces *workspace.Service
-	token      string
-	tokenB     string
-	home       string
-	project    string
+	// blobs holds checkpoint and state content, so the seed helpers save
+	// through the same store as the server.
+	blobs   *fs.Store
+	token   string
+	tokenB  string
+	home    string
+	project string
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
@@ -206,6 +209,7 @@ type serverBuild struct {
 	handler    http.Handler
 	store      serverStore
 	workspaces *workspace.Service
+	blobs      *fs.Store
 	dbProxy    *DBProxy
 }
 
@@ -269,6 +273,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		server:        build.store,
 		client:        client,
 		workspaces:    build.workspaces,
+		blobs:         build.blobs,
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
@@ -423,7 +428,7 @@ func newServer(
 		tb.Fatalf("new server: %v", err)
 	}
 
-	return serverBuild{handler: srv.Handler(), store: st, workspaces: workspaces, dbProxy: dbProxy}
+	return serverBuild{handler: srv.Handler(), store: st, workspaces: workspaces, blobs: blobs, dbProxy: dbProxy}
 }
 
 // openBackupTarget opens a backup target directory next to the database at
@@ -553,7 +558,10 @@ func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string
 		Checkpoints:        e.server,
 		Events:             e.server,
 		Namespaces:         namespaces,
+		Stacks:             e.server,
+		Blobs:              e.blobs,
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {

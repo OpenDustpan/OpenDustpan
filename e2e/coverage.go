@@ -19,6 +19,7 @@ import (
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -165,7 +166,10 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Checkpoints:        coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Events:             coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
+		Stacks:             coverageStackStore{},
+		Blobs:              coverageBlobs{},
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: 0,
 	})
 	if err != nil {
@@ -233,6 +237,30 @@ func (coverageStackStore) RenameStack(
 func (coverageStackStore) UpdateStackTags(
 	_ context.Context, _ stack.Ref, _ map[string]string, _ time.Time, _ namespace.Fence,
 ) error {
+	return nil
+}
+
+// coverageBlobs answers no object. It exists only to build an Updates
+// service for the route tables; no request is ever served.
+type coverageBlobs struct{}
+
+func (coverageBlobs) Put(_ context.Context, _ blob.Key, _ io.Reader) error {
+	return blob.ErrExists
+}
+
+func (coverageBlobs) Get(_ context.Context, _ blob.Key) (io.ReadCloser, error) {
+	return nil, blob.ErrNotFound
+}
+
+func (coverageBlobs) Delete(_ context.Context, _ blob.Key) error {
+	return nil
+}
+
+func (coverageBlobs) List(_ context.Context, _ string) ([]blob.Object, error) {
+	return nil, nil
+}
+
+func (coverageBlobs) Ping(_ context.Context) error {
 	return nil
 }
 

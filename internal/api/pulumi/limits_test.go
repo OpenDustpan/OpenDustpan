@@ -46,7 +46,10 @@ func newUpdateFixtureWithGate(
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
+		Stacks:             stacks,
+		Blobs:              newMemBlob(),
 		Now:                nil,
+		Logger:             nil,
 		MaxCheckpointBytes: limit,
 	})
 	if err != nil {

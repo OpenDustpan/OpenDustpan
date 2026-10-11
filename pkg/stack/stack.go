@@ -243,6 +243,12 @@ func (s *Service) Get(ctx context.Context, ref Ref) (Stack, error) {
 	return st, nil
 }
 
+// GetStack returns the stack identified by ref. Updates calls it for the
+// stable ID in checkpoint blob keys.
+func (s *Service) GetStack(ctx context.Context, ref Ref) (Stack, error) {
+	return s.Get(ctx, ref)
+}
+
 // List returns the stacks matching filter.
 func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 	stacks, err := s.store.ListStacks(ctx, filter)

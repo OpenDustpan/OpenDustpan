@@ -29,6 +29,10 @@ type Checkpoint struct {
 	Deployment    []byte
 	SavedAtMs     int64
 	ResourceCount sql.NullInt64
+	BlobKey       sql.NullString
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
 }
 
 type Installation struct {

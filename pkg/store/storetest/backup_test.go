@@ -700,20 +700,45 @@ func (s *fakeBackupStore) PutCheckpoint(
 		s.data.checkpoints[stackID] = byStack
 	}
 
-	if stored, ok := byStack[cp.Update.String()]; ok && cp.Sequence > 0 {
-		switch {
-		case stored.Sequence == cp.Sequence && stored.Digest == cp.Digest:
-			return nil
-		case stored.Sequence == cp.Sequence:
-			return stack.ErrCheckpointConflict
-		case cp.Sequence < stored.Sequence:
-			return stack.ErrStaleCheckpoint
-		}
+	if retried, err := checkCheckpointSequence(byStack, cp); err != nil {
+		return err
+	} else if retried {
+		return nil
+	}
+
+	if cp.BlobKey != "" {
+		// Rows with a blob key keep the metadata only, as the SQL adapters
+		// do: the content lives in blobs.
+		cp.Deployment = nil
 	}
 
 	byStack[cp.Update.String()] = cp
 
 	return nil
+}
+
+// checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp
+// against the stored checkpoints of its update: it reports whether a repeated
+// sequence with the same digest writes nothing. Another digest conflicts, and
+// an older sequence is stale.
+func checkCheckpointSequence(
+	byStack map[string]stack.Checkpoint, cp stack.Checkpoint,
+) (bool, error) {
+	stored, ok := byStack[cp.Update.String()]
+	if !ok || cp.Sequence == 0 {
+		return false, nil
+	}
+
+	switch {
+	case stored.Sequence == cp.Sequence && stored.Digest == cp.Digest:
+		return true, nil
+	case stored.Sequence == cp.Sequence:
+		return false, stack.ErrCheckpointConflict
+	case cp.Sequence < stored.Sequence:
+		return false, stack.ErrStaleCheckpoint
+	default:
+		return false, nil
+	}
 }
 
 // LatestCheckpoint implements stack.CheckpointStore: the checkpoint of the
@@ -777,6 +802,58 @@ func (s *fakeBackupStore) CheckpointByVersion(
 	}
 
 	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+// CheckpointByUpdate implements stack.CheckpointStore.
+func (s *fakeBackupStore) CheckpointByUpdate(
+	_ context.Context, ref stack.Ref, id stack.UpdateID,
+) (stack.Checkpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return stack.Checkpoint{}, errFakeClosed
+	}
+
+	stackID, err := s.stackIDOf(ref)
+	if err != nil {
+		return stack.Checkpoint{}, stack.ErrNoState
+	}
+
+	if cp, ok := s.data.checkpoints[stackID][id.String()]; ok {
+		return cp, nil
+	}
+
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+// ReferencedCheckpointKeys implements stack.CheckpointStore.
+func (s *fakeBackupStore) ReferencedCheckpointKeys(
+	_ context.Context, ref stack.Ref,
+) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	stackID, err := s.stackIDOf(ref)
+	if err != nil {
+		return nil, nil
+	}
+
+	var out []blob.Key
+
+	for id := range s.data.checkpoints[stackID] {
+		if cp := s.data.checkpoints[stackID][id]; cp.BlobKey != "" {
+			out = append(out, cp.BlobKey)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out, nil
 }
 
 // AppendEvents implements stack.EventStore, skipping stored sequences.
@@ -1716,6 +1793,14 @@ func fakeSummaryOf(
 		}
 
 		blobs = append(blobs, backup.BlobRef{MD5: sv.MD5, Key: sv.Content.String(), Size: sv.Size})
+	}
+
+	for _, byStack := range data.checkpoints {
+		for id := range byStack {
+			if cp := byStack[id]; cp.BlobKey != "" {
+				blobs = append(blobs, backup.BlobRef{MD5: cp.BlobMD5, Key: cp.BlobKey.String(), Size: cp.BlobSize})
+			}
+		}
 	}
 
 	slices.SortFunc(blobs, func(a, b backup.BlobRef) int {

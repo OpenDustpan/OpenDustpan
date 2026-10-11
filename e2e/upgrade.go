@@ -225,6 +225,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		server:        nil,
 		client:        client,
 		workspaces:    nil,
+		blobs:         openBlobStoreAt(tb, blobDir),
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
