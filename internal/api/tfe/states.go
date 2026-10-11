@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,6 +78,23 @@ type stateVersionResource struct {
 type stateVersionDocument struct {
 	Data stateVersionResource `json:"data"`
 }
+
+// restoreMeta holds the message of a restore response: a restore writes old
+// state as a new version and changes no infrastructure.
+type restoreMeta struct {
+	Message string `json:"message"`
+}
+
+// restoreStateVersionDocument is the response of the restore route: the new
+// state version and the message that no infrastructure changed.
+type restoreStateVersionDocument struct {
+	Data stateVersionResource `json:"data"`
+	Meta restoreMeta          `json:"meta"`
+}
+
+// restoreMessage tells the client that a restore writes old state as a new
+// version and changes no infrastructure.
+const restoreMessage = "Restore writes old state as a new version. It changes no infrastructure."
 
 // stateVersionListDocument is the response of the state version list route:
 // one page of finalized versions, newest first, with the meta.pagination
@@ -413,6 +431,59 @@ func (h *Handler) downloadState(
 	if _, err := io.Copy(w, content); err != nil {
 		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
 	}
+}
+
+// restoreStateVersion serves POST
+// /api/v2/state-versions/{state_version_id}/actions/restore. It makes the
+// finalized version current again as a new, forced version and answers 200
+// with the new version and the message that no infrastructure changed. An
+// unknown ID and a version that is not finalized answer 404. A lock that
+// another principal holds answers 409 with a detail holding "is locked by
+// User" and the holder.
+func (h *Handler) restoreStateVersion(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+	from := workspace.StateVersionID(r.PathValue("state_version_id"))
+
+	src, err := h.workspaces.ReadState(ctx, from)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	restored, err := h.workspaces.Restore(ctx, src.Workspace, from, p.Subject)
+	if err != nil {
+		if errors.Is(err, workspace.ErrLockedByOther) {
+			holder := h.lockHolder(ctx, src.Workspace)
+			if holder == "" {
+				h.writeConflict(ctx, w, err.Error())
+
+				return
+			}
+
+			h.writeConflict(ctx, w, lockConflictDetail(src.Workspace, holder))
+
+			return
+		}
+
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	doc, err := h.stateVersionDocument(r, restored)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, restoreStateVersionDocument{
+		Data: doc,
+		Meta: restoreMeta{Message: restoreMessage},
+	})
 }
 
 // readCurrentOutputs serves GET
