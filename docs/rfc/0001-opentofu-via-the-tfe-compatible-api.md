@@ -1,14 +1,15 @@
 ---
 rfc: 1
 title: OpenTofu support through the TFE-compatible remote API
-status: discussing
+status: accepted
+adr: 25
 created: 2026-10-09
 was: proposed ADR 9
 ---
 
 # RFC 1. OpenTofu support through the TFE-compatible remote API
 
-Status: under discussion. It was proposed ADR 9 until ADR 15 moved every
+Status: accepted as ADR 25. It was proposed ADR 9 until ADR 15 moved every
 undecided proposal to `docs/rfc/`.
 
 ## Context
@@ -123,3 +124,9 @@ worked into the proposal above.
   `/admin/feature-sets`).
 - Remote execution is RFC 30; TFE `run-triggers` is RFC 24;
   `notification-configurations` is RFC 23.
+
+## Outcome
+
+Accepted as ADR 25 on 2026-10-11, for state and locking with local
+execution. Remote runs (RFC 30), `tofu login`, workspace tags and run tasks
+stay outside it.
