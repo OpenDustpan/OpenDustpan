@@ -57,6 +57,9 @@ type Manifest struct {
 	Format        int            `json:"format"`
 	SchemaVersion int            `json:"schemaVersion"`
 	SQLSize       int64          `json:"sqlSize"`
+	// RowCounts holds the row count of each table in Tables. Restore compares
+	// the loaded counts with it after the SQL load.
+	RowCounts map[string]int64 `json:"rowCounts"`
 }
 
 // ManifestBlob names one copied blob with its size and MD5.
@@ -426,6 +429,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		Format:        FormatVersion,
 		SchemaVersion: in.sum.SchemaVersion,
 		SQLSize:       in.size,
+		RowCounts:     in.sum.RowCounts,
 	}
 
 	for _, ref := range in.ordered {

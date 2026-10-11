@@ -37,6 +37,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	workspace.StateStore
 	backup.Exporter
 	backup.Importer
+	backup.KeyPeeker
 	backup.Registry
 	backup.Inspector
 }
@@ -72,6 +73,9 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "import refuses another schema version", test: testBackupImportRefusesVersion},
 		{name: "a failed import leaves an empty store", test: testBackupFailedImportLeavesEmpty},
 		{name: "import loads the row counts that export returns", test: testBackupRowCountsMatch},
+		{name: "peek returns one key of the wrapper without loading", test: testBackupPeekKey},
+		{name: "peek refuses an unknown wrapper", test: testBackupPeekUnknownWrapper},
+		{name: "peek refuses a corrupt stream", test: testBackupPeekCorrupt},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
@@ -1219,6 +1223,82 @@ func testBackupRowCountsMatch(t *testing.T, newStore BackupFactory) {
 
 	assertSummary(t, got, sum)
 	assertExportGroundTruth(t, dst, newStore, &seed, got)
+}
+
+// testBackupPeekKey peeks one wrapped data key per seeded wrapper from the
+// export through an empty store: the key must equal the stored row, and the
+// peeking store must stay empty, so PeekKey reads the stream without loading
+// the destination.
+func testBackupPeekKey(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	_, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	for i, wrapper := range []string{"kek-1", "kek-2"} {
+		got, err := dst.PeekKey(t.Context(), bytes.NewReader(data), wrapper)
+		if err != nil {
+			t.Fatalf("peek key of wrapper %q: %v", wrapper, err)
+		}
+
+		want := mustGetKey(t, src, seed.scopes[i])
+
+		if got.Scope != want.Scope || got.WrapperID != want.WrapperID ||
+			!got.CreatedAt.Equal(want.CreatedAt) || !bytes.Equal(got.Ciphertext, want.Ciphertext) {
+			t.Fatalf("peeked key of wrapper %q = %+v, want %+v", wrapper, got, want)
+		}
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupPeekUnknownWrapper peeks a wrapper the export holds no key of
+// and expects ErrCorrupt, with the peeking store still empty.
+func testBackupPeekUnknownWrapper(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	_, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	if _, err := dst.PeekKey(t.Context(), bytes.NewReader(data), "kek-unknown"); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupPeekCorrupt peeks truncated and empty streams and expects
+// ErrCorrupt, with the peeking store still empty.
+func testBackupPeekCorrupt(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	_, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	if _, err := dst.PeekKey(t.Context(), bytes.NewReader(data[:len(data)/2]), "kek-1"); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("peek key of truncated data: err = %v, want ErrCorrupt", err)
+	}
+
+	if _, err := dst.PeekKey(t.Context(), bytes.NewReader(nil), "kek-1"); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("peek key of empty data: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
 }
 
 // newBackupRecord returns a running backup record with the given start time.

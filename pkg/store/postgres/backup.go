@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/gob"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -26,6 +29,7 @@ var (
 	_ backup.Importer  = (*Store)(nil)
 	_ backup.Registry  = (*Store)(nil)
 	_ backup.Inspector = (*Store)(nil)
+	_ backup.KeyPeeker = (*Store)(nil)
 )
 
 // pgDumpVersion is the version of the export stream below. Import rejects any
@@ -512,6 +516,108 @@ func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (b
 	}
 
 	return s.summarize(ctx)
+}
+
+// PeekKey implements backup.KeyPeeker: it decodes the export stream and reads
+// one wrapped data key of wrapperID from the COPY bytes of secret_keys,
+// without loading the destination.
+func (s *Store) PeekKey(_ context.Context, r io.Reader, wrapperID string) (secret.WrappedKey, error) {
+	var none secret.WrappedKey
+
+	var dump pgDump
+
+	if err := gob.NewDecoder(r).Decode(&dump); err != nil {
+		return none, fmt.Errorf("decode backup stream: %w", backup.ErrCorrupt)
+	}
+
+	if dump.Version != pgDumpVersion {
+		return none, fmt.Errorf(
+			"decode backup stream of version %d: %w", dump.Version, backup.ErrCorrupt,
+		)
+	}
+
+	for _, frame := range dump.Tables {
+		if frame.Table != "secret_keys" {
+			continue
+		}
+
+		return peekPGKey(frame.Copy, wrapperID)
+	}
+
+	return none, fmt.Errorf(
+		"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
+	)
+}
+
+// peekPGKey returns one data key of wrapperID from the COPY text of
+// secret_keys. The dump orders rows by namespace and stack ID, so the first
+// match is stable.
+func peekPGKey(copyBytes []byte, wrapperID string) (secret.WrappedKey, error) {
+	var none secret.WrappedKey
+
+	for line := range strings.Lines(string(copyBytes)) {
+		row, ok := parsePGKeyLine(line, wrapperID)
+		if ok {
+			return row, nil
+		}
+	}
+
+	return none, fmt.Errorf(
+		"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
+	)
+}
+
+// parsePGKeyLine parses one COPY line of secret_keys and reports whether it
+// carries wrapperID. Columns are namespace, stack_id, wrapper_id, ciphertext
+// and created_at_ms. Text fields never hold a tab or newline (they are
+// validated IDs), and bytea reads as the escaped hex format \\x.
+func parsePGKeyLine(line, wrapperID string) (secret.WrappedKey, bool) {
+	var none secret.WrappedKey
+
+	line = strings.TrimSuffix(line, "\n")
+
+	fields := strings.Split(line, "\t")
+	if len(fields) != 5 || fields[2] != wrapperID {
+		return none, false
+	}
+
+	ciphertext, err := parsePGBytea(fields[3])
+	if err != nil {
+		return none, false
+	}
+
+	createdAt, err := strconv.ParseInt(fields[4], 10, 64)
+	if err != nil {
+		return none, false
+	}
+
+	return codec.FromSecretKeyRow(codec.SecretKeyRow{
+		Namespace:   fields[0],
+		StackID:     fields[1],
+		WrapperID:   fields[2],
+		Ciphertext:  ciphertext,
+		CreatedAtMs: createdAt,
+	}), true
+}
+
+// parsePGBytea decodes the COPY text of a bytea column. COPY escapes the
+// backslash of the hex format, so ciphertext reads as \\x followed by hex.
+func parsePGBytea(s string) ([]byte, error) {
+	hexDigits, ok := strings.CutPrefix(s, `\\x`)
+	if !ok {
+		hexDigits, ok = strings.CutPrefix(s, `\x`)
+	}
+
+	if !ok {
+		return nil, fmt.Errorf("bytea %q: %w", s, backup.ErrCorrupt)
+	}
+
+	raw, err := hex.DecodeString(hexDigits)
+	if err != nil {
+		return nil, fmt.Errorf("bytea: %w", errors.Join(err, backup.ErrCorrupt))
+	}
+
+	return raw, nil
 }
 
 // schemaVersion returns the highest applied migration version.

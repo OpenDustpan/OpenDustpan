@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -18,8 +19,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -1679,5 +1682,66 @@ func seed0010StateVersions(t *testing.T, conn *pgx.Conn) {
 
 	if _, err := conn.Exec(t.Context(), seed); err != nil {
 		t.Fatalf("seed state versions: %v", err)
+	}
+}
+
+// TestPeekKeyReadsOneWrappedKey exports a store with one data key and reads
+// it back through PeekKey without loading a destination.
+func TestPeekKeyReadsOneWrappedKey(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL peek test", envURL)
+	}
+
+	s := open(t, base)
+	ctx := t.Context()
+	ns := namespace.Namespace{
+		CreatedAt:       time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		Name:            namespace.Name("acme"),
+		HomeRegion:      namespace.Region("eu-west"),
+		FailoverVersion: 1,
+	}
+
+	if err := s.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	scope, err := secret.NewScope(ns.Name, "stk-test01")
+	if err != nil {
+		t.Fatalf("new scope: %v", err)
+	}
+
+	want := secret.WrappedKey{
+		CreatedAt:  time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		Scope:      scope,
+		WrapperID:  "kek-1",
+		Ciphertext: []byte("wrapped-1"),
+	}
+
+	if _, err = s.CreateKey(ctx, want, ns.Fence()); err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	var buf bytes.Buffer
+
+	if _, err = s.Export(ctx, &buf); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	var got secret.WrappedKey
+
+	if got, err = s.PeekKey(ctx, bytes.NewReader(buf.Bytes()), "kek-1"); err != nil {
+		t.Fatalf("peek key: %v", err)
+	}
+
+	if got.Scope != want.Scope || got.WrapperID != want.WrapperID || !bytes.Equal(got.Ciphertext, want.Ciphertext) {
+		t.Fatalf("peeked key = %+v, want %+v", got, want)
+	}
+
+	_, peekErr := s.PeekKey(ctx, bytes.NewReader(buf.Bytes()), "kek-2")
+	if !errors.Is(peekErr, backup.ErrCorrupt) {
+		t.Fatalf("peek missing wrapper: err = %v, want ErrCorrupt", peekErr)
 	}
 }
