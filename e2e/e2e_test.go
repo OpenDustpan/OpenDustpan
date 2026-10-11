@@ -863,6 +863,90 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	} {
 		env.Step(ctx, t, s)
 	}
+
+	tofuRemoteScenario(t, env)
+}
+
+// tofuRemoteScenario drives the remote backend with a workspace prefix in its
+// own directory: new, list and select run without tags, and the two
+// workspaces keep separate state.
+func tofuRemoteScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	env.WriteRemoteProject(t)
+
+	for _, s := range []e2e.StepSpec{
+		step("remote init", nil, "init", "-input=false", "-no-color"),
+		step("workspace new dev", contains(e2e.RemoteDev), "workspace", "new", e2e.RemoteDev, "-no-color"),
+		step("workspace new prod", contains(e2e.RemoteProd), "workspace", "new", e2e.RemoteProd, "-no-color"),
+		step("workspace list", checkRemoteList(env), "workspace", "list", "-no-color"),
+		step("workspace select dev", nil, "workspace", "select", e2e.RemoteDev, "-no-color"),
+		step("workspace show dev", contains(e2e.RemoteDev), "workspace", "show", "-no-color"),
+		step("remote apply dev", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+		step("remote state pull dev", contains(`"greeting"`), "state", "pull", "-no-color"),
+		step("workspace select prod", nil, "workspace", "select", e2e.RemoteProd, "-no-color"),
+		step("remote state pull prod", statePullLacksGreeting, "state", "pull", "-no-color"),
+	} {
+		env.RemoteStep(ctx, t, s)
+	}
+}
+
+// checkRemoteList proves workspace list shows the short names dev and prod
+// and that the CLI listed with search[name]: the request carries the prefix.
+func checkRemoteList(env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if err := remoteListShows(r); err != nil {
+			return err
+		}
+
+		return remoteListSearched(env)
+	}
+}
+
+// remoteListShows proves workspace list shows the short names dev and prod.
+func remoteListShows(r e2e.Result) error {
+	for _, want := range []string{e2e.RemoteDev, e2e.RemoteProd} {
+		if !strings.Contains(r.Stdout, want) {
+			return fmt.Errorf("%w: workspace list lacks %q: %s", errUnexpected, want, r.Stdout)
+		}
+	}
+
+	return nil
+}
+
+// remoteListSearched proves the list step sent a workspace list with a search
+// query.
+func remoteListSearched(env *e2e.Env) error {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		if entries[i].Step != "workspace list" || entries[i].Method != http.MethodGet {
+			continue
+		}
+
+		if entries[i].Path != "/api/v2/organizations/"+e2e.Namespace+"/workspaces" {
+			continue
+		}
+
+		if !strings.Contains(entries[i].Query, "search") {
+			return fmt.Errorf("%w: workspace list sent no search query: %q", errUnexpected, entries[i].Query)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: workspace list made no list request", errUnexpected)
+}
+
+// statePullLacksGreeting proves the state holds no resource of the other
+// workspace: the pulled state lacks the greeting output.
+func statePullLacksGreeting(r e2e.Result) error {
+	if strings.Contains(r.Stdout, `"greeting"`) {
+		return fmt.Errorf("%w: state pull shows the other workspace: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
 }
 
 // tofuLockScenario proves workspace locks across two principals: A locks

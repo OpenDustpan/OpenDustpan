@@ -927,6 +927,52 @@ func checkLockedFlags(t *testing.T, handler *tfe.Handler) {
 	}
 }
 
+// TestListWorkspacesSearchName proves search[name] keeps the workspaces
+// whose name holds the value: a match lists them, no match lists none, and an
+// empty value lists every workspace.
+func TestListWorkspacesSearchName(t *testing.T) {
+	t.Parallel()
+
+	handler := newPagingHandler(t, allowAll())
+
+	t.Run("match", func(t *testing.T) {
+		t.Parallel()
+
+		doc := checkListPage(t, handler, "/api/v2/organizations/acme/workspaces?search[name]=et", "beta", "zeta")
+
+		if doc.Meta.Pagination.TotalCount != 2 {
+			t.Fatalf("total count = %d, want 2", doc.Meta.Pagination.TotalCount)
+		}
+	})
+
+	t.Run("no match", func(t *testing.T) {
+		t.Parallel()
+
+		doc := getListPage(t, handler, "/api/v2/organizations/acme/workspaces?search[name]=zzz")
+
+		if len(doc.Data) != 0 {
+			t.Fatalf("page holds %v, want no workspaces", listNames(doc))
+		}
+
+		if doc.Meta.Pagination.TotalCount != 0 {
+			t.Fatalf("total count = %d, want 0", doc.Meta.Pagination.TotalCount)
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		t.Parallel()
+
+		checkListPage(
+			t,
+			handler,
+			"/api/v2/organizations/acme/workspaces?search[name]=",
+			"acme",
+			"beta",
+			"zeta",
+		)
+	})
+}
+
 // TestWorkspacePermissionFlags proves each flag follows the Authorizer result
 // for the caller: without unit:write the lock and queue-run flags are false
 // while force-unlock stays true, and without unit:manage only force-unlock
