@@ -400,6 +400,18 @@ func (stubWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.Rea
 	return io.NopCloser(strings.NewReader(stubStateContent())), nil
 }
 
+// History serves the stub state of ws-test123 as a list of one, so the list
+// route test proves authorization, not the state rules.
+func (stubWorkspaces) History(
+	_ context.Context, id workspace.ID, _ workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	if id.String() != "ws-test123" {
+		return nil, 0, nil
+	}
+
+	return []workspace.StateVersion{stubStateVersion()}, 1, nil
+}
+
 // stubWorkspaceTime stamps every stub workspace.
 func stubWorkspaceTime() time.Time {
 	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
@@ -870,6 +882,10 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		"{token}", "wrong-token",
 	).Replace(route.Path)
 
+	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions" {
+		path += "?filter[organization][name]=acme&filter[workspace][name]=web"
+	}
+
 	body := ""
 	if route.Method == http.MethodPost {
 		body = `{"data":{}}`
@@ -1253,6 +1269,12 @@ func (errorWorkspaces) ReadState(
 
 func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, errTestInternal
+}
+
+func (errorWorkspaces) History(
+	_ context.Context, _ workspace.ID, _ workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	return nil, 0, errTestInternal
 }
 
 // errTestInternal is the internal failure errorWorkspaces answers with.

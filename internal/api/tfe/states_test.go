@@ -15,6 +15,8 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -191,6 +193,16 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 	handler := newStateHandler(t, allowAll())
 
 	cases := []workspaceRouteCase{
+		{
+			name:    "state version list",
+			pattern: "GET /api/v2/state-versions",
+			method:  http.MethodGet,
+			target:  "/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=web",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
 		{
 			name:    "current state version",
 			pattern: "GET /api/v2/workspaces/{id}/current-state-version",
@@ -576,6 +588,411 @@ func TestStateDownloadUsesPublicURL(t *testing.T) {
 
 	if !strings.HasPrefix(doc.Data.Attributes.DownloadURL, "https://dustpan.example/") {
 		t.Fatalf("download URL = %q, want the public host", doc.Data.Attributes.DownloadURL)
+	}
+}
+
+// TestStateVersionListDeclaresActionAndObject proves the list route declares
+// unit:read and resolves the filtered workspace to opentofu:acme/web.
+func TestStateVersionListDeclaresActionAndObject(t *testing.T) {
+	t.Parallel()
+
+	handler := newStateHandler(t, allowAll())
+
+	const pattern = "GET /api/v2/state-versions"
+
+	var found *tfe.Route
+
+	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path == pattern {
+			found = &route
+
+			break
+		}
+	}
+
+	if found == nil {
+		t.Fatalf("route %q is not declared", pattern)
+	}
+
+	if len(found.Actions) != 1 || found.Actions[0] != identity.ActionUnitRead {
+		t.Fatalf("route %q actions = %v, want [unit:read]", pattern, found.Actions)
+	}
+
+	if found.Resolve == nil {
+		t.Fatalf("route %q declares no resolver", pattern)
+	}
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=web",
+		http.NoBody,
+	)
+
+	obj, err := found.Resolve(httptest.NewRecorder(), req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if obj.String() != "opentofu:acme/web" || !obj.IsUnit() {
+		t.Fatalf("object = %q (unit %v), want unit %q", obj.String(), obj.IsUnit(), "opentofu:acme/web")
+	}
+}
+
+// stateListTestAttributes decodes the added attributes of a listed state
+// version in tests.
+type stateListTestAttributes struct {
+	Holder       string `json:"holder"`
+	Force        bool   `json:"force"`
+	RestoredFrom string `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// stateListTestResource decodes one listed state version in tests.
+type stateListTestResource struct {
+	ID         string                  `json:"id"`
+	Type       string                  `json:"type"`
+	Attributes stateListTestAttributes `json:"attributes"`
+}
+
+// stateListTestDoc decodes a state version list document in tests.
+type stateListTestDoc struct {
+	Data []stateListTestResource `json:"data"`
+	Meta workspaceTestListMeta   `json:"meta"`
+}
+
+// decodeStateList decodes a state version list document and fails the test
+// when the status is not 200.
+func decodeStateList(t *testing.T, rec *httptest.ResponseRecorder) stateListTestDoc {
+	t.Helper()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if got := rec.Header().Get("Content-Type"); got != "application/vnd.api+json" {
+		t.Fatalf("media type = %q, want %q", got, "application/vnd.api+json")
+	}
+
+	var doc stateListTestDoc
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+
+	return doc
+}
+
+// listStateWorkspaces serves fixed finalized versions of ws-test123, newest
+// first, with paging like the store: a non-positive limit reads as the
+// default size, a large limit is capped and a negative offset reads as zero.
+type listStateWorkspaces struct {
+	stubWorkspaces
+
+	versions []workspace.StateVersion
+}
+
+func (l listStateWorkspaces) History(
+	_ context.Context, id workspace.ID, page workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	if id.String() != "ws-test123" {
+		return nil, 0, nil
+	}
+
+	limit := page.Limit
+	if limit <= 0 {
+		limit = workspace.DefaultStatePageSize
+	}
+
+	limit = min(limit, workspace.MaxStatePageSize)
+	offset := max(page.Offset, 0)
+
+	total := len(l.versions)
+
+	if offset >= total {
+		return nil, total, nil
+	}
+
+	end := min(offset+limit, total)
+
+	return append([]workspace.StateVersion(nil), l.versions[offset:end]...), total, nil
+}
+
+// newListStateHandler returns a production Handler over three finalized state
+// versions of ws-test123, newest first: sv-3, sv-2 and sv-1. The second is
+// forced and the third restores the first, so the tests prove the added
+// attributes.
+func newListStateHandler(t *testing.T) *tfe.Handler {
+	t.Helper()
+
+	at := stubWorkspaceTime()
+	versions := make([]workspace.StateVersion, 0, 3)
+
+	for i, tc := range []struct {
+		id, holder, restored string
+		force                bool
+		serial               int64
+	}{
+		{id: "sv-3", holder: "tester", restored: "sv-1", force: true, serial: 5},
+		{id: "sv-2", holder: "tester", restored: "", force: true, serial: 4},
+		{id: "sv-1", holder: "tester", restored: "", force: false, serial: 3},
+	} {
+		created := at.Add(time.Duration(i) * time.Minute)
+		versions = append(versions, workspace.StateVersion{
+			CreatedAt:       created,
+			FinalizedAt:     created,
+			UploadExpiresAt: created,
+			Upload:          token.Digest{},
+			ID:              workspace.StateVersionID(tc.id),
+			Workspace:       workspace.ID("ws-test123"),
+			Holder:          tc.holder,
+			LockID:          "lock-test",
+			Lineage:         "seed-lineage",
+			Status:          workspace.StatusFinalized,
+			Content:         blob.Key("tofu/ws-test123/" + tc.id + "/seed"),
+			Outputs:         []byte(stubStateOutputs()),
+			MD5:             [md5.Size]byte{},
+			Serial:          tc.serial,
+			Size:            10,
+			Force:           tc.force,
+			RestoredFrom:    workspace.StateVersionID(tc.restored),
+		})
+	}
+
+	handler, err := tfe.NewHandler(tfe.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
+		BaseURL:       baseurl.Resolver{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// listTarget builds a state version list target with the go-tfe query shape:
+// filter[organization][name], filter[workspace][name], page[number] and
+// page[size].
+func listTarget(query string) string {
+	target := "/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=web"
+	if query != "" {
+		target += "&" + query
+	}
+
+	return target
+}
+
+// wantListPage holds the IDs and pagination one list page must hold.
+type wantListPage struct {
+	ids    []string
+	number int
+	size   int
+	total  int
+	pages  int
+}
+
+// checkListIDs proves a list document holds the want IDs in order with the
+// want pagination.
+func checkListIDs(t *testing.T, doc stateListTestDoc, want wantListPage) {
+	t.Helper()
+
+	if len(doc.Data) != len(want.ids) {
+		t.Fatalf("list holds %d entries, want %d (%v)", len(doc.Data), len(want.ids), want.ids)
+	}
+
+	for i := range want.ids {
+		if doc.Data[i].ID != want.ids[i] || doc.Data[i].Type != "state-versions" {
+			t.Fatalf(
+				"entry %d = %q %q, want %q of type state-versions",
+				i,
+				doc.Data[i].ID,
+				doc.Data[i].Type,
+				want.ids[i],
+			)
+		}
+	}
+
+	page := doc.Meta.Pagination
+	if page.CurrentPage != want.number || page.PageSize != want.size ||
+		page.TotalCount != want.total || page.TotalPages != want.pages {
+		t.Fatalf("pagination = %+v, want page %d of size %d with %d entries in %d pages",
+			page, want.number, want.size, want.total, want.pages)
+	}
+}
+
+// TestListStateVersions proves the list answers the stub version with the
+// holder, force and restored-from attributes and the pagination object.
+func TestListStateVersions(t *testing.T) {
+	t.Parallel()
+
+	handler := newStateHandler(t, allowAll())
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, stateRequest(t, listTarget("")))
+
+	doc := decodeStateList(t, rec)
+
+	if len(doc.Data) != 1 || doc.Data[0].ID != "sv-test123" {
+		t.Fatalf("list holds %+v, want one entry sv-test123", doc.Data)
+	}
+
+	got := doc.Data[0].Attributes
+
+	if got.Holder != "tester" || got.Force || got.RestoredFrom != "" {
+		t.Fatalf("attributes = %+v, want holder tester, force false, no restored-from", got)
+	}
+
+	checkListIDs(t, doc, wantListPage{ids: []string{"sv-test123"}, number: 1, size: 20, total: 1, pages: 1})
+}
+
+// TestListStateVersionsPaging proves the list is newest first and respects
+// page[size] and page[number].
+func TestListStateVersionsPaging(t *testing.T) {
+	t.Parallel()
+
+	handler := newListStateHandler(t)
+
+	t.Run("first page", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, stateRequest(t, listTarget("page[number]=1&page[size]=2")))
+
+		doc := decodeStateList(t, rec)
+		checkListIDs(t, doc, wantListPage{ids: []string{"sv-3", "sv-2"}, number: 1, size: 2, total: 3, pages: 2})
+
+		if page := doc.Meta.Pagination; page.PrevPage != nil || page.NextPage == nil || *page.NextPage != 2 {
+			t.Fatalf("pagination = %+v, want null prev and next 2", page)
+		}
+	})
+
+	t.Run("second page", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, stateRequest(t, listTarget("page[number]=2&page[size]=2")))
+
+		doc := decodeStateList(t, rec)
+		checkListIDs(t, doc, wantListPage{ids: []string{"sv-1"}, number: 2, size: 2, total: 3, pages: 2})
+
+		if page := doc.Meta.Pagination; page.PrevPage == nil || *page.PrevPage != 1 || page.NextPage != nil {
+			t.Fatalf("pagination = %+v, want prev 1 and null next", page)
+		}
+	})
+}
+
+// TestListStateVersionsAddedAttributes proves the list carries holder, force
+// and restored-from on every entry.
+func TestListStateVersionsAddedAttributes(t *testing.T) {
+	t.Parallel()
+
+	handler := newListStateHandler(t)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, stateRequest(t, listTarget("")))
+
+	doc := decodeStateList(t, rec)
+
+	want := map[string]stateListTestAttributes{
+		"sv-3": {Holder: "tester", Force: true, RestoredFrom: "sv-1"},
+		"sv-2": {Holder: "tester", Force: true, RestoredFrom: ""},
+		"sv-1": {Holder: "tester", Force: false, RestoredFrom: ""},
+	}
+
+	if len(doc.Data) != len(want) {
+		t.Fatalf("list holds %d entries, want %d", len(doc.Data), len(want))
+	}
+
+	for _, item := range doc.Data {
+		if item.Attributes != want[item.ID] {
+			t.Fatalf("attributes of %q = %+v, want %+v", item.ID, item.Attributes, want[item.ID])
+		}
+	}
+}
+
+// TestListStateVersionsDeniedHidesExistence proves a caller without
+// unit:read answers 403 for both an existing and an unknown workspace, so
+// the route never tells whether the filtered workspace exists.
+func TestListStateVersionsDeniedHidesExistence(t *testing.T) {
+	t.Parallel()
+
+	handler := newStateHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitRead: true}},
+	)
+
+	for _, tc := range []struct {
+		name   string
+		target string
+	}{
+		{
+			name:   "existing workspace",
+			target: "/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=web",
+		},
+		{
+			name:   "unknown workspace",
+			target: "/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=ghost",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, stateRequest(t, tc.target))
+
+			checkJSONAPIError(t, rec, http.StatusForbidden)
+		})
+	}
+}
+
+// TestListStateVersionsFilters proves a missing filter answers 400, an
+// unknown workspace answers 404 and a bad page answers 422, each as a
+// JSON:API error.
+func TestListStateVersionsFilters(t *testing.T) {
+	t.Parallel()
+
+	handler := newListStateHandler(t)
+
+	for _, tc := range []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{name: "missing workspace", target: "/api/v2/state-versions?filter[organization][name]=acme", want: http.StatusBadRequest},
+		{name: "missing organization", target: "/api/v2/state-versions?filter[workspace][name]=web", want: http.StatusBadRequest},
+		{name: "no filters", target: "/api/v2/state-versions", want: http.StatusBadRequest},
+		{
+			name:   "unknown workspace",
+			target: "/api/v2/state-versions?filter[organization][name]=acme&filter[workspace][name]=ghost",
+			want:   http.StatusNotFound,
+		},
+		{
+			name:   "unknown organization",
+			target: "/api/v2/state-versions?filter[organization][name]=ghost&filter[workspace][name]=web",
+			want:   http.StatusNotFound,
+		},
+		{
+			name:   "bad page size",
+			target: listTarget("page[size]=many"),
+			want:   http.StatusUnprocessableEntity,
+		},
+		{
+			name:   "zero page number",
+			target: listTarget("page[number]=0"),
+			want:   http.StatusUnprocessableEntity,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, stateRequest(t, tc.target))
+
+			checkJSONAPIError(t, rec, tc.want)
+		})
 	}
 }
 

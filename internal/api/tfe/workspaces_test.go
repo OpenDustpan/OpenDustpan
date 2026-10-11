@@ -740,6 +740,12 @@ func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 	return nil, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) History(
+	_ context.Context, _ workspace.ID, _ workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	return nil, 0, nil
+}
+
 // newPagingHandler returns a production Handler over three workspaces.
 func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()

@@ -200,9 +200,22 @@ func (h *Handler) lockRoutes() []Route {
 }
 
 // stateRoutes returns the state read routes: the current state version, one
-// state version, its download and its outputs. Every route needs unit:read.
+// state version, its download, its outputs and the state version list. Every
+// route needs unit:read.
 func (h *Handler) stateRoutes() []Route {
 	return []Route{
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-versions",
+			// A list needs unit:read on opentofu:<namespace>/<name>. The
+			// resolver reads the two filters and builds the workspace unit.
+			// A missing filter answers 400; an unknown workspace answers
+			// 404.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: resolveStateVersionList,
+			Serve:   h.listStateVersions,
+		},
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/workspaces/{id}/current-state-version",
