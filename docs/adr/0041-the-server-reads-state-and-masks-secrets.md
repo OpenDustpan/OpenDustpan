@@ -74,11 +74,12 @@ with its fixed list of fields, is not part of this decision.
    reveal with the unit, the version and one value path. The call answers the
    plain value of that path only. The console shows a masked value until the
    user selects reveal.
-5. **Each reveal writes an audit entry.** The entry holds the principal, the
-   action, the unit reference, the version, the value path, the result and the
-   time. The server writes the entry before it answers. If the write fails,
-   the call fails and answers no value. An audit entry is a write in a
-   namespace, so it carries the namespace fence.
+5. **Each reveal writes an audit entry.** The entry has the fields of
+   decision 13, with the version and the value path of the reveal. The server
+   writes the entry before it answers. If the write fails, the call fails and
+   answers no value. The server then writes a log line and counts the failure
+   in a metric. An audit entry is a write in a namespace, so it carries the
+   namespace fence.
 6. **Actions.** The actions follow the names in `pkg/identity`:
    - `unit:read`: the unit, its history, and the masked state read. It also
      covers the outputs of the unit with secret values masked, and the
@@ -145,7 +146,29 @@ with its fixed list of fields, is not part of this decision.
     SQL, with a conformance suite and a REST route to list them. No API
     changes or deletes an entry. The two audit routes of ADR 23
     (`decrypt/log-decryption` and `decrypt/log-batch-decryption`) write
-    entries to this store. Retention, export and other events stay in RFC 22.
+    entries to this store. This ADR fixes the entry schema now, so that RFC 22 can
+    add events and fields without a change of meaning:
+    - **Who:** the principal subject, the subject at the identity provider
+      when the principal has one, and the access token ID when the principal
+      has one. The schema keeps a column for each, also before the server
+      can fill it.
+    - **What:** the action and the object (a unit reference or a namespace),
+      and for a state read, the version and the value path.
+    - **When:** UTC, in Unix milliseconds.
+    - **Where:** the source IP address that the server sees, the user agent,
+      and the channel (API or console). The client declares the channel, so
+      the entry records it as declared. A rule for trusted proxies is for
+      RFC 22.
+    - **Outcome:** `success`, `failure` or `denied`.
+    - **Request ID:** the `X-Request-Id` of the request (ADR 32).
+    - **Hash chain:** each entry holds the SHA-256 of its own fields and of
+      the previous entry of its namespace. A check call reads the chain of
+      a namespace. The chain shows a change or a deletion of an entry. It
+      does not stop a person who can write to the database and compute the
+      chain again. An anchor outside the database is for RFC 22.
+
+    The next steps in RFC 22 are retention, export to a SIEM, and the full
+    catalog of events.
 14. **Order of work.** Each route lands with its e2e step first (ADR 12) and
     with its actions in the route table (ADR 17). The sealing at rest comes
     first, because it changes no API. The route paths and field names are for
@@ -184,6 +207,8 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   no client loses access now.
 - Each `tofu plan` and `tofu apply` writes an audit entry for the download.
   The audit store grows with each run until RFC 22 decides retention.
+- A hash chain puts the appends of one namespace in a sequence. Each append
+  reads the last entry of its namespace in the same transaction.
 - An installation that stores OpenTofu state must set a key-encryption key.
   A lost key means lost OpenTofu state, as it means lost secrets for the
   Pulumi CLI (ADR 23). The documents must say this.
