@@ -54,6 +54,9 @@ const (
 	ActionUnitManage     Action = "unit:manage"
 	ActionUnitEncrypt    Action = "unit:encrypt"
 	ActionUnitDecrypt    Action = "unit:decrypt"
+	// ActionCallerRead allows reading the caller's own record, for example
+	// the current-user endpoint of a tool API. Its object is CallerObject.
+	ActionCallerRead Action = "caller:read"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -62,21 +65,37 @@ const (
 	maxUnitLength = 300
 )
 
-// Object is a namespace or a unit reference. A namespace reference is the
+// Object is the thing an action applies to: a namespace, a unit reference,
+// or the authenticated caller itself. A namespace reference is the
 // namespace name. A unit reference is the tool, the namespace and the tool's
 // own name for the unit, written as <tool>:<namespace>/<name>. The core keeps
-// the tool-specific name opaque and never parses it.
+// the tool-specific name opaque and never parses it. The caller reference
+// names the principal in the request and has no namespace or unit. Its wire
+// form starts with '@', which namespace names never contain, so ParseObject
+// rejects it and it never equals a namespace. Use IsCaller to test for it;
+// String alone also differs, but IsCaller states the intent.
 type Object struct {
-	raw    string
-	ns     namespace.Name
-	tool   string
-	unit   string
-	isUnit bool
+	raw      string
+	ns       namespace.Name
+	tool     string
+	unit     string
+	isUnit   bool
+	isCaller bool
 }
 
 // NamespaceObject returns the reference to the namespace ns.
 func NamespaceObject(ns namespace.Name) Object {
-	return Object{raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false}
+	return Object{raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false, isCaller: false}
+}
+
+// CallerObject returns the reference to the authenticated caller itself, for
+// endpoints that read the caller's own record and act on no namespace or
+// unit. Its wire form is "@caller", which ParseObject rejects: '@' is not a
+// valid namespace character, so a namespace named "caller" never equals it.
+// Every tool API needs it for its current-user endpoint, so it lives in the
+// core.
+func CallerObject() Object {
+	return Object{raw: "@caller", ns: namespace.Name(""), tool: "", unit: "", isUnit: false, isCaller: true}
 }
 
 // UnitObject returns the reference to the unit called name in the namespace ns
@@ -93,10 +112,11 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 
 	raw := tool + ":" + ns.String() + "/" + name
 
-	return Object{raw: raw, ns: ns, tool: tool, unit: name, isUnit: true}, nil
+	return Object{raw: raw, ns: ns, tool: tool, unit: name, isUnit: true, isCaller: false}, nil
 }
 
-// ParseObject parses s as a namespace or unit reference.
+// ParseObject parses s as a namespace or unit reference. It rejects the
+// caller reference form: use CallerObject for that.
 func ParseObject(s string) (Object, error) {
 	if !strings.Contains(s, ":") {
 		ns, err := namespace.ParseName(s)
@@ -104,7 +124,7 @@ func ParseObject(s string) (Object, error) {
 			return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 		}
 
-		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false}, nil
+		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false, isCaller: false}, nil
 	}
 
 	return parseUnitObject(s)
@@ -137,7 +157,7 @@ func parseUnitObject(s string) (Object, error) {
 		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 	}
 
-	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true}, nil
+	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true, isCaller: false}, nil
 }
 
 // validUnitName reports whether name is a usable opaque unit name.
@@ -165,6 +185,12 @@ func (o Object) String() string {
 // IsUnit reports whether the reference names a unit rather than a namespace.
 func (o Object) IsUnit() bool {
 	return o.isUnit
+}
+
+// IsCaller reports whether the reference names the authenticated caller
+// itself rather than a namespace or a unit.
+func (o Object) IsCaller() bool {
+	return o.isCaller
 }
 
 // Namespace returns the namespace that owns the object.

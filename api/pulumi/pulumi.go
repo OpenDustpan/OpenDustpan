@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -23,9 +24,16 @@ import (
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
+// errInvalidBody reports a request body that is not valid JSON. classify maps
+// it to the 400 response the Pulumi CLI expects.
+var errInvalidBody = errors.New(invalidBodyMessage)
+
 const (
 	maxBodyBytes = 1 << 20
 	tokenScheme  = "token "
+	// invalidBodyMessage is the response text for a request body that is not
+	// valid JSON.
+	invalidBodyMessage = "invalid JSON body"
 	// unitTool names this API's tool in unit references.
 	unitTool = "pulumi"
 )
@@ -46,7 +54,8 @@ type Handler struct {
 	authn   identity.Authenticator
 	authz   identity.Authorizer
 	logger  *slog.Logger
-	mux     *http.ServeMux
+	mux     *patternMux
+	routes  []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -70,14 +79,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authn:   cfg.Authenticator,
 		authz:   cfg.Authorizer,
 		logger:  cfg.Logger,
-		mux:     http.NewServeMux(),
+		mux:     newPatternMux(),
+		routes:  nil,
 	}
 
-	h.mux.HandleFunc("GET /api/capabilities", h.capabilities)
-	h.mux.HandleFunc("GET /api/user", h.authenticated(h.currentUser))
-	h.mux.HandleFunc("GET /api/user/stacks", h.authenticated(h.listStacks))
-	h.mux.HandleFunc("POST /api/stacks/{namespace}/{project}", h.authenticated(h.createStack))
-	h.mux.HandleFunc("GET /api/stacks/{namespace}/{project}/{stack}", h.authenticated(h.getStack))
+	h.routes = h.buildRoutes()
+	for _, route := range h.routes {
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	}
 
 	return h, nil
 }
@@ -91,7 +100,7 @@ type capabilitiesResponse struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	h.writeJSON(r.Context(), w, http.StatusOK, capabilitiesResponse{Capabilities: []string{}})
 }
 
@@ -101,7 +110,7 @@ type userResponse struct {
 	Organizations []string `json:"organizations"`
 }
 
-func (h *Handler) currentUser(w http.ResponseWriter, r *http.Request, p identity.Principal) {
+func (h *Handler) currentUser(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	h.writeJSON(r.Context(), w, http.StatusOK, userResponse{
 		GithubLogin:   p.Subject,
 		Name:          p.DisplayName,
@@ -121,27 +130,19 @@ type listStacksResponse struct {
 	Stacks []stackSummary `json:"stacks"`
 }
 
-func (h *Handler) listStacks(w http.ResponseWriter, r *http.Request, p identity.Principal) {
+func (h *Handler) listStacks(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	ns, err := namespace.ParseName(r.URL.Query().Get("organization"))
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
+	ns := obj.Namespace()
 
 	var project stack.ProjectName
 	if raw := r.URL.Query().Get("project"); raw != "" {
+		var err error
 		if project, err = stack.ParseProjectName(raw); err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
-	}
-
-	if !h.authorize(ctx, w, p, identity.ActionUnitRead, identity.NamespaceObject(ns)) {
-		return
 	}
 
 	stacks, err := h.stacks.List(ctx, stack.Filter{Namespace: ns, Project: project})
@@ -172,16 +173,28 @@ type createStackRequest struct {
 
 type createStackResponse struct{}
 
-func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity.Principal) {
+func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
-	var req createStackRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
 		h.writeJSON(
 			ctx,
 			w,
 			http.StatusBadRequest,
-			errorResponse{Code: http.StatusBadRequest, Message: "invalid JSON body"},
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
+		)
+
+		return
+	}
+
+	req, err := parseCreateStackRequest(body)
+	if err != nil {
+		h.writeJSON(
+			ctx,
+			w,
+			http.StatusBadRequest,
+			errorResponse{Code: http.StatusBadRequest, Message: invalidBodyMessage},
 		)
 
 		return
@@ -191,17 +204,6 @@ func (h *Handler) createStack(w http.ResponseWriter, r *http.Request, p identity
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return
-	}
-
-	obj, err := unitObject(ref)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	if !h.authorize(ctx, w, p, identity.ActionUnitManage, obj) {
 		return
 	}
 
@@ -224,24 +226,13 @@ type stackResponse struct {
 	Version      int64             `json:"version"`
 }
 
-func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, p identity.Principal) {
+func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return
-	}
-
-	obj, err := unitObject(ref)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	if !h.authorize(ctx, w, p, identity.ActionUnitRead, obj) {
 		return
 	}
 
@@ -268,44 +259,14 @@ func unitObject(ref stack.Ref) (identity.Object, error) {
 	return identity.UnitObject(unitTool, ref.Namespace, ref.Project.String()+"/"+ref.Stack.String())
 }
 
-// authorize reports whether p may perform action on obj, writing the error response if not.
-func (h *Handler) authorize(
-	ctx context.Context,
-	w http.ResponseWriter,
-	p identity.Principal,
-	action identity.Action,
-	obj identity.Object,
-) bool {
-	if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
-		h.writeError(ctx, w, err)
-
-		return false
+// authenticate resolves the "Authorization: token <t>" header to a principal.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	if !ok || token == "" {
+		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return true
-}
-
-type authenticatedHandler func(w http.ResponseWriter, r *http.Request, p identity.Principal)
-
-// authenticated resolves the "Authorization: token <t>" header to a principal.
-func (h *Handler) authenticated(next authenticatedHandler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
-		if !ok || token == "" {
-			h.writeError(r.Context(), w, identity.ErrUnauthenticated)
-
-			return
-		}
-
-		p, err := h.authn.AuthenticateToken(r.Context(), token)
-		if err != nil {
-			h.writeError(r.Context(), w, err)
-
-			return
-		}
-
-		next(w, r, p)
-	}
+	return h.authn.AuthenticateToken(r.Context(), token)
 }
 
 // errorResponse is the error body the Pulumi CLI expects.
@@ -330,6 +291,8 @@ func classify(err error) (int, string) {
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, errInvalidBody):
+		return http.StatusBadRequest, invalidBodyMessage
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
