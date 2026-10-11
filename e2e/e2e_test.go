@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"crypto/rand"
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -4123,6 +4125,447 @@ func checkTofuPairReport(ctx context.Context, t *testing.T, pair *e2e.Pair) {
 
 	if len(run.Requests) == 0 {
 		t.Fatal("pair report holds no requests")
+	}
+}
+
+// TestTofuImportReplay proves the T2 import (ADR 29): three applies on the
+// source S, the replay script in scripts/import-tfe-state.sh (dry run first),
+// three replayed versions on the destination D with the same serial, lineage
+// and MD5, a normal apply on D, and a second run that moves nothing, with S
+// unchanged. It runs on Linux on every OpenTofu version and store under test
+// and writes a -pair report. It needs jq on PATH for the script and skips
+// with a clear report when jq is absent.
+func TestTofuImportReplay(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "linux" {
+		t.Skipf("the OpenTofu replay suite needs Linux, not %s", runtime.GOOS)
+	}
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	tool := e2e.OpenTofu()
+
+	if skipWithoutJq(t, tool, databases) {
+		t.Skip("the replay script needs jq on PATH")
+	}
+
+	for _, label := range tool.Versions() {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			runImportReplayLabel(t, fetcher, tool, label, databases)
+		})
+	}
+}
+
+// skipWithoutJq writes a skipped report for every version and store when jq
+// is absent from PATH and reports whether it did. The replay script needs jq
+// to read the TFE list route.
+func skipWithoutJq(t *testing.T, tool e2e.Tool, databases []e2e.Store) bool {
+	t.Helper()
+
+	if _, err := exec.LookPath("jq"); err == nil {
+		return false
+	}
+
+	reason := "the replay script needs jq on PATH"
+
+	for _, label := range tool.Versions() {
+		for _, db := range databases {
+			writeReport(t, e2e.NotRun(tool.Name, label+"-pair", db, reason, true))
+		}
+	}
+
+	return true
+}
+
+// runImportReplayLabel installs one OpenTofu CLI and runs the T2 replay on
+// every store under test.
+func runImportReplayLabel(
+	t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, databases []e2e.Store,
+) {
+	t.Helper()
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	defer cancel()
+
+	cli, err := fetcher.Install(installCtx, tool, label)
+	if err != nil {
+		for _, db := range databases {
+			writeReport(t, e2e.NotRun(tool.Name, label+"-pair", db, err.Error(), false))
+		}
+
+		t.Fatalf("install %s %s: %v", tool.Name, label, err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runImportReplayOnStore(t, cli, db)
+		})
+	}
+}
+
+// replayVersion is one listed state version the replay test compares: its ID
+// with the serial, lineage and MD5 the replay must keep.
+type replayVersion struct {
+	id      string
+	serial  int64
+	lineage string
+	md5     string
+}
+
+// runImportReplayOnStore runs the T2 replay on one store: three applies on S,
+// the script dry run and replay, the triple check on D, an apply on D, a
+// second run that moves nothing, and the proof that S never changed.
+func runImportReplayOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	pair := e2e.NewPair(ctx, t, cli, store)
+
+	t.Cleanup(func() {
+		writeReport(t, pair.NewPairRun())
+	})
+
+	pair.MergeTofuPair(t)
+
+	src, dst := pair.Src, pair.Dst
+
+	src.Step(ctx, t, step("init on source", nil, "init", "-input=false", "-no-color"))
+
+	for i, greeting := range []string{"one", "two", "three"} {
+		src.WriteTofuConfig(t, tofuGreetingConfig(src.Host(), greeting))
+		src.Step(
+			ctx,
+			t,
+			step(fmt.Sprintf("source apply %d", i+1), nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+		)
+	}
+
+	before := listReplayVersions(ctx, t, src)
+	if len(before) != 3 {
+		t.Fatalf("source holds %d versions, want 3 before the replay", len(before))
+	}
+
+	dst.Step(ctx, t, step("init on destination", nil, "init", "-input=false", "-no-color"))
+
+	if got := listReplayVersions(ctx, t, dst); len(got) != 0 {
+		t.Fatalf("destination holds %d versions, want none before the replay", len(got))
+	}
+
+	srcWS := src.WorkspaceID(ctx, t)
+
+	args := replayArgs(pair)
+
+	dry := runReplayScript(ctx, t, pair, "replay dry run", append(args, "--dry-run")...)
+
+	if dry.ExitCode != 0 {
+		t.Fatalf("replay dry run exits with status %d: %s%s", dry.ExitCode, dry.Stdout, dry.Stderr)
+	}
+
+	if got := listReplayVersions(ctx, t, dst); len(got) != 0 {
+		t.Fatalf("destination holds %d versions, want none after the dry run", len(got))
+	}
+
+	checkDryRunReadOnly(t, pair, "replay dry run")
+
+	replayed := runReplayScript(ctx, t, pair, "replay", args...)
+
+	if replayed.ExitCode != 0 {
+		t.Fatalf("replay exits with status %d: %s%s", replayed.ExitCode, replayed.Stdout, replayed.Stderr)
+	}
+
+	checkReplayedTriples(t, before, listReplayVersions(ctx, t, dst))
+	checkSourceUnchanged(t, src, before)
+	checkNoSourceWrite(t, pair, srcWS, "replay")
+
+	dst.WriteTofuConfig(t, tofuGreetingConfig(dst.Host(), "four"))
+	dst.Step(ctx, t, step("apply on destination", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	dst.Step(ctx, t, step("state pull on destination", contains(`"four"`), "state", "pull", "-no-color"))
+
+	again := runReplayScript(ctx, t, pair, "replay again", args...)
+
+	if again.ExitCode != 0 {
+		t.Fatalf("second replay exits with status %d: %s%s", again.ExitCode, again.Stdout, again.Stderr)
+	}
+
+	if out := again.Stdout + again.Stderr; !strings.Contains(out, "moving 0") {
+		t.Fatalf("second replay output lacks moving 0: %s%s", again.Stdout, again.Stderr)
+	}
+
+	if got := listReplayVersions(ctx, t, dst); len(got) != 4 {
+		t.Fatalf("destination holds %d versions, want 4 after the apply and the second run", len(got))
+	}
+
+	checkSourceUnchanged(t, src, before)
+	checkNoSourceWrite(t, pair, srcWS, "replay again")
+}
+
+// tofuGreetingConfig is the cloud-block configuration with one greeting
+// output, so each apply with a new greeting writes a new state version.
+func tofuGreetingConfig(host, greeting string) string {
+	return `terraform {
+  cloud {
+    hostname     = ` + strconv.Quote(host) + `
+    organization = ` + strconv.Quote(e2e.Namespace) + `
+    workspaces {
+      name = ` + strconv.Quote(e2e.Workspace) + `
+    }
+  }
+}
+
+output "greeting" {
+  value = ` + strconv.Quote(greeting) + `
+}
+`
+}
+
+// replayArgs returns the replay script arguments for pair: both server URLs,
+// both namespaces and workspaces, the last ten versions and the trust bundle.
+func replayArgs(pair *e2e.Pair) []string {
+	args := make([]string, 0, 16)
+
+	return append(args,
+		"--source-url", pair.Src.URL,
+		"--dest-url", pair.Dst.URL,
+		"--source-org", e2e.Namespace,
+		"--source-workspace", e2e.Workspace,
+		"--dest-org", e2e.Namespace,
+		"--dest-workspace", e2e.Workspace,
+		"--count", "10",
+		"--ca-bundle", pair.Src.CABundle(),
+	)
+}
+
+// replayScriptPath returns the path of scripts/import-tfe-state.sh from the
+// directory of this test file.
+func replayScriptPath(t *testing.T) string {
+	t.Helper()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("find the test file for the script path")
+	}
+
+	return filepath.Join(filepath.Dir(file), "..", "scripts", "import-tfe-state.sh")
+}
+
+// runReplayScript runs the replay script with args and tokens from the pair,
+// records it as name on the source side, and returns the outcome. The tokens
+// travel through the environment, never as arguments, and the outcome must
+// hold neither token.
+func runReplayScript(
+	ctx context.Context, t *testing.T, pair *e2e.Pair, name string, args ...string,
+) e2e.ExternalResult {
+	t.Helper()
+
+	pair.Src.Recorder.SetStep(name)
+
+	path := replayScriptPath(t)
+	command := "import-tfe-state.sh " + strings.Join(args, " ")
+
+	var stdout, stderr bytes.Buffer
+
+	//nolint:gosec // The command is the repository's own replay script.
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Dir = t.TempDir()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(),
+		"IMPORT_TFE_SOURCE_TOKEN="+pair.Src.TokenA(),
+		"IMPORT_TFE_DEST_TOKEN="+pair.Dst.TokenA(),
+	)
+
+	err := cmd.Run()
+	res := e2e.ExternalResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: 0}
+
+	if err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			res.ExitCode = exitErr.ExitCode()
+		} else {
+			res.ExitCode = 1
+			res.Stderr += "\nrun import-tfe-state.sh: " + err.Error()
+		}
+	}
+
+	failure := ""
+
+	switch {
+	case res.ExitCode != 0:
+		failure = fmt.Sprintf("exit code %d", res.ExitCode)
+	case strings.Contains(res.Stdout+res.Stderr, pair.Src.TokenA()) ||
+		strings.Contains(res.Stdout+res.Stderr, pair.Dst.TokenA()):
+		failure = "output holds a token"
+	default:
+	}
+
+	pair.Src.RecordExternalStep(t, name, command, res, failure)
+
+	return res
+}
+
+// replayListAttributes holds the serial, lineage and MD5 of one listed
+// state version in the replay test.
+type replayListAttributes struct {
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+	MD5     string `json:"md5"`
+}
+
+// replayListItem decodes one entry of a state version list in the replay
+// test: its ID with the serial, lineage and MD5 the replay must keep.
+type replayListItem struct {
+	ID         string               `json:"id"`
+	Attributes replayListAttributes `json:"attributes"`
+}
+
+// listReplayVersions returns the state versions of the environment workspace,
+// newest first, through the TFE list route.
+func listReplayVersions(ctx context.Context, t *testing.T, env *e2e.Env) []replayVersion {
+	t.Helper()
+
+	target := "/api/v2/state-versions?filter[organization][name]=" + e2e.Namespace +
+		"&filter[workspace][name]=" + e2e.Workspace + "&page[size]=100"
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, target, "")
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list state versions answers %d: %s", status, body)
+	}
+
+	var doc struct {
+		Data []replayListItem `json:"data"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode state version list: %v", err)
+	}
+
+	out := make([]replayVersion, 0, len(doc.Data))
+	for _, item := range doc.Data {
+		out = append(out, replayVersion{
+			id:      item.ID,
+			serial:  item.Attributes.Serial,
+			lineage: item.Attributes.Lineage,
+			md5:     item.Attributes.MD5,
+		})
+	}
+
+	return out
+}
+
+// checkReplayedTriples proves D holds every source version with the same
+// serial, lineage and MD5: the replay kept the three values of each version.
+func checkReplayedTriples(t *testing.T, want, got []replayVersion) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("destination holds %d versions, want %d", len(got), len(want))
+	}
+
+	bySerial := func(a, b replayVersion) int {
+		switch {
+		case a.serial != b.serial:
+			return cmp.Compare(a.serial, b.serial)
+		case a.lineage != b.lineage:
+			return strings.Compare(a.lineage, b.lineage)
+		default:
+			return strings.Compare(a.md5, b.md5)
+		}
+	}
+
+	slices.SortFunc(want, bySerial)
+	slices.SortFunc(got, bySerial)
+
+	for i := range want {
+		if got[i].serial != want[i].serial || got[i].lineage != want[i].lineage || got[i].md5 != want[i].md5 {
+			t.Fatalf(
+				"destination version %+v, want serial %d lineage %q md5 %q",
+				got[i],
+				want[i].serial,
+				want[i].lineage,
+				want[i].md5,
+			)
+		}
+	}
+}
+
+// checkSourceUnchanged proves the source still holds the same versions: the
+// replay never writes to S.
+func checkSourceUnchanged(t *testing.T, src *e2e.Env, want []replayVersion) {
+	t.Helper()
+
+	got := listReplayVersions(t.Context(), t, src)
+
+	if len(got) != len(want) {
+		t.Fatalf("source holds %d versions, want %d: the replay changed S", len(got), len(want))
+	}
+
+	ids := map[string]bool{}
+	for _, v := range want {
+		ids[v.id] = true
+	}
+
+	for _, v := range got {
+		if !ids[v.id] {
+			t.Fatalf("source holds new version %q: the replay changed S", v.id)
+		}
+	}
+}
+
+// checkDryRunReadOnly proves every request of a dry-run step is a GET: the
+// dry run only reads.
+func checkDryRunReadOnly(t *testing.T, pair *e2e.Pair, step string) {
+	t.Helper()
+
+	entries := pair.Src.Recorder.Entries()
+
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Step != step {
+			continue
+		}
+
+		if entry.Method != http.MethodGet {
+			t.Fatalf("dry run step %q holds a write: %s %s", step, entry.Method, entry.Path)
+		}
+	}
+}
+
+// checkNoSourceWrite proves the recorder shows no write to the source
+// workspace during step: no non-GET entry names the source workspace ID. The
+// destination writes of a real run name its own workspace instead.
+func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
+	t.Helper()
+
+	entries := pair.Src.Recorder.Entries()
+
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Step != step {
+			continue
+		}
+
+		if entry.Method == http.MethodGet {
+			continue
+		}
+
+		if strings.Contains(entry.Path, srcWS) {
+			t.Fatalf("replay step %q writes to the source: %s %s", step, entry.Method, entry.Path)
+		}
 	}
 }
 
