@@ -10,10 +10,43 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/store/schema"
 )
 
 // ErrBadName reports a migration file not named NNNN_description.sql.
 var ErrBadName = errors.New("migration file must be named NNNN_description.sql")
+
+// Inspect returns the schema state for recorded versions against the
+// embedded migrations: the newest recorded version, the newest embedded
+// version, the names of the embedded migrations the database does not
+// record, and the recorded versions the binary does not embed.
+func Inspect(recorded []int64, embedded []Migration) schema.Inspection {
+	done := make(map[int64]bool, len(recorded))
+	for _, v := range recorded {
+		done[v] = true
+	}
+
+	var pending []string
+
+	for _, m := range embedded {
+		if !done[m.Version] {
+			pending = append(pending, m.Name)
+		}
+	}
+
+	versions := make([]int64, 0, len(embedded))
+	for _, m := range embedded {
+		versions = append(versions, m.Version)
+	}
+
+	return schema.Inspection{
+		DatabaseVersion: schema.DatabaseVersion(recorded),
+		BinaryVersion:   schema.BinaryVersion(versions),
+		Pending:         pending,
+		Unknown:         UnknownRecorded(recorded, embedded),
+	}
+}
 
 // UnknownRecorded returns the recorded versions the binary does not embed,
 // ordered. It returns nothing when the database is equal or older, even when

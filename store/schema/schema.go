@@ -81,3 +81,19 @@ func BinaryVersion(embedded []int64) int64 {
 
 	return newest
 }
+
+// Inspection is the read-only schema state of one database. Inspect in each
+// store adapter returns it, and `opendustpan upgrade check` reads it.
+type Inspection struct {
+	// DatabaseVersion is the newest migration version the database records.
+	// It is zero when the database records none.
+	DatabaseVersion int64
+	// BinaryVersion is the newest migration version the binary embeds.
+	BinaryVersion int64
+	// Pending holds the names of the embedded migrations the database does
+	// not record, ordered by version.
+	Pending []string
+	// Unknown holds the recorded versions the binary does not embed,
+	// ordered. It is empty when the database is equal or older.
+	Unknown []int64
+}
