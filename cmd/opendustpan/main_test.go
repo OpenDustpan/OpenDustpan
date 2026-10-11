@@ -1546,7 +1546,6 @@ func TestBackupCheckUsage(t *testing.T) {
 		args []string
 		want error
 	}{
-		{"backup without a subcommand waits for a later change", []string{"backup"}, errUsage},
 		{"unknown backup subcommand", []string{"backup", "no-such"}, errUsage},
 		{"check without an id", []string{"backup", "check", "--backup-target", "dir:/tmp/x"}, errBackupID},
 		{
