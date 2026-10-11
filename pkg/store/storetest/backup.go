@@ -1,0 +1,1437 @@
+package storetest
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+// BackupStore is every port the backup suite exercises: the domain stores it
+// fills and compares through, and the backup ports under test. RunBackup
+// exercises them the same way Run covers the namespace and stack ports.
+// Every store adapter runs the suite once it implements the ports (issues
+// #143 and #144); until then a fake in backup_test.go runs it and proves
+// each case can fail.
+type BackupStore interface { //nolint:interfacebloat // A whole-store round trip fills every table, so the union holds every port.
+	namespace.Store
+	stack.Store
+	stack.UpdateStore
+	stack.CheckpointStore
+	stack.EventStore
+	secret.KeyStore
+	inventory.Reader
+	workspace.Store
+	workspace.StateStore
+	backup.Exporter
+	backup.Importer
+	backup.Registry
+	backup.Inspector
+}
+
+// BackupFactory returns a fresh, empty store for one subtest.
+type BackupFactory func(t *testing.T) BackupStore
+
+// Reopener is an optional BackupStore capability for the close-and-reopen
+// case: Close releases the store and Reopen returns a new handle to the same
+// backing storage, as reopening the database file or reconnecting does.
+type Reopener interface {
+	BackupStore
+	// Close releases the store.
+	Close() error
+	// Reopen returns a new handle to the same backing storage.
+	Reopen() BackupStore
+}
+
+// RunBackup executes the conformance suite of the backup ports against stores
+// produced by newStore.
+func RunBackup(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	cases := []struct {
+		test func(t *testing.T, newStore BackupFactory)
+		name string
+	}{
+		{name: "round trip over every table keeps every row", test: testBackupRoundTrip},
+		{name: "table list covers every table of the schema", test: testBackupTablesCoverSchema},
+		{name: "export does not tear a concurrent stack write", test: testBackupExportDoesNotTear},
+		{name: "import refuses a destination that is not empty", test: testBackupImportRefusesNonEmpty},
+		{name: "import refuses another dialect", test: testBackupImportRefusesDialect},
+		{name: "import refuses another schema version", test: testBackupImportRefusesVersion},
+		{name: "a failed import leaves an empty store", test: testBackupFailedImportLeavesEmpty},
+		{name: "import loads the row counts that export returns", test: testBackupRowCountsMatch},
+		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
+		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
+		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.test(t, newStore)
+		})
+	}
+}
+
+// backupSeed holds the rows a fill wrote, so the comparison knows what to read.
+type backupSeed struct {
+	acme       namespace.Namespace
+	other      namespace.Namespace
+	prod       stack.Stack
+	dev        stack.Stack
+	otherProd  stack.Stack
+	finished   stack.Update
+	waiting    stack.Update
+	checkpoint stack.Checkpoint
+	events     []stack.Event
+	scopes     []secret.Scope
+	net        workspace.Workspace
+	plain      workspace.Workspace
+	current    workspace.StateVersion
+	pending    workspace.StateVersion
+	backedUp   backup.Record
+}
+
+// seedBackupStore fills s through the real ports: namespaces, stacks with
+// tags, a finished and a waiting update, one checkpoint, events, secret keys
+// under two wrappers, workspaces with a finalized and a pending state
+// version, and one finished backup row. Inventory rows follow from the tool
+// writes.
+func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
+	t.Helper()
+
+	ctx := t.Context()
+	f := newFixture(t, s)
+	prod := mustGetStack(t, s, f.ref)
+
+	other := namespace.Namespace{
+		CreatedAt:       now(),
+		Name:            "other",
+		HomeRegion:      "us-east",
+		FailoverVersion: 1,
+	}
+
+	if err := s.CreateNamespace(ctx, other); err != nil {
+		t.Fatalf("create namespace %q: %v", other.Name, err)
+	}
+
+	acme := mustGetNamespace(t, s, "acme")
+	dev := mustCreateStack(t, s, acme, "dev")
+	otherProd := mustCreateStack(t, s, other, "prod")
+
+	running := f.run(t, f.ref, "u1", mutating())
+	checkpoint := newCheckpoint(running, 0, `{"v":1}`)
+
+	if err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	batch := newEvents(running, 1, 0, 1)
+	if err := s.AppendEvents(ctx, batch, f.fence); err != nil {
+		t.Fatalf("append events: %v", err)
+	}
+
+	finished := f.end(t, running, stack.StatusSucceeded)
+	waiting := f.create(t, f.ref, "u2", mutating())
+
+	scopes := []secret.Scope{
+		seedBackupKey(t, s, acme, prod, "kek-1"),
+		seedBackupKey(t, s, acme, dev, "kek-2"),
+	}
+
+	net := createTestWorkspace(t, s, acme, "network")
+	locked := lockTestWorkspace(t, s, acme, net, "alice")
+	declared := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
+	createPendingVersion(t, s, acme, declared)
+
+	current := finalizedVersion(declared, now().Add(2*time.Hour), "v1")
+	if err := s.FinalizeStateVersion(ctx, current, acme.Fence()); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	pending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
+	createPendingVersion(t, s, acme, pending)
+
+	plain := createTestWorkspace(t, s, other, "plain")
+	backedUp := seedBackupRecord(t, s)
+
+	return backupSeed{
+		acme:       acme,
+		other:      other,
+		prod:       prod,
+		dev:        dev,
+		otherProd:  otherProd,
+		finished:   finished,
+		waiting:    waiting,
+		checkpoint: checkpoint,
+		events:     batch.Events,
+		scopes:     scopes,
+		net:        net,
+		plain:      plain,
+		current:    current,
+		pending:    pending,
+		backedUp:   backedUp,
+	}
+}
+
+// mustCreateStack creates one stack called name in ns, failing on error.
+func mustCreateStack(t *testing.T, s BackupStore, ns namespace.Namespace, name string) stack.Stack {
+	t.Helper()
+
+	st := newStack(ns.Name, "web", name)
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", st.Ref, err)
+	}
+
+	return st
+}
+
+// seedBackupKey stores one wrapped data key and returns its scope.
+func seedBackupKey(
+	t *testing.T, s BackupStore, acme namespace.Namespace, st stack.Stack, wrapper string,
+) secret.Scope {
+	t.Helper()
+
+	scope, err := secret.NewScope(acme.Name, st.ID.String())
+	if err != nil {
+		t.Fatalf("new scope of %s: %v", st.Ref, err)
+	}
+
+	key := secret.WrappedKey{
+		CreatedAt:  now(),
+		Scope:      scope,
+		WrapperID:  wrapper,
+		Ciphertext: []byte("wrapped-" + st.Ref.Stack.String()),
+	}
+
+	stored, err := s.CreateKey(t.Context(), key, acme.Fence())
+	if err != nil {
+		t.Fatalf("create key of %s: %v", st.Ref, err)
+	}
+
+	_ = stored
+
+	return scope
+}
+
+// seedBackupRecord stores one finished backup row, so the round trip compares
+// the backups table row by row too, not only through its row count.
+func seedBackupRecord(t *testing.T, s BackupStore) backup.Record {
+	t.Helper()
+
+	ctx := t.Context()
+	seeded := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+
+	if err := s.CreateBackup(ctx, seeded); err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+
+	backedUp, err := s.FinishBackup(ctx, seeded.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("finish backup: %v", err)
+	}
+
+	return backedUp
+}
+
+// exportBackup exports s into memory, failing on error.
+func exportBackup(t *testing.T, s BackupStore) (backup.Summary, []byte) {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	sum, err := s.Export(t.Context(), &buf)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	return sum, buf.Bytes()
+}
+
+// importBackup loads data with want into dst, failing on error.
+func importBackup(t *testing.T, dst BackupStore, data []byte, want backup.Summary) backup.Summary {
+	t.Helper()
+
+	got, err := dst.Import(t.Context(), bytes.NewReader(data), want)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	return got
+}
+
+// assertBackupEmpty fails when s holds any namespace, secret key, or backup
+// row. Namespaces own every other row through foreign keys, so an empty
+// namespace and backup list means an empty store; the wrapper-ID check names
+// the secret_keys table directly, matching the fake's full-table empty check.
+func assertBackupEmpty(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	namespaces, err := s.ListNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces: %v", err)
+	}
+
+	if len(namespaces) != 0 {
+		t.Fatalf("namespaces = %+v, want none", namespaces)
+	}
+
+	wrappers, err := s.ListWrapperIDs(t.Context())
+	if err != nil {
+		t.Fatalf("list wrapper IDs: %v", err)
+	}
+
+	if len(wrappers) != 0 {
+		t.Fatalf("wrapper IDs = %+v, want none", wrappers)
+	}
+
+	rows, err := s.ListBackups(t.Context())
+	if err != nil {
+		t.Fatalf("list backups: %v", err)
+	}
+
+	if len(rows) != 0 {
+		t.Fatalf("backups = %+v, want none", rows)
+	}
+}
+
+// mustGetNamespace reads one namespace, failing on error.
+func mustGetNamespace(t *testing.T, s BackupStore, name namespace.Name) namespace.Namespace {
+	t.Helper()
+
+	got, err := s.GetNamespace(t.Context(), name)
+	if err != nil {
+		t.Fatalf("get namespace %q: %v", name, err)
+	}
+
+	return got
+}
+
+// mustListNamespaces lists every namespace, failing on error.
+func mustListNamespaces(t *testing.T, s BackupStore) []namespace.Namespace {
+	t.Helper()
+
+	got, err := s.ListNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces: %v", err)
+	}
+
+	return got
+}
+
+// mustGetStack reads one stack, failing on error.
+func mustGetStack(t *testing.T, s BackupStore, ref stack.Ref) stack.Stack {
+	t.Helper()
+
+	got, err := s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack %s: %v", ref, err)
+	}
+
+	return got
+}
+
+// mustListStacks lists the stacks of ns, failing on error.
+func mustListStacks(t *testing.T, s BackupStore, ns namespace.Name) []stack.Stack {
+	t.Helper()
+
+	got, err := s.ListStacks(t.Context(), stack.Filter{Namespace: ns, Project: ""})
+	if err != nil {
+		t.Fatalf("list stacks in %q: %v", ns, err)
+	}
+
+	return got
+}
+
+// mustGetUpdate reads one update, failing on error.
+func mustGetUpdate(t *testing.T, s BackupStore, ref stack.Ref, id stack.UpdateID) stack.Update {
+	t.Helper()
+
+	got, err := s.GetUpdate(t.Context(), ref, id)
+	if err != nil {
+		t.Fatalf("get update %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustLatestCheckpoint reads the latest checkpoint, failing on error.
+func mustLatestCheckpoint(t *testing.T, s BackupStore, ref stack.Ref) stack.Checkpoint {
+	t.Helper()
+
+	got, err := s.LatestCheckpoint(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("latest checkpoint of %s: %v", ref, err)
+	}
+
+	return got
+}
+
+// mustCheckpointByVersion reads one checkpoint by version, failing on error.
+func mustCheckpointByVersion(
+	t *testing.T, s BackupStore, ref stack.Ref, version int64,
+) stack.Checkpoint {
+	t.Helper()
+
+	got, err := s.CheckpointByVersion(t.Context(), ref, version)
+	if err != nil {
+		t.Fatalf("checkpoint of version %d of %s: %v", version, ref, err)
+	}
+
+	return got
+}
+
+// mustListEvents lists the events of one update, failing on error.
+func mustListEvents(t *testing.T, s BackupStore, ref stack.Ref, id stack.UpdateID) []stack.Event {
+	t.Helper()
+
+	got, err := s.ListEvents(t.Context(), ref, id, -1, 100)
+	if err != nil {
+		t.Fatalf("list events of %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustGetKey reads one wrapped data key, failing on error.
+func mustGetKey(t *testing.T, s BackupStore, scope secret.Scope) secret.WrappedKey {
+	t.Helper()
+
+	got, err := s.GetKey(t.Context(), scope)
+	if err != nil {
+		t.Fatalf("get key of %s: %v", scope, err)
+	}
+
+	return got
+}
+
+// mustListWrapperIDs lists the wrapper IDs, failing on error.
+func mustListWrapperIDs(t *testing.T, s BackupStore) []string {
+	t.Helper()
+
+	got, err := s.ListWrapperIDs(t.Context())
+	if err != nil {
+		t.Fatalf("list wrapper IDs: %v", err)
+	}
+
+	return got
+}
+
+// mustListUnits lists the inventory entries of ns, failing on error.
+func mustListUnits(t *testing.T, s BackupStore, ns namespace.Name) []inventory.Entry {
+	t.Helper()
+
+	got, err := s.ListUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list inventory of %q: %v", ns, err)
+	}
+
+	return got
+}
+
+// mustGetWorkspace reads one workspace by reference, failing on error.
+func mustGetWorkspace(t *testing.T, s BackupStore, ref workspace.Ref) workspace.Workspace {
+	t.Helper()
+
+	got, err := s.GetWorkspace(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get workspace %s: %v", ref, err)
+	}
+
+	return got
+}
+
+// mustGetWorkspaceByID reads one workspace by ID, failing on error.
+func mustGetWorkspaceByID(t *testing.T, s BackupStore, id workspace.ID) workspace.Workspace {
+	t.Helper()
+
+	got, err := s.GetWorkspaceByID(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get workspace %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustGetStateVersion reads one state version, failing on error.
+func mustGetStateVersion(t *testing.T, s BackupStore, id workspace.StateVersionID) workspace.StateVersion {
+	t.Helper()
+
+	got, err := s.GetStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get state version %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustCurrentStateVersion reads the current state version, failing on error.
+func mustCurrentStateVersion(t *testing.T, s BackupStore, id workspace.ID) workspace.StateVersion {
+	t.Helper()
+
+	got, err := s.CurrentStateVersion(t.Context(), id)
+	if err != nil {
+		t.Fatalf("current state of %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustGetBackup reads one backup row, failing on error.
+func mustGetBackup(t *testing.T, s BackupStore, id backup.ID) backup.Record {
+	t.Helper()
+
+	got, err := s.GetBackup(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get backup %s: %v", id, err)
+	}
+
+	return got
+}
+
+// mustListBackups lists every backup row, failing on error.
+func mustListBackups(t *testing.T, s BackupStore) []backup.Record {
+	t.Helper()
+
+	got, err := s.ListBackups(t.Context())
+	if err != nil {
+		t.Fatalf("list backups: %v", err)
+	}
+
+	return got
+}
+
+// mustCreateBackup stores a running backup row, failing on error.
+func mustCreateBackup(t *testing.T, s BackupStore, r backup.Record) backup.Record {
+	t.Helper()
+
+	if err := s.CreateBackup(t.Context(), r); err != nil {
+		t.Fatalf("create backup %s: %v", r.ID, err)
+	}
+
+	return r
+}
+
+// backupFinish holds how to finish a running backup row: its ID, the end
+// state with the error text, and the end time.
+type backupFinish struct {
+	ID      backup.ID
+	State   backup.State
+	Error   string
+	EndedAt time.Time
+}
+
+// mustFinishBackup finishes a running backup row, failing on error.
+func mustFinishBackup(t *testing.T, s BackupStore, finish backupFinish) backup.Record {
+	t.Helper()
+
+	got, err := s.FinishBackup(t.Context(), finish.ID, finish.State, finish.Error, finish.EndedAt)
+	if err != nil {
+		t.Fatalf("finish backup %s: %v", finish.ID, err)
+	}
+
+	return got
+}
+
+// mustFailRunningBackups marks every running row failed, failing on error.
+func mustFailRunningBackups(t *testing.T, s BackupStore, endedAt time.Time, errText string) {
+	t.Helper()
+
+	if err := s.FailRunningBackups(t.Context(), endedAt, errText); err != nil {
+		t.Fatalf("fail running backups: %v", err)
+	}
+}
+
+// testBackupRoundTrip fills a store through the real ports, exports it,
+// imports it into an empty store, and compares every table row by row.
+func testBackupRoundTrip(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+	assertExportGroundTruth(t, src, newStore, &seed, sum)
+
+	dst := newStore(t)
+	got := importBackup(t, dst, data, sum)
+
+	assertSummary(t, got, sum)
+	assertExportGroundTruth(t, dst, newStore, &seed, got)
+	compareBackupStores(t, dst, src, &seed)
+}
+
+// assertSummary compares two summaries field by field.
+func assertSummary(t *testing.T, got, want backup.Summary) {
+	t.Helper()
+
+	if got.Dialect != want.Dialect || got.SchemaVersion != want.SchemaVersion ||
+		!slices.Equal(got.HomeRegions, want.HomeRegions) || !slices.Equal(got.WrapperIDs, want.WrapperIDs) ||
+		!maps.Equal(got.RowCounts, want.RowCounts) || !slices.EqualFunc(got.Blobs, want.Blobs, sameBlobRef) {
+		t.Fatalf("summary = %+v, want %+v", got, want)
+	}
+}
+
+// sameBlobRef compares two blob references.
+func sameBlobRef(a, b backup.BlobRef) bool {
+	return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+}
+
+// assertExportGroundTruth checks the export summary against values read
+// through the real ports, not against another summary, so an exporter that
+// returns empty or constant fields fails. Dialect and schema version are
+// store properties: they must be valid and match a fresh store of the same
+// factory, and the refuse cases prove a mismatch is detected.
+func assertExportGroundTruth(
+	t *testing.T, s BackupStore, newStore BackupFactory, seed *backupSeed, sum backup.Summary,
+) {
+	t.Helper()
+
+	assertExportRegions(t, s, sum)
+	assertExportWrappers(t, s, sum)
+	assertExportBlobs(t, s, seed, sum)
+	assertExportCounts(t, s, seed, sum)
+	assertExportDialect(t, newStore, sum)
+}
+
+// assertExportRegions checks the home regions against the namespaces.
+func assertExportRegions(t *testing.T, s BackupStore, sum backup.Summary) {
+	t.Helper()
+
+	namespaces := mustListNamespaces(t, s)
+
+	regions := map[string]bool{}
+	for i := range namespaces {
+		regions[namespaces[i].HomeRegion.String()] = true
+	}
+
+	wantRegions := slices.Sorted(maps.Keys(regions))
+	if !slices.Equal(wantRegions, []string{"eu-west", "us-east"}) {
+		t.Fatalf("home regions of the seed = %v, want [eu-west us-east]", wantRegions)
+	}
+
+	if !slices.Equal(sum.HomeRegions, wantRegions) {
+		t.Fatalf("export home regions = %v, want %v", sum.HomeRegions, wantRegions)
+	}
+}
+
+// assertExportWrappers checks the wrapper IDs against the key store.
+func assertExportWrappers(t *testing.T, s BackupStore, sum backup.Summary) {
+	t.Helper()
+
+	wrappers := mustListWrapperIDs(t, s)
+	if !slices.Equal(wrappers, []string{"kek-1", "kek-2"}) {
+		t.Fatalf("wrapper IDs of the seed = %v, want [kek-1 kek-2]", wrappers)
+	}
+
+	if !slices.Equal(sum.WrapperIDs, wrappers) {
+		t.Fatalf("export wrapper IDs = %v, want %v", sum.WrapperIDs, wrappers)
+	}
+}
+
+// assertExportBlobs checks the blob references against the finalized state.
+func assertExportBlobs(t *testing.T, s BackupStore, seed *backupSeed, sum backup.Summary) {
+	t.Helper()
+
+	current := mustGetStateVersion(t, s, seed.current.ID)
+	if current.Content.String() == "" {
+		t.Fatalf("finalized state %s holds no blob key", current.ID)
+	}
+
+	wantBlobs := []backup.BlobRef{{MD5: current.MD5, Key: current.Content.String(), Size: current.Size}}
+	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
+	}
+}
+
+// assertExportCounts checks the row counts against the seeded rows.
+func assertExportCounts(t *testing.T, s BackupStore, seed *backupSeed, sum backup.Summary) {
+	t.Helper()
+
+	wantCounts := expectedRowCounts(t, s, seed)
+	if !maps.Equal(sum.RowCounts, wantCounts) {
+		t.Fatalf("export row counts = %v, want %v", sum.RowCounts, wantCounts)
+	}
+}
+
+// assertExportDialect checks the dialect and schema version against a fresh
+// store of the same factory.
+func assertExportDialect(t *testing.T, newStore BackupFactory, sum backup.Summary) {
+	t.Helper()
+
+	if sum.Dialect != backup.DialectSQLite && sum.Dialect != backup.DialectPostgres {
+		t.Fatalf("export dialect = %q, want sqlite or postgres", sum.Dialect)
+	}
+
+	if sum.SchemaVersion <= 0 {
+		t.Fatalf("export schema version = %d, want above zero", sum.SchemaVersion)
+	}
+
+	empty := newStore(t)
+
+	var buf bytes.Buffer
+
+	emptySum, err := empty.Export(t.Context(), &buf)
+	if err != nil {
+		t.Fatalf("export an empty store: %v", err)
+	}
+
+	if sum.Dialect != emptySum.Dialect || sum.SchemaVersion != emptySum.SchemaVersion {
+		t.Fatalf(
+			"export dialect/version = %q/%d, want the store properties %q/%d",
+			sum.Dialect,
+			sum.SchemaVersion,
+			emptySum.Dialect,
+			emptySum.SchemaVersion,
+		)
+	}
+}
+
+// expectedRowCounts counts the seeded rows through the real ports where a
+// list port exists, and from the seed where no port lists the table, so the
+// export counts meet values the exporter did not produce. The hardcoded
+// numbers document the seed shape: two namespaces, three stacks with one tag
+// each, two updates, one checkpoint, two secret keys, two workspaces, two
+// state versions and one backup row.
+func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string]int64 {
+	t.Helper()
+
+	ctx := t.Context()
+	stacks := append(mustListStacks(t, s, seed.acme.Name), mustListStacks(t, s, seed.other.Name)...)
+
+	tags := 0
+
+	for i := range stacks {
+		tags += len(stacks[i].Tags)
+	}
+
+	acmeUnits := mustListUnits(t, s, seed.acme.Name)
+	otherUnits := mustListUnits(t, s, seed.other.Name)
+
+	acmeWorkspaces, err := s.ListWorkspaces(ctx, seed.acme.Name)
+	if err != nil {
+		t.Fatalf("list workspaces of %q: %v", seed.acme.Name, err)
+	}
+
+	otherWorkspaces, err := s.ListWorkspaces(ctx, seed.other.Name)
+	if err != nil {
+		t.Fatalf("list workspaces of %q: %v", seed.other.Name, err)
+	}
+
+	got := map[string]int64{
+		"namespaces":     int64(len(mustListNamespaces(t, s))),
+		"stacks":         int64(len(stacks)),
+		"stack_tags":     int64(tags),
+		"updates":        2,
+		"checkpoints":    1,
+		"update_events":  int64(len(seed.events)),
+		"secret_keys":    int64(len(seed.scopes)),
+		"inventory":      int64(len(acmeUnits) + len(otherUnits)),
+		"workspaces":     int64(len(acmeWorkspaces) + len(otherWorkspaces)),
+		"state_versions": 2,
+		"backups":        int64(len(mustListBackups(t, s))),
+	}
+
+	want := map[string]int64{
+		"namespaces":     2,
+		"stacks":         3,
+		"stack_tags":     3,
+		"updates":        2,
+		"checkpoints":    1,
+		"update_events":  int64(len(seed.events)),
+		"secret_keys":    2,
+		"inventory":      5,
+		"workspaces":     2,
+		"state_versions": 2,
+		"backups":        1,
+	}
+
+	if !maps.Equal(got, want) {
+		t.Fatalf("seeded row counts = %v, want %v", got, want)
+	}
+
+	return want
+}
+
+// compareBackupStores reads every seeded row from want and dst and compares
+// them table by table.
+func compareBackupStores(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	compareBackupNamespaces(t, dst, want)
+	compareBackupStacks(t, dst, want, seed)
+	compareBackupUpdates(t, dst, want, seed)
+	compareBackupCheckpoint(t, dst, seed)
+	compareBackupEvents(t, dst, seed)
+	compareBackupKeys(t, dst, want, seed)
+	compareBackupInventory(t, dst, want, seed)
+	compareBackupWorkspaces(t, dst, want, seed)
+	compareBackupStates(t, dst, want, seed)
+	compareBackupRecord(t, dst, seed)
+}
+
+// compareBackupNamespaces compares the namespaces after import.
+func compareBackupNamespaces(t *testing.T, dst, want BackupStore) {
+	t.Helper()
+
+	got := mustListNamespaces(t, dst)
+	all := mustListNamespaces(t, want)
+
+	if !slices.Equal(got, all) {
+		t.Fatalf("namespaces after import = %+v, want %+v", got, all)
+	}
+}
+
+// compareBackupStacks compares the stacks with their tags after import.
+func compareBackupStacks(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, ref := range []stack.Ref{seed.prod.Ref, seed.dev.Ref, seed.otherProd.Ref} {
+		assertStack(t, mustGetStack(t, dst, ref), mustGetStack(t, want, ref))
+	}
+
+	for _, name := range []namespace.Name{seed.acme.Name, seed.other.Name} {
+		got := mustListStacks(t, dst, name)
+		all := mustListStacks(t, want, name)
+
+		if len(got) != len(all) {
+			t.Fatalf("stacks in %q after import = %d, want %d", name, len(got), len(all))
+		}
+
+		for i := range all {
+			assertStack(t, got[i], all[i])
+		}
+	}
+}
+
+// compareBackupUpdates compares the finished and waiting updates after import.
+func compareBackupUpdates(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, id := range []stack.UpdateID{seed.finished.ID, seed.waiting.ID} {
+		got := mustGetUpdate(t, dst, seed.prod.Ref, id)
+		all := mustGetUpdate(t, want, seed.prod.Ref, id)
+
+		if !sameUpdate(got, all) {
+			t.Fatalf("update %s after import = %+v, want %+v", id, got, all)
+		}
+	}
+}
+
+// compareBackupCheckpoint compares the checkpoint by latest and by version.
+func compareBackupCheckpoint(t *testing.T, dst BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	got := mustLatestCheckpoint(t, dst, seed.prod.Ref)
+	assertSameCheckpoint(t, got, seed.checkpoint, "checkpoint after import")
+
+	byVersion := mustCheckpointByVersion(t, dst, seed.prod.Ref, seed.finished.Version)
+	assertSameCheckpoint(t, byVersion, seed.checkpoint, "checkpoint of version after import")
+}
+
+// compareBackupEvents compares the events of the finished update.
+func compareBackupEvents(t *testing.T, dst BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	got := mustListEvents(t, dst, seed.prod.Ref, seed.finished.ID)
+
+	if !sameEvents(got, seed.events) {
+		t.Fatalf("events after import = %s, want %s", eventsString(got), eventsString(seed.events))
+	}
+}
+
+// compareBackupKeys compares the secret keys and their wrapper IDs.
+func compareBackupKeys(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, scope := range seed.scopes {
+		got := mustGetKey(t, dst, scope)
+		all := mustGetKey(t, want, scope)
+
+		if got.Scope != all.Scope || got.WrapperID != all.WrapperID ||
+			!got.CreatedAt.Equal(all.CreatedAt) || !bytes.Equal(got.Ciphertext, all.Ciphertext) {
+			t.Fatalf("key of %s after import = %+v, want %+v", scope, got, all)
+		}
+	}
+
+	gotWrappers := mustListWrapperIDs(t, dst)
+	allWrappers := mustListWrapperIDs(t, want)
+
+	if !slices.Equal(gotWrappers, allWrappers) {
+		t.Fatalf("wrapper IDs after import = %v, want %v", gotWrappers, allWrappers)
+	}
+}
+
+// compareBackupInventory compares the inventory entries of each namespace.
+func compareBackupInventory(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, name := range []namespace.Name{seed.acme.Name, seed.other.Name} {
+		got := mustListUnits(t, dst, name)
+		all := mustListUnits(t, want, name)
+
+		if !slices.EqualFunc(got, all, sameEntry) {
+			t.Fatalf("inventory of %q after import = %+v, want %+v", name, got, all)
+		}
+	}
+}
+
+// compareBackupWorkspaces compares the workspaces by reference and by ID.
+func compareBackupWorkspaces(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, ref := range []workspace.Ref{seed.net.Ref, seed.plain.Ref} {
+		all := mustGetWorkspace(t, want, ref)
+		assertWorkspace(t, mustGetWorkspace(t, dst, ref), all)
+		assertWorkspace(t, mustGetWorkspaceByID(t, dst, all.ID), all)
+	}
+}
+
+// compareBackupStates compares the state versions and the current pointer.
+func compareBackupStates(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	for _, id := range []workspace.StateVersionID{seed.current.ID, seed.pending.ID} {
+		assertStateVersion(t, mustGetStateVersion(t, dst, id), mustGetStateVersion(t, want, id))
+	}
+
+	assertStateVersion(
+		t,
+		mustCurrentStateVersion(t, dst, seed.net.ID),
+		mustCurrentStateVersion(t, want, seed.net.ID),
+	)
+}
+
+// compareBackupRecord compares the seeded backup row after import.
+func compareBackupRecord(t *testing.T, dst BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	if got := mustGetBackup(t, dst, seed.backedUp.ID); got != seed.backedUp {
+		t.Fatalf("backup after import = %+v, want %+v", got, seed.backedUp)
+	}
+}
+
+// sameEntry compares two inventory entries, including the resource count.
+func sameEntry(a, b inventory.Entry) bool {
+	switch {
+	case a.Tool != b.Tool, a.Namespace != b.Namespace, a.Name != b.Name, a.UnitID != b.UnitID,
+		a.DisplayName != b.DisplayName, !a.LastChanged.Equal(b.LastChanged), a.Status != b.Status:
+		return false
+	case a.ResourceCount == nil || b.ResourceCount == nil:
+		return a.ResourceCount == nil && b.ResourceCount == nil
+	default:
+		return *a.ResourceCount == *b.ResourceCount
+	}
+}
+
+// testBackupTablesCoverSchema fails when a table of the schema is missing
+// from backup.Tables. It reads the schema tables through the Inspector,
+// never through Tables itself, so the two cannot drift silently.
+func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	schema, err := s.SchemaTables(t.Context())
+	if err != nil {
+		t.Fatalf("list schema tables: %v", err)
+	}
+
+	for _, table := range schema {
+		if !slices.Contains(backup.Tables, table) {
+			t.Fatalf("schema table %q is missing from the backup table list", table)
+		}
+	}
+
+	for _, table := range backup.Tables {
+		if !slices.Contains(schema, table) {
+			t.Fatalf("backup table %q is missing from the schema", table)
+		}
+	}
+
+	sum, _ := exportBackup(t, s)
+
+	for _, table := range backup.Tables {
+		if _, ok := sum.RowCounts[table]; !ok {
+			t.Fatalf("export misses the row count of table %q", table)
+		}
+	}
+
+	for table := range sum.RowCounts {
+		if !slices.Contains(backup.Tables, table) {
+			t.Fatalf("export counts unknown table %q", table)
+		}
+	}
+}
+
+// testBackupExportDoesNotTear exports while writers add stacks, each in one
+// store transaction with its tags and inventory entry. Every writer writes
+// its first stack before the export starts, so the capture is non-empty,
+// and keeps writing the rest while the export runs, so the writes overlap
+// the capture. Every stack the import holds must equal its source row: all
+// in it or all out of it.
+func testBackupExportDoesNotTear(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	ns := newNamespace(t, src, "acme")
+
+	const writers = 8
+
+	const perWriter = 8
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, writers)
+	firstDone := make(chan struct{}, writers)
+
+	for w := range writers {
+		wg.Go(func() {
+			errs[w] = writeBackupStacksTask(t, backupWriteTask{
+				src: src, ns: ns, worker: w, total: perWriter, signal: func() { firstDone <- struct{}{} },
+			})
+		})
+	}
+
+	for range writers {
+		<-firstDone
+	}
+
+	sum, data := exportBackup(t, src)
+	wg.Wait()
+
+	for w, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d: %v", w, err)
+		}
+	}
+
+	dst := newStore(t)
+	importBackup(t, dst, data, sum)
+	verifyBackupNoTear(t, src, dst, ns)
+}
+
+// backupWriteTask is one concurrent writer of the no-tear case: worker
+// numbers the writer, total counts its stacks, and signal runs after its
+// first stack so the caller can start the export while the rest is pending.
+type backupWriteTask struct {
+	src    BackupStore
+	ns     namespace.Namespace
+	signal func()
+	worker int
+	total  int
+}
+
+// writeBackupStacksTask adds total stacks for one writer, calling signal
+// after the first stack so the caller can start the export while the
+// remaining writes are still pending. It returns the first error.
+func writeBackupStacksTask(t *testing.T, task backupWriteTask) error {
+	t.Helper()
+
+	project := fmt.Sprintf("w%d", task.worker)
+	signaled := false
+
+	for j := range task.total {
+		st := newStack(task.ns.Name, project, fmt.Sprintf("s%d", j))
+		st.Tags = map[string]string{"writer": project}
+
+		if err := task.src.CreateStack(t.Context(), st, task.ns.Fence()); err != nil {
+			if !signaled {
+				task.signal()
+			}
+
+			return fmt.Errorf("create stack %s: %w", st.Ref, err)
+		}
+
+		if !signaled {
+			signaled = true
+			task.signal()
+		}
+	}
+
+	return nil
+}
+
+// verifyBackupNoTear checks that the import holds a non-empty snapshot and
+// that every imported stack equals its source row and carries its inventory
+// entry. The non-empty check keeps a fast store from passing vacuously with
+// an empty capture taken before any writer wrote.
+func verifyBackupNoTear(t *testing.T, src, dst BackupStore, ns namespace.Namespace) {
+	t.Helper()
+
+	imported := mustListStacks(t, dst, ns.Name)
+
+	if len(imported) == 0 {
+		t.Fatal("imported stacks after a concurrent export = 0, want a non-empty snapshot")
+	}
+
+	for i := range imported {
+		assertStack(t, imported[i], mustGetStack(t, src, imported[i].Ref))
+	}
+
+	entries := mustListUnits(t, dst, ns.Name)
+
+	if len(entries) != len(imported) {
+		t.Fatalf("inventory entries after import = %d, want one per stack (%d)", len(entries), len(imported))
+	}
+
+	byUnit := make(map[string]inventory.Entry, len(entries))
+	for i := range entries {
+		byUnit[entries[i].UnitID] = entries[i]
+	}
+
+	for i := range imported {
+		e, ok := byUnit[imported[i].ID.String()]
+		if !ok {
+			t.Fatalf("stack %s misses its inventory entry after import", imported[i].Ref)
+		}
+
+		if e.Name != imported[i].Ref.Project.String()+"/"+imported[i].Ref.Stack.String() {
+			t.Fatalf("inventory entry of %s = %q, want the stack name", imported[i].Ref, e.Name)
+		}
+	}
+}
+
+// testBackupImportRefusesNonEmpty imports into a store that holds a namespace
+// and expects ErrNotEmpty, with the destination unchanged.
+func testBackupImportRefusesNonEmpty(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	dst := newStore(t)
+	ns := newNamespace(t, dst, "acme")
+
+	if _, err := dst.Import(t.Context(), bytes.NewReader(data), sum); !errors.Is(err, backup.ErrNotEmpty) {
+		t.Fatalf("import into a non-empty store: err = %v, want ErrNotEmpty", err)
+	}
+
+	got := mustGetNamespace(t, dst, ns.Name)
+	if got != ns {
+		t.Fatalf("namespace after a refused import = %+v, want %+v", got, ns)
+	}
+
+	if stacks := mustListStacks(t, dst, ns.Name); len(stacks) != 0 {
+		t.Fatalf("stacks after a refused import = %+v, want none", stacks)
+	}
+}
+
+// otherDialect returns the dialect that differs from d.
+func otherDialect(d backup.Dialect) backup.Dialect {
+	if d == backup.DialectSQLite {
+		return backup.DialectPostgres
+	}
+
+	return backup.DialectSQLite
+}
+
+// testBackupImportRefusesDialect imports with a manifest of another dialect
+// and expects ErrDialectMismatch, with the destination still empty.
+func testBackupImportRefusesDialect(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	sum.Dialect = otherDialect(sum.Dialect)
+
+	dst := newStore(t)
+
+	if _, err := dst.Import(t.Context(), bytes.NewReader(data), sum); !errors.Is(err, backup.ErrDialectMismatch) {
+		t.Fatalf("import of another dialect: err = %v, want ErrDialectMismatch", err)
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupImportRefusesVersion imports with a manifest of another schema
+// version and expects ErrSchemaMismatch, with the destination still empty.
+func testBackupImportRefusesVersion(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	sum.SchemaVersion++
+
+	dst := newStore(t)
+
+	if _, err := dst.Import(t.Context(), bytes.NewReader(data), sum); !errors.Is(err, backup.ErrSchemaMismatch) {
+		t.Fatalf("import of another schema version: err = %v, want ErrSchemaMismatch", err)
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupFailedImportLeavesEmpty imports truncated bytes and expects an
+// error, with the destination still empty: no partial rows.
+func testBackupFailedImportLeavesEmpty(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	if _, err := dst.Import(t.Context(), bytes.NewReader(data[:len(data)/2]), sum); err == nil {
+		t.Fatal("import of truncated data succeeded, want an error")
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupRowCountsMatch checks that the row counts the export returns
+// equal the rows the import loads and the seeded rows.
+func testBackupRowCountsMatch(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+	assertExportGroundTruth(t, src, newStore, &seed, sum)
+
+	dst := newStore(t)
+	got := importBackup(t, dst, data, sum)
+
+	if !maps.Equal(got.RowCounts, sum.RowCounts) {
+		t.Fatalf("imported row counts = %v, want %v", got.RowCounts, sum.RowCounts)
+	}
+
+	assertSummary(t, got, sum)
+	assertExportGroundTruth(t, dst, newStore, &seed, got)
+}
+
+// newBackupRecord returns a running backup record with the given start time.
+func newBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
+	return backup.Record{
+		StartedAt: startedAt,
+		EndedAt:   time.Time{},
+		ID:        id,
+		Target:    "dir:/var/backups",
+		Error:     "",
+		State:     backup.StateRunning,
+	}
+}
+
+// testBackupRegistry covers the backups table: create a running row, finish
+// it succeeded or failed with the error text, get it, and list newest first.
+func testBackupRegistry(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	if empty := mustListBackups(t, s); len(empty) != 0 {
+		t.Fatalf("backups = %+v, want none", empty)
+	}
+
+	first := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+
+	if err := s.CreateBackup(ctx, first); !errors.Is(err, backup.ErrAlreadyExists) {
+		t.Fatalf("create duplicate backup: err = %v, want ErrAlreadyExists", err)
+	}
+
+	if got := mustGetBackup(t, s, first.ID); got != first {
+		t.Fatalf("backup = %+v, want %+v", got, first)
+	}
+
+	if _, err := s.GetBackup(ctx, backup.ID(ident.NewID("bkp-"))); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("get missing backup: err = %v, want ErrNotFound", err)
+	}
+
+	endedAt := now().Add(time.Hour)
+	finished := mustFinishBackup(t, s, backupFinish{
+		ID:      first.ID,
+		State:   backup.StateSucceeded,
+		Error:   "",
+		EndedAt: endedAt,
+	})
+
+	if finished.State != backup.StateSucceeded || !finished.EndedAt.Equal(endedAt) || finished.Error != "" {
+		t.Fatalf("finished backup = %+v, want succeeded at %v without error", finished, endedAt)
+	}
+
+	checkBackupFinishErrors(t, s, first.ID, endedAt)
+
+	secondDone := failSecondBackup(t, s)
+	third := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(4*time.Hour)))
+
+	checkBackupList(t, s, first.ID, secondDone, third.ID)
+}
+
+// checkBackupFinishErrors checks that finishing a finished row reports
+// ErrNotRunning and finishing a missing row reports ErrNotFound.
+func checkBackupFinishErrors(t *testing.T, s BackupStore, id backup.ID, endedAt time.Time) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if _, err := s.FinishBackup(ctx, id, backup.StateFailed, "again", endedAt); !errors.Is(
+		err, backup.ErrNotRunning,
+	) {
+		t.Fatalf("finish a finished backup: err = %v, want ErrNotRunning", err)
+	}
+
+	if _, err := s.FinishBackup(ctx, backup.ID(ident.NewID("bkp-")), backup.StateFailed, "no", endedAt); !errors.Is(
+		err, backup.ErrNotFound,
+	) {
+		t.Fatalf("finish a missing backup: err = %v, want ErrNotFound", err)
+	}
+}
+
+// checkBackupList checks that ListBackups returns every row newest first with
+// its state, error text and end time.
+func checkBackupList(t *testing.T, s BackupStore, firstID backup.ID, secondDone backup.Record, thirdID backup.ID) {
+	t.Helper()
+
+	list := mustListBackups(t, s)
+
+	if len(list) != 3 || list[0].ID != thirdID || list[1].ID != secondDone.ID || list[2].ID != firstID {
+		t.Fatalf("backups newest first = %v, want [%s %s %s]", backupIDs(list), thirdID, secondDone.ID, firstID)
+	}
+
+	if list[1] != secondDone {
+		t.Fatalf("listed failed backup = %+v, want %+v", list[1], secondDone)
+	}
+}
+
+// failSecondBackup creates a second backup row and finishes it failed with
+// the error text.
+func failSecondBackup(t *testing.T, s BackupStore) backup.Record {
+	t.Helper()
+
+	second := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(2*time.Hour)))
+	failedAt := now().Add(3 * time.Hour)
+
+	secondDone := mustFinishBackup(t, s, backupFinish{
+		ID:      second.ID,
+		State:   backup.StateFailed,
+		Error:   "copy blobs: connection reset",
+		EndedAt: failedAt,
+	})
+
+	if secondDone.State != backup.StateFailed || secondDone.Error != "copy blobs: connection reset" ||
+		!secondDone.EndedAt.Equal(failedAt) {
+		t.Fatalf("failed backup = %+v, want the error text and end time", secondDone)
+	}
+
+	return secondDone
+}
+
+// backupIDs returns the IDs of rows for failure messages.
+func backupIDs(rows []backup.Record) []backup.ID {
+	ids := make([]backup.ID, 0, len(rows))
+	for i := range rows {
+		ids = append(ids, rows[i].ID)
+	}
+
+	return ids
+}
+
+// testBackupRestartFailsRunning marks a running row failed at the next start,
+// with the error text, and leaves finished rows alone.
+func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	mustFailRunningBackups(t, s, now(), "no backup is running")
+
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
+	endedAt := now().Add(2 * time.Hour)
+	finished := mustFinishBackup(t, s, backupFinish{
+		ID:      done.ID,
+		State:   backup.StateSucceeded,
+		Error:   "",
+		EndedAt: endedAt,
+	})
+
+	restartedAt := now().Add(3 * time.Hour)
+	mustFailRunningBackups(t, s, restartedAt, "server stopped during backup")
+
+	checkRestartedBackup(t, s, running, restartedAt)
+
+	if untouched := mustGetBackup(t, s, done.ID); untouched != finished {
+		t.Fatalf("finished backup after restart = %+v, want %+v", untouched, finished)
+	}
+}
+
+// checkRestartedBackup checks that the running row failed with the error text
+// and the end time, keeping its start time and target.
+func checkRestartedBackup(t *testing.T, s BackupStore, running backup.Record, restartedAt time.Time) {
+	t.Helper()
+
+	got := mustGetBackup(t, s, running.ID)
+
+	if got.State != backup.StateFailed || got.Error != "server stopped during backup" ||
+		!got.EndedAt.Equal(restartedAt) || !got.StartedAt.Equal(running.StartedAt) || got.Target != running.Target {
+		t.Fatalf("restarted backup = %+v, want failed with the error text and end time", got)
+	}
+}
+
+// testBackupRowSurvivesReopen closes the store and reopens the same backing
+// storage: every backup row stays. Stores without the Reopener capability
+// skip this case; the SQL adapters implement it.
+func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	reopenable, ok := s.(Reopener)
+	if !ok {
+		t.Skip("store does not support close and reopen")
+	}
+
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
+	finished := mustFinishBackup(t, s, backupFinish{
+		ID:      done.ID,
+		State:   backup.StateSucceeded,
+		Error:   "",
+		EndedAt: now().Add(2 * time.Hour),
+	})
+
+	if err := reopenable.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened := reopenable.Reopen()
+	checkReopenedBackups(t, reopened, running, finished)
+	mustFailRunningBackups(t, reopened, now().Add(3*time.Hour), "server stopped during backup")
+
+	if after := mustGetBackup(t, reopened, running.ID); after.State != backup.StateFailed {
+		t.Fatalf("restarted backup after reopen = %+v, want failed", after)
+	}
+}
+
+// checkReopenedBackups checks that both backup rows survived close and reopen.
+func checkReopenedBackups(
+	t *testing.T, reopened BackupStore, running, finished backup.Record,
+) {
+	t.Helper()
+
+	if gotRunning := mustGetBackup(t, reopened, running.ID); gotRunning != running {
+		t.Fatalf("running backup after reopen = %+v, want %+v", gotRunning, running)
+	}
+
+	if gotFinished := mustGetBackup(t, reopened, finished.ID); gotFinished != finished {
+		t.Fatalf("finished backup after reopen = %+v, want %+v", gotFinished, finished)
+	}
+}
