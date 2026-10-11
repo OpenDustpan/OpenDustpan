@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/identity"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 )
@@ -578,12 +579,12 @@ func unitObject(ref stack.Ref) (identity.Object, error) {
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
-	if !ok || token == "" {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	if !ok || raw == "" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), token)
+	return h.authn.AuthenticateToken(r.Context(), raw)
 }
 
 // errorResponse is the error body the Pulumi CLI expects.
@@ -604,19 +605,27 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 func classify(err error) (int, string) {
 	switch {
-	case errors.Is(err, identity.ErrUnauthenticated):
+	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid):
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
-		errors.Is(err, identity.ErrInvalidObject):
+		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound):
+	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
+		errors.Is(err, stack.ErrUpdateNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
+		errors.Is(err, stack.ErrConcurrentModification):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
+		return http.StatusUnauthorized, err.Error()
+	case errors.Is(err, stack.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, err.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, err.Error()
 	default:
