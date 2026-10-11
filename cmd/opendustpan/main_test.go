@@ -442,3 +442,75 @@ func TestVersionFlag(t *testing.T) {
 		t.Fatalf("usage = %q, want it to keep --version", errUsage.Error())
 	}
 }
+
+func TestDefaultBlobDir(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, database, flag, want string
+	}{
+		{"explicit flag wins", "sqlite:/data/dustpan.db", "/custom/blobs", "/custom/blobs"},
+		{"sqlite next to file", "sqlite:/data/dustpan.db", "", "/data/blobs"},
+		{"sqlite bare filename", "sqlite:dustpan.db", "", "blobs"},
+		{"postgres uses working directory", "postgres://user@localhost/db", "", "blobs"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := defaultBlobDir(tc.database, tc.flag); got != tc.want {
+				t.Fatalf("defaultBlobDir(%q, %q) = %q, want %q", tc.database, tc.flag, got, tc.want)
+			}
+		})
+	}
+}
+
+//nolint:paralleltest // serve reads process environment, so this test sets it and runs its cases in order.
+func TestServeBlobDir(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
+
+	if err := os.Unsetenv("DUSTPAN_BLOB_DIR"); err != nil {
+		t.Fatalf("unset DUSTPAN_BLOB_DIR: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "dustpan.db")
+
+	if err := startServer(t, "--database", "sqlite:"+dbPath, "--listen", "127.0.0.1:0"); err != nil {
+		t.Fatalf("serve with default blob directory: %v", err)
+	}
+
+	checkBlobDir(t, filepath.Join(dir, "blobs"))
+
+	custom := filepath.Join(dir, "custom-blobs")
+	customArgs := []string{
+		"--database", "sqlite:" + dbPath,
+		"--listen", "127.0.0.1:0",
+		"--blob-dir", custom,
+	}
+
+	if serveErr := startServer(t, customArgs...); serveErr != nil {
+		t.Fatalf("serve with --blob-dir: %v", serveErr)
+	}
+
+	checkBlobDir(t, custom)
+}
+
+// checkBlobDir proves the server created dir with owner-only permissions.
+func checkBlobDir(t *testing.T, dir string) {
+	t.Helper()
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat blob directory %s: %v", dir, err)
+	}
+
+	if !info.IsDir() {
+		t.Fatalf("blob directory %s is not a directory", dir)
+	}
+
+	if perm := info.Mode().Perm(); perm != blobDirPerm {
+		t.Fatalf("blob directory %s mode %04o, want %04o", dir, perm, blobDirPerm)
+	}
+}

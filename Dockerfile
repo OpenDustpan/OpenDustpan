@@ -59,5 +59,4 @@ COPY --from=build /out/opendustpan /opendustpan
 COPY --from=console /console /console
 VOLUME /data
 ENTRYPOINT ["/opendustpan"]
-# Issue #85 adds --blob-dir /data/blobs to this command.
-CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--listen", ":8080", "--console-dir", "/console"]
+CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--blob-dir", "/data/blobs", "--listen", ":8080", "--console-dir", "/console"]
