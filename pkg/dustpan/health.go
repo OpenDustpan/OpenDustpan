@@ -15,9 +15,9 @@ import (
 // ping each get this long (ADR 32 decision 3).
 const readinessTimeout = 2 * time.Second
 
-// readinessFailuresName names the counter of failed readiness probes. Issue
-// #162 owns the metrics route; until it lands, this probe registers the
-// counter on the server registry itself.
+// readinessFailuresName names the counter of failed readiness probes. The
+// server registry holds it (internal/metrics); the tests register it under
+// the same name.
 const readinessFailuresName = "dustpan_readiness_failures_total"
 
 // pinger reports whether a dependency answers. namespace.Store and blob.Store
