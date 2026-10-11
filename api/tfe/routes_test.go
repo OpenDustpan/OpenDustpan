@@ -1370,7 +1370,7 @@ func TestPublicRouteServesWithoutToken(t *testing.T) {
 }
 
 // TestDiscoveryAdvertisesTFE proves the discovery document advertises tfe.v2
-// at /api/v2/ and nothing else: there is no login.v1 service.
+// and tfe.v2.1 at /api/v2/ and nothing else: there is no login.v1 service.
 func TestDiscoveryAdvertisesTFE(t *testing.T) {
 	t.Parallel()
 
@@ -1399,8 +1399,8 @@ func TestDiscoveryAdvertisesTFE(t *testing.T) {
 		t.Fatalf("decode discovery body: %v", err)
 	}
 
-	if len(doc) != 1 || doc["tfe.v2"] != "/api/v2/" {
-		t.Fatalf("discovery body = %v, want only tfe.v2 at /api/v2/", doc)
+	if len(doc) != 2 || doc["tfe.v2"] != "/api/v2/" || doc["tfe.v2.1"] != "/api/v2/" {
+		t.Fatalf("discovery body = %v, want tfe.v2 and tfe.v2.1 at /api/v2/", doc)
 	}
 }
 

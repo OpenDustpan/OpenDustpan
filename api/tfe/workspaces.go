@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/identity"
@@ -254,8 +255,9 @@ func (h *Handler) createWorkspace(
 }
 
 // listWorkspaces serves GET /api/v2/organizations/{organization}/workspaces,
-// ordered by name, with page[number] and page[size]. An unknown organization
-// answers 404. The search[name] filter is not served yet.
+// ordered by name, with page[number] and page[size]. search[name] keeps the
+// workspaces whose name contains the value; an empty value keeps every
+// workspace. An unknown organization answers 404.
 func (h *Handler) listWorkspaces(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -288,7 +290,25 @@ func (h *Handler) listWorkspaces(
 		return
 	}
 
-	h.writeWorkspaceList(ctx, w, p, all, page)
+	h.writeWorkspaceList(ctx, w, p, filterWorkspaces(all, r.URL.Query().Get("search[name]")), page)
+}
+
+// filterWorkspaces keeps the workspaces whose name contains search. An empty
+// search keeps every workspace.
+func filterWorkspaces(all []workspace.Workspace, search string) []workspace.Workspace {
+	if search == "" {
+		return all
+	}
+
+	kept := make([]workspace.Workspace, 0, len(all))
+
+	for i := range all {
+		if strings.Contains(all[i].Ref.Name.String(), search) {
+			kept = append(kept, all[i])
+		}
+	}
+
+	return kept
 }
 
 // workspacePage holds one list page request: the page number and size.
