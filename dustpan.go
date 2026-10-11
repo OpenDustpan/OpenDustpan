@@ -729,7 +729,9 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 func withRequestLog(next http.Handler, logger *slog.Logger, authn identity.Authenticator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := newRequestID()
-		w.Header().Set(requestIDHeader, id) //nolint:canonicalheader // ADR 32 names the header X-Request-Id.
+		// A direct assignment keeps the header name of ADR 32. The key is already
+		// in canonical form, so http.Header reads it with Get.
+		w.Header()[requestIDHeader] = []string{id}
 
 		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
 
