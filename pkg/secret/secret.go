@@ -225,6 +225,23 @@ func CheckWrapper(ctx context.Context, keys KeyStore, wrapper Wrapper) error {
 	return nil
 }
 
+// OpenKey opens the wrapped data key k with wrapper. It binds the ciphertext
+// to the scope of k, so a key of another scope does not open. Restore calls
+// it on one key of the backup to prove that the key-encryption key opens the
+// backup before it writes anything (ADR 30). A failure is ErrDecrypt.
+func OpenKey(ctx context.Context, wrapper Wrapper, k WrappedKey) ([]byte, error) {
+	if wrapper == nil {
+		return nil, fmt.Errorf("open key of %s: %w", k.Scope, ErrKeyNotConfigured)
+	}
+
+	key, err := wrapper.Unwrap(ctx, k.Ciphertext, k.Scope.aad())
+	if err != nil {
+		return nil, fmt.Errorf("open key of %s: %w", k.Scope, err)
+	}
+
+	return key, nil
+}
+
 // Encrypt seals each plaintext under the scope's data key, creating the key on
 // first use. The result has one ciphertext per plaintext, in order.
 func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte) ([][]byte, error) {
