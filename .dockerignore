@@ -1,0 +1,12 @@
+# Build context for the container image: source only.
+.git/
+.github/
+bin/
+data/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.idea/
+.vscode/
+/e2e/report/
