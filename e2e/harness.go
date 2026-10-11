@@ -57,7 +57,7 @@ const (
 	RemoteProd = "prod"
 	// SubjectB is the second principal for lock tests. Both principals are
 	// administrators, so the AdminOnly authorizer allows both.
-	SubjectB = "member"
+	SubjectB = "admin-2"
 
 	region         = "e2e"
 	tokenBytes     = 24
@@ -160,6 +160,10 @@ type Env struct {
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
+	// tls reports whether the server speaks HTTPS. OpenTofu always needs
+	// it; the Pulumi CLI needs it only on a TLS server, where it trusts
+	// the certificate through SSL_CERT_FILE.
+	tls bool
 }
 
 // serverStore is every persistence port the server needs.
@@ -183,6 +187,10 @@ type serverStore interface {
 // isolated schema that is dropped when the test ends. OpenTofu gets an HTTPS
 // server, because its service discovery refuses plain HTTP, and the server's
 // certificate is the only one it trusts. Everything is removed when the test ends.
+//
+// With E2E_SERVER=binary the server is the real cmd/opendustpan binary run
+// with --tls-cert and --tls-key, fronted by a recording proxy. That variant
+// is the proof for the milestone 2 exit test.
 func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
@@ -190,17 +198,31 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	token := newToken(tb)
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
+	in := envInput{tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec}
+
+	if UseBinaryServer() {
+		return newBinaryEnv(ctx, in)
+	}
+
+	return newInprocessEnv(ctx, in)
+}
+
+// newInprocessEnv starts an in-process server for cli and returns the
+// environment.
+func newInprocessEnv(ctx context.Context, in envInput) *Env {
+	tb := in.tb
+	tb.Helper()
 
 	handler, st, workspaces := newServer(
 		ctx,
 		tb,
-		store,
-		filepath.Join(dir, "dustpan.db"),
-		serverTokens{tokenA: token, tokenB: tokenB},
+		in.store,
+		filepath.Join(in.dir, "dustpan.db"),
+		serverTokens{tokenA: in.token, tokenB: in.tokenB},
 	)
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(handler))
-	if cli.Tool == ToolTofu {
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(handler))
+	if in.cli.Tool == ToolTofu {
 		ts.StartTLS()
 	} else {
 		ts.Start()
@@ -213,18 +235,19 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 
 	env := &Env{
 		URL:           ts.URL,
-		Recorder:      rec,
-		cli:           cli,
-		store:         store,
+		Recorder:      in.rec,
+		cli:           in.cli,
+		store:         in.store,
 		server:        st,
 		client:        client,
 		workspaces:    workspaces,
-		token:         token,
-		tokenB:        tokenB,
-		home:          filepath.Join(dir, "home"),
-		project:       filepath.Join(dir, "project"),
+		token:         in.token,
+		tokenB:        in.tokenB,
+		home:          filepath.Join(in.dir, "home"),
+		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
+		tls:           in.cli.Tool == ToolTofu,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -233,13 +256,20 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 		}
 	}
 
-	if cli.Tool == ToolTofu {
+	env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
+
+	if env.tls {
 		env.writeTofuFiles(tb, ts)
-	} else {
-		env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 	}
 
 	return env
+}
+
+// SetCLI switches the environment to another installed CLI on the same
+// server, so one test can drive both tools against one server process and
+// database. The project files of both tools are already written.
+func (e *Env) SetCLI(cli Install) {
+	e.cli = cli
 }
 
 // Host is the server's host:port, as OpenTofu names it.
@@ -256,28 +286,6 @@ func newToken(tb testing.TB) string {
 	}
 
 	return hex.EncodeToString(raw)
-}
-
-// dualToken is a test-only Authenticator that knows two tokens with two
-// subjects. The server code does not change: production still uses a single
-// static token or real identity.
-type dualToken struct {
-	tokenA string
-	tokenB string
-}
-
-var _ identity.Authenticator = dualToken{tokenA: "", tokenB: ""}
-
-// AuthenticateToken returns the principal owning token, or ErrUnauthenticated.
-func (d dualToken) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	switch token {
-	case d.tokenA:
-		return identity.Principal{Subject: Subject, DisplayName: Subject, Admin: true}, nil
-	case d.tokenB:
-		return identity.Principal{Subject: SubjectB, DisplayName: SubjectB, Admin: true}, nil
-	default:
-		return identity.Principal{}, identity.ErrUnauthenticated
-	}
 }
 
 // serverTokens holds the two access tokens one Env accepts.
@@ -322,7 +330,10 @@ func newServer(
 		tb.Fatalf("create namespace: %v", err)
 	}
 
-	authn := dualToken(tokens)
+	authn, err := identity.NewStaticTokens(tokens.tokenA, tokens.tokenB)
+	if err != nil {
+		tb.Fatalf("static tokens: %v", err)
+	}
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte(testKeyEncryptionKey))
 	if err != nil {
@@ -406,7 +417,14 @@ func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverSt
 func openTestBlobStore(tb testing.TB, dbPath string) *fs.Store {
 	tb.Helper()
 
-	blobs, err := fs.Open(filepath.Join(filepath.Dir(dbPath), "blobs"))
+	return openBlobStoreAt(tb, filepath.Join(filepath.Dir(dbPath), "blobs"))
+}
+
+// openBlobStoreAt opens a blob store in blobDir.
+func openBlobStoreAt(tb testing.TB, blobDir string) *fs.Store {
+	tb.Helper()
+
+	blobs, err := fs.Open(blobDir)
 	if err != nil {
 		tb.Fatalf("open blob store: %v", err)
 	}
@@ -660,7 +678,7 @@ func (e *Env) StackID(
 
 	req.Header.Set("Authorization", "token "+e.token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("get stack %s/%s/%s: %w", ns, project, name, err)
 	}
@@ -707,9 +725,7 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: commandTimeout}
-
-	resp, err := client.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
 	}
@@ -1458,9 +1474,7 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 
 	httpReq.Header.Set("Authorization", req.Auth)
 
-	client := &http.Client{Timeout: commandTimeout}
-
-	resp, err := client.Do(httpReq)
+	resp, err := e.client.Do(httpReq)
 	if err != nil {
 		tb.Fatalf("%s %s: %v", req.Method, req.Path, err)
 	}
@@ -1519,8 +1533,6 @@ func (e *Env) cliEnv(extra []string) []string {
 	if e.cli.Tool == ToolTofu {
 		env = append(env,
 			"TF_CLI_CONFIG_FILE="+filepath.Join(e.home, "tofurc"),
-			// Go reads SSL_CERT_FILE on Linux only; see the OpenTofu test.
-			"SSL_CERT_FILE="+filepath.Join(e.home, "server.pem"),
 			"TF_IN_AUTOMATION=1",
 			"TF_INPUT=0",
 		)
@@ -1532,6 +1544,13 @@ func (e *Env) cliEnv(extra []string) []string {
 			// The update check is asynchronous and would make the request log vary between runs.
 			"PULUMI_SKIP_UPDATE_CHECK=true",
 		)
+	}
+
+	if e.tls {
+		// Go reads SSL_CERT_FILE on Linux only; see the OpenTofu test.
+		// Both CLIs are Go programs, so the Pulumi CLI trusts a TLS
+		// server the same way when they share one.
+		env = append(env, "SSL_CERT_FILE="+filepath.Join(e.home, "server.pem"))
 	}
 
 	// Later entries win, so extra can override anything above.

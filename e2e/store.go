@@ -97,6 +97,17 @@ func PostgresURL() string {
 func openPostgresStore(ctx context.Context, tb testing.TB, base string) *postgres.Store {
 	tb.Helper()
 
+	st, _ := openPostgresStoreWithURL(ctx, tb, base)
+
+	return st
+}
+
+// openPostgresStoreWithURL opens the PostgreSQL server at base in a fresh
+// schema and returns the store with the schema URL, so a server binary can
+// serve the same schema. The schema is dropped when the test ends.
+func openPostgresStoreWithURL(ctx context.Context, tb testing.TB, base string) (*postgres.Store, string) {
+	tb.Helper()
+
 	if base == "" {
 		tb.Fatalf("set %s to run the PostgreSQL suite", postgresURLEnv)
 	}
@@ -105,7 +116,9 @@ func openPostgresStore(ctx context.Context, tb testing.TB, base string) *postgre
 
 	createSchema(ctx, tb, base, schema)
 
-	st, err := postgres.Open(ctx, schemaURL(tb, base, schema))
+	schemaURI := schemaURL(tb, base, schema)
+
+	st, err := postgres.Open(ctx, schemaURI)
 	if err != nil {
 		dropSchema(ctx, tb, base, schema)
 		tb.Fatalf("open postgres store: %v", err)
@@ -116,7 +129,7 @@ func openPostgresStore(ctx context.Context, tb testing.TB, base string) *postgre
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
-	return st
+	return st, schemaURI
 }
 
 func randomSchema(tb testing.TB) string {

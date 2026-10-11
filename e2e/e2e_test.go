@@ -813,7 +813,12 @@ func consoleURLSteps(t *testing.T, env *e2e.Env) {
 		appURL = "http://app.dustpan.test/" + e2e.Subject
 	)
 
+	// The CLI inherits the console URL scheme from the backend URL, so the
+	// override keeps http on a plain-HTTP server and https on a TLS server.
 	overrideURL := "http://console.example.test:3000/" + e2e.Subject
+	if strings.HasPrefix(env.URL, "https://") {
+		overrideURL = "https://console.example.test:3000/" + e2e.Subject
+	}
 
 	env.Step(ctx, t, step("console url from 127.0.0.1", contains("as "+e2e.Subject+" ()\n"), "login"))
 	env.Step(ctx, t, e2e.StepSpec{

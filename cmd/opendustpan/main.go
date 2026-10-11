@@ -197,7 +197,7 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
 	logger := slog.New(slog.NewJSONHandler(stderr, nil))
 
-	authn, err := identity.NewStaticToken("admin", os.Getenv("DUSTPAN_ADMIN_TOKEN"))
+	authn, err := identity.NewStaticTokens(strings.Split(os.Getenv("DUSTPAN_ADMIN_TOKEN"), ",")...)
 	if err != nil {
 		return fmt.Errorf("DUSTPAN_ADMIN_TOKEN: %w", err)
 	}

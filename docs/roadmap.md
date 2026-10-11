@@ -54,6 +54,11 @@ principal and `force-unlock`, and recovery after a crashed `apply`. It drives
 `workspace new`, `workspace list` and `workspace select`, and `destroy`. The
 full Pulumi scenario still passes on the same server.
 
+**Status.** Met on 2026-10-11. The e2e suite passes every exit-test step on
+each OpenTofu version in the matrix. It runs on SQLite and on PostgreSQL,
+over TLS through the real binary. The full Pulumi scenario passes on the same
+server (issue #99).
+
 | Where | Item | Part | State |
 | --- | --- | --- | --- |
 | server | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all | accepted (ADR 25) |
@@ -67,7 +72,7 @@ Its gate:
 
 - [x] A `LICENSE` in this repository ([ADR 22](adr/0022-apache-2-license.md)).
 - [ ] A `LICENSE` in the Console repository.
-- [ ] A `--version` flag that the build stamps.
+- [x] A `--version` flag that the build stamps.
 - [ ] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
 - [ ] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
