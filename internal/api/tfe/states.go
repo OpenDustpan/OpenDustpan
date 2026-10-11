@@ -165,8 +165,10 @@ func parseStoredOutputs(raw []byte) (map[string]storedOutput, error) {
 }
 
 // stateOutputs renders the stored outputs of sv as TFE output resources,
-// ordered by name. A version without outputs renders an empty list. A
-// document that is not valid JSON fails, as the stored data is corrupt.
+// ordered by name, with the values of sensitive outputs kept. The resources
+// are shared: callers that serve the list must nil sensitive values, and only
+// the single output route serves them. A version without outputs renders an
+// empty list. A document that is not valid JSON fails, as the stored data is corrupt.
 func stateOutputs(sv workspace.StateVersion) ([]stateVersionOutputResource, error) {
 	if len(sv.Outputs) == 0 {
 		return []stateVersionOutputResource{}, nil
@@ -467,13 +469,21 @@ func (h *Handler) writeStateVersion(
 }
 
 // writeStateOutputs writes the outputs of sv as one page holding the whole
-// list, with the meta.pagination object the client reads.
+// list, with the meta.pagination object the client reads. A sensitive output
+// reports null as its value in the list; the CLI reads the value from the
+// single output route.
 func (h *Handler) writeStateOutputs(ctx context.Context, w http.ResponseWriter, sv workspace.StateVersion) {
 	outputs, err := stateOutputs(sv)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
+	}
+
+	for i := range outputs {
+		if outputs[i].Attributes.Sensitive {
+			outputs[i].Attributes.Value = nil
+		}
 	}
 
 	pages := 0

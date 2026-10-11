@@ -1,9 +1,11 @@
 package tfe_test
 
 import (
+	"context"
 	"crypto/md5" //nolint:gosec // The test recomputes the MD5 the protocol uses for integrity.
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // stateTestAttributes decodes the attributes of a state version document in
@@ -574,4 +577,156 @@ func TestStateDownloadUsesPublicURL(t *testing.T) {
 	if !strings.HasPrefix(doc.Data.Attributes.DownloadURL, "https://dustpan.example/") {
 		t.Fatalf("download URL = %q, want the public host", doc.Data.Attributes.DownloadURL)
 	}
+}
+
+// sensitiveOutputsWorkspaces serves the stub workspace with a state version
+// that holds one plain output and one sensitive output.
+type sensitiveOutputsWorkspaces struct {
+	stubWorkspaces
+}
+
+// sensitiveStateVersion returns the stub state with the greeting output and a
+// sensitive secret output.
+func sensitiveStateVersion() workspace.StateVersion {
+	sv := stubStateVersion()
+	sv.Outputs = []byte(
+		`{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
+			`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}`,
+	)
+
+	return sv
+}
+
+func (sensitiveOutputsWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.StateVersion, error) {
+	if id.String() != "ws-test123" {
+		return workspace.StateVersion{}, workspace.ErrNoState
+	}
+
+	return sensitiveStateVersion(), nil
+}
+
+func (sensitiveOutputsWorkspaces) ReadState(
+	_ context.Context, id workspace.StateVersionID,
+) (workspace.StateVersion, error) {
+	if id.String() != "sv-test123" {
+		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+	}
+
+	return sensitiveStateVersion(), nil
+}
+
+func (sensitiveOutputsWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.ReadCloser, error) {
+	if sv.ID.String() != "sv-test123" || sv.Status != workspace.StatusFinalized {
+		return nil, workspace.ErrStateVersionNotFound
+	}
+
+	return io.NopCloser(strings.NewReader(stubStateContent())), nil
+}
+
+// newSensitiveStateHandler returns a production Handler over the state with a
+// sensitive output.
+func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
+	t.Helper()
+
+	handler, err := tfe.NewHandler(tfe.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    allowAll(),
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:       baseurl.Resolver{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// checkListGreeting proves the list still serves the plain greeting value.
+func checkListGreeting(t *testing.T, byName map[string]stateOutputTestResource) {
+	t.Helper()
+
+	got, found := byName["greeting"]
+	if !found {
+		t.Fatal("outputs hold no greeting output")
+	}
+
+	value, isString := got.Attributes.Value.(string)
+	if !isString || value != "hello" {
+		t.Fatalf("greeting value = %v, want hello", got.Attributes.Value)
+	}
+}
+
+// checkListSecretHidden proves the list reports null as the value of the
+// sensitive output and the raw body never holds the plaintext.
+func checkListSecretHidden(t *testing.T, raw string, byName map[string]stateOutputTestResource) {
+	t.Helper()
+
+	got, found := byName["secret"]
+	if !found {
+		t.Fatal("outputs hold no secret output")
+	}
+
+	if !got.Attributes.Sensitive {
+		t.Fatal("secret output is not sensitive")
+	}
+
+	if got.Attributes.Value != nil {
+		t.Fatalf("secret value = %v, want null", got.Attributes.Value)
+	}
+
+	if strings.Contains(raw, "s3cr3t") {
+		t.Fatalf("outputs list holds the sensitive value: %s", raw)
+	}
+}
+
+// checkSingleSecretShown proves the single output route still serves the
+// sensitive value.
+func checkSingleSecretShown(t *testing.T, got stateOutputTestResource) {
+	t.Helper()
+
+	if !got.Attributes.Sensitive {
+		t.Fatal("single secret output is not sensitive")
+	}
+
+	value, isString := got.Attributes.Value.(string)
+	if !isString || value != "s3cr3t" {
+		t.Fatalf("single secret value = %v, want s3cr3t", got.Attributes.Value)
+	}
+}
+
+// TestOutputsListHidesSensitiveValues proves the outputs list reports null as
+// the value of a sensitive output, while the single output route still serves
+// the value.
+func TestOutputsListHidesSensitiveValues(t *testing.T) {
+	t.Parallel()
+
+	handler := newSensitiveStateHandler(t)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(
+		rec,
+		stateRequest(t, "/api/v2/workspaces/ws-test123/current-state-version-outputs"),
+	)
+
+	doc := decodeOutputList(t, rec, http.StatusOK)
+
+	if len(doc.Data) != 2 {
+		t.Fatalf("outputs hold %d entries, want the greeting and the secret", len(doc.Data))
+	}
+
+	byName := map[string]stateOutputTestResource{}
+
+	for _, output := range doc.Data {
+		byName[output.Attributes.Name] = output
+	}
+
+	checkListGreeting(t, byName)
+	checkListSecretHidden(t, rec.Body.String(), byName)
+
+	single := httptest.NewRecorder()
+	handler.ServeHTTP(single, stateRequest(t, "/api/v2/state-version-outputs/sv-test123.secret"))
+
+	checkSingleSecretShown(t, decodeOutputDoc(t, single, http.StatusOK).Data)
 }
