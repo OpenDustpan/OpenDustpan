@@ -105,7 +105,8 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
   Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
-  edit an applied migration. Timestamps are Unix milliseconds in `BIGINT`.
+  edit an applied migration. TestFrozenMigrations in each store adapter holds
+  the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
