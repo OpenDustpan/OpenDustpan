@@ -598,6 +598,43 @@ func TestServeLogFlagDefaults(t *testing.T) {
 	}
 }
 
+func TestServeSizeFlagDefaults(t *testing.T) {
+	t.Parallel()
+
+	var f serveFlags
+
+	fs := newTestFlagSet(&f)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if f.maxCheckpointBytes != 0 || f.maxSecretBatchBytes != 0 || f.maxStateBytes != 0 || f.maxBodyBytesInFlight != 0 {
+		t.Fatalf(
+			"size flags = %d %d %d %d, want all zero for domain defaults",
+			f.maxCheckpointBytes, f.maxSecretBatchBytes, f.maxStateBytes, f.maxBodyBytesInFlight,
+		)
+	}
+
+	sizeLimits := []int64{
+		f.maxCheckpointBytes,
+		f.maxSecretBatchBytes,
+		f.maxStateBytes,
+		f.maxBodyBytesInFlight,
+	}
+
+	if err := checkSizeFlags(sizeLimits); err != nil {
+		t.Fatalf("default size flags: %v", err)
+	}
+
+	if err := checkSizeFlags([]int64{1, 1, 1, 1}); err != nil {
+		t.Fatalf("positive size flags: %v", err)
+	}
+
+	if err := checkSizeFlags([]int64{-1, 0, 0, 0}); err == nil {
+		t.Fatal("negative size flag succeeded")
+	}
+}
+
 func TestVersionFlag(t *testing.T) {
 	t.Parallel()
 

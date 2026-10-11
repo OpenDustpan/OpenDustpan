@@ -314,14 +314,15 @@ func newUpdateFixtureWithLimit(t *testing.T, authz identity.Authorizer, limit in
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:        stacks,
-		Updates:       updates,
-		Secrets:       newTestSecrets(t, namespaces),
-		Namespaces:    namespaces,
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		BaseURL:       baseurl.Resolver{},
+		Stacks:               stacks,
+		Updates:              updates,
+		Secrets:              newTestSecrets(t, namespaces),
+		Namespaces:           namespaces,
+		Authenticator:        tokenAuthenticator{},
+		Authorizer:           authz,
+		Logger:               slog.New(slog.DiscardHandler),
+		BaseURL:              baseurl.Resolver{},
+		MaxBodyBytesInFlight: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
