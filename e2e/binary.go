@@ -443,8 +443,10 @@ func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs 
 
 	//nolint:gosec // The wait dials the test backend on loopback; there is no other party to impersonate.
 	client := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		Timeout:   commandTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13},
+		},
+		Timeout: commandTimeout,
 	}
 
 	deadline := time.Now().Add(binaryStartTimeout)
@@ -489,7 +491,7 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 	}
 
 	//nolint:gosec // The proxy dials the test backend on loopback; there is no other party to impersonate.
-	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}}
 
 	//nolint:exhaustruct_v5 // The test proxy needs only Rewrite and Transport; the rest stays zero.
 	proxy := &httputil.ReverseProxy{

@@ -27,7 +27,15 @@ Consider a change done only when `make check` passes with zero findings:
 - `golangci-lint run ./...` reports nothing. Fix code, do not weaken
   `.golangci.yml`. Allow a `//nolint:<linter> // <reason>` only with a
   specific linter and a real reason. Expect reviewers to question it.
-- `go test -race ./...` passes, including the conformance suites.
+- `make nilaway` reports no possible nil panic. Fix the code. Do not exclude
+  a package or a file.
+- `make vuln` (govulncheck) reports no known vulnerability.
+- `make semgrep` reports nothing. Allow a `// nosemgrep: <rule id>` only with
+  the full rule id and a comment that gives a real reason.
+- `go test -race ./...` passes, including the conformance suites. Each test
+  package has a `leak_test.go` file. Its `TestMain` calls
+  `goleak.VerifyTestMain`, which fails the package if a goroutine continues
+  to run after the tests. Add this file to each new test package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
 
 Do not report work as finished if any of these fail. Say what fails instead.

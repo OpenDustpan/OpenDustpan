@@ -29,7 +29,7 @@ or HashiCorp.
 
 ## Try it
 
-Requires Go 1.27.1+, the Pulumi CLI and OpenTofu.
+Requires Go 1.27.2+, the Pulumi CLI and OpenTofu.
 
 Build the server. Generate the two secrets it needs. The administrator
 signs in with the admin token. The key-encryption key protects secret
@@ -216,7 +216,10 @@ trusts it. It is not part of `make check`.
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint and the tests with the race detector. Set
+golangci-lint, NilAway, govulncheck, Semgrep and the tests with the race
+detector. goleak fails a test package that leaves a goroutine running. The
+`Makefile` lists the tool versions to install. NilAway and govulncheck need no
+install. Set
 `DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
 real CLI versions against the server. It downloads them first, as `e2e/doc.go`
 describes.

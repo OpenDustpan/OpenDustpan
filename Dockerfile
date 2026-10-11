@@ -11,7 +11,7 @@
 # scripts/smoke-image.sh builds with a local test tarball instead.
 
 # Go stage: static binary with the version stamp of issue #91.
-FROM golang:1.27.1-bookworm AS build
+FROM golang:1.27.2-bookworm AS build
 WORKDIR /src
 ARG TARGETARCH
 ARG VERSION=dev
@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
 # are placeholders for its first tag. A build without explicit CONSOLE_URL and
 # CONSOLE_SHA256 fails at the download step. When the first console release
 # lands, pin its tag and SHA-256 here.
-FROM golang:1.27.1-bookworm AS console
+FROM golang:1.27.2-bookworm AS console
 ARG CONSOLE_URL=https://github.com/OpenDustpan/console/releases/download/v0.1.0/console.tar.gz
 ARG CONSOLE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 COPY . /src
@@ -58,5 +58,8 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/opendustpan /opendustpan
 COPY --from=console /console /console
 VOLUME /data
+# The base image already runs as nonroot. The explicit USER keeps that true if
+# the base changes.
+USER nonroot:nonroot
 ENTRYPOINT ["/opendustpan"]
 CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--blob-dir", "/data/blobs", "--listen", ":8080", "--console-dir", "/console"]

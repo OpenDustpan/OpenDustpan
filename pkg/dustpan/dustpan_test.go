@@ -682,7 +682,7 @@ func TestRunRefusesMismatchedKey(t *testing.T) {
 	srv := newRunCheckServer(t, st)
 
 	runErr := srv.Run(t.Context())
-	if !errors.Is(runErr, secret.ErrWrapperMismatch) {
+	if runErr == nil || !errors.Is(runErr, secret.ErrWrapperMismatch) {
 		t.Fatalf("run with another key: err = %v, want ErrWrapperMismatch", runErr)
 	}
 

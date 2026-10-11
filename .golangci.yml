@@ -84,15 +84,18 @@ linters:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
           # inventory, so it is excluded below.
+          # The globs match the absolute path of a file, so each one names
+          # pkg/. A bare "**/workspace/**" also matches a checkout below a
+          # directory named workspace, and the rule then applies to all files.
           files:
-            - "**/namespace/**"
-            - "**/stack/**"
-            - "**/identity/**"
-            - "**/secret/**"
-            - "**/workspace/**"
-            - "**/inventory/**"
-            - "**/backup/**"
-            - "**/blob/*.go"
+            - "**/pkg/namespace/**"
+            - "**/pkg/stack/**"
+            - "**/pkg/identity/**"
+            - "**/pkg/secret/**"
+            - "**/pkg/workspace/**"
+            - "**/pkg/inventory/**"
+            - "**/pkg/backup/**"
+            - "**/pkg/blob/*.go"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:

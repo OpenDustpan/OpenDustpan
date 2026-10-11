@@ -41,6 +41,14 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
+      - name: Nil-panic analysis
+        run: make nilaway
+      - name: Known vulnerabilities
+        run: make vuln
+      - name: Install Semgrep
+        run: pipx install semgrep==1.178.0
+      - name: Semgrep rules
+        run: make semgrep
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
       - name: Test

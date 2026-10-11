@@ -56,7 +56,7 @@ func TestPingClosed(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	if err = s.Ping(t.Context()); !errors.Is(err, namespace.ErrUnavailable) {
+	if err = s.Ping(t.Context()); err == nil || !errors.Is(err, namespace.ErrUnavailable) {
 		t.Fatalf("ping closed store: err = %v, want ErrUnavailable", err)
 	}
 
