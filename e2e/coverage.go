@@ -416,9 +416,15 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
-// coverageServerRoutes returns the installation adapter's route table. The
-// table is empty at first: later issues add the backup routes (ADR 30) and
-// the metrics route (ADR 32).
+// coverageMetrics writes nothing: the route table needs a metrics writer,
+// and the coverage gate never serves a request.
+type coverageMetrics struct{}
+
+func (coverageMetrics) Write(_ io.Writer) error {
+	return nil
+}
+
+// coverageServerRoutes returns the installation adapter's route table.
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -427,6 +433,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
 		Backups:       nil,
+		Metrics:       coverageMetrics{},
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -551,6 +558,11 @@ func CoverageAllowlist() []AllowEntry {
 			CoveringTest: "TestCLIs (tofuRestoreScenario)",
 			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
 				"The harness step restores a version and checks it with state pull.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/metrics",
+			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
+			Reason:       "Operator route (ADR 32): no CLI calls it.",
 		},
 		{
 			Method: http.MethodGet, Path: "/health/live",

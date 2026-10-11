@@ -56,14 +56,22 @@ type Route struct {
 
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces. The
-// table is empty at first: later issues add the backup routes (ADR 30) and
-// the metrics route (ADR 32).
+// backup routes of later issues (ADR 30) join the metrics route here.
 //
 // Contract: never remove or rename these endpoints or status codes. The
 // console and operators read only this API, and they update on their own
 // schedule.
 func (h *Handler) buildRoutes() []Route {
-	return nil
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/metrics",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer,
+			Serve:   h.serveMetrics,
+		},
+	}
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied

@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"runtime"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -79,4 +80,41 @@ func runBothOnStore(
 	env.SetCLI(pulumiCLI)
 
 	pulumiScenario(t, env)
+
+	checkServerMetrics(t, env)
+}
+
+// checkServerMetrics proves the metrics route counts both tools: GET
+// /api/server/metrics with the admin token returns a request count sample
+// for the pulumi and opentofu adapters, while a request without a token
+// gets 401.
+func checkServerMetrics(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, "/api/server/metrics", "")
+	if err != nil {
+		t.Fatalf("get metrics: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("get metrics answers %d, want %d: %s", status, http.StatusOK, body)
+	}
+
+	for _, adapter := range []string{"pulumi", "opentofu"} {
+		want := `dustpan_http_requests_total{adapter="` + adapter + `"`
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics output misses a request count for adapter %q:\n%s", adapter, body)
+		}
+	}
+
+	status, body, err = env.TFEStatus(ctx, "", http.MethodGet, "/api/server/metrics", "")
+	if err != nil {
+		t.Fatalf("get metrics without a token: %v", err)
+	}
+
+	if status != http.StatusUnauthorized {
+		t.Fatalf("get metrics without a token answers %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
 }
