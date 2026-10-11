@@ -214,6 +214,12 @@ Kubernetes ignores `HEALTHCHECK` and uses its own probes.
   PostgreSQL and object storage. Every storage backend is a swappable adapter
   (ADR 2).
 
+## Guides
+
+- [Backup, restore and upgrade](docs/guides/backup-restore-upgrade.md):
+  back up the whole installation, check a backup, restore it into an empty
+  installation, and upgrade the server.
+
 ## Configuration
 
 | Flag | Environment | Default |
@@ -227,6 +233,11 @@ Kubernetes ignores `HEALTHCHECK` and uses its own probes.
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
+| `--blob-store` | `DUSTPAN_BLOB_STORE` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
+| `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
+| `--s3-region` | `DUSTPAN_S3_REGION` | `us-east-1` |
+| `--backup-target` | `DUSTPAN_BACKUP_TARGET` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
+| | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | the S3 credentials. No flag takes them |
 | | `DUSTPAN_ADMIN_TOKEN` | required when you set no token file, at least 32 bytes (comma-separated tokens sign in as distinct administrators: admin, admin-2, ...). The server clears it from its environment after the read |
 | | `DUSTPAN_ADMIN_TOKEN_FILE` | file holding the tokens, one per line or comma-separated, readable only by its owner. When you set both, `DUSTPAN_ADMIN_TOKEN` wins |
 | | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
