@@ -630,7 +630,7 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 	size, sum, err := s.putCheckpointBlob(ctx, save.key, save.in.Deployment)
 	if err != nil {
 		if errors.Is(err, blob.ErrExists) {
-			return s.adoptCheckpointBlob(ctx, save)
+			return s.adoptCheckpointBlob(ctx, save, size, sum)
 		}
 
 		if cerr := ctx.Err(); cerr != nil {
@@ -657,7 +657,17 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // Anything else is a concurrent save of the same update, which fails without
 // touching SQL, so no row can name a blob with other content. No error text
 // names the key.
-func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave) error {
+//
+// size with sum are the size and MD5 of the bytes this save tried to write,
+// returned with the ErrExists error. When the stored bytes match them, the
+// retry adopts without decompressing anything: gzip decodes deterministically,
+// so equal stored bytes mean equal content, which is the same guarantee the
+// gunzip and hash below give. That fast path hashes the compressed bytes
+// once, instead of paying a gunzip with two hash passes over a large
+// checkpoint. When they differ, the blob may still hold the same deployment
+// compressed at another level by an older binary, so the slow path below
+// decides that before reporting a collision.
+func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
 	raw, err := s.blobs.Get(ctx, save.key)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
@@ -680,6 +690,16 @@ func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave) 
 		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
 	}
 
+	if storedSize, storedSum := storedAttrs(gave); storedSize == size && storedSum == sum {
+		if commitErr := s.commitCheckpointRow(ctx, save, size, sum); commitErr != nil {
+			return fmt.Errorf("save checkpoint of update %s: %w", save.id, commitErr)
+		}
+
+		s.afterCheckpointSave(ctx, save)
+
+		return nil
+	}
+
 	deployment, err := gunzipBytes(gave, s.maxCheckpoints)
 	if err != nil {
 		return s.checkpointCollision(ctx, save)
@@ -689,10 +709,12 @@ func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave) 
 		return s.checkpointCollision(ctx, save)
 	}
 
-	size, sum := storedAttrs(gave)
+	// The stored bytes hold the same deployment at another level: the row
+	// names their size and MD5, not those of this save.
+	storedSize, storedSum := storedAttrs(gave)
 
-	if err := s.commitCheckpointRow(ctx, save, size, sum); err != nil {
-		return fmt.Errorf("save checkpoint of update %s: %w", save.id, err)
+	if commitErr := s.commitCheckpointRow(ctx, save, storedSize, storedSum); commitErr != nil {
+		return fmt.Errorf("save checkpoint of update %s: %w", save.id, commitErr)
 	}
 
 	s.afterCheckpointSave(ctx, save)
@@ -821,15 +843,23 @@ func (s *Updates) previousCheckpoint(ctx context.Context, ref Ref, id UpdateID) 
 }
 
 // putCheckpointBlob gzips deployment and stores it under key, returning the
-// size and MD5 of the stored bytes for backups. It holds one decompressed
-// copy (deployment) with one compressed copy (the gzip buffer). No error text
-// names the key: callers match ErrExists and redact the rest.
+// size and MD5 of the stored bytes for backups. It compresses at the fastest
+// level: a checkpoint save is latency sensitive, and the default level costs
+// about one second for a 24 MiB deployment, over 15 seconds under the race
+// detector, while the fastest level costs under one second in both. Stored
+// bytes stay larger, but readers decompress any level, so the change needs
+// no migration. It holds one decompressed copy (deployment) with one
+// compressed copy (the gzip buffer). No error text names the key: callers
+// match ErrExists and redact the rest.
 func (s *Updates) putCheckpointBlob(
 	ctx context.Context, key blob.Key, deployment []byte,
 ) (int64, [md5.Size]byte, error) {
 	var zipped bytes.Buffer
 
-	w := gzip.NewWriter(&zipped)
+	w, err := gzip.NewWriterLevel(&zipped, gzip.BestSpeed)
+	if err != nil {
+		return 0, [md5.Size]byte{}, fmt.Errorf("compress checkpoint: %w", err)
+	}
 
 	if _, err := w.Write(deployment); err != nil {
 		return 0, [md5.Size]byte{}, fmt.Errorf("compress checkpoint: %w", err)
@@ -841,11 +871,17 @@ func (s *Updates) putCheckpointBlob(
 
 	gave := zipped.Bytes()
 
+	size, sum := storedAttrs(gave)
+
 	if err := s.blobs.Put(ctx, key, bytes.NewReader(gave)); err != nil {
+		if errors.Is(err, blob.ErrExists) {
+			// The retry compares these against the stored bytes without
+			// decompressing anything; other errors carry no attributes.
+			return size, sum, fmt.Errorf("store checkpoint: %w", err)
+		}
+
 		return 0, [md5.Size]byte{}, fmt.Errorf("store checkpoint: %w", err)
 	}
-
-	size, sum := storedAttrs(gave)
 
 	return size, sum, nil
 }
