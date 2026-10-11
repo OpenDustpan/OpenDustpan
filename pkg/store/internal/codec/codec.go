@@ -3,8 +3,10 @@
 package codec
 
 import (
+	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -126,5 +128,45 @@ func FromSecretKeyRow(row SecretKeyRow) secret.WrappedKey {
 		},
 		WrapperID:  row.WrapperID,
 		Ciphertext: row.Ciphertext,
+	}
+}
+
+// BackupRow is the column representation of a backup registry row. The end
+// time is 0 while the backup runs.
+type BackupRow struct {
+	ID          string
+	State       string
+	Target      string
+	Error       string
+	StartedAtMs int64
+	EndedAtMs   int64
+}
+
+// ToBackupRow converts a domain backup record into a row.
+func ToBackupRow(r backup.Record) BackupRow {
+	return BackupRow{
+		ID:          r.ID.String(),
+		State:       string(r.State),
+		Target:      r.Target,
+		Error:       r.Error,
+		StartedAtMs: Millis(r.StartedAt),
+		EndedAtMs:   OptionalMillis(r.EndedAt),
+	}
+}
+
+// FromBackupRow converts a row into a domain backup record.
+func FromBackupRow(row BackupRow) (backup.Record, error) {
+	switch state := backup.State(row.State); state {
+	case backup.StateRunning, backup.StateSucceeded, backup.StateFailed:
+		return backup.Record{
+			StartedAt: FromMillis(row.StartedAtMs),
+			EndedAt:   FromOptionalMillis(row.EndedAtMs),
+			ID:        backup.ID(row.ID),
+			Target:    row.Target,
+			Error:     row.Error,
+			State:     state,
+		}, nil
+	default:
+		return backup.Record{}, fmt.Errorf("%w: unknown backup state %q", ErrCorruptRow, row.State)
 	}
 }

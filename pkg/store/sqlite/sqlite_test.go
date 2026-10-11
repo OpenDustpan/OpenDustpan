@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,6 +101,90 @@ func TestWorkspaceConformance(t *testing.T) {
 
 		return open(t)
 	})
+}
+
+func TestBackupConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunBackup(t, func(t *testing.T) storetest.BackupStore {
+		t.Helper()
+
+		return openBackup(t)
+	})
+}
+
+// backupStore wraps a Store with its path for the close-and-reopen case of
+// the backup suite: Close releases the handle and Reopen returns a new handle
+// to the same database file.
+type backupStore struct {
+	*sqlite.Store
+
+	t      *testing.T
+	mu     sync.Mutex
+	path   string
+	closed bool
+}
+
+var _ storetest.Reopener = (*backupStore)(nil)
+
+// openBackup returns a fresh backup-capable store in a temporary directory.
+func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	b := &backupStore{Store: s, t: t, mu: sync.Mutex{}, path: path, closed: false}
+
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	return b
+}
+
+// Close releases the handle. It runs once, so the cleanup and the reopen
+// case can both call it.
+func (s *backupStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	s.closed = true
+
+	if err := s.Store.Close(); err != nil {
+		return fmt.Errorf("close store: %w", err)
+	}
+
+	return nil
+}
+
+// Reopen returns a new handle to the same database file. It leaves running
+// backup rows alone, as Open does: the server marks them failed at start.
+func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reopener returns a new handle as the interface.
+	reopened, err := sqlite.Open(s.t.Context(), s.path)
+	if err != nil {
+		s.t.Fatalf("reopen store: %v", err)
+	}
+
+	b := &backupStore{Store: reopened, t: s.t, mu: sync.Mutex{}, path: s.path, closed: false}
+
+	s.t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			s.t.Errorf("close store: %v", err)
+		}
+	})
+
+	return b
 }
 
 func TestMigration0010Workspaces(t *testing.T) {
