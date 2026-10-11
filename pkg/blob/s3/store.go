@@ -3,6 +3,7 @@ package s3
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
@@ -45,6 +46,24 @@ var ErrNilReader = errors.New("reader is nil")
 
 // ErrPingFailed reports that the bucket did not answer.
 var ErrPingFailed = errors.New("ping bucket failed")
+
+// ErrNoConditionalWrites reports that the store ignores conditional writes.
+// Open returns it when the second probe write succeeds. The message tells
+// the operator to use a store that supports conditional writes.
+var ErrNoConditionalWrites = errors.New(
+	"the store does not support conditional writes; use a store that does",
+)
+
+const (
+	// probeRandSize is the random suffix length of a probe key in bytes.
+	probeRandSize = 16
+	// probeNamePrefix starts every probe key.
+	probeNamePrefix = "probe-"
+	// probeAttempts caps first-write tries when a probe key already exists.
+	probeAttempts = 3
+	// probeBody is the content of each probe object.
+	probeBody = "opendustpan-probe"
+)
 
 // s3Error is the XML body of an S3 error answer.
 type s3Error struct {
@@ -141,6 +160,55 @@ func New(signer *Signer, prefix string, client *http.Client, opts ...Option) (*S
 	}
 
 	return s, nil
+}
+
+// Open returns a Store after it proves the bucket supports conditional
+// writes. It writes a probe object twice under a random key and deletes it.
+// A second write that succeeds means the store ignores If-None-Match. Open
+// then deletes the probe and fails, so the server does not start. The error
+// names the endpoint and the bucket. It never holds a credential.
+func Open(
+	ctx context.Context,
+	signer *Signer,
+	prefix string,
+	client *http.Client,
+	opts ...Option,
+) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("s3: open store: %w", err)
+	}
+
+	store, err := New(signer, prefix, client, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := store.writeFirstProbe(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := store.checkSecondProbe(ctx, key); err != nil {
+		return nil, err
+	}
+
+	return store, nil
+}
+
+// newProbeKey returns a unique probe key. The random suffix keeps parallel
+// starts apart.
+func newProbeKey() (blob.Key, error) {
+	suffix := make([]byte, probeRandSize)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("generate probe key: %w", err)
+	}
+
+	key, err := blob.ParseKey(probeNamePrefix + hex.EncodeToString(suffix))
+	if err != nil {
+		return "", fmt.Errorf("generate probe key: %w", err)
+	}
+
+	return key, nil
 }
 
 // Put stores the contents of r under key. It returns blob.ErrExists when the
@@ -272,6 +340,89 @@ func (s *Store) Ping(ctx context.Context) error {
 	}
 
 	return sanitizePingError(lastErr)
+}
+
+// writeFirstProbe writes the first probe copy under a fresh key. A key that
+// already exists belongs to another start, so it tries the next key. Any
+// other failure deletes the probe and reports the failure.
+func (s *Store) writeFirstProbe(ctx context.Context) (blob.Key, error) {
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	for range probeAttempts {
+		key, err := newProbeKey()
+		if err != nil {
+			return "", fmt.Errorf("s3: open store at %s: %w", s.describe(), err)
+		}
+
+		err = s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
+		if err == nil {
+			return key, nil
+		}
+
+		if errors.Is(err, blob.ErrExists) {
+			continue
+		}
+
+		if cleanupErr := s.Delete(cleanupCtx, key); cleanupErr != nil {
+			return "", errors.Join(
+				fmt.Errorf("s3: open store at %s: probe first write: %w", s.describe(), err),
+				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
+			)
+		}
+
+		return "", fmt.Errorf("s3: open store at %s: probe first write: %w", s.describe(), err)
+	}
+
+	return "", fmt.Errorf("s3: open store at %s: probe key exists: %w", s.describe(), blob.ErrExists)
+}
+
+// checkSecondProbe writes the probe a second time and deletes it. A second
+// write that succeeds means the store ignores conditional writes. It deletes
+// the probe on every path, so no probe object stays behind.
+func (s *Store) checkSecondProbe(ctx context.Context, key blob.Key) error {
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	secondErr := s.Put(ctx, key, bytes.NewReader([]byte(probeBody)))
+	cleanupErr := s.Delete(cleanupCtx, key)
+
+	switch {
+	case secondErr == nil:
+		probeErr := fmt.Errorf("s3: open store at %s: %w", s.describe(), ErrNoConditionalWrites)
+		if cleanupErr != nil {
+			return errors.Join(
+				probeErr,
+				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
+			)
+		}
+
+		return probeErr
+	case errors.Is(secondErr, blob.ErrExists):
+		if cleanupErr != nil {
+			return fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr)
+		}
+
+		return nil
+	default:
+		probeErr := fmt.Errorf("s3: open store at %s: probe second write: %w", s.describe(), secondErr)
+		if cleanupErr != nil {
+			return errors.Join(
+				probeErr,
+				fmt.Errorf("s3: open store at %s: delete probe: %w", s.describe(), cleanupErr),
+			)
+		}
+
+		return probeErr
+	}
+}
+
+// describe names the store without a credential. It holds the endpoint and
+// the bucket, or the bucket and the region for AWS.
+func (s *Store) describe() string {
+	if s.signer.Endpoint != "" {
+		return fmt.Sprintf("endpoint %q bucket %q", s.signer.Endpoint, s.signer.Bucket)
+	}
+
+	return fmt.Sprintf("bucket %q region %q", s.signer.Bucket, s.signer.Region)
 }
 
 // putLoop sends the staged upload with retries.
