@@ -49,11 +49,13 @@ type errorClass struct {
 }
 
 // writeError answers err as a JSON:API error document. A 500 never returns
-// an internal error text: it logs the error and answers "internal error".
+// an internal error text: it logs the status and answers "internal error".
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	class := classify(err)
 	if class.status == http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "request failed", slog.String("error", err.Error()))
+		// The log names the status only, never the error text: the text
+		// may hold driver detail, a token, or state (ADR 32 decision 7).
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", class.status))
 		h.writeInternal(ctx, w)
 
 		return

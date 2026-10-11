@@ -218,7 +218,9 @@ type errorResponse struct {
 func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, message := classify(err)
 	if status == http.StatusInternalServerError {
-		h.logger.ErrorContext(ctx, "request failed", slog.String("error", err.Error()))
+		// The log names the status only, never the error text: the text
+		// may hold driver detail, a token, or state (ADR 32 decision 7).
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
