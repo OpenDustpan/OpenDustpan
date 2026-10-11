@@ -354,6 +354,18 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 	return cp, nil
 }
 
+// ExportVersion returns the checkpoint of the stack's update with the given
+// version, or ErrNoState when no such update exists or it has no checkpoint.
+// It never falls back to an older version.
+func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Checkpoint, error) {
+	cp, err := s.checkpoints.CheckpointByVersion(ctx, ref, version)
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
+	}
+
+	return cp, nil
+}
+
 // MaxCheckpointBytes returns the largest checkpoint SaveCheckpoint accepts.
 func (s *Updates) MaxCheckpointBytes() int {
 	return s.maxCheckpoints

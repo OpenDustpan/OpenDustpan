@@ -38,6 +38,7 @@ func updatePatterns() []string {
 		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
 		"GET /api/stacks/{namespace}/{project}/{stack}/export",
+		"GET /api/stacks/{namespace}/{project}/{stack}/export/{version}",
 	}
 }
 
@@ -472,6 +473,7 @@ func wantUpdateAction() map[string]identity.Action {
 		"GET /api/stacks/{namespace}/{project}/{stack}/update/{update}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/updates",
 		"GET /api/stacks/{namespace}/{project}/{stack}/export",
+		"GET /api/stacks/{namespace}/{project}/{stack}/export/{version}",
 	} {
 		write[pattern] = false
 	}
@@ -815,12 +817,28 @@ type accessTarget struct {
 
 // accessRouteTarget builds the target and body for an access-authed update
 // route, minting the update state the route needs in f: a created update
-// for start and get, a started update for cancel, none for create, history
-// and export.
+// for start and get, a started update for cancel, a finished update with a
+// checkpoint for versioned export, none for create, history and export, and a
+// deployment body for import.
 func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarget {
 	t.Helper()
 
 	switch {
+	case strings.HasSuffix(pattern, "/export/{version}"):
+		input := stack.CheckpointInput{
+			Features:      nil,
+			Deployment:    []byte(`{}`),
+			SchemaVersion: 3,
+			Sequence:      0,
+			Invalid:       false,
+		}
+
+		_, importErr := f.updates.Import(t.Context(), f.ref, input)
+		if importErr != nil {
+			t.Fatalf("import: %v", importErr)
+		}
+
+		return accessTarget{Target: "/api/stacks/acme/web/prod/export/1", Body: ""}
 	case strings.HasSuffix(pattern, "/updates"), strings.HasSuffix(pattern, "/export"):
 		return accessTarget{
 			Target: "/api/stacks/acme/web/prod" + strings.TrimPrefix(
@@ -828,6 +846,8 @@ func accessRouteTarget(t *testing.T, f updateFixture, pattern string) accessTarg
 			),
 			Body: "",
 		}
+	case strings.HasSuffix(pattern, "/import"):
+		return accessTarget{Target: "/api/stacks/acme/web/prod/import", Body: `{"version":3,"deployment":{}}`}
 	case strings.HasSuffix(pattern, "/cancel"):
 		u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
 		if err != nil {
@@ -1157,6 +1177,219 @@ func TestEventBatchBodyLimit(t *testing.T) {
 
 	if err := json.Unmarshal([]byte(body), &decoded); err != nil || decoded.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("error = %q, want code 413", body)
+	}
+}
+
+// TestImportStackCycle imports a deployment through HTTP: the import answers
+// the ID of its update, shows in history as kind import, and becomes the
+// latest export.
+func TestImportStackCycle(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPost, "/api/stacks/acme/web/prod/import", `{"version":3,"deployment":{"resources":[]}}`,
+	))
+	if status != http.StatusOK {
+		t.Fatalf("import answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var imported struct {
+		UpdateID string `json:"updateId"` //nolint:tagliatelle // The Pulumi CLI's wire name; it must not change.
+	}
+
+	if err := json.Unmarshal([]byte(body), &imported); err != nil || imported.UpdateID == "" {
+		t.Fatalf("import answers %q, want an update id: %v", body, err)
+	}
+
+	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""))
+	if status != http.StatusOK {
+		t.Fatalf("history answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var history historyPayload
+
+	if err := json.Unmarshal([]byte(body), &history); err != nil {
+		t.Fatalf("decode history: %v (%s)", err, body)
+	}
+
+	if len(history.Updates) != 1 {
+		t.Fatalf("history holds %d updates, want 1 (%s)", len(history.Updates), body)
+	}
+
+	got := history.Updates[0]
+	if got.Kind != "import" || got.Result != "succeeded" || got.Version != 1 {
+		t.Fatalf("history entry = %+v, want kind import result succeeded version 1", got)
+	}
+
+	status, body = f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK || !strings.Contains(body, `"resources"`) {
+		t.Fatalf("export answers %d %q, want 200 with the imported deployment", status, body)
+	}
+}
+
+// TestImportStackConflict proves an import while another update runs is
+// rejected, and the running update keeps the stack lock.
+func TestImportStackConflict(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	id, _ := f.mintStartedMutating(t)
+
+	status, body := f.doUpdate(t, accessRequest(
+		http.MethodPost, "/api/stacks/acme/web/prod/import", `{"version":3,"deployment":{}}`,
+	))
+	if status != http.StatusConflict {
+		t.Fatalf("import during a running update answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	active, err := f.updates.Active(t.Context(), f.ref)
+	if err != nil || active.ID != id {
+		t.Fatalf("active update = %q, %v; want the running one %q", active.ID, err, id)
+	}
+}
+
+// TestImportStackInvalidBody proves an import with a bad body answers 400
+// and records no update: validation runs before the import update exists.
+func TestImportStackInvalidBody(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid JSON", body: `{`},
+		{name: "no schema version", body: `{"version":0,"deployment":{}}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newUpdateFixture(t, allowAll())
+
+			status, body := f.doUpdate(
+				t,
+				accessRequest(http.MethodPost, "/api/stacks/acme/web/prod/import", tc.body),
+			)
+			if status != http.StatusBadRequest {
+				t.Fatalf("import answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+			}
+
+			status, body = f.doUpdate(
+				t,
+				accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/updates", ""),
+			)
+			if status != http.StatusOK || strings.TrimSpace(body) != `{"updates":[]}` {
+				t.Fatalf("history answers %d %q, want 200 with no updates", status, body)
+			}
+		})
+	}
+}
+
+// TestExportStackVersion proves versioned export returns only the named
+// version: each version holds its own checkpoint, a missing or empty version
+// answers 404, and a malformed version answers 400.
+func TestExportStackVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	for _, deployment := range []string{`{"v":1}`, `{"v":2}`} {
+		status, body := f.doUpdate(t, accessRequest(
+			http.MethodPost, "/api/stacks/acme/web/prod/import",
+			`{"version":3,"deployment":`+deployment+`}`,
+		))
+		if status != http.StatusOK {
+			t.Fatalf("import answers %d, want %d (%s)", status, http.StatusOK, body)
+		}
+	}
+
+	// A finished update without a checkpoint leaves its version empty.
+	finishMutatingUpdate(t, f, "", stack.StatusSucceeded)
+
+	cases := []struct {
+		name   string
+		target string
+		check  string
+		want   int
+	}{
+		{name: "first version", target: "/api/stacks/acme/web/prod/export/1", want: http.StatusOK, check: `"v":1`},
+		{name: "second version", target: "/api/stacks/acme/web/prod/export/2", want: http.StatusOK, check: `"v":2`},
+		{name: "missing version", target: "/api/stacks/acme/web/prod/export/99", want: http.StatusNotFound, check: ""},
+		{name: "empty version", target: "/api/stacks/acme/web/prod/export/3", want: http.StatusNotFound, check: ""},
+		{name: "not a number", target: "/api/stacks/acme/web/prod/export/abc", want: http.StatusBadRequest, check: ""},
+		{name: "negative", target: "/api/stacks/acme/web/prod/export/-1", want: http.StatusBadRequest, check: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, body := f.doUpdate(t, accessRequest(http.MethodGet, tc.target, ""))
+			if status != tc.want {
+				t.Fatalf("export answers %d, want %d (%s)", status, tc.want, body)
+			}
+
+			if tc.check != "" && !strings.Contains(body, tc.check) {
+				t.Fatalf("export answers %q, want it to hold %s", body, tc.check)
+			}
+		})
+	}
+}
+
+// TestExportStackVersionNoFallback proves versioned export never falls back:
+// version 2 keeps no checkpoint of its own after version 1 saved one, so it
+// answers 404 even though an older checkpoint exists.
+func TestExportStackVersionNoFallback(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	finishMutatingUpdate(t, f, `{"v":1}`, stack.StatusSucceeded)
+	finishMutatingUpdate(t, f, "", stack.StatusSucceeded)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export/2", ""))
+	if status != http.StatusNotFound {
+		t.Fatalf("export of an empty version answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}
+
+// finishMutatingUpdate creates, starts, and completes a mutating update,
+// saving deployment as its checkpoint first when not empty.
+func finishMutatingUpdate(t *testing.T, f updateFixture, deployment string, status stack.UpdateStatus) {
+	t.Helper()
+
+	u, createErr := f.updates.Create(t.Context(), f.ref, stack.Plan{Kind: stack.KindUpdate, DryRun: false})
+	if createErr != nil {
+		t.Fatalf("create: %v", createErr)
+	}
+
+	started, startErr := f.updates.Start(t.Context(), f.ref, u.ID)
+	if startErr != nil {
+		t.Fatalf("start: %v", startErr)
+	}
+
+	if deployment != "" {
+		input := stack.CheckpointInput{
+			Features:      nil,
+			Deployment:    []byte(deployment),
+			SchemaVersion: 3,
+			Sequence:      0,
+			Invalid:       false,
+		}
+
+		saveErr := f.updates.SaveCheckpoint(t.Context(), f.ref, u.ID, started.Token, input)
+		if saveErr != nil {
+			t.Fatalf("save checkpoint: %v", saveErr)
+		}
+	}
+
+	_, completeErr := f.updates.Complete(t.Context(), f.ref, u.ID, started.Token, status)
+	if completeErr != nil {
+		t.Fatalf("complete: %v", completeErr)
 	}
 }
 
