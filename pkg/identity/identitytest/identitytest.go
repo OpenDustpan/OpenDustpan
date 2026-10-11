@@ -251,7 +251,7 @@ func testDenialNamesObject(t *testing.T, authz identity.Authorizer) {
 
 	for _, obj := range testObjects(t) {
 		err := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, obj)
-		if !errors.Is(err, identity.ErrDenied) {
+		if err == nil || !errors.Is(err, identity.ErrDenied) {
 			t.Fatalf("viewer unit:read on %q = %v, want ErrDenied", obj.String(), err)
 		}
 
@@ -280,7 +280,7 @@ func testUnitsDistinct(t *testing.T, authz identity.Authorizer) {
 	errA := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, unitA)
 	errB := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, unitB)
 
-	if !errors.Is(errA, identity.ErrDenied) || !errors.Is(errB, identity.ErrDenied) {
+	if errA == nil || errB == nil || !errors.Is(errA, identity.ErrDenied) || !errors.Is(errB, identity.ErrDenied) {
 		t.Fatalf("viewer denials = (%v, %v), want ErrDenied on both units", errA, errB)
 	}
 

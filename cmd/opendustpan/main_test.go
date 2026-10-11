@@ -442,7 +442,7 @@ func refuseHalfRotatedKey(t *testing.T) {
 	seedSecondKey(t, path, []byte(otherKeyString))
 
 	err := serveDatabase(t, path)
-	if !errors.Is(err, secret.ErrWrapperMismatch) {
+	if err == nil || !errors.Is(err, secret.ErrWrapperMismatch) {
 		t.Fatalf("serve a half-rotated database: err = %v, want ErrWrapperMismatch", err)
 	}
 

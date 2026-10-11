@@ -979,7 +979,8 @@ func TestRenameAuthorizesDestination(t *testing.T) {
 		body   = `{"newName":"renamed","newProject":"web"}`
 	)
 
-	rename := func(t *testing.T, authz identity.Authorizer) (int, *recordingStackStore) {
+	// rename returns the status code and the number of stacks renamed.
+	rename := func(t *testing.T, authz identity.Authorizer) (int, int) {
 		t.Helper()
 
 		handler, stores := newEnforcingHandler(t, authz)
@@ -995,27 +996,27 @@ func TestRenameAuthorizesDestination(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
-		return rec.Code, stores
+		return rec.Code, len(stores.renamed)
 	}
 
 	sourceOnly := identitytest.NewPolicyAuthorizer("tester", map[identity.Action][]string{
 		identity.ActionUnitManage: {source},
 	})
 
-	if code, stores := rename(t, sourceOnly); code != http.StatusForbidden {
+	if code, renamed := rename(t, sourceOnly); code != http.StatusForbidden {
 		t.Fatalf("rename without destination grant answers %d, want %d", code, http.StatusForbidden)
-	} else if len(stores.renamed) != 0 {
-		t.Fatalf("renamed %d stacks, want 0", len(stores.renamed))
+	} else if renamed != 0 {
+		t.Fatalf("renamed %d stacks, want 0", renamed)
 	}
 
 	both := identitytest.NewPolicyAuthorizer("tester", map[identity.Action][]string{
 		identity.ActionUnitManage: {source, dest},
 	})
 
-	if code, stores := rename(t, both); code != http.StatusOK {
+	if code, renamed := rename(t, both); code != http.StatusOK {
 		t.Fatalf("rename with both grants answers %d, want %d", code, http.StatusOK)
-	} else if len(stores.renamed) != 1 {
-		t.Fatalf("renamed %d stacks, want 1", len(stores.renamed))
+	} else if renamed != 1 {
+		t.Fatalf("renamed %d stacks, want 1", renamed)
 	}
 }
 
