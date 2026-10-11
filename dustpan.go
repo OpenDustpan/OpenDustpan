@@ -38,6 +38,7 @@ import (
 
 	inventoryapi "opendustpan.org/opendustpan/api/inventory"
 	"opendustpan.org/opendustpan/api/pulumi"
+	serverapi "opendustpan.org/opendustpan/api/server"
 	"opendustpan.org/opendustpan/api/tfe"
 	"opendustpan.org/opendustpan/blob"
 	"opendustpan.org/opendustpan/identity"
@@ -264,22 +265,12 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base)
+	adapters, err := newAdapters(svc, cfg, base)
 	if err != nil {
 		return nil, err
 	}
 
-	units, err := newInventoryHandler(svc, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
-	if err != nil {
-		return nil, err
-	}
-
-	handler, err := routes(api, units, tfeAPI, cfg)
+	handler, err := routes(adapters.pulumi, adapters.inventory, adapters.tfe, adapters.server, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +284,39 @@ func NewServer(opts ...Option) (*Server, error) {
 		tlsCertFile: cfg.tlsCertFile,
 		tlsKeyFile:  cfg.tlsKeyFile,
 	}, nil
+}
+
+// adapters holds the HTTP adapters that routes mounts.
+type adapters struct {
+	pulumi    http.Handler
+	inventory http.Handler
+	tfe       http.Handler
+	server    http.Handler
+}
+
+// newAdapters builds every HTTP adapter from the services and settings.
+func newAdapters(svc services, cfg settings, base baseurl.Resolver) (adapters, error) {
+	api, err := newPulumiHandler(svc, cfg, base)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	units, err := newInventoryHandler(svc, cfg)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	serverAPI, err := newServerHandler(cfg)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI}, nil
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
@@ -542,13 +566,31 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
-func routes(api, units, tfeAPI http.Handler, cfg settings) (http.Handler, error) {
+// newServerHandler builds the tool-neutral installation API. The skeleton
+// needs only the identity ports; later issues add the backup and metrics
+// dependencies.
+func newServerHandler(cfg settings) (http.Handler, error) {
+	handler, err := serverapi.NewHandler(serverapi.Config{
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("server api: %w", err)
+	}
+
+	return handler, nil
+}
+
+func routes(api, units, tfeAPI, serverAPI http.Handler, cfg settings) (http.Handler, error) {
 	mux := http.NewServeMux()
-	// /api/inventory/ and /api/v2/ are more specific than /api/, so the
-	// inventory units route and the OpenTofu routes reach their own adapters
-	// while every other /api/ route reaches Pulumi.
+	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
+	// /api/, so the inventory units route, the OpenTofu routes and the
+	// installation routes reach their own adapters while every other /api/
+	// route reaches Pulumi.
 	mux.Handle("/api/inventory/", withCORS(units, cfg.allowedOrigins))
 	mux.Handle("/api/v2/", withCORS(tfeAPI, cfg.allowedOrigins))
+	mux.Handle("/api/server/", withCORS(serverAPI, cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(api, cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it
 	// through the TFE adapter.

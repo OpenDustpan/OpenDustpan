@@ -51,6 +51,8 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
 		identity.ActionCallerRead,
+		identity.ActionServerBackup,
+		identity.ActionServerObserve,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -92,6 +94,7 @@ func TestParseObjectInvalid(t *testing.T) {
 	invalid := []string{
 		"",
 		"@caller",
+		"@server",
 		"pulumi:",
 		"pulumi:acme",
 		"pulumi:/web",
@@ -224,6 +227,88 @@ func TestCallerObject(t *testing.T) {
 	}
 }
 
+// TestServerObject proves the server reference names no namespace, unit or
+// caller, that ParseObject rejects its wire form, and that a namespace named
+// "server" never equals it.
+func TestServerObject(t *testing.T) {
+	t.Parallel()
+
+	sobj := identity.ServerObject()
+	checkServerIdentity(t, sobj)
+	checkServerParse(t, sobj)
+}
+
+// checkServerIdentity proves sobj names the installation and nothing else.
+func checkServerIdentity(t *testing.T, sobj identity.Object) {
+	t.Helper()
+
+	if sobj.IsUnit() {
+		t.Fatal("server object reports IsUnit")
+	}
+
+	if sobj.IsCaller() {
+		t.Fatal("server object reports caller")
+	}
+
+	if !sobj.IsServer() {
+		t.Fatal("server object reports no server")
+	}
+
+	if sobj.String() != "@server" {
+		t.Fatalf("server String() = %q", sobj.String())
+	}
+
+	if sobj.Namespace().String() != "" || sobj.Tool() != "" || sobj.UnitName() != "" {
+		t.Fatalf(
+			"server object names %q/%q/%q, want no namespace, tool or unit",
+			sobj.Namespace().String(),
+			sobj.Tool(),
+			sobj.UnitName(),
+		)
+	}
+}
+
+// checkServerParse proves ParseObject rejects the server wire form and that a
+// namespace named server never equals the server object.
+func checkServerParse(t *testing.T, sobj identity.Object) {
+	t.Helper()
+
+	if _, err := identity.ParseObject(sobj.String()); !errors.Is(err, identity.ErrInvalidObject) {
+		t.Fatalf("parse server form %q = %v, want ErrInvalidObject", sobj.String(), err)
+	}
+
+	nsObj, err := identity.ParseObject("server")
+	if err != nil {
+		t.Fatalf("parse namespace server: %v", err)
+	}
+
+	if nsObj.IsServer() {
+		t.Fatal("namespace server reports server")
+	}
+
+	if nsObj == sobj {
+		t.Fatal("namespace server equals the server object")
+	}
+
+	if identity.CallerObject() == sobj {
+		t.Fatal("caller object equals the server object")
+	}
+}
+
+// TestServerActionsProveWireForms proves the server actions use the server
+// wire forms that the installation API declares.
+func TestServerActionsProveWireForms(t *testing.T) {
+	t.Parallel()
+
+	if identity.ActionServerBackup != "server:backup" {
+		t.Fatalf("backup action = %q, want %q", identity.ActionServerBackup, "server:backup")
+	}
+
+	if identity.ActionServerObserve != "server:observe" {
+		t.Fatalf("observe action = %q, want %q", identity.ActionServerObserve, "server:observe")
+	}
+}
+
 func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	t.Helper()
 
@@ -236,6 +321,8 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
 		identity.ActionCallerRead,
+		identity.ActionServerBackup,
+		identity.ActionServerObserve,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))
@@ -247,7 +334,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true}
 	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false}
 
-	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject()} {
+	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()} {
 		for _, action := range actions {
 			if err := authorizer.Authorize(t.Context(), admin, action, obj); err != nil {
 				t.Fatalf("admin %s on %q: %v", action, obj.String(), err)
