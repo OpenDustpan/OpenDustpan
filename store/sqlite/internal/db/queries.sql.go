@@ -10,26 +10,18 @@ import (
 )
 
 const activeUpdate = `-- name: ActiveUpdate :one
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview'
 `
 
-type ActiveUpdateParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-}
-
-func (q *Queries) ActiveUpdate(ctx context.Context, arg ActiveUpdateParams) (Update, error) {
-	row := q.db.QueryRowContext(ctx, activeUpdate, arg.Namespace, arg.Project, arg.Stack)
+func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (Update, error) {
+	row := q.db.QueryRowContext(ctx, activeUpdate, stackID)
 	var i Update
 	err := row.Scan(
-		&i.Namespace,
-		&i.Project,
-		&i.Stack,
+		&i.StackID,
 		&i.ID,
 		&i.Kind,
 		&i.DryRun,
@@ -46,15 +38,13 @@ func (q *Queries) ActiveUpdate(ctx context.Context, arg ActiveUpdateParams) (Upd
 }
 
 const appendEvent = `-- name: AppendEvent :exec
-INSERT INTO update_events (namespace, project, stack, update_id, sequence, timestamp_ms, payload)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type AppendEventParams struct {
-	Namespace   string
-	Project     string
-	Stack       string
+	StackID     string
 	UpdateID    string
 	Sequence    int64
 	TimestampMs int64
@@ -63,9 +53,7 @@ type AppendEventParams struct {
 
 func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error {
 	_, err := q.db.ExecContext(ctx, appendEvent,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
+		arg.StackID,
 		arg.UpdateID,
 		arg.Sequence,
 		arg.TimestampMs,
@@ -136,15 +124,13 @@ func (q *Queries) CreateStack(ctx context.Context, arg CreateStackParams) (int64
 
 const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
-    namespace, project, stack, id, kind, dry_run, status, version, revision,
+    stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateUpdateParams struct {
-	Namespace        string
-	Project          string
-	Stack            string
+	StackID          string
 	ID               string
 	Kind             string
 	DryRun           bool
@@ -160,9 +146,7 @@ type CreateUpdateParams struct {
 
 func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) error {
 	_, err := q.db.ExecContext(ctx, createUpdate,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
+		arg.StackID,
 		arg.ID,
 		arg.Kind,
 		arg.DryRun,
@@ -179,25 +163,17 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 }
 
 const getCheckpoint = `-- name: GetCheckpoint :one
-SELECT namespace, project, stack, update_id, lease_digest, schema_version, sequence,
+SELECT stack_id, update_id, lease_digest, schema_version, sequence,
        digest, invalid, features_json, deployment, saved_at_ms
 FROM checkpoints
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
 `
 
-type GetCheckpointParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-}
-
-func (q *Queries) GetCheckpoint(ctx context.Context, arg GetCheckpointParams) (Checkpoint, error) {
-	row := q.db.QueryRowContext(ctx, getCheckpoint, arg.Namespace, arg.Project, arg.Stack)
+func (q *Queries) GetCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
+	row := q.db.QueryRowContext(ctx, getCheckpoint, stackID)
 	var i Checkpoint
 	err := row.Scan(
-		&i.Namespace,
-		&i.Project,
-		&i.Stack,
+		&i.StackID,
 		&i.UpdateID,
 		&i.LeaseDigest,
 		&i.SchemaVersion,
@@ -281,6 +257,25 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 	return i, err
 }
 
+const getStackID = `-- name: GetStackID :one
+SELECT id
+FROM stacks
+WHERE namespace = ? AND project = ? AND name = ?
+`
+
+type GetStackIDParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+func (q *Queries) GetStackID(ctx context.Context, arg GetStackIDParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getStackID, arg.Namespace, arg.Project, arg.Name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getStackVersion = `-- name: GetStackVersion :one
 SELECT version
 FROM stacks
@@ -301,31 +296,22 @@ func (q *Queries) GetStackVersion(ctx context.Context, arg GetStackVersionParams
 }
 
 const getUpdate = `-- name: GetUpdate :one
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ? AND id = ?
+WHERE stack_id = ? AND id = ?
 `
 
 type GetUpdateParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-	ID        string
+	StackID string
+	ID      string
 }
 
 func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (Update, error) {
-	row := q.db.QueryRowContext(ctx, getUpdate,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
-		arg.ID,
-	)
+	row := q.db.QueryRowContext(ctx, getUpdate, arg.StackID, arg.ID)
 	var i Update
 	err := row.Scan(
-		&i.Namespace,
-		&i.Project,
-		&i.Stack,
+		&i.StackID,
 		&i.ID,
 		&i.Kind,
 		&i.DryRun,
@@ -344,14 +330,12 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (Update, e
 const getUpdateLease = `-- name: GetUpdateLease :one
 SELECT status, lease_digest
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ? AND id = ?
+WHERE stack_id = ? AND id = ?
 `
 
 type GetUpdateLeaseParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-	ID        string
+	StackID string
+	ID      string
 }
 
 type GetUpdateLeaseRow struct {
@@ -360,12 +344,7 @@ type GetUpdateLeaseRow struct {
 }
 
 func (q *Queries) GetUpdateLease(ctx context.Context, arg GetUpdateLeaseParams) (GetUpdateLeaseRow, error) {
-	row := q.db.QueryRowContext(ctx, getUpdateLease,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
-		arg.ID,
-	)
+	row := q.db.QueryRowContext(ctx, getUpdateLease, arg.StackID, arg.ID)
 	var i GetUpdateLeaseRow
 	err := row.Scan(&i.Status, &i.LeaseDigest)
 	return i, err
@@ -374,18 +353,12 @@ func (q *Queries) GetUpdateLease(ctx context.Context, arg GetUpdateLeaseParams) 
 const highestUpdateVersion = `-- name: HighestUpdateVersion :one
 SELECT CAST(COALESCE(MAX(version), 0) AS INTEGER)
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview'
 `
 
-type HighestUpdateVersionParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-}
-
-func (q *Queries) HighestUpdateVersion(ctx context.Context, arg HighestUpdateVersionParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, highestUpdateVersion, arg.Namespace, arg.Project, arg.Stack)
+func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, highestUpdateVersion, stackID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -394,18 +367,16 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, arg HighestUpdateVer
 const listEvents = `-- name: ListEvents :many
 SELECT sequence, timestamp_ms, payload
 FROM update_events
-WHERE namespace = ? AND project = ? AND stack = ? AND update_id = ? AND sequence > ?
+WHERE stack_id = ? AND update_id = ? AND sequence > ?
 ORDER BY sequence
 LIMIT ?
 `
 
 type ListEventsParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-	UpdateID  string
-	Sequence  int64
-	Limit     int64
+	StackID  string
+	UpdateID string
+	Sequence int64
+	Limit    int64
 }
 
 type ListEventsRow struct {
@@ -416,9 +387,7 @@ type ListEventsRow struct {
 
 func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listEvents,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
+		arg.StackID,
 		arg.UpdateID,
 		arg.Sequence,
 		arg.Limit,
@@ -550,31 +519,23 @@ func (q *Queries) ListStacksInProject(ctx context.Context, arg ListStacksInProje
 }
 
 const listUpdates = `-- name: ListUpdates :many
-SELECT namespace, project, stack, id, kind, dry_run, status, version, revision,
+SELECT stack_id, id, kind, dry_run, status, version, revision,
        lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status <> 'not started' AND dry_run = 0 AND kind <> 'preview'
 ORDER BY version DESC
 LIMIT ? OFFSET ?
 `
 
 type ListUpdatesParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-	Limit     int64
-	Offset    int64
+	StackID string
+	Limit   int64
+	Offset  int64
 }
 
 func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Update, error) {
-	rows, err := q.db.QueryContext(ctx, listUpdates,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
-		arg.Limit,
-		arg.Offset,
-	)
+	rows, err := q.db.QueryContext(ctx, listUpdates, arg.StackID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -583,9 +544,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Upd
 	for rows.Next() {
 		var i Update
 		if err := rows.Scan(
-			&i.Namespace,
-			&i.Project,
-			&i.Stack,
+			&i.StackID,
 			&i.ID,
 			&i.Kind,
 			&i.DryRun,
@@ -613,10 +572,10 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Upd
 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
-    namespace, project, stack, update_id, lease_digest, schema_version, sequence,
+    stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, deployment, saved_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (namespace, project, stack) DO UPDATE SET
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
     update_id = excluded.update_id,
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -629,9 +588,7 @@ ON CONFLICT (namespace, project, stack) DO UPDATE SET
 `
 
 type PutCheckpointParams struct {
-	Namespace     string
-	Project       string
-	Stack         string
+	StackID       string
 	UpdateID      string
 	LeaseDigest   []byte
 	SchemaVersion int64
@@ -645,9 +602,7 @@ type PutCheckpointParams struct {
 
 func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) error {
 	_, err := q.db.ExecContext(ctx, putCheckpoint,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
+		arg.StackID,
 		arg.UpdateID,
 		arg.LeaseDigest,
 		arg.SchemaVersion,
@@ -661,21 +616,39 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const renameStack = `-- name: RenameStack :execrows
+UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?
+`
+
+type RenameStackParams struct {
+	Name      string
+	Namespace string
+	Project   string
+	Name_2    string
+}
+
+func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, renameStack,
+		arg.Name,
+		arg.Namespace,
+		arg.Project,
+		arg.Name_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
 SELECT COUNT(*)
 FROM updates
-WHERE namespace = ? AND project = ? AND stack = ?
+WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview'
 `
 
-type RunningMutatingUpdatesParams struct {
-	Namespace string
-	Project   string
-	Stack     string
-}
-
-func (q *Queries) RunningMutatingUpdates(ctx context.Context, arg RunningMutatingUpdatesParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, runningMutatingUpdates, arg.Namespace, arg.Project, arg.Stack)
+func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, runningMutatingUpdates, stackID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -686,8 +659,8 @@ UPDATE updates
 SET status = ?1, version = ?2, revision = ?3,
     lease_digest = ?4, lease_expires_at_ms = ?5,
     started_at_ms = ?6, ended_at_ms = ?7
-WHERE namespace = ?8 AND project = ?9 AND stack = ?10 AND id = ?11
-  AND revision = ?12
+WHERE stack_id = ?8 AND id = ?9
+  AND revision = ?10
 `
 
 type SaveUpdateParams struct {
@@ -698,9 +671,7 @@ type SaveUpdateParams struct {
 	LeaseExpiresAtMs int64
 	StartedAtMs      int64
 	EndedAtMs        int64
-	Namespace        string
-	Project          string
-	Stack            string
+	StackID          string
 	ID               string
 	ExpectedRevision int64
 }
@@ -716,9 +687,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.LeaseExpiresAtMs,
 		arg.StartedAtMs,
 		arg.EndedAtMs,
-		arg.Namespace,
-		arg.Project,
-		arg.Stack,
+		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,
 	)
@@ -751,23 +720,4 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 		arg.Name,
 	)
 	return err
-}
-
-const stackExists = `-- name: StackExists :one
-SELECT EXISTS (
-    SELECT 1 FROM stacks WHERE namespace = ? AND project = ? AND name = ?
-)
-`
-
-type StackExistsParams struct {
-	Namespace string
-	Project   string
-	Name      string
-}
-
-func (q *Queries) StackExists(ctx context.Context, arg StackExistsParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, stackExists, arg.Namespace, arg.Project, arg.Name)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
