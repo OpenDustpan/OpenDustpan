@@ -77,6 +77,7 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithAllowedOrigins(origin),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
@@ -167,6 +168,49 @@ func TestStackLifecycle(t *testing.T) {
 
 	if !strings.HasPrefix(got.ID, "stk-") {
 		t.Fatalf("get stack ID = %q, want stk- prefix", got.ID)
+	}
+
+	status, body = f.do(t, http.MethodGet, "/api/user/stacks?organization=acme", adminToken, "")
+	if status != http.StatusOK || !strings.Contains(body, `"stackName":"prod"`) {
+		t.Fatalf("list stacks: status %d, body %s", status, body)
+	}
+}
+
+// TestInventoryRouting proves dustpan.go mounts the inventory API at
+// /api/inventory/, a pattern more specific than the Pulumi /api/ pattern: the
+// unit list serves the inventory envelope, while the Pulumi CLI routes keep
+// their shape.
+func TestInventoryRouting(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.createNamespace(t, "acme", region)
+
+	status, body := f.do(t, http.MethodGet, "/api/inventory/units?organization=acme", adminToken, "")
+	if status != http.StatusOK || !strings.Contains(body, `"units":[]`) {
+		t.Fatalf("list units: status %d, body %s", status, body)
+	}
+
+	status, body = f.do(t, http.MethodGet, "/api/inventory/units?organization=ghost", adminToken, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown namespace: status %d, want %d (body %s)", status, http.StatusNotFound, body)
+	}
+
+	status, body = f.do(t, http.MethodGet, "/api/inventory/units", adminToken, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("missing organization: status %d, want %d (body %s)", status, http.StatusBadRequest, body)
+	}
+
+	status, body = f.do(t, http.MethodPost, "/api/stacks/acme/web", adminToken, `{"stackName":"prod"}`)
+	if status != http.StatusOK {
+		t.Fatalf("create stack: status %d, body %s", status, body)
+	}
+
+	status, body = f.do(t, http.MethodGet, "/api/inventory/units?organization=acme", adminToken, "")
+	if status != http.StatusOK ||
+		!strings.Contains(body, `"tool":"Pulumi"`) ||
+		!strings.Contains(body, `"reference":"pulumi:acme/web/prod"`) {
+		t.Fatalf("list units after create: status %d, body %s", status, body)
 	}
 
 	status, body = f.do(t, http.MethodGet, "/api/user/stacks?organization=acme", adminToken, "")
@@ -425,6 +469,7 @@ func TestNewServerRequiresWorkspacePorts(t *testing.T) {
 		{name: "workspace store", drop: 8},
 		{name: "state store", drop: 9},
 		{name: "blob store", drop: 10},
+		{name: "inventory reader", drop: 11},
 	}
 
 	for _, tc := range cases {
@@ -494,6 +539,7 @@ func fullServerOptions(st *sqlite.Store, blobs *fs.Store, authn *identity.Static
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 	}
 }
 
@@ -562,6 +608,7 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithConsoleDir(dir),
 	)
