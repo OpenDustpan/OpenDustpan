@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -360,6 +361,77 @@ func TestAuthorizerConformance(t *testing.T) {
 	t.Parallel()
 
 	checkAuthorizer(t, testAuthorizer{})
+}
+
+// TestAdminOnlySuite runs the shared Authorizer suite against the built-in
+// default: administrators pass on every object, everyone else fails closed.
+func TestAdminOnlySuite(t *testing.T) {
+	t.Parallel()
+
+	identitytest.Run(t, func(t *testing.T) identity.Authorizer {
+		t.Helper()
+
+		return identity.AdminOnly{}
+	})
+}
+
+// TestPolicyAuthorizerSuite runs the shared Authorizer suite against the
+// object-sensitive test Authorizer with no grants: it behaves like the
+// default, so administrators pass and everyone else fails on every object.
+func TestPolicyAuthorizerSuite(t *testing.T) {
+	t.Parallel()
+
+	identitytest.Run(t, func(t *testing.T) identity.Authorizer {
+		t.Helper()
+
+		return identitytest.NewPolicyAuthorizer("viewer", map[identity.Action][]string{})
+	})
+}
+
+// TestObjectSensitiveSuite runs the object-sensitive cases: a grant on one
+// unit allows only that unit, and a grant on a namespace allows its units.
+func TestObjectSensitiveSuite(t *testing.T) {
+	t.Parallel()
+
+	identitytest.RunObjectSensitive(t)
+}
+
+// TestStaticTokenSuite runs the shared Authenticator suite against the
+// single-token bootstrap authenticator.
+func TestStaticTokenSuite(t *testing.T) {
+	t.Parallel()
+
+	token := strings.Repeat("a", 32)
+
+	identitytest.RunAuthenticator(t, func(t *testing.T) (identity.Authenticator, string) {
+		t.Helper()
+
+		authn, err := identity.NewStaticToken("admin", token)
+		if err != nil {
+			t.Fatalf("static token: %v", err)
+		}
+
+		return authn, token
+	})
+}
+
+// TestStaticTokensSuite runs the shared Authenticator suite against the
+// multi-token bootstrap authenticator.
+func TestStaticTokensSuite(t *testing.T) {
+	t.Parallel()
+
+	token := strings.Repeat("b", 32)
+
+	identitytest.RunAuthenticator(t, func(t *testing.T) (identity.Authenticator, string) {
+		t.Helper()
+
+		authn, err := identity.NewStaticTokens(token)
+		if err != nil {
+			t.Fatalf("static tokens: %v", err)
+		}
+
+		return authn, token
+	})
 }
 
 // TestStaticTokensSingle proves one bootstrap token signs in as admin.

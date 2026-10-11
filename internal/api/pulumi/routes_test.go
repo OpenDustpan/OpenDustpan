@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -231,6 +232,43 @@ func (s selectiveAuthorizer) Authorize(
 	obj identity.Object,
 ) error {
 	if s.deny[action] {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+// recordedCall is one Authorize call: the action on the object wire form.
+type recordedCall struct {
+	action identity.Action
+	object string
+}
+
+// recordingAuthorizer allows every action and records every call, so tests
+// prove which object a route authorizes.
+type recordingAuthorizer struct {
+	calls []recordedCall
+}
+
+func (r *recordingAuthorizer) Authorize(
+	_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	r.calls = append(r.calls, recordedCall{action: action, object: obj.String()})
+
+	return nil
+}
+
+// denyObjectAuthorizer denies the one object wire form in deny and allows
+// everything else, so tests prove a route authorizes the resolved object:
+// denying it answers 403.
+type denyObjectAuthorizer struct {
+	deny string
+}
+
+func (d denyObjectAuthorizer) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if obj.String() == d.deny {
 		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
 
@@ -612,6 +650,101 @@ func wantSuccess(route pulumi.Route) int {
 	return http.StatusOK
 }
 
+// TestRoutesAuthorizeDeclaredObject proves every authorized route asks for
+// its declared actions on the object its resolver returns: the recording
+// Authorizer sees each declared action on the resolved object, and denying
+// that object answers 403. Update routes need live update state, so they are
+// skipped here and covered by TestUpdateRoutesAuthorizeDeclaredObject
+// instead. Secrets routes need live stack state, so they are skipped here
+// and covered by TestSecretRoutesAuthorizeDeclaredObject instead.
+func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+
+	for _, route := range handler.Routes() {
+		if slices.Contains(updatePatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			t.Parallel()
+			checkRouteObject(t, route)
+		})
+	}
+}
+
+// checkRouteObject proves one route authorizes its declared actions on its
+// resolved object.
+func checkRouteObject(t *testing.T, route pulumi.Route) {
+	t.Helper()
+
+	if route.Scope == pulumi.ScopePublic {
+		allowed, _ := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
+
+		rec := httptest.NewRecorder()
+		allowed.ServeHTTP(rec, routeRequest(t, route, ""))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
+		}
+
+		return
+	}
+
+	expected := resolveExpected(t, route)
+
+	recorder := &recordingAuthorizer{calls: nil}
+	allowed, _ := newEnforcingHandler(t, recorder)
+
+	rec := httptest.NewRecorder()
+	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if rec.Code != wantSuccess(route) {
+		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, wantSuccess(route), rec.Body.String())
+	}
+
+	for _, action := range route.Actions {
+		if !slices.Contains(recorder.calls, recordedCall{action: action, object: expected}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, expected, recorder.calls)
+		}
+	}
+
+	denied, _ := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected})
+
+	rec = httptest.NewRecorder()
+	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusForbidden)
+	}
+}
+
+// resolveExpected returns the wire form of the object the route resolves for
+// its valid test request. Path placeholders are filled as routeRequest fills
+// them, since resolvers read path values that only routing sets.
+func resolveExpected(t *testing.T, route pulumi.Route) string {
+	t.Helper()
+
+	req := routeRequest(t, route, "test-token")
+	req.SetPathValue("namespace", "acme")
+	req.SetPathValue("project", "web")
+	req.SetPathValue("stack", "prod")
+
+	rec := httptest.NewRecorder()
+
+	obj, err := route.Resolve(rec, req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	return obj.String()
+}
+
 // TestCreateStackThroughWrapper proves a stack create still works end to end
 // through the registration wrapper: the resolver reads the body for
 // authorization and the handler reads it again to create the stack.
@@ -750,8 +883,8 @@ func TestUpdateStackTagsThroughWrapperInvalidBody(t *testing.T) {
 }
 
 // TestRenameStackThroughWrapper proves a stack rename still works end to end
-// through the registration wrapper: the resolver authorizes the old unit and
-// the handler renames it to the name in the body.
+// through the registration wrapper: the wrapper authorizes the old unit and
+// the handler authorizes the new unit before it renames.
 func TestRenameStackThroughWrapper(t *testing.T) {
 	t.Parallel()
 
@@ -830,6 +963,59 @@ func TestRenameStackThroughWrapperInvalid(t *testing.T) {
 				t.Fatalf("renamed %d stacks, want 0", len(stores.renamed))
 			}
 		})
+	}
+}
+
+// TestRenameAuthorizesDestination proves a rename needs unit:manage on the
+// destination as well as the source: with the source allowed but the new
+// name denied it answers 403 and renames nothing, and with both allowed it
+// renames.
+func TestRenameAuthorizesDestination(t *testing.T) {
+	t.Parallel()
+
+	const (
+		source = "pulumi:acme/web/prod"
+		dest   = "pulumi:acme/web/renamed"
+		body   = `{"newName":"renamed","newProject":"web"}`
+	)
+
+	rename := func(t *testing.T, authz identity.Authorizer) (int, *recordingStackStore) {
+		t.Helper()
+
+		handler, stores := newEnforcingHandler(t, authz)
+
+		req := httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			"/api/stacks/acme/web/prod/rename",
+			strings.NewReader(body),
+		)
+		req.Header.Set("Authorization", "token test-token")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		return rec.Code, stores
+	}
+
+	sourceOnly := identitytest.NewPolicyAuthorizer("tester", map[identity.Action][]string{
+		identity.ActionUnitManage: {source},
+	})
+
+	if code, stores := rename(t, sourceOnly); code != http.StatusForbidden {
+		t.Fatalf("rename without destination grant answers %d, want %d", code, http.StatusForbidden)
+	} else if len(stores.renamed) != 0 {
+		t.Fatalf("renamed %d stacks, want 0", len(stores.renamed))
+	}
+
+	both := identitytest.NewPolicyAuthorizer("tester", map[identity.Action][]string{
+		identity.ActionUnitManage: {source, dest},
+	})
+
+	if code, stores := rename(t, both); code != http.StatusOK {
+		t.Fatalf("rename with both grants answers %d, want %d", code, http.StatusOK)
+	} else if len(stores.renamed) != 1 {
+		t.Fatalf("renamed %d stacks, want 1", len(stores.renamed))
 	}
 }
 
@@ -1356,8 +1542,9 @@ func TestDeleteStackWithResourcesMessage(t *testing.T) {
 	}
 }
 
-// TestResolveRenameStack proves the rename route resolves the unit in the
-// path: the stack being renamed, not the new name in the body.
+// TestResolveRenameStack proves the rename route resolves the source unit in
+// the path: the stack being renamed. The handler authorizes the destination
+// unit in the body separately.
 func TestResolveRenameStack(t *testing.T) {
 	t.Parallel()
 

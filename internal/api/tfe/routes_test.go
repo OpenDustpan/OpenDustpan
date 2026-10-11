@@ -115,6 +115,63 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
+// recordedCall is one Authorize call: the action on the object wire form.
+type recordedCall struct {
+	action identity.Action
+	object string
+}
+
+// recordingAuthorizer allows every action and records every call, so tests
+// prove which object a route authorizes.
+type recordingAuthorizer struct {
+	calls []recordedCall
+}
+
+func (r *recordingAuthorizer) Authorize(
+	_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	r.calls = append(r.calls, recordedCall{action: action, object: obj.String()})
+
+	return nil
+}
+
+// denyObjectAuthorizer denies the one object wire form in deny and allows
+// everything else, so tests prove a route authorizes the resolved object:
+// denying it answers 403.
+type denyObjectAuthorizer struct {
+	deny string
+}
+
+func (d denyObjectAuthorizer) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if obj.String() == d.deny {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+// newObjectHandler returns a production Handler (no test-only routes) with
+// the given Authorizer, so the object tests cover the real table.
+func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
+	t.Helper()
+
+	handler, err := tfe.NewHandler(tfe.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    stubWorkspaces{},
+		BaseURL:       baseurl.Resolver{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
 // stubWorkspaces serves one workspace, acme/web with ID ws-test123, for
 // every workspace route. Unknown names and IDs answer workspace.ErrNotFound
 // and ws-locked answers workspace.ErrLocked, so the error tests can prove
@@ -1272,6 +1329,142 @@ func TestProductionTableHasNoTestRoutes(t *testing.T) {
 			t.Fatalf("production pattern %q contains test", pattern)
 		}
 	}
+}
+
+// TestRoutesAuthorizeDeclaredObject proves every authorized route asks for
+// its declared actions on the object its resolver returns, on the production
+// table: the recording Authorizer sees each declared action on the resolved
+// object, and denying that object answers 403. Public and upload routes never
+// call the Authorizer: public routes need no credential and upload routes
+// carry their capability in the path.
+func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
+	t.Parallel()
+
+	handler := newProductionHandler(t)
+
+	for _, route := range handler.Routes() {
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			t.Parallel()
+			checkRouteObject(t, route)
+		})
+	}
+}
+
+// checkRouteObject proves one route authorizes its declared object.
+func checkRouteObject(t *testing.T, route tfe.Route) {
+	t.Helper()
+
+	switch route.Scope {
+	case tfe.ScopePublic:
+		checkPublicRouteObject(t, route)
+
+		return
+	case tfe.ScopeUpload:
+		checkUploadRouteObject(t, route)
+
+		return
+	case tfe.ScopeAuthorized:
+		checkAuthorizedRouteObject(t, route)
+
+		return
+	}
+}
+
+// checkPublicRouteObject proves a public route serves without sign-in and
+// never calls the Authorizer.
+func checkPublicRouteObject(t *testing.T, route tfe.Route) {
+	t.Helper()
+
+	recorder := &recordingAuthorizer{calls: nil}
+	handler := newObjectHandler(t, recorder)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, routeRequest(t, route, ""))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if len(recorder.calls) != 0 {
+		t.Fatalf("public route calls %v, want no Authorizer call", recorder.calls)
+	}
+}
+
+// checkUploadRouteObject proves an upload route serves its capability without
+// calling the Authorizer.
+func checkUploadRouteObject(t *testing.T, route tfe.Route) {
+	t.Helper()
+
+	recorder := &recordingAuthorizer{calls: nil}
+	handler := newObjectHandler(t, recorder)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, routeRequest(t, route, ""))
+
+	if rec.Code == http.StatusNotFound {
+		t.Fatal("upload route is not served")
+	}
+
+	if len(recorder.calls) != 0 {
+		t.Fatalf("upload route calls %v, want no Authorizer call", recorder.calls)
+	}
+}
+
+// checkAuthorizedRouteObject proves an authorized route asks for its declared
+// actions on its resolved object: the recorder sees each action on it, and
+// denying it answers 403.
+func checkAuthorizedRouteObject(t *testing.T, route tfe.Route) {
+	t.Helper()
+
+	expected := resolveExpected(t, route)
+
+	recorder := &recordingAuthorizer{calls: nil}
+	allowed := newObjectHandler(t, recorder)
+
+	rec := httptest.NewRecorder()
+	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if want := wantSuccessStatus(route); rec.Code != want {
+		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
+	}
+
+	for _, action := range route.Actions {
+		if !slices.Contains(recorder.calls, recordedCall{action: action, object: expected}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, expected, recorder.calls)
+		}
+	}
+
+	denied := newObjectHandler(t, denyObjectAuthorizer{deny: expected})
+
+	rec = httptest.NewRecorder()
+	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusForbidden)
+	}
+}
+
+// resolveExpected returns the wire form of the object the route resolves.
+// Path placeholders are filled as routeRequest fills them, since resolvers
+// read path values that only routing sets.
+func resolveExpected(t *testing.T, route tfe.Route) string {
+	t.Helper()
+
+	req := routeRequest(t, route, "test-token")
+	req.SetPathValue("organization", "acme")
+	req.SetPathValue("workspace", "web")
+	req.SetPathValue("id", "ws-test123")
+	req.SetPathValue("state_version_id", "sv-test123")
+	req.SetPathValue("output_id", "sv-test123.greeting")
+
+	rec := httptest.NewRecorder()
+
+	obj, err := route.Resolve(rec, req)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	return obj.String()
 }
 
 // resolverFor returns the resolver that a route declares.
