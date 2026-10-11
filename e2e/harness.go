@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -155,11 +156,17 @@ type Env struct {
 	workspaces *workspace.Service
 	// blobs holds checkpoint and state content, so the seed helpers save
 	// through the same store as the server.
-	blobs   *fs.Store
-	token   string
-	tokenB  string
-	home    string
-	project string
+	blobs blob.Store
+	// blobName is the live blob store of the run: "fs" or "s3". The report
+	// names it, so a summary shows what was driven.
+	blobName string
+	// s3Endpoint is the S3 endpoint URL of an S3 run, or "" on the directory
+	// store. Client commands pass it as --s3-endpoint.
+	s3Endpoint string
+	token      string
+	tokenB     string
+	home       string
+	project    string
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
@@ -209,7 +216,7 @@ type serverBuild struct {
 	handler    http.Handler
 	store      serverStore
 	workspaces *workspace.Service
-	blobs      *fs.Store
+	blobs      blob.Store
 	dbProxy    *DBProxy
 }
 
@@ -274,6 +281,8 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		client:        client,
 		workspaces:    build.workspaces,
 		blobs:         build.blobs,
+		blobName:      blobNameOf(tb),
+		s3Endpoint:    s3EndpointOf(tb),
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
@@ -404,7 +413,7 @@ func newServer(
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
 
-	blobs := openTestBlobStore(tb, dbPath)
+	blobs := openTestBlobStore(ctx, tb, dbPath)
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, dbPath)
 
@@ -457,7 +466,7 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 // newWorkspaceService returns the workspace use cases over st and blobs,
 // for the seed helpers.
 func newWorkspaceService(
-	tb testing.TB, st serverStore, blobs *fs.Store, namespaces *namespace.Service,
+	tb testing.TB, st serverStore, blobs blob.Store, namespaces *namespace.Service,
 ) *workspace.Service {
 	tb.Helper()
 
@@ -498,9 +507,19 @@ func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverSt
 	return st
 }
 
-// openTestBlobStore opens a blob store in the test directory holding dbPath.
-func openTestBlobStore(tb testing.TB, dbPath string) *fs.Store {
+// openTestBlobStore opens the live blob store of one environment: an
+// S3-compatible store under a unique prefix with E2E_BLOBS=s3, else a blob
+// store in the test directory holding dbPath.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openTestBlobStore(ctx context.Context, tb testing.TB, dbPath string) blob.Store {
 	tb.Helper()
+
+	if UseS3Blobs(tb) {
+		cfg := RequireS3Config(tb)
+
+		return openS3Store(ctx, tb, cfg, newS3RunPrefix(tb)+"/blobs")
+	}
 
 	return openBlobStoreAt(tb, filepath.Join(filepath.Dir(dbPath), "blobs"))
 }

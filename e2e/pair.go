@@ -151,6 +151,7 @@ func (p *Pair) NewPairRunAs(label string) Run {
 		Tool:           cli.Tool,
 		Label:          label,
 		Store:          p.Src.store,
+		Blobs:          p.Src.blobName,
 		Version:        cli.Version,
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          p.Steps(),
