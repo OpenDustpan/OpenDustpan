@@ -443,7 +443,7 @@ func (h *Handler) workspaceDocument(
 		},
 		Relationships: map[string]relationship{"current-state-version": relation},
 		Links: map[string]string{
-			"self": "/api/v2/organizations/" + ws.Ref.Namespace.String() + "/workspaces/" + name,
+			linkSelf: "/api/v2/organizations/" + ws.Ref.Namespace.String() + "/workspaces/" + name,
 		},
 	}, nil
 }

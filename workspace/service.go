@@ -316,6 +316,22 @@ func (s *Service) Current(ctx context.Context, id ID) (StateVersion, error) {
 	return sv, nil
 }
 
+// ReadState returns the finalized state version with id, or
+// ErrStateVersionNotFound when it does not exist or is not finalized. A
+// pending version is never readable.
+func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersion, error) {
+	sv, err := s.states.GetStateVersion(ctx, id)
+	if err != nil {
+		return StateVersion{}, fmt.Errorf("read state %s: %w", id, err)
+	}
+
+	if sv.Status != StatusFinalized {
+		return StateVersion{}, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, id, sv.Status)
+	}
+
+	return sv, nil
+}
+
 // Open returns the content of a finalized state version. The caller closes it.
 func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, error) {
 	if sv.Status != StatusFinalized {

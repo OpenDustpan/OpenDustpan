@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -118,11 +120,13 @@ type Env struct {
 	store    Store
 	server   serverStore
 	client   *http.Client
-	token    string
-	tokenB   string
-	home     string
-	project  string
-	steps    []StepResult
+	// workspaces runs the workspace use cases the seed helpers need.
+	workspaces *workspace.Service
+	token      string
+	tokenB     string
+	home       string
+	project    string
+	steps      []StepResult
 }
 
 // serverStore is every persistence port the server needs.
@@ -154,7 +158,7 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 
-	handler, st := newServer(
+	handler, st, workspaces := newServer(
 		ctx,
 		tb,
 		store,
@@ -175,17 +179,18 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	client.Timeout = commandTimeout
 
 	env := &Env{
-		URL:      ts.URL,
-		Recorder: rec,
-		cli:      cli,
-		store:    store,
-		server:   st,
-		client:   client,
-		token:    token,
-		tokenB:   tokenB,
-		home:     filepath.Join(dir, "home"),
-		project:  filepath.Join(dir, "project"),
-		steps:    nil,
+		URL:        ts.URL,
+		Recorder:   rec,
+		cli:        cli,
+		store:      store,
+		server:     st,
+		client:     client,
+		workspaces: workspaces,
+		token:      token,
+		tokenB:     tokenB,
+		home:       filepath.Join(dir, "home"),
+		project:    filepath.Join(dir, "project"),
+		steps:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -249,8 +254,8 @@ type serverTokens struct {
 
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
 // PostgreSQL schema), creates the Namespace namespace and returns the server's
-// handler and store. The store and its schema are closed and removed when the
-// test ends.
+// handler, store and workspace service. The store and its schema are closed
+// and removed when the test ends.
 // the environment needs the interface.
 //
 //nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
@@ -260,7 +265,7 @@ func newServer(
 	store Store,
 	dbPath string,
 	tokens serverTokens,
-) (http.Handler, serverStore) {
+) (http.Handler, serverStore, *workspace.Service) {
 	tb.Helper()
 
 	var st serverStore
@@ -297,6 +302,7 @@ func newServer(
 	}
 
 	blobs := openTestBlobStore(tb, dbPath)
+	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
@@ -317,7 +323,29 @@ func newServer(
 		tb.Fatalf("new server: %v", err)
 	}
 
-	return srv.Handler(), st
+	return srv.Handler(), st, workspaces
+}
+
+// newWorkspaceService returns the workspace use cases over st and blobs,
+// for the seed helpers.
+func newWorkspaceService(
+	tb testing.TB, st serverStore, blobs *fs.Store, namespaces *namespace.Service,
+) *workspace.Service {
+	tb.Helper()
+
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:    st,
+		States:        st,
+		Blobs:         blobs,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxStateBytes: 0,
+	})
+	if err != nil {
+		tb.Fatalf("workspace service: %v", err)
+	}
+
+	return workspaces
 }
 
 // openSQLiteStore opens the SQLite file at dbPath for one test.
@@ -424,6 +452,96 @@ func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string
 	if _, err := updates.Complete(ctx, ref, u.ID, started.Token, stack.StatusSucceeded); err != nil {
 		tb.Fatalf("complete update: %v", err)
 	}
+}
+
+const (
+	// seedHolder locks the workspace while SeedTofuState writes.
+	seedHolder = "seed"
+	// seedStateLineage is the lineage SeedTofuState writes when the workspace
+	// has no state yet.
+	seedStateLineage = "seed-lineage"
+	// seedStateOutputs is the json-state-outputs document SeedTofuState
+	// writes: the greeting output with its cty value and type, plus a
+	// sensitive output so the run also proves the single-output route the
+	// CLI uses for it.
+	seedStateOutputs = `{"outputs":{` +
+		`"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
+		`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}}`
+)
+
+// seedStateDocument returns a minimal tfstate document with lineage, serial
+// and the greeting output.
+func seedStateDocument(lineage string, serial int64) []byte {
+	doc := `{"version":4,"terraform_version":"1.11.0","serial":` + strconv.FormatInt(serial, 10) +
+		`,"lineage":` + strconv.Quote(lineage) +
+		`,"outputs":{"greeting":{"value":"hello","type":"string"}},"resources":[]}`
+
+	return []byte(doc)
+}
+
+// SeedTofuState writes a finalized state version with a greeting output
+// straight to the store for the scenario workspace, as SeedResources does
+// for Pulumi. It chains the lineage and serial after the current state when
+// one exists. It locks as seed and releases the lock, so later steps see an
+// unlocked workspace with state.
+func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateVersion {
+	tb.Helper()
+
+	ns, err := namespace.ParseName(Namespace)
+	if err != nil {
+		tb.Fatalf("parse namespace %q: %v", Namespace, err)
+	}
+
+	name, err := workspace.ParseName(Workspace)
+	if err != nil {
+		tb.Fatalf("parse workspace %q: %v", Workspace, err)
+	}
+
+	ws, err := e.server.GetWorkspace(ctx, workspace.Ref{Namespace: ns, Name: name})
+	if err != nil {
+		tb.Fatalf("get workspace %s/%s: %v", Namespace, Workspace, err)
+	}
+
+	if _, lockErr := e.workspaces.Lock(ctx, ws.ID, seedHolder, "seed"); lockErr != nil {
+		tb.Fatalf("lock workspace for seed: %v", lockErr)
+	}
+
+	lineage, serial := seedStateLineage, int64(1)
+
+	current, currentErr := e.workspaces.Current(ctx, ws.ID)
+
+	switch {
+	case currentErr == nil:
+		lineage, serial = current.Lineage, current.Serial+1
+	case errors.Is(currentErr, workspace.ErrNoState):
+	default:
+		tb.Fatalf("current state: %v", currentErr)
+	}
+
+	content := seedStateDocument(lineage, serial)
+	sum := md5.Sum(content) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+
+	pending, beginErr := e.workspaces.BeginState(ctx, ws.ID, seedHolder, workspace.NewState{
+		Lineage: lineage,
+		MD5:     hex.EncodeToString(sum[:]),
+		Outputs: []byte(seedStateOutputs),
+		Serial:  serial,
+		Force:   false,
+	})
+	if beginErr != nil {
+		tb.Fatalf("begin seed state: %v", beginErr)
+	}
+
+	sv, uploadErr := e.workspaces.Upload(ctx, pending.Version.ID, pending.Upload, bytes.NewReader(content))
+	if uploadErr != nil {
+		tb.Fatalf("upload seed state: %v", uploadErr)
+	}
+
+	if _, unlockErr := e.workspaces.Unlock(ctx, ws.ID, seedHolder); unlockErr != nil {
+		tb.Fatalf("unlock workspace after seed: %v", unlockErr)
+	}
+
+	return sv
 }
 
 // CreateNamespace creates a namespace homed in the test region, for steps

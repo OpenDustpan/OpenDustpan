@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
@@ -63,11 +64,7 @@ type Route struct {
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	routes := h.discoveryRoutes()
-	routes = append(routes, h.workspaceRoutes()...)
-	routes = append(routes, h.lockRoutes()...)
-
-	return routes
+	return slices.Concat(h.discoveryRoutes(), h.workspaceRoutes(), h.lockRoutes(), h.stateRoutes())
 }
 
 // discoveryRoutes returns service discovery, ping and the entitlement set.
@@ -183,6 +180,66 @@ func (h *Handler) lockRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitManage},
 			Resolve: h.resolveWorkspaceID,
 			Serve:   h.forceUnlockWorkspace,
+		},
+	}
+}
+
+// stateRoutes returns the state read routes: the current state version, one
+// state version, its download and its outputs. Every route needs unit:read.
+func (h *Handler) stateRoutes() []Route {
+	return []Route{
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/workspaces/{id}/current-state-version",
+			// A state read needs unit:read on opentofu:<namespace>/<name>.
+			// The resolver maps the ID to the unit. A workspace without
+			// state answers 404.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.readCurrentState,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-versions/{state_version_id}",
+			// A state read needs unit:read. The resolver maps the version
+			// to the unit of its workspace. Unknown IDs and versions that
+			// are not finalized answer 404.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveStateVersionID,
+			Serve:   h.readStateVersion,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-versions/{state_version_id}/download",
+			// A download is a normal authorized route: the CLI sends its
+			// token, so it needs unit:read on the unit of the workspace.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveStateVersionID,
+			Serve:   h.downloadState,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/workspaces/{id}/current-state-version-outputs",
+			// A state read needs unit:read on opentofu:<namespace>/<name>.
+			// The resolver maps the ID to the unit. A workspace without
+			// state answers 404.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.readCurrentOutputs,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-version-outputs/{output_id}",
+			// A state read needs unit:read. The resolver maps the output to
+			// the unit of its workspace. Unknown outputs answer 404.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveStateOutputID,
+			Serve:   h.readStateOutput,
 		},
 	}
 }
