@@ -2,6 +2,7 @@
 //
 //	opendustpan --version
 //	opendustpan serve [flags]
+//	opendustpan health [flags]
 //	opendustpan namespace create [flags] <name>
 //	opendustpan upgrade check [flags]
 //	opendustpan backup check [flags]
@@ -51,7 +52,7 @@ import (
 
 var (
 	errUsage = errors.New(
-		"usage: opendustpan --version | opendustpan serve | opendustpan namespace create <name> | " +
+		"usage: opendustpan --version | opendustpan serve | opendustpan health | opendustpan namespace create <name> | " +
 			"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore",
 	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
@@ -140,6 +141,10 @@ const (
 	// defaultS3Region signs S3 requests when --s3-region is empty. Both S3
 	// settings stay optional for AWS (ADR 31 decision 6).
 	defaultS3Region = "us-east-1"
+	// schemeHTTP and schemeHTTPS name the URL schemes of S3 endpoints and
+	// of the health probe.
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 func main() {
@@ -170,6 +175,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return nil
 	case "serve":
 		return serve(ctx, args[1:], stderr)
+	case "health":
+		return runHealth(ctx, args[1:], stdout, stderr)
 	case "namespace":
 		return runNamespaceCommand(ctx, args[1:], stdout, stderr)
 	case "upgrade":
@@ -658,7 +665,7 @@ func checkS3Endpoint(endpoint string) error {
 		return err
 	}
 
-	if parsed != "http" && parsed != "https" {
+	if parsed != schemeHTTP && parsed != schemeHTTPS {
 		return errS3Endpoint
 	}
 
@@ -673,9 +680,9 @@ func parseEndpoint(endpoint string) (string, error) {
 
 	switch {
 	case strings.HasPrefix(lower, "http://"):
-		scheme = "http"
+		scheme = schemeHTTP
 	case strings.HasPrefix(lower, "https://"):
-		scheme = "https"
+		scheme = schemeHTTPS
 	default:
 		return "", errS3Endpoint
 	}
