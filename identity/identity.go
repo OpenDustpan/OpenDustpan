@@ -58,6 +58,12 @@ const (
 	// ActionCallerRead allows reading the caller's own record, for example
 	// the current-user endpoint of a tool API. Its object is CallerObject.
 	ActionCallerRead Action = "caller:read"
+	// ActionServerBackup allows starting and reading installation backups.
+	// Its object is ServerObject.
+	ActionServerBackup Action = "server:backup"
+	// ActionServerObserve allows reading installation metrics. Its object
+	// is ServerObject.
+	ActionServerObserve Action = "server:observe"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -67,14 +73,16 @@ const (
 )
 
 // Object is the thing an action applies to: a namespace, a unit reference,
-// or the authenticated caller itself. A namespace reference is the
-// namespace name. A unit reference is the tool, the namespace and the tool's
-// own name for the unit, written as <tool>:<namespace>/<name>. The core keeps
-// the tool-specific name opaque and never parses it. The caller reference
-// names the principal in the request and has no namespace or unit. Its wire
-// form starts with '@', which namespace names never contain, so ParseObject
-// rejects it and it never equals a namespace. Use IsCaller to test for it;
-// String alone also differs, but IsCaller states the intent.
+// the authenticated caller itself, or the installation itself. A namespace
+// reference is the namespace name. A unit reference is the tool, the
+// namespace and the tool's own name for the unit, written as
+// <tool>:<namespace>/<name>. The core keeps the tool-specific name opaque
+// and never parses it. The caller reference names the principal in the
+// request and has no namespace or unit. The server reference names the
+// installation and has no namespace or unit. Their wire forms start with
+// '@', which namespace names never contain, so ParseObject rejects them and
+// they never equal a namespace. Use IsCaller and IsServer to test for them;
+// String alone also differs, but the methods state the intent.
 type Object struct {
 	raw      string
 	ns       namespace.Name
@@ -82,11 +90,14 @@ type Object struct {
 	unit     string
 	isUnit   bool
 	isCaller bool
+	isServer bool
 }
 
 // NamespaceObject returns the reference to the namespace ns.
 func NamespaceObject(ns namespace.Name) Object {
-	return Object{raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false, isCaller: false}
+	return Object{
+		raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false, isCaller: false, isServer: false,
+	}
 }
 
 // CallerObject returns the reference to the authenticated caller itself, for
@@ -96,7 +107,22 @@ func NamespaceObject(ns namespace.Name) Object {
 // Every tool API needs it for its current-user endpoint, so it lives in the
 // core.
 func CallerObject() Object {
-	return Object{raw: "@caller", ns: namespace.Name(""), tool: "", unit: "", isUnit: false, isCaller: true}
+	return Object{
+		raw: "@caller", ns: namespace.Name(""), tool: "", unit: "",
+		isUnit: false, isCaller: true, isServer: false,
+	}
+}
+
+// ServerObject returns the reference to the installation itself, for
+// endpoints that act on no namespace or unit. Its wire form is "@server",
+// which ParseObject rejects: '@' is not a valid namespace character, so a
+// namespace named "server" never equals it. The installation API needs it,
+// so it lives in the core.
+func ServerObject() Object {
+	return Object{
+		raw: "@server", ns: namespace.Name(""), tool: "", unit: "",
+		isUnit: false, isCaller: false, isServer: true,
+	}
 }
 
 // UnitObject returns the reference to the unit called name in the namespace ns
@@ -113,11 +139,14 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 
 	raw := tool + ":" + ns.String() + "/" + name
 
-	return Object{raw: raw, ns: ns, tool: tool, unit: name, isUnit: true, isCaller: false}, nil
+	return Object{
+		raw: raw, ns: ns, tool: tool, unit: name, isUnit: true, isCaller: false, isServer: false,
+	}, nil
 }
 
 // ParseObject parses s as a namespace or unit reference. It rejects the
-// caller reference form: use CallerObject for that.
+// caller and server reference forms: use CallerObject and ServerObject for
+// those.
 func ParseObject(s string) (Object, error) {
 	if !strings.Contains(s, ":") {
 		ns, err := namespace.ParseName(s)
@@ -125,7 +154,7 @@ func ParseObject(s string) (Object, error) {
 			return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 		}
 
-		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false, isCaller: false}, nil
+		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false, isCaller: false, isServer: false}, nil
 	}
 
 	return parseUnitObject(s)
@@ -158,7 +187,7 @@ func parseUnitObject(s string) (Object, error) {
 		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 	}
 
-	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true, isCaller: false}, nil
+	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true, isCaller: false, isServer: false}, nil
 }
 
 // validUnitName reports whether name is a usable opaque unit name.
@@ -189,9 +218,15 @@ func (o Object) IsUnit() bool {
 }
 
 // IsCaller reports whether the reference names the authenticated caller
-// itself rather than a namespace or a unit.
+// itself rather than a namespace, a unit or the installation.
 func (o Object) IsCaller() bool {
 	return o.isCaller
+}
+
+// IsServer reports whether the reference names the installation itself
+// rather than a namespace, a unit or the caller.
+func (o Object) IsServer() bool {
+	return o.isServer
 }
 
 // Namespace returns the namespace that owns the object.

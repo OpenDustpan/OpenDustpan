@@ -219,6 +219,36 @@ func TestInventoryRouting(t *testing.T) {
 	}
 }
 
+// TestServerRouting proves dustpan.go mounts the installation API at
+// /api/server/, a pattern more specific than the Pulumi /api/ pattern: an
+// unknown /api/server/ path answers 404 as JSON from the installation
+// adapter, while the Pulumi CLI routes keep their shape.
+func TestServerRouting(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		status, header, body := f.doRaw(t, method, "/api/server/no-such-route", "")
+		if status != http.StatusNotFound {
+			t.Fatalf("unknown server path status %d, want %d (body %s)", status, http.StatusNotFound, body)
+		}
+
+		if got := header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("media type = %q, want the installation JSON error", got)
+		}
+
+		if !strings.Contains(body, `"code":404`) {
+			t.Fatalf("unknown server path body %s, want a JSON error with code 404", body)
+		}
+	}
+
+	status, _, body := f.doRaw(t, http.MethodGet, "/api/user", "token "+adminToken)
+	if status != http.StatusOK || !strings.Contains(body, "admin") {
+		t.Fatalf("user route: status %d, body %s", status, body)
+	}
+}
+
 func TestWorkspaceLifecycle(t *testing.T) {
 	t.Parallel()
 
