@@ -547,7 +547,7 @@ func openSnapshot(ctx context.Context, path string) (*sql.DB, error) {
 
 	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
-	conn, err := sql.Open("sqlite3", dsn)
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open backup snapshot: %w", err)
 	}

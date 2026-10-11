@@ -204,7 +204,7 @@ func listMigrationNames(t *testing.T) ([]string, int64) {
 func inspectSnapshot(t *testing.T, path string) ([]int64, []string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite3", "file:"+path)
+	conn, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}

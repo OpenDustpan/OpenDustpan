@@ -20,8 +20,8 @@ import (
 	"slices"
 	"time"
 
-	// Registers the "sqlite3" database/sql driver.
-	_ "github.com/ncruces/go-sqlite3/driver"
+	// Registers the "sqlite" database/sql driver.
+	_ "modernc.org/sqlite"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -85,7 +85,7 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 
 	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
-	conn, err := sql.Open("sqlite3", dsn)
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
