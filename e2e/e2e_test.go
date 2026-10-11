@@ -294,6 +294,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		Fail:  false,
 	})
 
+	// A rename keeps the stack ID, so its secrets still decrypt.
+	env.Step(ctx, t, step(
+		"config get after rename",
+		contains("s3cr3t"),
+		"config", "get", "--stack", renamedQualified, "apiKey",
+	))
+
 	// Tags follow the stack through a rename.
 	env.Step(ctx, t, step("stack tag ls after rename", tagListed("team", "e2e"), "stack", "tag", "ls"))
 	env.Step(ctx, t, step("stack tag rm", nil, "stack", "tag", "rm", "team"))
@@ -301,6 +308,7 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	env.Step(ctx, t, step("up", checkCheckpointSaved(env, "up"), "up", "--yes", "--non-interactive"))
 	exported := env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
+	env.Step(ctx, t, step("stack export hides secrets", exportHidesSecrets, "stack", "export"))
 	env.Step(ctx, t, step("stack history after up", historyShowsKinds("update"), "stack", "history", "--json"))
 
 	// An export round-trips through import: the deployment is saved to a
@@ -382,6 +390,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	)
 	env.Step(ctx, t, step("stack export after cancel", exportHoldsReference, "stack", "export"))
 
+	// A ciphertext is bound to its stack: another stack cannot decrypt it.
+	env.Step(ctx, t, step(
+		"decrypt rejects a foreign ciphertext",
+		checkForeignDecrypt(ctx, env),
+		"stack", "--show-name",
+	))
+
 	// Cancel frees a running update from a second process: hold the stack
 	// through the API while an update runs, cancel through the CLI, then
 	// up works at once.
@@ -447,7 +462,12 @@ func pulumiSetupSteps(env *e2e.Env, org, qualified, stackPath string) []e2e.Step
 		step("stack tag set", nil, "stack", "tag", "set", "team", "e2e"),
 		step("stack tag ls", tagListed("team", "e2e"), "stack", "tag", "ls"),
 		// The service backend encrypts secrets on the server, per stack.
+		// The list command hides secret values unless asked to show them,
+		// while config get prints the plaintext by design.
 		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
+		step("config get shows the secret", contains("s3cr3t"), "config", "get", "apiKey"),
+		step("config hides the secret", configListHidesSecret, "config"),
+		step("config shows the secret", contains("s3cr3t"), "config", "--show-secrets"),
 		step("stack export", nil, "stack", "export"),
 		{
 			// An unqualified stack name takes the default organization.
@@ -682,6 +702,85 @@ func exportHoldsReference(r e2e.Result) error {
 	}
 
 	return nil
+}
+
+// configListHidesSecret proves that config list without --show-secrets never
+// prints the plaintext secret.
+func configListHidesSecret(r e2e.Result) error {
+	if strings.Contains(r.Stdout, "s3cr3t") {
+		return fmt.Errorf("%w: config printed the plaintext secret: %s", errUnexpected, r.Stdout)
+	}
+
+	return nil
+}
+
+// exportHidesSecrets proves that stack export keeps secrets encrypted: the
+// checkpoint survives the round trip without its plaintext.
+func exportHidesSecrets(r e2e.Result) error {
+	if err := exportHoldsReference(r); err != nil {
+		return err
+	}
+
+	if strings.Contains(r.Stdout, "s3cr3t") {
+		return fmt.Errorf("%w: stack export printed the plaintext secret", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkForeignDecrypt proves that a ciphertext is bound to its stack: it
+// encrypts on the renamed stack, decrypts on the same stack, and proves that
+// the other stack cannot decrypt the ciphertext.
+func checkForeignDecrypt(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		renamed := fmt.Sprintf("/api/stacks/%s/%s/renamed", e2e.Namespace, e2e.Project)
+		other := fmt.Sprintf("/api/stacks/%s/%s/other", e2e.Namespace, e2e.Project)
+
+		status, body, err := env.APIStatus(ctx, http.MethodPost, renamed+"/encrypt", `{"plaintext":"aGk="}`)
+		if err != nil {
+			return err
+		}
+
+		if status != http.StatusOK {
+			return fmt.Errorf("%w: encrypt answers %d: %s", errUnexpected, status, body)
+		}
+
+		var encrypted struct {
+			Ciphertext string `json:"ciphertext"`
+		}
+
+		if decodeErr := json.Unmarshal([]byte(body), &encrypted); decodeErr != nil || encrypted.Ciphertext == "" {
+			return fmt.Errorf("%w: encrypt answers no ciphertext: %s", errUnexpected, body)
+		}
+
+		decryptBody := fmt.Sprintf(`{"ciphertext":%q}`, encrypted.Ciphertext)
+
+		status, body, err = env.APIStatus(ctx, http.MethodPost, renamed+"/decrypt", decryptBody)
+		if err != nil {
+			return err
+		}
+
+		if status != http.StatusOK {
+			return fmt.Errorf("%w: own decrypt answers %d: %s", errUnexpected, status, body)
+		}
+
+		status, body, err = env.APIStatus(ctx, http.MethodPost, other+"/decrypt", decryptBody)
+		if err != nil {
+			return err
+		}
+
+		if status != http.StatusBadRequest {
+			return fmt.Errorf(
+				"%w: foreign decrypt answers %d, want %d: %s",
+				errUnexpected,
+				status,
+				http.StatusBadRequest,
+				body,
+			)
+		}
+
+		return nil
+	}
 }
 
 // checkCheckpointSaved proves that the CLI stored its checkpoint through

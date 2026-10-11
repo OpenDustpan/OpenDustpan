@@ -180,6 +180,11 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{keys: cfg.Keys, wrapper: cfg.Wrapper, namespaces: cfg.Namespaces, now: now, maxBatch: maxBatch}, nil
 }
 
+// MaxBatchBytes returns the largest batch Encrypt and Decrypt accept.
+func (s *Service) MaxBatchBytes() int {
+	return s.maxBatch
+}
+
 // CheckWrapper reports whether wrapper can open the data keys in keys, for
 // the start-up check that refuses a key-encryption key that matches none of
 // them (ADR 23). It returns nil when keys holds no wrapped key: a server

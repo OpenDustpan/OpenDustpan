@@ -204,6 +204,7 @@ func NewServer(opts ...Option) (*Server, error) {
 	api, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:        svc.stacks,
 		Updates:       svc.updates,
+		Secrets:       svc.secrets,
 		Namespaces:    svc.namespaces,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
