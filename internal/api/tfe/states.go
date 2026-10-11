@@ -491,7 +491,8 @@ func (h *Handler) writeStateOutputs(ctx context.Context, w http.ResponseWriter, 
 
 // resolveStateVersionID returns the unit of the finalized state version in
 // the state_version_id path value. Unknown IDs and versions that are not
-// finalized fail, so a pending version is never readable.
+// finalized fail with absence, which the wrapper answers as 403 for a caller
+// without rights and 404 otherwise, so a pending version is never readable.
 func (h *Handler) resolveStateVersionID(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	return h.resolveStateVersion(r, workspace.StateVersionID(r.PathValue("state_version_id")))
 }
@@ -509,7 +510,9 @@ func (h *Handler) resolveStateOutputID(_ http.ResponseWriter, r *http.Request) (
 }
 
 // resolveStateVersion returns the unit of the finalized state version with
-// id: its workspace resolved through GetByID.
+// id: its workspace resolved through GetByID. Absence fails with the
+// workspace or state version error, which the wrapper answers as 403 for a
+// caller without rights and 404 otherwise.
 func (h *Handler) resolveStateVersion(
 	r *http.Request, id workspace.StateVersionID,
 ) (identity.Object, error) {

@@ -16,7 +16,7 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/organizations/{organization}/workspaces/{workspace} | Token, `unit:read` | Reads one workspace by name. Unknown names answer 404. |
 | POST | /api/v2/organizations/{organization}/workspaces | Token, `unit:manage` | Creates one workspace. Duplicate names answer 422. |
 | GET | /api/v2/workspaces/{id} | Token, `unit:read` | Reads one workspace by ID. Unknown IDs answer 404. |
-| GET | /api/v2/organizations/{organization}/workspaces | Token, `namespace:read` | Lists the workspaces of one namespace. Supports the search query. |
+| GET | /api/v2/organizations/{organization}/workspaces | Token, `namespace:read` | Lists the workspaces of one namespace the caller may `unit:read`. Supports the search query. `page[size]` caps at 100. |
 | POST | /api/v2/workspaces/{id}/actions/lock | Token, `unit:write` | Locks one workspace for the caller. Locked workspaces answer 409. |
 | POST | /api/v2/workspaces/{id}/actions/unlock | Token, `unit:write` | Releases the caller lock. Another holder answers 409. |
 | POST | /api/v2/workspaces/{id}/actions/force-unlock | Token, `unit:manage` | Releases the lock whoever holds it. Unlocked workspaces answer 409. |
@@ -41,6 +41,8 @@ The server keeps remote state and locks for local execution only.
 - The token comes from the `cloud` block, a `credentials` block in the CLI
   configuration, or `TF_TOKEN_<host>`.
 - An organization is a namespace. Unknown names answer 404.
+- Unknown workspace and state version IDs answer 403 for a caller without
+  rights, 404 otherwise, so the absence does not leak.
 - The server never creates a namespace on its own.
 - Workspace names are unique within one namespace. The ID has the prefix `ws-`.
 - Rename is out. Delete is out.
