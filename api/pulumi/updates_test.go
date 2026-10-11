@@ -277,7 +277,7 @@ func newUpdateFixture(t *testing.T, authz identity.Authorizer) updateFixture {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil}
+	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, deleteErr: nil}
 
 	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
 	if err != nil {

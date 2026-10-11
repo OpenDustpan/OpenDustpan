@@ -188,7 +188,7 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms;
 
--- name: DeleteStack :exec
+-- name: DeleteStack :execrows
 DELETE FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3;
 

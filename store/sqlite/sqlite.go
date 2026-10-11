@@ -332,17 +332,37 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 	return nil
 }
 
-// DeleteStackForTest deletes a stack and, through foreign keys, its updates,
-// checkpoints and events. It is test-only until issue #49 adds the delete port.
-func (s *Store) DeleteStackForTest(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+// DeleteStack implements stack.Store. It removes the stack with its updates,
+// checkpoints and events in one fenced transaction, through foreign keys. It
+// returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
+// while a mutating update of the stack runs.
+func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		err := q.DeleteStack(ctx, db.DeleteStackParams{
+		stackID, err := stackIDFor(ctx, q, ref)
+		if err != nil {
+			return err
+		}
+
+		running, err := q.RunningMutatingUpdates(ctx, stackID)
+		if err != nil {
+			return fmt.Errorf("count running updates: %w", err)
+		}
+
+		if running > 0 {
+			return stack.ErrUpdateConflict
+		}
+
+		n, err := q.DeleteStack(ctx, db.DeleteStackParams{
 			Namespace: ref.Namespace.String(),
 			Project:   ref.Project.String(),
 			Name:      ref.Stack.String(),
 		})
 		if err != nil {
 			return fmt.Errorf("delete stack: %w", err)
+		}
+
+		if n == 0 {
+			return stack.ErrNotFound
 		}
 
 		return nil
