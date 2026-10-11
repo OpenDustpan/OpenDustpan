@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"opendustpan.org/opendustpan/identity"
 	"opendustpan.org/opendustpan/namespace"
@@ -23,6 +24,11 @@ const (
 	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
 	// every declared action on the resolved object before the handler runs.
 	ScopeAuthorized
+	// ScopeUpdateLease needs the update's lease token in the Authorization
+	// header instead of a signed-in principal. The lease stands in for the
+	// declared actions: start granted it after authorizing them, and it
+	// scopes to one update alone. The Authorizer does not run.
+	ScopeUpdateLease
 )
 
 // ObjectResolver returns the authorization object for a request: the
@@ -64,6 +70,15 @@ type Route struct {
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
+	routes := h.baseRoutes()
+	routes = append(routes, h.updateCreateRoutes()...)
+	routes = append(routes, h.updateRunRoutes()...)
+
+	return routes
+}
+
+// baseRoutes returns the login and stack routes that predate updates.
+func (h *Handler) baseRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodGet,
@@ -142,6 +157,98 @@ func (h *Handler) buildRoutes() []Route {
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
 			Serve:   h.updateStackTags,
+		},
+	}
+}
+
+// updateCreateRoutes returns one create route per update kind. The five kinds
+// share the create shape; each has its own route.
+func (h *Handler) updateCreateRoutes() []Route {
+	kinds := []struct {
+		path string
+		kind stack.UpdateKind
+	}{
+		{"update", stack.KindUpdate},
+		{"preview", stack.KindPreview},
+		{"refresh", stack.KindRefresh},
+		{"destroy", stack.KindDestroy},
+		{"import", stack.KindImport},
+	}
+
+	routes := make([]Route, 0, len(kinds))
+	for _, k := range kinds {
+		routes = append(routes, Route{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/" + k.path,
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.createUpdateHandler(k.kind),
+		})
+	}
+
+	return routes
+}
+
+// updateRunRoutes returns the start, lease, read, history and export routes
+// for an update.
+func (h *Handler) updateRunRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.startUpdate,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.renewLease,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/events/batch",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.recordEvents,
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.completeUpdate,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.getUpdate,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/updates",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.listHistory,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/export",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.exportStack,
 		},
 	}
 }
@@ -281,22 +388,65 @@ func resolveGetStack(_ http.ResponseWriter, r *http.Request) (identity.Object, e
 	return unitObject(ref)
 }
 
-// enforce wraps one route table row. Public routes run unwrapped. Every
-// other route authenticates, resolves the object, authorizes every declared
-// action on it, and only then runs the handler.
+// enforce wraps one route table row. Public routes run unwrapped. Lease
+// routes need the update's lease token and resolve the object, then run the
+// handler: the lease stands in for the declared actions. Every other route
+// authenticates, resolves the object, authorizes every declared action on
+// it, and only then runs the handler.
 func (h *Handler) enforce(route Route) http.HandlerFunc {
+	switch route.Scope {
+	case ScopePublic:
+		return h.enforcePublic(route)
+	case ScopeUpdateLease:
+		return h.enforceLease(route)
+	case ScopeAuthorized:
+		return h.enforceAuthorized(route)
+	}
+
+	return h.enforceAuthorized(route)
+}
+
+// enforcePublic serves a route that needs no sign-in.
+func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var guest identity.Principal
+
+		var noObject identity.Object
+
+		route.Serve(w, r, guest, noObject)
+	}
+}
+
+// enforceLease serves a lease route: the update lease token stands in for the
+// declared actions, so the Authorizer does not run.
+func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		if route.Scope == ScopePublic {
-			var guest identity.Principal
-
-			var noObject identity.Object
-
-			route.Serve(w, r, guest, noObject)
+		if _, ok := strings.CutPrefix(r.Header.Get("Authorization"), updateTokenScheme); !ok {
+			h.writeError(ctx, w, identity.ErrUnauthenticated)
 
 			return
 		}
+
+		obj, err := route.Resolve(w, r)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+
+		var guest identity.Principal
+
+		route.Serve(w, r, guest, obj)
+	}
+}
+
+// enforceAuthorized serves a route that needs a signed-in principal and the
+// Authorizer to allow every declared action on the resolved object.
+func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 
 		p, err := h.authenticate(r)
 		if err != nil {
