@@ -3,6 +3,7 @@ package pulumi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -970,6 +971,109 @@ func checkLeaseRouteEnforcement(t *testing.T, route pulumi.Route, pattern string
 			t.Fatalf("unleased request answers %d, want %d (%s)", status, http.StatusUnauthorized, resp)
 		}
 	}
+}
+
+// TestUpdateRoutesAuthorizeDeclaredObject proves every authorized update
+// route asks for its declared action on the unit its resolver returns, and
+// every lease route never calls the Authorizer: the lease stands in for the
+// declared unit:write.
+func TestUpdateRoutesAuthorizeDeclaredObject(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range updatePatterns() {
+		t.Run(pattern, func(t *testing.T) {
+			t.Parallel()
+			checkUpdateRouteObject(t, pattern)
+		})
+	}
+}
+
+// checkUpdateRouteObject proves one update route authorizes its declared
+// object: lease routes record no call with a valid lease, authorized routes
+// record the declared action on the resolved unit and answer 403 once that
+// unit is denied.
+func checkUpdateRouteObject(t *testing.T, pattern string) {
+	t.Helper()
+
+	route := updateRoute(t, newUpdateFixture(t, allowAll()).handler, pattern)
+
+	if route.Scope == pulumi.ScopeUpdateLease {
+		checkLeaseRouteObject(t, route, pattern)
+
+		return
+	}
+
+	checkAccessRouteObject(t, route, pattern)
+}
+
+// checkLeaseRouteObject proves one lease route answers 200 with a valid
+// lease without calling the Authorizer.
+func checkLeaseRouteObject(t *testing.T, route pulumi.Route, pattern string) {
+	t.Helper()
+
+	recorder := &recordingAuthorizer{calls: nil}
+	f := newUpdateFixture(t, recorder)
+
+	id, lease := mintForLease(t, f, pattern)
+	target := leaseTargets(id)[pattern]
+	body := leaseBodies()[pattern]
+
+	status, resp := f.doUpdate(t, leaseRequest(route.Method, target, lease, body))
+	if status != http.StatusOK {
+		t.Fatalf("leased request answers %d, want %d (%s)", status, http.StatusOK, resp)
+	}
+
+	if len(recorder.calls) != 0 {
+		t.Fatalf("lease route calls %v, want no Authorizer call", recorder.calls)
+	}
+}
+
+// checkAccessRouteObject proves one access-authed update route records its
+// declared action on the resolved unit and answers 403 once denied on it.
+func checkAccessRouteObject(t *testing.T, route pulumi.Route, pattern string) {
+	t.Helper()
+
+	authz := &objectToggleAuthorizer{calls: nil, object: "pulumi:acme/web/prod", deny: false}
+	f := newUpdateFixture(t, authz)
+	at := accessRouteTarget(t, f, pattern)
+
+	status, resp := f.doUpdate(t, accessRequest(route.Method, at.Target, at.Body))
+	if status != http.StatusOK {
+		t.Fatalf("allowed request answers %d, want %d (%s)", status, http.StatusOK, resp)
+	}
+
+	for _, action := range route.Actions {
+		if !slices.Contains(authz.calls, recordedCall{action: action, object: authz.object}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, authz.object, authz.calls)
+		}
+	}
+
+	authz.deny = true
+
+	status, resp = f.doUpdate(t, accessRequest(route.Method, at.Target, at.Body))
+	if status != http.StatusForbidden {
+		t.Fatalf("request denied on %q answers %d, want %d (%s)", authz.object, status, http.StatusForbidden, resp)
+	}
+}
+
+// objectToggleAuthorizer records every call and allows all until deny is
+// set, after which it denies object. Tests mint state before they deny.
+type objectToggleAuthorizer struct {
+	calls  []recordedCall
+	object string
+	deny   bool
+}
+
+func (a *objectToggleAuthorizer) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	a.calls = append(a.calls, recordedCall{action: action, object: obj.String()})
+
+	if a.deny && obj.String() == a.object {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
 }
 
 // historyEntry is one entry of the stack history as the tests decode it.

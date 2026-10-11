@@ -158,8 +158,11 @@ func (h *Handler) stackRoutes() []Route {
 			Serve:   h.deleteStack,
 		},
 		{
-			Method:  http.MethodPost,
-			Path:    "/api/stacks/{namespace}/{project}/{stack}/rename",
+			Method: http.MethodPost,
+			Path:   "/api/stacks/{namespace}/{project}/{stack}/rename",
+			// The wrapper authorizes unit:manage on the source unit in the
+			// path. The handler also authorizes unit:manage on the
+			// destination unit in the body before it renames.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitManage},
 			Resolve: resolveGetStack,
