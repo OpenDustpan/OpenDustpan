@@ -7,7 +7,10 @@ created: 2026-10-10
 
 # RFC 18. State operations: history, restore, locks and leases
 
-Status: draft. A stub opened from the competitor review in the research doc
+Status: accepted (ADR 28) for milestone 3: history, restore and unlock, for
+both tools. Retention, content diff and the manual lock stay open.
+
+The rest stays a draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.
 
 ## Problem

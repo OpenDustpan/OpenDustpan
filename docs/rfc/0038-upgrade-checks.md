@@ -7,7 +7,11 @@ created: 2026-10-10
 
 # RFC 38. Upgrade checks
 
-Status: draft. A stub opened from the competitor review in the research doc
+Status: accepted (ADR 33) for milestone 3: the refusal of a newer schema, the
+`upgrade check` command and the upgrade test. The usage ledger for deprecated
+features stays open.
+
+The rest stays a draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.
 
 ## Problem

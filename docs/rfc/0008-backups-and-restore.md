@@ -7,7 +7,12 @@ created: 2026-10-10
 
 # RFC 8. Backups and restore, built in
 
-Status: draft.
+Status: accepted (ADR 30) for milestone 3: backup and restore of the whole
+installation, to a local directory or to S3-compatible storage. Schedules,
+retention, backups of one namespace, other targets, a public format and
+encryption of the whole backup stay open.
+
+The rest stays a draft.
 
 ## Problem
 

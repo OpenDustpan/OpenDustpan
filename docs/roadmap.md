@@ -69,6 +69,8 @@ Its gate:
 - [ ] A `LICENSE` in the Console repository.
 - [ ] A `--version` flag that the build stamps.
 - [ ] An upgrade test from the previous tag (for `v0.1.0`, an empty database).
+- [ ] The binary refuses to start on a database schema that is newer than it
+  knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
 - [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
 - [ ] The e2e suite passes for both tools on SQLite and on PostgreSQL.
 
@@ -78,16 +80,34 @@ Its gate:
 history or secrets, and can operate the server: back it up, restore it,
 upgrade it and watch it.
 
+**Exit test.** On Linux, on SQLite and on PostgreSQL, the e2e suite drives
+these steps for both tools, on each version in its matrix. It imports state
+from a Pulumi service backend, a Pulumi file backend, an OpenTofu backend and
+a TFE-compatible API (ADR 29). The imported secrets decrypt, `up` and `plan`
+show no changes, and the source stays unchanged. It lists OpenTofu state
+versions, restores an old one, and restores an old Pulumi checkpoint. A restore
+while another principal holds the lock gives 409. `force-unlock` and
+`pulumi cancel` free a stuck lock or update (ADR 28). It takes a backup while
+the scenarios write. It restores the backup into an empty installation with the
+same key, and both CLIs read the same state. A wrong key stops the restore
+before it writes (ADR 30). The OpenTofu scenario and the backup scenario pass
+with the blobs on an S3-compatible server (ADR 31). The metrics route counts
+the requests of both tools. `/readyz` turns to 503 when the database stops
+(ADR 32). The upgrade test starts the current binary on a database of the
+previous tag. Data, secrets and the held lock survive. The previous binary
+refuses to start on the upgraded database (ADR 33). The full Pulumi and
+OpenTofu scenarios still pass on the same server.
+
 | Where | Item | Part | State |
 | --- | --- | --- | --- |
-| server | [RFC 42](rfc/0042-migration-import.md) Migration from other backends | first sources | draft |
-| server | [RFC 18](rfc/0018-state-operations.md) State operations | history, restore, force-unlock | draft |
-| server | [RFC 8](rfc/0008-backups-and-restore.md) Backups and restore | all | draft |
-| server | [RFC 32](rfc/0032-object-storage.md) Object storage adapters | S3-compatible | draft |
-| server | [RFC 34](rfc/0034-server-observability.md) Observing the server | all | draft |
-| server | [RFC 38](rfc/0038-upgrade-checks.md) Upgrade checks | all | draft |
-| console | [RFC 18](rfc/0018-state-operations.md) State operations | version list, restore, lock holder | draft |
-| console | [RFC 42](rfc/0042-migration-import.md) Migration | import progress | draft |
+| server | [RFC 42](rfc/0042-migration-import.md) Migration from other backends | first sources | accepted (ADR 29) |
+| server | [RFC 18](rfc/0018-state-operations.md) State operations | history, restore, force-unlock | accepted (ADR 28) |
+| server | [RFC 8](rfc/0008-backups-and-restore.md) Backups and restore | all | accepted (ADR 30) |
+| server | [RFC 32](rfc/0032-object-storage.md) Object storage adapters | S3-compatible | accepted (ADR 31) |
+| server | [RFC 34](rfc/0034-server-observability.md) Observing the server | all | accepted (ADR 32) |
+| server | [RFC 38](rfc/0038-upgrade-checks.md) Upgrade checks | all | accepted (ADR 33) |
+| console | [RFC 18](rfc/0018-state-operations.md) State operations | version list, restore, lock holder | accepted (ADR 28) |
+| console | [RFC 42](rfc/0042-migration-import.md) Migration | import progress | deferred: ADR 29 has no import API in milestone 3 |
 
 ## Milestone 4. People, teams and access
 

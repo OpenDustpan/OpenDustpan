@@ -36,6 +36,14 @@ _Avoid_: State file (except for OpenTofu), snapshot
 The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
 _Avoid_: Catalog, registry, index
 
+**Import**:
+The act of moving the state of a unit from a source into OpenDustpan. It moves history and secrets where the tool can export them. The source stays unchanged. An import is not the Pulumi update of kind `import`. That update records one `pulumi stack import` command. An import is also not the Pulumi command `pulumi import`.
+_Avoid_: Migration (it means a SQL schema migration), transfer, onboarding
+
+**Source**:
+The backend or product that holds the state of a unit before an import. Examples: a Pulumi service backend, an OpenTofu backend or HCP Terraform.
+_Avoid_: Origin, legacy backend
+
 ### Regions
 
 **Home region**:
@@ -151,4 +159,5 @@ _Avoid_: Master key, root key, KEK
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
