@@ -302,7 +302,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 			{"preview", "--non-interactive"},
 			{"preview", "--non-interactive"},
 		},
-		Env: nil,
+		Env:  nil,
+		Envs: nil,
 	})
 
 	beforeID := stackIDBeforeRename(t, env, org)
@@ -1141,6 +1142,60 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:   "",
 		Want:   http.StatusConflict,
 	})
+
+	// Two principals contend for one lock: both plans run at once with a
+	// lock timeout, so the loser waits and retries instead of failing. Every
+	// 409 lock answer during the step holds "is locked by User": a lost
+	// compare-and-swap reports the held lock, or the CLI would not retry.
+	env.StepParallel(ctx, t, e2e.ParallelSpec{
+		Name:  "concurrent plans contend for lock",
+		Check: checkContentionRetried(env, "concurrent plans contend for lock"),
+		Args: [][]string{
+			{"plan", "-input=false", "-no-color", "-lock-timeout=60s"},
+			{"plan", "-input=false", "-no-color", "-lock-timeout=60s"},
+		},
+		Env: nil,
+		Envs: [][]string{
+			nil,
+			env.TofuEnvB(),
+		},
+	})
+}
+
+// checkContentionRetried proves every 409 lock answer during step holds "is
+// locked by User": the loser of a lock race reports the held lock, so the
+// CLI waits and retries under -lock-timeout instead of failing.
+func checkContentionRetried(env *e2e.Env, step string) func([]e2e.Result) error {
+	return func([]e2e.Result) error {
+		entries := env.Recorder.Entries()
+
+		conflicts := 0
+
+		for i := range entries {
+			e := &entries[i]
+			if e.Step != step || e.Method != http.MethodPost ||
+				!strings.HasSuffix(e.Path, "/actions/lock") {
+				continue
+			}
+
+			if e.Status != http.StatusConflict {
+				continue
+			}
+
+			conflicts++
+
+			if !strings.Contains(e.ResponseBody, "is locked by User") {
+				return fmt.Errorf(
+					"%w: lock detail lacks %q: %s",
+					errUnexpected,
+					"is locked by User",
+					e.ResponseBody,
+				)
+			}
+		}
+
+		return nil
+	}
 }
 
 // checkPlanLockedByAnother proves a plan as B fails on the held lock and
