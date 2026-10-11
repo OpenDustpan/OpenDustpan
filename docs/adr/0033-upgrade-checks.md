@@ -1,6 +1,6 @@
 # 33. Upgrade checks
 
-Status: accepted · 2026-10-11 · supersedes the gate of ADR 21 in part
+Status: accepted · 2026-10-11 · supersedes the gate of ADR 21 in part · decision 3 superseded by ADR 39
 
 ## Context
 
