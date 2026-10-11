@@ -66,7 +66,9 @@ func (h *Handler) lockHolder(ctx context.Context, id workspace.ID) string {
 // The protocol carries no lock ID from the client, so CI jobs that share one
 // workspace need distinct principals. The server mints the lock ID and
 // records the subject of the caller as the holder. A lock on a held workspace
-// answers 409 with a detail holding "is locked by User" and the holder.
+// answers 409 with a detail holding "is locked by User" and the holder. A
+// lost compare-and-swap also answers so: the loser retries once, then reports
+// the held lock, so the CLI waits and retries under -lock-timeout.
 func (h *Handler) lockWorkspace(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -80,10 +82,18 @@ func (h *Handler) lockWorkspace(
 		return
 	}
 
-	locked, err := h.workspaces.Lock(ctx, id, p.Subject, lockReason(body))
+	reason := lockReason(body)
+
+	locked, err := h.workspaces.Lock(ctx, id, p.Subject, reason)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLocked) {
 			h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+
+			return
+		}
+
+		if errors.Is(err, workspace.ErrConcurrentModification) {
+			h.retryLock(ctx, w, id, p, reason)
 
 			return
 		}
@@ -94,6 +104,29 @@ func (h *Handler) lockWorkspace(
 	}
 
 	h.writeWorkspace(ctx, w, http.StatusOK, p, locked)
+}
+
+// retryLock retries one lock after a lost compare-and-swap. A win answers
+// 200 with the workspace. A further conflict answers 409 with a detail
+// holding "is locked by User" and the holder, so the CLI waits and retries
+// under -lock-timeout.
+func (h *Handler) retryLock(
+	ctx context.Context, w http.ResponseWriter, id workspace.ID, p identity.Principal, reason string,
+) {
+	locked, err := h.workspaces.Lock(ctx, id, p.Subject, reason)
+	if err == nil {
+		h.writeWorkspace(ctx, w, http.StatusOK, p, locked)
+
+		return
+	}
+
+	if errors.Is(err, workspace.ErrLocked) || errors.Is(err, workspace.ErrConcurrentModification) {
+		h.writeConflict(ctx, w, lockConflictDetail(id, h.lockHolder(ctx, id)))
+
+		return
+	}
+
+	h.writeError(ctx, w, err)
 }
 
 // unlockWorkspace serves POST /api/v2/workspaces/{id}/actions/unlock. The

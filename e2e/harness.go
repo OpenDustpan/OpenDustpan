@@ -1191,6 +1191,10 @@ type ParallelSpec struct {
 	Args [][]string
 	// Env holds extra NAME=value pairs for every invocation of this step.
 	Env []string
+	// Envs holds extra NAME=value pairs per invocation. When it holds one
+	// entry per argument list, each run uses its own entry instead of Env,
+	// so two principals can contend for one lock.
+	Envs [][]string
 }
 
 // StepParallel runs every argument list in spec at the same time and records
@@ -1215,7 +1219,7 @@ func (e *Env) StepParallel(ctx context.Context, t *testing.T, spec ParallelSpec)
 
 		for i, args := range spec.Args {
 			wg.Go(func() {
-				outs[i].res, outs[i].err = e.Run(ctx, spec.Env, args...)
+				outs[i].res, outs[i].err = e.Run(ctx, parallelEnv(spec, i), args...)
 			})
 		}
 
@@ -1261,6 +1265,16 @@ func (e *Env) StepParallel(ctx context.Context, t *testing.T, spec ParallelSpec)
 	})
 
 	return res
+}
+
+// parallelEnv returns the extra environment for run i: its own entry when
+// Envs holds one per argument list, else the shared Env.
+func parallelEnv(spec ParallelSpec, i int) []string {
+	if len(spec.Envs) == len(spec.Args) {
+		return spec.Envs[i]
+	}
+
+	return spec.Env
 }
 
 // parallelCommand joins several argument lists into one report command.
