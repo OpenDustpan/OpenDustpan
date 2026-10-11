@@ -125,6 +125,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, "id", "kind", "dry_run", pgColStatus, "version", "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, "started_at_ms", "ended_at_ms",
+				"created_by", "restored_from",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -132,7 +133,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "checkpoints",
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
-				"digest", "invalid", "features", "deployment", "saved_at_ms",
+				"digest", "invalid", "features", "deployment", "saved_at_ms", "resource_count",
 				"blob_key", "size", "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
@@ -185,7 +186,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", "size",
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
-				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms",
+				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from",
 			},
 			orderBy: []string{"id"},
 		},
@@ -212,6 +213,38 @@ func pgCopySpec(table string) (pgCopyTable, error) {
 	}
 
 	return pgCopyTable{}, fmt.Errorf("backup table %q: %w", table, backup.ErrCorrupt)
+}
+
+// checkCopyColumns compares the COPY column list of table with the live
+// columns of the table. It reports the first column the list omits or names
+// without a live column, naming the table and the column, so a migration
+// that adds a column fails the coverage test until its author extends
+// pgCopyTables. Column order does not matter: the dump and the load name
+// every column on both COPY statements.
+func checkCopyColumns(table string, listed, live []string) error {
+	for _, column := range listed {
+		if !slices.Contains(live, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q name unknown column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	for _, column := range live {
+		if !slices.Contains(listed, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q miss column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	return nil
 }
 
 // pgIdent quotes one identifier. Table and column names come from the
