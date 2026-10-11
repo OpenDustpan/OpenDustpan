@@ -139,32 +139,63 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 		return stack.Stack{}, fmt.Errorf("select stack: %w", err)
 	}
 
-	return codec.FromStackRow(codec.StackRow(row))
+	return codec.FromStackRow(codec.StackRow{
+		Namespace:   row.Namespace,
+		Project:     row.Project,
+		Name:        row.Name,
+		ID:          row.ID,
+		Tags:        row.Tags,
+		Version:     row.Version,
+		CreatedAtMs: row.CreatedAtMs,
+		UpdatedAtMs: row.UpdatedAtMs,
+	})
 }
 
 // ListStacks implements stack.Store.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
-	var (
-		rows []db.Stack
-		err  error
-	)
-
 	if filter.Project == "" {
-		rows, err = s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
-	} else {
-		rows, err = s.queries.ListStacksInProject(ctx, db.ListStacksInProjectParams{
-			Namespace: filter.Namespace.String(),
-			Project:   filter.Project.String(),
-		})
+		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
+		if err != nil {
+			return nil, fmt.Errorf("select stacks: %w", err)
+		}
+
+		converted := make([]codec.StackRow, 0, len(rows))
+		for _, row := range rows {
+			converted = append(converted, codec.StackRow{
+				Namespace:   row.Namespace,
+				Project:     row.Project,
+				Name:        row.Name,
+				ID:          row.ID,
+				Tags:        row.Tags,
+				Version:     row.Version,
+				CreatedAtMs: row.CreatedAtMs,
+				UpdatedAtMs: row.UpdatedAtMs,
+			})
+		}
+
+		return codec.FromStackRows(converted)
 	}
 
+	rows, err := s.queries.ListStacksInProject(ctx, db.ListStacksInProjectParams{
+		Namespace: filter.Namespace.String(),
+		Project:   filter.Project.String(),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("select stacks: %w", err)
 	}
 
 	converted := make([]codec.StackRow, 0, len(rows))
 	for _, row := range rows {
-		converted = append(converted, codec.StackRow(row))
+		converted = append(converted, codec.StackRow{
+			Namespace:   row.Namespace,
+			Project:     row.Project,
+			Name:        row.Name,
+			ID:          row.ID,
+			Tags:        row.Tags,
+			Version:     row.Version,
+			CreatedAtMs: row.CreatedAtMs,
+			UpdatedAtMs: row.UpdatedAtMs,
+		})
 	}
 
 	return codec.FromStackRows(converted)

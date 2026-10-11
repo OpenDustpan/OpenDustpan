@@ -14,9 +14,11 @@ package storetest
 import (
 	"errors"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/stack"
 )
@@ -47,6 +49,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "stack in missing namespace is namespace.ErrNotFound", test: testStackMissingNamespace},
 		{name: "missing stack is ErrNotFound", test: testMissingStack},
 		{name: "list filters and orders", test: testList},
+		{name: "stack ID is set and returned", test: testStackID},
+		{name: "stack IDs are unique", test: testStackIDsUnique},
+		{name: "delete then create gives a new ID", test: testStackIDAfterDelete},
 	}
 
 	for _, tc := range cases {
@@ -85,6 +90,7 @@ func newStack(ns namespace.Name, project, name string) stack.Stack {
 		UpdatedAt: now(),
 		Tags:      map[string]string{"team": "platform"},
 		Ref:       stack.Ref{Namespace: ns, Project: stack.ProjectName(project), Stack: stack.Name(name)},
+		ID:        stack.ID(ident.NewID("stk-")),
 		Version:   0,
 	}
 }
@@ -198,15 +204,16 @@ func testList(t *testing.T, s Store) {
 	acme := newNamespace(t, s, "acme")
 	other := newNamespace(t, s, "other")
 
-	for _, st := range []stack.Stack{
+	stacks := []stack.Stack{
 		newStack(acme.Name, "web", "prod"),
 		newStack(acme.Name, "api", "prod"),
 		newStack(acme.Name, "web", "dev"),
 		newStack(other.Name, "web", "prod"),
-	} {
-		fence := namespace.Fence{Namespace: st.Ref.Namespace, FailoverVersion: 1}
-		if err := s.CreateStack(t.Context(), st, fence); err != nil {
-			t.Fatalf("create stack %s: %v", st.Ref, err)
+	}
+	for i := range stacks {
+		fence := namespace.Fence{Namespace: stacks[i].Ref.Namespace, FailoverVersion: 1}
+		if err := s.CreateStack(t.Context(), stacks[i], fence); err != nil {
+			t.Fatalf("create stack %s: %v", stacks[i].Ref, err)
 		}
 	}
 
@@ -228,19 +235,90 @@ func testList(t *testing.T, s Store) {
 func assertStack(t *testing.T, got, want stack.Stack) {
 	t.Helper()
 
-	if got.Ref != want.Ref || got.Version != want.Version ||
+	if got.Ref != want.Ref || got.ID != want.ID || got.Version != want.Version ||
 		!got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) ||
 		!maps.Equal(got.Tags, want.Tags) {
 		t.Fatalf("stack = %+v, want %+v", got, want)
 	}
 }
 
+func testStackID(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	want := newStack(ns.Name, "web", "prod")
+
+	if want.ID == "" || !strings.HasPrefix(want.ID.String(), "stk-") {
+		t.Fatalf("new stack ID = %q, want stk- prefix", want.ID)
+	}
+
+	if err := s.CreateStack(t.Context(), want, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	got, err := s.GetStack(t.Context(), want.Ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	if got.ID != want.ID {
+		t.Fatalf("get stack ID = %q, want %q", got.ID, want.ID)
+	}
+
+	list, err := s.ListStacks(t.Context(), stack.Filter{Namespace: ns.Name, Project: ""})
+	if err != nil {
+		t.Fatalf("list stacks: %v", err)
+	}
+
+	if len(list) != 1 || list[0].ID != want.ID {
+		t.Fatalf("list stacks IDs = %v, want [%q]", list, want.ID)
+	}
+}
+
+func testStackIDsUnique(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+	second := newStack(ns.Name, "web", "dev")
+
+	if err := s.CreateStack(t.Context(), first, ns.Fence()); err != nil {
+		t.Fatalf("create first stack: %v", err)
+	}
+
+	if err := s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
+		t.Fatalf("create second stack: %v", err)
+	}
+
+	if first.ID == second.ID {
+		t.Fatalf("stack IDs are not unique: both %q", first.ID)
+	}
+
+	wants := []stack.Stack{first, second}
+	for i := range wants {
+		got, err := s.GetStack(t.Context(), wants[i].Ref)
+		if err != nil {
+			t.Fatalf("get stack %s: %v", wants[i].Ref, err)
+		}
+
+		if got.ID != wants[i].ID {
+			t.Fatalf("get stack %s ID = %q, want %q", wants[i].Ref, got.ID, wants[i].ID)
+		}
+	}
+}
+
+func testStackIDAfterDelete(t *testing.T, _ Store) {
+	t.Helper()
+
+	t.Skip("delete then create with the same name waits for issue #49")
+}
+
 func assertRefs(t *testing.T, stacks []stack.Stack, want ...string) {
 	t.Helper()
 
 	got := make([]string, 0, len(stacks))
-	for _, st := range stacks {
-		got = append(got, st.Ref.String())
+	for i := range stacks {
+		got = append(got, stacks[i].Ref.String())
 	}
 
 	if len(got) != len(want) {

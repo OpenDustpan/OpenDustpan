@@ -51,6 +51,15 @@ func (p ProjectName) String() string {
 // Name is a validated stack name.
 type Name string
 
+// ID is a stack's stable, opaque identifier ("stk-..."). A rename keeps it,
+// and a new stack with the name of a deleted stack gets a new ID.
+type ID string
+
+// String returns the ID as a plain string.
+func (id ID) String() string {
+	return string(id)
+}
+
 // ParseName validates s as a stack name.
 func ParseName(s string) (Name, error) {
 	if !ident.Valid(s, maxNameLength) {
@@ -103,6 +112,7 @@ type Stack struct {
 	UpdatedAt time.Time
 	Tags      map[string]string
 	Ref       Ref
+	ID        ID
 	// Version is the version of the stack's last finished update; a new stack
 	// is at version 0.
 	Version int64
@@ -176,6 +186,7 @@ func (s *Service) Create(ctx context.Context, ref Ref, tags map[string]string) (
 		UpdatedAt: now,
 		Tags:      maps.Clone(tags),
 		Ref:       ref,
+		ID:        ID(ident.NewID("stk-")),
 		Version:   0,
 	}
 
