@@ -5320,3 +5320,417 @@ func insertFuturePostgres(ctx context.Context, t *testing.T, schemaURL string) {
 		t.Fatalf("record future version: %v", execErr)
 	}
 }
+
+// backupPadBytes grows the database with one padded checkpoint, so a backup
+// holds still running while the test starts another one or stops the server.
+// The pad stays below the default 32 MiB checkpoint limit, and no test hook
+// is needed: the data set itself holds the backup.
+const backupPadBytes = 24 << 20
+
+// backupPollTimeout bounds a backup poll: a test backup ends well before it,
+// even with the padded checkpoint.
+const backupPollTimeout = 2 * time.Minute
+
+// backupPollInterval sets how often a backup poll reads the row.
+const backupPollInterval = 100 * time.Millisecond
+
+// TestBackups proves the installation backup routes (ADR 30 decision 9): the
+// Pulumi CLI writes state, POST starts a backup that polls to succeeded with
+// a manifest holding the Pulumi data, a second start while one runs answers
+// 409, calls without a token answer 401, and the list holds the backups
+// newest first. It runs on every store under test with the first Pulumi
+// version of the matrix. The restart part needs the real server binary: it
+// stops the server during a running backup and sees the row failed after the
+// start. Without E2E_SERVER=binary the test proves the routes and skips only
+// the restart.
+func TestBackups(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runBackupsOnStore(t, cli, db)
+		})
+	}
+}
+
+// runBackupsOnStore runs the backup steps on one store: CLI writes, a backup
+// to succeeded with the manifest checks, the 409 and 401 checks, the list
+// check, and the restart check with the real binary.
+func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	checkReady(ctx, t, env)
+	writeBackupData(ctx, t, env)
+
+	id := startBackupAndConflict(ctx, t, env)
+	doc := pollBackupState(ctx, t, env, id, "succeeded")
+	checkBackupManifest(t, store, doc)
+	checkBackupList(ctx, t, env, id)
+	checkBackupUnauthorized(ctx, t, env, id)
+
+	if !e2e.UseBinaryServer() {
+		t.Log("skipping the restart part without E2E_SERVER=binary")
+		return
+	}
+
+	checkBackupRestartFailed(ctx, t, env, id)
+}
+
+// writeBackupData writes Pulumi state with the CLI and grows the database
+// with one padded checkpoint, so a backup holds still running while the test
+// starts another one or stops the server.
+func writeBackupData(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	org := e2e.Namespace
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, stackName)
+
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("stack init", nil, "stack", "init", qualified),
+		step("stack init other", nil, "stack", "init", "other"),
+		step("stack select", nil, "stack", "select", qualified),
+		step("config set secret", nil, "config", "set", "--secret", "apiKey", "s3cr3t"),
+		step("up", nil, "up", "--yes", "--non-interactive"),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	exported := env.Step(ctx, t, step("stack export", exportHoldsReference, "stack", "export"))
+
+	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, stackName)
+	env.SaveHeldPaddedCheckpoint(ctx, t, held, exported.Stdout, map[string]string{
+		"e2ePad": strings.Repeat("x", backupPadBytes),
+	})
+	env.EndHeldUpdate(ctx, t, held, "succeeded")
+}
+
+// backupDoc decodes one backup in tests.
+type backupDoc struct {
+	ID        string            `json:"id"`
+	State     string            `json:"state"`
+	StartedAt string            `json:"startedAt"`
+	EndedAt   string            `json:"endedAt"`
+	Target    string            `json:"target"`
+	Error     string            `json:"error"`
+	Manifest  backupManifestDoc `json:"manifest"`
+}
+
+// backupManifestDoc holds the manifest fields the backup steps check.
+type backupManifestDoc struct {
+	ID            string   `json:"id"`
+	Format        int      `json:"format"`
+	Dialect       string   `json:"dialect"`
+	HomeRegions   []string `json:"homeRegions"`
+	WrapperIDs    []string `json:"wrapperIds"`
+	SQLSize       int64    `json:"sqlSize"`
+	SQLSHA256     string   `json:"sqlSha256"`
+	SchemaVersion int      `json:"schemaVersion"`
+}
+
+// startBackupAndConflict starts a backup and proves a second start while it
+// runs answers 409 with the one JSON error shape. The padded checkpoint holds
+// the first backup running, so no test hook is needed. It returns the ID of
+// the running backup.
+func startBackupAndConflict(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	if err != nil {
+		t.Fatalf("POST backups: %v", err)
+	}
+
+	if status != http.StatusAccepted {
+		t.Fatalf("POST backups answers %d, want %d (%s)", status, http.StatusAccepted, body)
+	}
+
+	var started struct {
+		ID string `json:"id"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &started); decodeErr != nil || started.ID == "" {
+		t.Fatalf("POST backups answers %q, want an id: %v", body, decodeErr)
+	}
+
+	if !strings.HasPrefix(started.ID, "bkp-") {
+		t.Fatalf("backup id = %q, want the bkp- prefix", started.ID)
+	}
+
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	if err != nil {
+		t.Fatalf("second POST backups: %v", err)
+	}
+
+	if status != http.StatusConflict {
+		t.Fatalf("second POST backups answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	var conflict struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &conflict); decodeErr != nil {
+		t.Fatalf("decode 409 of POST backups: %v (%s)", decodeErr, body)
+	}
+
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Message, "already running") {
+		t.Fatalf("second POST backups error = %+v, want code 409 naming the running backup", conflict)
+	}
+
+	return started.ID
+}
+
+// pollBackupState polls one backup until it reaches want, failing the test
+// when it reaches another terminal state or the deadline passes first.
+func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id, want string) backupDoc {
+	t.Helper()
+
+	deadline, cancel := context.WithTimeout(ctx, backupPollTimeout)
+	defer cancel()
+
+	timer := time.NewTimer(backupPollInterval)
+	defer timer.Stop()
+
+	for {
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups/"+id, "")
+		if err != nil {
+			t.Fatalf("GET backup %s: %v", id, err)
+		}
+
+		if status != http.StatusOK {
+			t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
+		}
+
+		var doc backupDoc
+
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("decode backup %s %q: %v", id, body, err)
+		}
+
+		switch doc.State {
+		case want:
+			return doc
+		case "running":
+		default:
+			t.Fatalf("backup %s reads %q with error %q, want %q", id, doc.State, doc.Error, want)
+		}
+
+		select {
+		case <-deadline.Done():
+			t.Fatalf("backup %s stays running, want %q", id, want)
+		case <-timer.C:
+			timer.Reset(backupPollInterval)
+		}
+	}
+}
+
+// checkBackupManifest proves the manifest of a succeeded backup holds the
+// Pulumi data: the store dialect, the padded SQL part, the wrapper of the
+// config secret and the home region.
+func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
+	t.Helper()
+
+	manifest := doc.Manifest
+
+	if manifest.ID != doc.ID {
+		t.Fatalf("manifest id = %q, want backup %q", manifest.ID, doc.ID)
+	}
+
+	if manifest.Format != 1 {
+		t.Fatalf("manifest format = %d, want 1", manifest.Format)
+	}
+
+	if manifest.Dialect != string(store) {
+		t.Fatalf("manifest dialect = %q, want %q", manifest.Dialect, store)
+	}
+
+	if manifest.SQLSize <= backupPadBytes {
+		t.Fatalf("manifest SQL size = %d, want above the %d pad bytes", manifest.SQLSize, backupPadBytes)
+	}
+
+	if manifest.SQLSHA256 == "" {
+		t.Fatal("manifest holds no SQL SHA-256")
+	}
+
+	if manifest.SchemaVersion <= 0 {
+		t.Fatalf("manifest schema version = %d, want above 0", manifest.SchemaVersion)
+	}
+
+	if len(manifest.WrapperIDs) == 0 {
+		t.Fatal("manifest holds no wrapper ID, want the key of the config secret")
+	}
+
+	if len(manifest.HomeRegions) == 0 {
+		t.Fatal("manifest holds no home region")
+	}
+}
+
+// checkBackupList proves GET lists the backups newest first and holds the
+// backup the test started.
+func checkBackupList(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups", "")
+	if err != nil {
+		t.Fatalf("GET backups: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc struct {
+		Backups []backupDoc `json:"backups"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode backup list %q: %v", body, err)
+	}
+
+	found := false
+
+	for i := range doc.Backups {
+		entry := &doc.Backups[i]
+		if entry.ID == id {
+			found = true
+
+			if entry.State != "succeeded" {
+				t.Fatalf("listed backup %s reads %q, want succeeded", id, entry.State)
+			}
+		}
+	}
+
+	if !found {
+		t.Fatalf("backup list holds %v, want backup %q", doc.Backups, id)
+	}
+
+	checkBackupListOrder(t, doc.Backups)
+}
+
+// checkBackupListOrder proves the listed backups run newest first by start
+// time.
+func checkBackupListOrder(t *testing.T, backups []backupDoc) {
+	t.Helper()
+
+	seen := time.Time{}
+
+	for i := range backups {
+		at, err := time.Parse(time.RFC3339Nano, backups[i].StartedAt)
+		if err != nil {
+			t.Fatalf("backup %s startedAt %q does not parse: %v", backups[i].ID, backups[i].StartedAt, err)
+		}
+
+		if !seen.IsZero() && at.After(seen) {
+			t.Fatalf("backup list is not newest first at %q", backups[i].ID)
+		}
+
+		seen = at
+	}
+}
+
+// checkBackupUnauthorized proves the backup routes answer 401 without a
+// token, with the one JSON error shape.
+func checkBackupUnauthorized(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
+	t.Helper()
+
+	for _, target := range []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/api/server/backups"},
+		{http.MethodGet, "/api/server/backups"},
+		{http.MethodGet, "/api/server/backups/" + id},
+	} {
+		status, body, err := env.ServerAPIStatusBare(ctx, target.method, target.path)
+		if err != nil {
+			t.Fatalf("%s %s without a token: %v", target.method, target.path, err)
+		}
+
+		if status != http.StatusUnauthorized {
+			t.Fatalf("%s %s without a token answers %d, want %d (%s)",
+				target.method, target.path, status, http.StatusUnauthorized, body)
+		}
+
+		var doc struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("decode 401 of %s %s: %v (%s)", target.method, target.path, err, body)
+		}
+
+		if doc.Code != http.StatusUnauthorized || doc.Message == "" {
+			t.Fatalf("%s %s error = %+v, want code 401 with a message", target.method, target.path, doc)
+		}
+	}
+}
+
+// checkBackupRestartFailed stops the server during a running backup, starts
+// it, and proves the row reads failed. The padded checkpoint holds the backup
+// running, so the stop lands mid-backup with no test hook. It also proves the
+// earlier backup survives the restart still succeeded.
+func checkBackupRestartFailed(ctx context.Context, t *testing.T, env *e2e.Env, firstID string) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	if err != nil {
+		t.Fatalf("POST backups before the restart: %v", err)
+	}
+
+	if status != http.StatusAccepted {
+		t.Fatalf("POST backups before the restart answers %d, want %d (%s)", status, http.StatusAccepted, body)
+	}
+
+	var started struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil || started.ID == "" {
+		t.Fatalf("POST backups before the restart answers %q, want an id: %v", body, err)
+	}
+
+	env.StopServer(ctx, t)
+	env.StartServer(ctx, t)
+
+	doc := pollBackupState(ctx, t, env, started.ID, "failed")
+
+	if doc.Error == "" {
+		t.Fatalf("backup %s reads failed with no error text", started.ID)
+	}
+
+	t.Logf("backup %s failed after the restart: %q", started.ID, doc.Error)
+
+	if again := pollBackupState(ctx, t, env, firstID, "succeeded"); again.Manifest.SQLSize <= backupPadBytes {
+		t.Fatalf("backup %s after the restart holds SQL size %d, want above the pad bytes",
+			firstID, again.Manifest.SQLSize)
+	}
+}
