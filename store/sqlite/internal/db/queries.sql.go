@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const activeUpdate = `-- name: ActiveUpdate :one
@@ -201,6 +202,22 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.StartedAtMs,
 		arg.EndedAtMs,
 	)
+	return err
+}
+
+const deleteInventory = `-- name: DeleteInventory :exec
+DELETE FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?
+`
+
+type DeleteInventoryParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+func (q *Queries) DeleteInventory(ctx context.Context, arg DeleteInventoryParams) error {
+	_, err := q.db.ExecContext(ctx, deleteInventory, arg.Namespace, arg.Tool, arg.Name)
 	return err
 }
 
@@ -638,6 +655,45 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listInventory = `-- name: ListInventory :many
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+FROM inventory
+WHERE namespace = ?
+ORDER BY tool, name
+`
+
+func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Inventory, error) {
+	rows, err := q.db.QueryContext(ctx, listInventory, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Inventory
+	for rows.Next() {
+		var i Inventory
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.Name,
+			&i.UnitID,
+			&i.DisplayName,
+			&i.LastChangedMs,
+			&i.Status,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms
 FROM namespaces
@@ -1018,5 +1074,41 @@ type TouchStackParams struct {
 
 func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	_, err := q.db.ExecContext(ctx, touchStack, arg.UpdatedAtMs, arg.ID)
+	return err
+}
+
+const upsertInventory = `-- name: UpsertInventory :exec
+INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (namespace, tool, name) DO UPDATE SET
+    unit_id = excluded.unit_id,
+    display_name = excluded.display_name,
+    last_changed_ms = excluded.last_changed_ms,
+    status = excluded.status,
+    resource_count = excluded.resource_count
+`
+
+type UpsertInventoryParams struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
+}
+
+func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams) error {
+	_, err := q.db.ExecContext(ctx, upsertInventory,
+		arg.Namespace,
+		arg.Tool,
+		arg.Name,
+		arg.UnitID,
+		arg.DisplayName,
+		arg.LastChangedMs,
+		arg.Status,
+		arg.ResourceCount,
+	)
 	return err
 }

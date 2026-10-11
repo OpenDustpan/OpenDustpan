@@ -208,3 +208,23 @@ ORDER BY wrapper_id;
 -- name: DeleteSecretKeysOfStack :exec
 DELETE FROM secret_keys
 WHERE stack_id = ?;
+
+-- name: UpsertInventory :exec
+INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (namespace, tool, name) DO UPDATE SET
+    unit_id = excluded.unit_id,
+    display_name = excluded.display_name,
+    last_changed_ms = excluded.last_changed_ms,
+    status = excluded.status,
+    resource_count = excluded.resource_count;
+
+-- name: DeleteInventory :exec
+DELETE FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?;
+
+-- name: ListInventory :many
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+FROM inventory
+WHERE namespace = ?
+ORDER BY tool, name;

@@ -87,6 +87,7 @@ linters:
             - "**/identity/**"
             - "**/secret/**"
             - "**/workspace/**"
+            - "**/inventory/**"
             - "**/blob/*.go"
             - "!**/*_test.go"
           deny:

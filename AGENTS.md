@@ -39,6 +39,7 @@ Do not report work as finished if any of these fail. Say what fails instead.
 dustpan.go, web.go   package dustpan: the SDK entry point (NewServer + options)
 cmd/opendustpan/     the binary: flags, env, built-in adapters. Only place that may exit.
 namespace/           domain: namespaces, home region, failover-version fencing
+inventory/           domain: cross-tool inventory projection of units
 stack/               domain (Pulumi CLI): projects, stacks; the update cycle (Updates: leases, checkpoints, events)
 secret/              domain: per-scope envelope encryption (first user: the Pulumi CLI's service secrets provider)
 workspace/           domain (OpenTofu): workspaces, locks, state versions (RFC 1)
