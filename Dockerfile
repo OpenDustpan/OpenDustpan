@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+# Container image for OpenDustpan (ADR 27, decision 5).
+#
+# Build it with:
+#
+#   docker build -t opendustpan:dev \
+#     --build-arg VERSION="$(git describe --tags --always --dirty)" \
+#     --build-arg CONSOLE_URL=<console release tarball URL> \
+#     --build-arg CONSOLE_SHA256=<tarball SHA-256> .
+#
+# scripts/smoke-image.sh builds with a local test tarball instead.
+
+# Go stage: static binary with the version stamp of issue #91.
+FROM golang:1.27.1-bookworm AS build
+WORKDIR /src
+ARG TARGETARCH
+ARG VERSION=dev
+COPY go.mod go.sum ./
+# Optional BuildKit secret for builds behind a TLS-intercepting proxy: pass
+# --secret id=extra_ca,src=<PEM bundle file> to trust one more CA bundle.
+# A normal build passes no secret and this step changes nothing.
+RUN --mount=type=secret,id=extra_ca,required=false sh -c 'if [ -s /run/secrets/extra_ca ]; then cat /run/secrets/extra_ca >> /etc/ssl/certs/ca-certificates.crt; fi; go mod download'
+COPY . ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
+  go build -trimpath -ldflags "-X main.version=${VERSION}" \
+  -o /out/opendustpan ./cmd/opendustpan
+
+# Console stage: static files from a console release tarball. No Node runs
+# here: the tarball is a built release. CONSOLE_URL is https: for a release or
+# file:<repo-relative path> for a local test tarball (see
+# scripts/smoke-image.sh). The SHA-256 check fails the build on a mismatch.
+#
+# No console release exists yet in OpenDustpan/console, so the defaults below
+# are placeholders for its first tag. A build without explicit CONSOLE_URL and
+# CONSOLE_SHA256 fails at the download step. When the first console release
+# lands, pin its tag and SHA-256 here.
+FROM golang:1.27.1-bookworm AS console
+ARG CONSOLE_URL=https://github.com/OpenDustpan/console/releases/download/v0.1.0/console.tar.gz
+ARG CONSOLE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+COPY . /src
+# The same optional extra-CA secret as in the Go stage: curl trusts the
+# bundle before it downloads the console tarball.
+RUN --mount=type=secret,id=extra_ca,required=false set -eu; \
+  if [ -s /run/secrets/extra_ca ]; then cat /run/secrets/extra_ca >> /etc/ssl/certs/ca-certificates.crt; fi; \
+  case "${CONSOLE_URL}" in \
+    https://*) curl -fsSL --retry 3 -o /tmp/console.tgz "${CONSOLE_URL}";; \
+    file:*) cp "/src/${CONSOLE_URL#file:}" /tmp/console.tgz;; \
+    *) echo "CONSOLE_URL must start with https: or file:" >&2; exit 1;; \
+  esac; \
+  echo "${CONSOLE_SHA256}  /tmp/console.tgz" | sha256sum -c -; \
+  mkdir -p /console; \
+  tar -xzf /tmp/console.tgz -C /console; \
+  test -f /console/index.html
+
+# Base: distroless static nonroot, pinned by digest.
+# Digest read 2026-10-11 from gcr.io/distroless/static-debian12:nonroot.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+COPY --from=build /out/opendustpan /opendustpan
+COPY --from=console /console /console
+VOLUME /data
+ENTRYPOINT ["/opendustpan"]
+# Issue #85 adds --blob-dir /data/blobs to this command.
+CMD ["serve", "--database", "sqlite:/data/dustpan.db", "--listen", ":8080", "--console-dir", "/console"]
