@@ -13,6 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1253,7 +1256,6 @@ func TestOpenBackupTarget(t *testing.T) {
 		{name: "unknown scheme", raw: "file:/tmp/backups", wantErr: "dir:/path"},
 		{name: "missing path", raw: "dir:", wantErr: "dir:/path"},
 		{name: "blank path", raw: "dir:   ", wantErr: "dir:/path"},
-		{name: "s3 waits for a later change", raw: "s3://bucket/prefix", wantErr: "s3"},
 	}
 
 	for _, tc := range cases {
@@ -1270,7 +1272,7 @@ func TestOpenBackupTarget(t *testing.T) {
 func checkBackupTargetCase(t *testing.T, raw, wantErr string) {
 	t.Helper()
 
-	target, err := openBackupTarget(raw)
+	target, err := openBackupTarget(t.Context(), raw, "", "", nil)
 	if wantErr == "" {
 		if err != nil || target != nil {
 			t.Fatalf("open %q: target %v, err %v, want nil, nil", raw, target, err)
@@ -1280,9 +1282,7 @@ func checkBackupTargetCase(t *testing.T, raw, wantErr string) {
 	}
 
 	if target != nil {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
+		closeBackupTarget(t, target)
 	}
 
 	if err == nil || !strings.Contains(err.Error(), wantErr) {
@@ -1294,12 +1294,24 @@ func checkBackupTargetCase(t *testing.T, raw, wantErr string) {
 	}
 }
 
+// closeBackupTarget closes target when it holds a directory handle, so dir:
+// targets release their handle while S3 targets need no close.
+func closeBackupTarget(t *testing.T, target blob.Store) {
+	t.Helper()
+
+	if closer, ok := target.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			t.Errorf("close backup target: %v", err)
+		}
+	}
+}
+
 func TestOpenBackupTargetDir(t *testing.T) {
 	t.Parallel()
 
 	dir := filepath.Join(t.TempDir(), "backups")
 
-	target, err := openBackupTarget("dir:" + dir)
+	target, err := openBackupTarget(t.Context(), "dir:"+dir, "", "", nil)
 	if err != nil {
 		t.Fatalf("open dir target: %v", err)
 	}
@@ -1309,9 +1321,7 @@ func TestOpenBackupTargetDir(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
+		closeBackupTarget(t, target)
 	})
 
 	checkBackupTargetDir(t, dir)
@@ -1380,15 +1390,17 @@ func TestBackupOptions(t *testing.T) {
 		t.Fatalf("backup options without a target = %d options, want none", len(opts))
 	}
 
-	target, err := openBackupTarget("dir:" + filepath.Join(t.TempDir(), "backups"))
+	target, err := openBackupTarget(t.Context(), "dir:"+filepath.Join(t.TempDir(), "backups"), "", "", nil)
 	if err != nil {
 		t.Fatalf("open dir target: %v", err)
 	}
 
+	if target == nil {
+		t.Fatal("open dir target = nil, want a store")
+	}
+
 	t.Cleanup(func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
+		closeBackupTarget(t, target)
 	})
 
 	f.backupTarget = "dir:/var/backups"
@@ -1404,7 +1416,7 @@ func TestBackupOptions(t *testing.T) {
 func writeCheckBackup(t *testing.T, dir, id string) string {
 	t.Helper()
 
-	target, err := openBackupTarget("dir:" + dir)
+	target, err := openBackupTarget(t.Context(), "dir:"+dir, "", "", nil)
 	if err != nil {
 		t.Fatalf("open check target: %v", err)
 	}
@@ -1414,9 +1426,7 @@ func writeCheckBackup(t *testing.T, dir, id string) string {
 	}
 
 	defer func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close check target: %v", closeErr)
-		}
+		closeBackupTarget(t, target)
 	}()
 
 	db := []byte("check backup database part")
@@ -2152,4 +2162,562 @@ func TestRestoreUsage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// s3Fake is a minimal S3-compatible server for the cmd tests: it holds objects
+// in memory. When honor is true, a PUT with If-None-Match: * on an existing
+// object answers 412. When honor is false, the PUT overwrites and answers 200,
+// so the open probe finds no conditional writes.
+type s3Fake struct {
+	mu    sync.Mutex
+	holds map[string][]byte
+	honor bool
+}
+
+// newS3Fake returns an s3Fake that honors conditional writes when honor is true.
+func newS3Fake(honor bool) *s3Fake {
+	return &s3Fake{mu: sync.Mutex{}, holds: map[string][]byte{}, honor: honor}
+}
+
+func (f *s3Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, ok := s3FakeBody(w, r)
+	if !ok {
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	switch r.Method {
+	case http.MethodPut:
+		f.servePut(w, r, body)
+	case http.MethodGet:
+		f.serveGet(w, r)
+	case http.MethodDelete:
+		delete(f.holds, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+// s3FakeBody reads the request body of the fake. It answers 500 when the read
+// fails.
+func s3FakeBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, bodyErr := io.ReadAll(r.Body)
+	closeErr := r.Body.Close()
+
+	if bodyErr != nil || closeErr != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+
+		return nil, false
+	}
+
+	return body, true
+}
+
+// servePut answers one PUT of the fake, honoring If-None-Match when honor is true.
+func (f *s3Fake) servePut(w http.ResponseWriter, r *http.Request, body []byte) {
+	if _, exists := f.holds[r.URL.Path]; exists && f.honor && r.Header.Get("If-None-Match") == "*" {
+		w.WriteHeader(http.StatusPreconditionFailed)
+
+		return
+	}
+
+	f.holds[r.URL.Path] = body
+	w.WriteHeader(http.StatusOK)
+}
+
+// serveGet answers one GET of the fake with the held object or NoSuchKey.
+func (f *s3Fake) serveGet(w http.ResponseWriter, r *http.Request) {
+	if held, ok := f.holds[r.URL.Path]; ok {
+		w.WriteHeader(http.StatusOK)
+
+		if _, err := w.Write(held); err != nil {
+			return
+		}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusNotFound)
+
+	const missing = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code></Error>`
+
+	if _, err := io.WriteString(w, missing); err != nil {
+		return
+	}
+}
+
+// setS3Env sets fake S3 credentials for a test that opens an s3:// store.
+func setS3Env(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-cmd-1")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-cmd-1")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+}
+
+//nolint:usetesting // t.Setenv cannot unset a variable; the cleanup restores it.
+func TestBlobStoreFlagPrecedence(t *testing.T) {
+	for _, key := range []string{"DUSTPAN_BLOB_STORE", "DUSTPAN_S3_ENDPOINT", "DUSTPAN_S3_REGION"} {
+		orig, had := os.LookupEnv(key)
+
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatalf("unset %s: %v", key, err)
+		}
+
+		t.Cleanup(func() {
+			var restoreErr error
+
+			if had {
+				restoreErr = os.Setenv(key, orig)
+			} else {
+				restoreErr = os.Unsetenv(key)
+			}
+
+			if restoreErr != nil {
+				t.Errorf("restore %s: %v", key, restoreErr)
+			}
+		})
+	}
+
+	checkBlobStoreDefaults(t)
+
+	t.Setenv("DUSTPAN_BLOB_STORE", "s3://env-bucket/env-prefix")
+	t.Setenv("DUSTPAN_S3_ENDPOINT", "http://env-endpoint:9000")
+	t.Setenv("DUSTPAN_S3_REGION", "eu-west-1")
+
+	checkBlobStoreFromEnv(t)
+	checkBlobStoreFlagWins(t)
+}
+
+// checkBlobStoreDefaults proves the storage flags default to fs with no
+// endpoint or region.
+func checkBlobStoreDefaults(t *testing.T) {
+	t.Helper()
+
+	var absent serveFlags
+
+	if err := newTestFlagSet(&absent).Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if absent.blobStore != "fs" {
+		t.Fatalf("blob store = %q, want fs", absent.blobStore)
+	}
+
+	if absent.s3Endpoint != "" || absent.s3Region != "" {
+		t.Fatalf("s3 settings = %q %q, want empty defaults", absent.s3Endpoint, absent.s3Region)
+	}
+}
+
+// checkBlobStoreFromEnv proves the storage flags read their variables.
+func checkBlobStoreFromEnv(t *testing.T) {
+	t.Helper()
+
+	var fromEnv serveFlags
+
+	if err := newTestFlagSet(&fromEnv).Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+
+	if fromEnv.blobStore != "s3://env-bucket/env-prefix" {
+		t.Fatalf("blob store = %q, want the variable", fromEnv.blobStore)
+	}
+
+	if fromEnv.s3Endpoint != "http://env-endpoint:9000" || fromEnv.s3Region != "eu-west-1" {
+		t.Fatalf("s3 settings = %q %q, want the variables", fromEnv.s3Endpoint, fromEnv.s3Region)
+	}
+}
+
+// checkBlobStoreFlagWins proves the storage flags win over their variables.
+func checkBlobStoreFlagWins(t *testing.T) {
+	t.Helper()
+
+	args := []string{
+		"--blob-store", "s3://flag-bucket/flag-prefix",
+		"--s3-endpoint", "http://flag-endpoint:9000",
+		"--s3-region", "us-west-2",
+	}
+
+	var flagWins serveFlags
+
+	if err := newTestFlagSet(&flagWins).Parse(args); err != nil {
+		t.Fatalf("parse s3 flags: %v", err)
+	}
+
+	if flagWins.blobStore != "s3://flag-bucket/flag-prefix" {
+		t.Fatalf("blob store = %q, want the flag to win", flagWins.blobStore)
+	}
+
+	if flagWins.s3Endpoint != "http://flag-endpoint:9000" || flagWins.s3Region != "us-west-2" {
+		t.Fatalf("s3 settings = %q %q, want the flags to win", flagWins.s3Endpoint, flagWins.s3Region)
+	}
+}
+
+//nolint:paralleltest // Serve reads process environment through setServeEnv.
+func TestServeBlobStoreBadValue(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
+
+	path := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+
+	err := serve(t.Context(), []string{"--database", path, "--blob-store", "bogus"}, io.Discard)
+	if err == nil || !errors.Is(err, errBlobStore) {
+		t.Fatalf("serve with a bad blob store: err = %v, want errBlobStore", err)
+	}
+
+	if !strings.Contains(err.Error(), "--blob-store") {
+		t.Fatalf("serve with a bad blob store: err = %v, want it to name the flag", err)
+	}
+}
+
+func TestParseS3Target(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []parseS3Case{
+		{name: "bucket only", raw: "s3://mybucket", bucket: "mybucket", pfx: "", ok: true},
+		{name: "bucket and prefix", raw: "s3://mybucket/pfx/sub", bucket: "mybucket", pfx: "pfx/sub", ok: true},
+		{name: "trims slashes", raw: "s3://mybucket//pfx//", bucket: "mybucket", pfx: "pfx", ok: true},
+		{name: "missing bucket", raw: "s3://", bucket: "", pfx: "", ok: false},
+		{name: "missing scheme", raw: "mybucket/pfx", bucket: "", pfx: "", ok: false},
+		{name: "blank prefix segment", raw: "s3://mybucket/a//b", bucket: "", pfx: "", ok: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkParseS3Target(t, tc)
+		})
+	}
+}
+
+// parseS3Case is one parse case of TestParseS3Target.
+type parseS3Case struct {
+	name   string
+	raw    string
+	bucket string
+	pfx    string
+	ok     bool
+}
+
+// checkParseS3Target proves parseS3Target splits raw into bucket and prefix,
+// or fails with errBlobStore when the case wants an error.
+func checkParseS3Target(t *testing.T, tc parseS3Case) {
+	t.Helper()
+
+	gotBucket, gotPrefix, err := parseS3Target(tc.raw, errBlobStore)
+	if !tc.ok {
+		if err == nil {
+			t.Fatalf("parse %q succeeded, want an error", tc.raw)
+		}
+
+		if !errors.Is(err, errBlobStore) {
+			t.Fatalf("parse %q: err = %v, want errBlobStore", tc.raw, err)
+		}
+
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("parse %q: %v", tc.raw, err)
+	}
+
+	if gotBucket != tc.bucket || gotPrefix != tc.pfx {
+		t.Fatalf("parse %q = %q %q, want %q %q", tc.raw, gotBucket, gotPrefix, tc.bucket, tc.pfx)
+	}
+}
+
+func TestS3EndpointWarning(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		endpoint string
+		wantWarn bool
+	}{
+		{name: "plain http warns", endpoint: "http://localhost:9000", wantWarn: true},
+		{name: "https stays quiet", endpoint: "https://s3.example", wantWarn: false},
+		{name: "empty stays quiet", endpoint: "", wantWarn: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var logs bytes.Buffer
+
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			warnPlainHTTP(t.Context(), logger, tc.endpoint)
+
+			got := strings.Contains(logs.String(), "plain HTTP")
+			if got != tc.wantWarn {
+				t.Fatalf("warn for %q = %v, want %v (%q)", tc.endpoint, got, tc.wantWarn, logs.String())
+			}
+		})
+	}
+}
+
+func TestOpenS3MissingCredential(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+
+	if err := os.Unsetenv("AWS_ACCESS_KEY_ID"); err != nil {
+		t.Fatalf("unset AWS_ACCESS_KEY_ID: %v", err)
+	}
+
+	_, err := openS3Store(t.Context(), s3StoreConfig{
+		raw:      "s3://mybucket/pfx",
+		endpoint: "",
+		region:   "",
+		formErr:  errBlobStore,
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "AWS_ACCESS_KEY_ID") {
+		t.Fatalf("open without credentials: err = %v, want it to name AWS_ACCESS_KEY_ID", err)
+	}
+
+	for _, leaked := range []string{"test-access-cmd-1", "test-secret-cmd-1"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error %q holds credential material", err.Error())
+		}
+	}
+}
+
+//nolint:paralleltest // The test sets credentials through a helper that calls t.Setenv.
+func TestOpenBackupTargetS3(t *testing.T) {
+	setS3EnvForTest(t)
+
+	fake := newS3Fake(true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	target, err := openBackupTarget(t.Context(), "s3://cmd-bucket/backups", server.URL, "us-east-1", nil)
+	if err != nil {
+		t.Fatalf("open s3 backup target: %v", err)
+	}
+
+	if target == nil {
+		t.Fatal("open s3 backup target = nil, want a store")
+	}
+
+	t.Cleanup(func() {
+		closeBackupTarget(t, target)
+	})
+
+	checkBackupTargetRoundTrip(t, target)
+}
+
+// setS3EnvForTest sets fake credentials without touching the parallel-safe
+// caller: tests that run in parallel set their own variables through it.
+func setS3EnvForTest(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-cmd-1")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-cmd-1")
+}
+
+//nolint:paralleltest // Serve reads process environment and binds a port.
+func TestServeWithS3BlobStore(t *testing.T) {
+	setServeEnv(t, "")
+	setS3Env(t)
+
+	fake := newS3Fake(true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	var logs lockedBuffer
+
+	dbPath := filepath.Join(t.TempDir(), "dustpan.db")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- serve(ctx, []string{
+			"--database", "sqlite:" + dbPath,
+			"--listen", "127.0.0.1:0",
+			"--blob-store", "s3://cmd-bucket/live",
+			"--s3-endpoint", server.URL,
+			"--s3-region", "us-east-1",
+		}, &logs)
+	}()
+
+	ticker := time.NewTicker(serveStartPoll)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(serveStartTimeout)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if strings.Contains(logs.String(), "listening") {
+				cancel()
+
+				if err := <-done; err != nil {
+					t.Fatalf("serve with s3 blobs: %v", err)
+				}
+
+				if !strings.Contains(logs.String(), "plain HTTP") {
+					t.Fatalf("s3 logs lack the plain HTTP warning:\n%s", logs.String())
+				}
+
+				return
+			}
+		case <-timeout.C:
+			t.Fatal("server with s3 blobs did not start in time")
+		}
+	}
+}
+
+//nolint:paralleltest // Serve reads process environment and binds a port.
+func TestServeRefusesS3WithoutConditionalWrites(t *testing.T) {
+	setServeEnv(t, "")
+	setS3Env(t)
+
+	fake := newS3Fake(false)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	dbPath := filepath.Join(t.TempDir(), "dustpan.db")
+
+	err := serve(t.Context(), []string{
+		"--database", "sqlite:" + dbPath,
+		"--listen", "127.0.0.1:0",
+		"--blob-store", "s3://cmd-bucket/live",
+		"--s3-endpoint", server.URL,
+		"--s3-region", "us-east-1",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("serve with a store without conditional writes succeeded, want an error")
+	}
+
+	if !strings.Contains(err.Error(), "conditional writes") {
+		t.Fatalf("serve without conditional writes: err = %v, want the probe error", err)
+	}
+
+	for _, leaked := range []string{"test-access-cmd-1", "test-secret-cmd-1"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("error %q holds credential material", err.Error())
+		}
+	}
+}
+
+func TestOpenBackupTargetS3BadValue(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"s3://", "s3://mybucket/a//b"} {
+		target, err := openBackupTarget(t.Context(), raw, "", "", nil)
+		if target != nil {
+			closeBackupTarget(t, target)
+		}
+
+		if err == nil || !errors.Is(err, errBackupTarget) {
+			t.Fatalf("open backup target %q: err = %v, want errBackupTarget", raw, err)
+		}
+
+		if !strings.Contains(err.Error(), "--backup-target") {
+			t.Fatalf("open backup target %q: err = %v, want it to name --backup-target", raw, err)
+		}
+
+		if strings.Contains(err.Error(), "--blob-store") {
+			t.Fatalf("open backup target %q: err = %v, want no --blob-store", raw, err)
+		}
+	}
+}
+
+func TestCheckS3Endpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{"ftp://x", "file:///x", "http://", "https://", "http://   "} {
+		err := checkS3Endpoint(endpoint)
+		if !errors.Is(err, errS3Endpoint) {
+			t.Fatalf("check endpoint %q: err = %v, want errS3Endpoint", endpoint, err)
+		}
+
+		if err == nil || !strings.Contains(err.Error(), "--s3-endpoint") {
+			t.Fatalf("check endpoint %q: err = %v, want it to name --s3-endpoint", endpoint, err)
+		}
+	}
+
+	for _, endpoint := range []string{"", "https://s3.example", "http://host", "http://host:9000/path"} {
+		if err := checkS3Endpoint(endpoint); err != nil {
+			t.Fatalf("check endpoint %q: %v, want no error", endpoint, err)
+		}
+	}
+}
+
+func TestOpenS3StoreBadEndpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{"ftp://x", "file:///x", "http://"} {
+		_, err := openS3Store(t.Context(), s3StoreConfig{
+			raw:      "s3://cmd-bucket/live",
+			endpoint: endpoint,
+			region:   "us-east-1",
+			formErr:  errBlobStore,
+		}, nil)
+		if err == nil || !errors.Is(err, errS3Endpoint) {
+			t.Fatalf("open s3 store with endpoint %q: err = %v, want errS3Endpoint", endpoint, err)
+		}
+
+		if !strings.Contains(err.Error(), "--s3-endpoint") {
+			t.Fatalf("open s3 store with endpoint %q: err = %v, want it to name --s3-endpoint", endpoint, err)
+		}
+	}
+}
+
+func TestOpenBackupTargetS3BadEndpoint(t *testing.T) {
+	t.Parallel()
+
+	_, err := openBackupTarget(t.Context(), "s3://cmd-bucket/backups", "ftp://x", "us-east-1", nil)
+	if err == nil || !errors.Is(err, errS3Endpoint) {
+		t.Fatalf("open s3 backup target with a bad endpoint: err = %v, want errS3Endpoint", err)
+	}
+
+	if !strings.Contains(err.Error(), "--s3-endpoint") {
+		t.Fatalf("open s3 backup target with a bad endpoint: err = %v, want it to name --s3-endpoint", err)
+	}
+}
+
+func TestResolveS3RegionDefault(t *testing.T) {
+	t.Parallel()
+
+	if got := resolveS3Region(""); got != "us-east-1" {
+		t.Fatalf("resolve empty region = %q, want us-east-1", got)
+	}
+
+	if got := resolveS3Region("   "); got != "us-east-1" {
+		t.Fatalf("resolve blank region = %q, want us-east-1", got)
+	}
+
+	if got := resolveS3Region("eu-west-1"); got != "eu-west-1" {
+		t.Fatalf("resolve eu-west-1 = %q, want eu-west-1", got)
+	}
+}
+
+//nolint:paralleltest // The test sets credentials through a helper that calls t.Setenv.
+func TestOpenS3StoreEmptyRegion(t *testing.T) {
+	setS3EnvForTest(t)
+
+	fake := newS3Fake(true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	target, err := openBackupTarget(t.Context(), "s3://cmd-bucket/backups", server.URL, "", nil)
+	if err != nil {
+		t.Fatalf("open s3 backup target with an empty region: %v", err)
+	}
+
+	if target == nil {
+		t.Fatal("open s3 backup target with an empty region = nil, want a store")
+	}
+
+	t.Cleanup(func() {
+		closeBackupTarget(t, target)
+	})
+
+	checkBackupTargetRoundTrip(t, target)
 }
