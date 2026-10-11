@@ -170,6 +170,28 @@ The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
 
+## Leaving OpenDustpan
+
+Your state stays yours. The standard CLI commands read it out, and the
+end-to-end suite tests them against the server:
+
+```sh
+pulumi stack export --file dev.json
+pulumi stack export --version 1 --file dev-v1.json
+tofu state pull > web.tfstate
+```
+
+`pulumi stack import` and `tofu state push` can then load the file into another
+backend. A tested guide for each exit, with the full history of each unit,
+does not exist yet.
+
+## Governance
+
+The project owner, [@DwaineSaunderson](https://github.com/DwaineSaunderson),
+maintains OpenDustpan and decides what merges. Agent sessions write most of
+the code. Each commit that an agent writes names it in a `Co-Authored-By`
+trailer.
+
 ## Documentation
 
 How-to guides:
