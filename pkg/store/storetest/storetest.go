@@ -22,6 +22,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -31,6 +32,7 @@ type Store interface {
 	namespace.Store
 	stack.Store
 	inventory.Reader
+	maintenance.Store
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -76,6 +78,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "inventory follows a tag change", test: testInventoryAfterTagChange},
 		{name: "inventory orders by tool then name", test: testInventoryOrders},
 		{name: "failed stack write leaves inventory unchanged", test: testInventoryFailedWrite},
+		{name: "installation state reads normal and stores maintenance", test: testMaintenanceState},
+		{name: "installation state conditional write stores only on match", test: testMaintenanceStateIf},
+		{name: "installation state conditional write moves back to normal", test: testMaintenanceStateIfRelease},
+		{name: "installation state conditional write rejects other values", test: testMaintenanceStateIfInvalid},
+		{name: "installation state on a closed store is ErrUnavailable", test: testMaintenanceStateUnavailable},
 	}
 
 	for _, tc := range cases {

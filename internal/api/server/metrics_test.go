@@ -11,6 +11,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -59,6 +60,7 @@ func newMetricsHandler(
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       metrics,
 	})
 	if err != nil {

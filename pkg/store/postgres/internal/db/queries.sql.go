@@ -775,6 +775,21 @@ func (q *Queries) GetFailoverVersionForShare(ctx context.Context, name string) (
 	return failover_version, err
 }
 
+const getInstallationState = `-- name: GetInstallationState :one
+SELECT state
+FROM installation
+WHERE id = 1
+`
+
+// The installation state (ADR 38 decision 4): normal or maintenance. The
+// migration seeds the one row; a missing row reads normal.
+func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, getInstallationState)
+	var state string
+	err := row.Scan(&state)
+	return state, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms, c.resource_count
@@ -1994,6 +2009,28 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 	return result.RowsAffected(), nil
 }
 
+const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows
+UPDATE installation
+SET state = $1
+WHERE id = 1 AND state = $2
+`
+
+type SetInstallationStateIfParams struct {
+	State   string
+	State_2 string
+}
+
+// Stores next only when the stored state is expected: a compare-and-swap, so
+// enters on several instances of one database stay ordered. It changes
+// nothing when the stored state differs or the row is missing.
+func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallationStateIfParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setInstallationStateIf, arg.State, arg.State_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setPendingContentKey = `-- name: SetPendingContentKey :execrows
 UPDATE state_versions
 SET content_key = $1
@@ -2089,6 +2126,18 @@ func (q *Queries) UpdateExists(ctx context.Context, arg UpdateExistsParams) (boo
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const upsertInstallationState = `-- name: UpsertInstallationState :exec
+INSERT INTO installation (id, state)
+VALUES (1, $1)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state
+`
+
+// Stores the installation state, creating the row when it is missing.
+func (q *Queries) UpsertInstallationState(ctx context.Context, state string) error {
+	_, err := q.db.Exec(ctx, upsertInstallationState, state)
+	return err
 }
 
 const upsertInventory = `-- name: UpsertInventory :exec

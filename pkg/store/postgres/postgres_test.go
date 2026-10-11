@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
@@ -268,6 +269,65 @@ func (s *uncountedStore) NullifyResourceCount(ctx context.Context) error {
 	return nil
 }
 
+// TestUnknownStoredStateIsUnavailable plants a stored installation state
+// outside the known set and proves GetState answers ErrUnavailable without
+// the value, never ErrInvalidState: an unknown stored value is a server
+// fault, not a bad request.
+func TestUnknownStoredStateIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, openErr := postgres.Open(t.Context(), schemaURL)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(s.Close)
+
+	ctx := t.Context()
+
+	conn, connErr := pgx.Connect(ctx, schemaURL)
+	if connErr != nil {
+		t.Fatalf("connect: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	const dropStateCheck = `ALTER TABLE installation DROP CONSTRAINT installation_state_check`
+
+	if _, execErr := conn.Exec(ctx, dropStateCheck); execErr != nil {
+		t.Fatalf("drop installation state check: %v", execErr)
+	}
+
+	if _, execErr := conn.Exec(ctx, `UPDATE installation SET state = 'offline'`); execErr != nil {
+		t.Fatalf("plant unknown installation state: %v", execErr)
+	}
+
+	_, stateErr := s.GetState(ctx)
+	if !errors.Is(stateErr, maintenance.ErrUnavailable) {
+		t.Fatalf("get unknown installation state: err = %v, want ErrUnavailable", stateErr)
+	}
+
+	if errors.Is(stateErr, maintenance.ErrInvalidState) {
+		t.Fatalf("get unknown installation state: err = %v, must not report ErrInvalidState", stateErr)
+	}
+
+	if strings.Contains(stateErr.Error(), "offline") {
+		t.Fatalf("get unknown installation state error %q holds the stored value", stateErr)
+	}
+}
+
+// the renamed stack keeps its tags and ID, and the old name is gone.
 // TestRenameKeepsTags checks that tags follow the stack ID through a rename:
 // the renamed stack keeps its tags and ID, and the old name is gone.
 func TestRenameKeepsTags(t *testing.T) {

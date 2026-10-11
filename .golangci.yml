@@ -95,6 +95,7 @@ linters:
             - "**/pkg/workspace/**"
             - "**/pkg/inventory/**"
             - "**/pkg/backup/**"
+            - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"

@@ -163,8 +163,9 @@ func pgCopyScopeTables() []pgCopyTable {
 	}
 }
 
-// pgCopyWorkspaceTables holds the COPY columns of the workspace and backup
-// tables, in foreign-key order.
+// pgCopyWorkspaceTables holds the COPY columns of the workspace, backup and
+// installation tables, in foreign-key order. The installation table has no
+// references, so it loads last.
 func pgCopyWorkspaceTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
@@ -187,6 +188,11 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table:   "backups",
 			columns: []string{"id", "state", "started_at_ms", "ended_at_ms", "target", "error"},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "installation",
+			columns: []string{"id", "state"},
 			orderBy: []string{"id"},
 		},
 	}
@@ -704,6 +710,14 @@ func (s *Store) loadDump(ctx context.Context, frames map[string]pgTableDump, wan
 			return err
 		}
 
+		// The migration seeds the installation row, so a fresh destination
+		// holds one. It is bookkeeping, not data: clear it before the load,
+		// so the COPY below inserts the row the backup holds instead of
+		// conflicting with the seed.
+		if _, err := tx.Exec(ctx, `DELETE FROM installation`); err != nil {
+			return fmt.Errorf("clear installation state: %w", err)
+		}
+
 		for _, table := range backup.Tables {
 			if err := copyTableIn(ctx, tx, table, frames[table], want); err != nil {
 				return err
@@ -769,14 +783,19 @@ func checkWantTables(want backup.Summary) error {
 	return nil
 }
 
-// countBackupRows returns the total rows of every backup table. Callers run
-// it in the load transaction, so the empty check and the load are one atomic
-// step: a concurrent writer lands before the check and refuses the import,
-// never inside the loaded data.
+// countBackupRows returns the total rows of every backup table. The seeded
+// installation row is bookkeeping, not data, so it never counts: a fresh
+// database still counts as empty. Callers run it in the load transaction,
+// so the empty check and the load are one atomic step: a concurrent writer
+// lands before the check and refuses the import, never inside the loaded data.
 func countBackupRows(ctx context.Context, qr pgQuerier) (int64, error) {
 	var total int64
 
 	for _, table := range backup.Tables {
+		if table == "installation" {
+			continue
+		}
+
 		count, err := countBackupTable(ctx, qr, table)
 		if err != nil {
 			return 0, err

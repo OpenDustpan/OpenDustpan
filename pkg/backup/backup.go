@@ -42,9 +42,12 @@ const (
 // store constant; the backup package holds it so the shared core stays
 // tool-neutral and both dialects use one source. Treat the list as a constant and
 // never mutate it; call TablesCopy for a copy to read or sort. The list
-// excludes schema_migrations: it is rebuildable bookkeeping, not data. A new
-// migration that adds a table must add its name here, and the conformance
-// suite fails while the schema and this list differ.
+// excludes schema_migrations: it is rebuildable bookkeeping, not data. It
+// holds installation last: the migration seeds its one row, and the export
+// carries it like data, so a restore loads the state the backup holds. The
+// empty checks skip it: a fresh database holds the seeded row and still
+// counts as empty. A new migration that adds a table must add its name here,
+// and the conformance suite fails while the schema and this list differ.
 //
 //nolint:gochecknoglobals // The shared frozen table list: Go has no constant slices, and both adapters use this one source.
 var Tables = []string{
@@ -59,6 +62,7 @@ var Tables = []string{
 	"workspaces",
 	"state_versions",
 	"backups",
+	"installation",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

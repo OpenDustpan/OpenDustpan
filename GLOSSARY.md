@@ -48,6 +48,10 @@ _Avoid_: Origin, legacy backend
 The copy of the SQL data of a whole installation with the blob references that the data names. A backup loads only into an empty store of the same dialect and schema version.
 _Avoid_: Dump, snapshot
 
+**Maintenance mode**:
+The state of an installation that answers tool calls with 503 while an operator prepares a restore. The installation API and the probes stay available.
+_Avoid_: Downtime, freeze
+
 ### Regions
 
 **Home region**:

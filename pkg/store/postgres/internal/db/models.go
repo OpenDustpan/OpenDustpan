@@ -31,6 +31,11 @@ type Checkpoint struct {
 	ResourceCount pgtype.Int8
 }
 
+type Installation struct {
+	ID    int64
+	State string
+}
+
 type Inventory struct {
 	Namespace     string
 	Tool          string

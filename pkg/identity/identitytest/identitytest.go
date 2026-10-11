@@ -208,6 +208,7 @@ func testActions() []identity.Action {
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
+		identity.ActionServerMaintenance,
 	}
 }
 

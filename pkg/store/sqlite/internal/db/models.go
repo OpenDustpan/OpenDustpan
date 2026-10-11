@@ -31,6 +31,11 @@ type Checkpoint struct {
 	ResourceCount sql.NullInt64
 }
 
+type Installation struct {
+	ID    int64
+	State string
+}
+
 type Inventory struct {
 	Namespace     string
 	Tool          string

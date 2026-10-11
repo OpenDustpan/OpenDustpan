@@ -49,6 +49,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -65,6 +66,11 @@ var (
 	// errBackupNeedsRegistry reports a backup target with a namespace store
 	// that cannot track backups.
 	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+	// errMaintenanceNeedsStore reports a namespace store that cannot keep
+	// the installation state. Every SQL adapter serves it from the same
+	// database connection; a custom store must serve it too, so every
+	// instance gates the tool APIs on the same value.
+	errMaintenanceNeedsStore = errors.New("namespace store must keep the installation state")
 )
 
 const (
@@ -395,11 +401,12 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 
 // adapters holds the HTTP adapters that routes mounts.
 type adapters struct {
-	pulumi    http.Handler
-	inventory http.Handler
-	tfe       http.Handler
-	server    http.Handler
-	ready     http.Handler
+	pulumi      http.Handler
+	inventory   http.Handler
+	tfe         http.Handler
+	server      http.Handler
+	ready       http.Handler
+	maintenance *maintenance.Watcher
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -412,6 +419,27 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
+	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
+	if !ok {
+		return adapters{}, errMaintenanceNeedsStore
+	}
+
+	maint, err := maintenance.NewService(maintenance.Config{
+		Store:      maintenanceStore,
+		Namespaces: svc.namespaces,
+		Stacks:     svc.stacks,
+		Updates:    svc.updates,
+		Workspaces: svc.workspaces,
+	})
+	if err != nil {
+		return adapters{}, fmt.Errorf("maintenance service: %w", err)
+	}
+
+	// The watcher measures its cache limit in wall-clock time, not the
+	// injected domain clock: tests freeze the domain clock, and the limit
+	// must still expire.
+	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
+
 	api, err := newPulumiHandler(svc, cfg, base)
 	if err != nil {
 		return adapters{}, err
@@ -427,7 +455,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, svc, backups, observed)
+	serverAPI, err := newServerHandler(cfg, svc, backups, maint, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -440,7 +468,14 @@ func newAdapters(
 		cfg.logger,
 	)
 
-	return adapters{pulumi: api, inventory: units, tfe: tfeAPI, server: serverAPI, ready: ready}, nil
+	return adapters{
+		pulumi:      api,
+		inventory:   units,
+		tfe:         tfeAPI,
+		server:      serverAPI,
+		ready:       ready,
+		maintenance: watcher,
+	}, nil
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
@@ -726,12 +761,13 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
-// backup target is configured, else nil, and the registry that the metrics
-// route writes.
+// backup target is configured, else nil, the maintenance service, and the
+// registry that the metrics route writes.
 func newServerHandler(
 	cfg settings,
 	svc services,
 	backups *backup.Service,
+	maint *maintenance.Service,
 	observed *metrics.ServerMetrics,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
@@ -740,6 +776,7 @@ func newServerHandler(
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Backups:       backups,
+		Maintenance:   maint,
 		Metrics:       observed,
 	})
 	if err != nil {
@@ -1014,13 +1051,25 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory units route, the OpenTofu routes and the
 	// installation routes reach their own adapters while every other /api/
-	// route reaches Pulumi.
-	mux.Handle("/api/inventory/", withCORS(a.inventory, cfg.allowedOrigins))
-	mux.Handle("/api/v2/", withCORS(a.tfe, cfg.allowedOrigins))
+	// route reaches Pulumi. In maintenance mode the tool adapters answer 503
+	// with Retry-After; the installation API stays available, so the
+	// maintenance routes that end the restore keep serving.
+	mux.Handle(
+		"/api/inventory/",
+		withCORS(withMaintenance(a.inventory, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
+	)
+	mux.Handle(
+		"/api/v2/",
+		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
+	)
 	mux.Handle("/api/server/", withCORS(a.server, cfg.allowedOrigins))
-	mux.Handle("/api/", withCORS(a.pulumi, cfg.allowedOrigins))
+	mux.Handle("/api/", withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it
-	// through the TFE adapter.
+	// through the TFE adapter. It stays available in maintenance mode: the
+	// CLI reads only the service addresses from it, and OpenTofu shows only
+	// the discovery status, never the refusal body. The lock, state and
+	// version endpoints under /api/v2/ pass the maintenance gate, so the
+	// CLI still meets the 503 refusal that names maintenance.
 	mux.Handle("GET /.well-known/terraform.json", a.tfe)
 	// The probes have their own prefix, so that ingress controllers that serve
 	// /healthz themselves cannot answer for this server (ADR 34). Liveness

@@ -11,6 +11,7 @@ import (
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -29,6 +30,27 @@ type namespaceDoc struct {
 func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
 	t.Helper()
 
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Backups:       nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// newTestNamespaces returns a namespace service in region test over a fresh
+// SQLite store that the test closes at cleanup.
+func newTestNamespaces(t *testing.T) *namespace.Service {
+	t.Helper()
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -45,19 +67,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       nil,
-		Metrics:       stubMetrics{},
-	})
-	if err != nil {
-		t.Fatalf("handler: %v", err)
-	}
-
-	return handler
+	return namespaces
 }
 
 // serveNamespace sends one namespace create request with the test token and

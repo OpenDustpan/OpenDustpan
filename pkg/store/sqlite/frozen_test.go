@@ -37,6 +37,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0012_update_history_fields.sql":     "04f3ff506ff836f27a3f9a3ee3528102b940fe3cd67b1a5c34eb5ea8e77dda9c",
 		"0013_backups.sql":                   "cb17d80821eec5a4b98b833d58642dbbc7ec5f25bd57ac5b9bc24783674ee6be",
 		"0014_checkpoint_resource_count.sql": "c679dde7df1f391e322fa8ff5ba398b105bfa400a14331f220a871c32d3d9af2",
+		"0015_maintenance.sql":               "dd34cbf7f918f2c0282a9e4bbd5ffa7bcef4444ded393bf7268086c3527488d8",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

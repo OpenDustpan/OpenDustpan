@@ -1,0 +1,1125 @@
+package maintenance_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+func TestParseState(t *testing.T) {
+	t.Parallel()
+
+	for _, s := range []string{"normal", "maintenance"} {
+		if got, err := maintenance.ParseState(s); err != nil || got.String() != s {
+			t.Fatalf("parse %q = %q, %v, want %q without error", s, got, err, s)
+		}
+	}
+
+	if _, err := maintenance.ParseState("offline"); !errors.Is(err, maintenance.ErrInvalidState) {
+		t.Fatalf("parse offline: err = %v, want ErrInvalidState", err)
+	}
+}
+
+// fakeStateStore holds the installation state in memory. onSet runs on each
+// write, so race tests seed a start between the enter check and its write.
+// onSetIf runs before the conditional write checks its expectation, so a
+// cross-instance write lands first and the conditional write loses, as one
+// UPDATE would against a committed concurrent write.
+type fakeStateStore struct {
+	state   maintenance.State
+	onSet   func()
+	onSetIf func()
+}
+
+func (f *fakeStateStore) GetState(context.Context) (maintenance.State, error) {
+	return f.state, nil
+}
+
+func (f *fakeStateStore) SetState(_ context.Context, state maintenance.State) error {
+	if state != maintenance.StateNormal && state != maintenance.StateMaintenance {
+		return maintenance.ErrInvalidState
+	}
+
+	if f.onSet != nil {
+		f.onSet()
+	}
+
+	f.state = state
+
+	return nil
+}
+
+func (f *fakeStateStore) SetStateIf(_ context.Context, expected, next maintenance.State) error {
+	if expected != maintenance.StateNormal && expected != maintenance.StateMaintenance {
+		return fmt.Errorf("%w: expected %q", maintenance.ErrInvalidState, expected)
+	}
+
+	if next != maintenance.StateNormal && next != maintenance.StateMaintenance {
+		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, next)
+	}
+
+	if f.onSetIf != nil {
+		f.onSetIf()
+	}
+
+	if f.state != expected {
+		return fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
+	}
+
+	f.state = next
+
+	return nil
+}
+
+// fakeNamespaces answers one namespace homed in the test region.
+type fakeNamespaces struct{}
+
+func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) error {
+	return nil
+}
+
+func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            name,
+		HomeRegion:      testRegion,
+		FailoverVersion: 1,
+	}, nil
+}
+
+func (fakeNamespaces) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	ns, err := fakeNamespaces{}.GetNamespace(ctx, testNamespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return []namespace.Namespace{ns}, nil
+}
+
+func (fakeNamespaces) Ping(context.Context) error { return nil }
+
+// fakeStacks lists the stacks the fixture holds.
+type fakeStacks struct {
+	stacks []stack.Stack
+}
+
+func (*fakeStacks) CreateStack(context.Context, stack.Stack, namespace.Fence) error {
+	return stack.ErrAlreadyExists
+}
+
+func (*fakeStacks) GetStack(context.Context, stack.Ref) (stack.Stack, error) {
+	return stack.Stack{}, stack.ErrNotFound
+}
+
+func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
+	return append([]stack.Stack(nil), f.stacks...), nil
+}
+
+func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
+func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
+func (*fakeStacks) UpdateStackTags(
+	context.Context, stack.Ref, map[string]string, time.Time, namespace.Fence,
+) error {
+	return stack.ErrNotFound
+}
+
+func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence) error {
+	return stack.ErrNotFound
+}
+
+// fakeUpdates holds updates by ID and answers the running one per stack.
+type fakeUpdates struct {
+	updates map[stack.UpdateID]stack.Update
+}
+
+func (*fakeUpdates) CreateUpdate(context.Context, stack.Update, namespace.Fence) error { return nil }
+
+func (f *fakeUpdates) GetUpdate(_ context.Context, _ stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	u, ok := f.updates[id]
+	if !ok {
+		return stack.Update{}, stack.ErrUpdateNotFound
+	}
+
+	return u, nil
+}
+
+func (*fakeUpdates) StartUpdate(
+	_ context.Context, u stack.Update, _ namespace.Fence,
+) (stack.Update, error) {
+	return u, nil
+}
+
+func (f *fakeUpdates) SaveUpdate(_ context.Context, u stack.Update, _ namespace.Fence) error {
+	stored, ok := f.updates[u.ID]
+	if !ok {
+		return stack.ErrUpdateNotFound
+	}
+
+	if u.Revision != stored.Revision+1 {
+		return stack.ErrConcurrentModification
+	}
+
+	f.updates[u.ID] = u
+
+	return nil
+}
+
+func (f *fakeUpdates) ActiveUpdate(_ context.Context, ref stack.Ref) (stack.Update, error) {
+	for id := range f.updates {
+		u := f.updates[id]
+		if u.Ref == ref && u.Status == stack.StatusRunning && u.Mutates() {
+			return u, nil
+		}
+	}
+
+	return stack.Update{}, stack.ErrUpdateNotFound
+}
+
+func (*fakeUpdates) ListUpdates(context.Context, stack.Ref, stack.Page) ([]stack.Update, error) {
+	return nil, nil
+}
+
+// fakeCheckpoints answers no checkpoint. The cancel path writes none.
+type fakeCheckpoints struct{}
+
+func (fakeCheckpoints) PutCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) error {
+	return nil
+}
+
+func (fakeCheckpoints) LatestCheckpoint(context.Context, stack.Ref) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+func (fakeCheckpoints) CheckpointByVersion(context.Context, stack.Ref, int64) (stack.Checkpoint, error) {
+	return stack.Checkpoint{}, stack.ErrNoState
+}
+
+// fakeEvents answers no events. The cancel path writes none.
+type fakeEvents struct{}
+
+func (fakeEvents) AppendEvents(context.Context, stack.EventBatch, namespace.Fence) error { return nil }
+
+func (fakeEvents) ListEvents(context.Context, stack.Ref, stack.UpdateID, int64, int) ([]stack.Event, error) {
+	return nil, nil
+}
+
+// fakeWorkspaces holds workspaces by ID.
+type fakeWorkspaces struct {
+	workspaces map[workspace.ID]workspace.Workspace
+}
+
+func (*fakeWorkspaces) CreateWorkspace(context.Context, workspace.Workspace, namespace.Fence) error {
+	return workspace.ErrAlreadyExists
+}
+
+func (*fakeWorkspaces) GetWorkspace(context.Context, workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (f *fakeWorkspaces) GetWorkspaceByID(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+	w, ok := f.workspaces[id]
+	if !ok {
+		return workspace.Workspace{}, workspace.ErrNotFound
+	}
+
+	return w, nil
+}
+
+func (f *fakeWorkspaces) ListWorkspaces(_ context.Context, _ namespace.Name) ([]workspace.Workspace, error) {
+	out := make([]workspace.Workspace, 0, len(f.workspaces))
+	for id := range f.workspaces {
+		out = append(out, f.workspaces[id])
+	}
+
+	return out, nil
+}
+
+func (f *fakeWorkspaces) SaveWorkspace(
+	_ context.Context, w workspace.Workspace, _ namespace.Fence,
+) error {
+	stored, ok := f.workspaces[w.ID]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if w.Revision != stored.Revision+1 {
+		return workspace.ErrConcurrentModification
+	}
+
+	f.workspaces[w.ID] = w
+
+	return nil
+}
+
+// fakeStates answers no state version. The force-unlock path reads none.
+type fakeStates struct{}
+
+func (fakeStates) CreateStateVersion(
+	context.Context, workspace.StateVersion, namespace.Fence, int,
+) error {
+	return nil
+}
+
+func (fakeStates) GetStateVersion(context.Context, workspace.StateVersionID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
+}
+
+func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, namespace.Fence) error {
+	return nil
+}
+
+func (fakeStates) CurrentStateVersion(context.Context, workspace.ID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNoState
+}
+
+func (fakeStates) ListStateVersions(
+	context.Context, workspace.ID, workspace.Page,
+) ([]workspace.StateVersion, int, error) {
+	return nil, 0, nil
+}
+
+func (fakeStates) CountPendingStateVersions(context.Context, workspace.ID) (int, error) {
+	return 0, nil
+}
+
+func (fakeStates) ReferencedContentKeys(context.Context, workspace.ID) ([]blob.Key, error) {
+	return nil, nil
+}
+
+func (fakeStates) RecordUploadAttempt(
+	context.Context, workspace.StateVersionID, blob.Key, namespace.Fence,
+) (blob.Key, error) {
+	return "", nil
+}
+
+func (fakeStates) DeleteExpiredPendingStateVersions(
+	context.Context, workspace.ID, time.Time, namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	return nil, nil
+}
+
+// fakeBlobs answers no content. The force-unlock path reads none.
+type fakeBlobs struct{}
+
+func (fakeBlobs) Put(context.Context, blob.Key, io.Reader) error { return nil }
+
+func (fakeBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
+	return nil, blob.ErrNotFound
+}
+
+func (fakeBlobs) Delete(context.Context, blob.Key) error { return nil }
+
+func (fakeBlobs) List(context.Context, string) ([]blob.Object, error) { return nil, nil }
+
+func (fakeBlobs) Ping(context.Context) error { return nil }
+
+const (
+	testRegion    = namespace.Region("eu-west")
+	testNamespace = namespace.Name("acme")
+)
+
+// fixture wires a maintenance service over fakes with no active work. It
+// keeps the domain services, so tests wire a second maintenance service over
+// the same store.
+type fixture struct {
+	state        *fakeStateStore
+	updates      *fakeUpdates
+	workspaces   *fakeWorkspaces
+	stacks       *fakeStacks
+	namespaces   *namespace.Service
+	stackSvc     *stack.Service
+	updateSvc    *stack.Updates
+	workspaceSvc *workspace.Service
+	service      *maintenance.Service
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+
+	return newFixtureWithNamespaces(t, fakeNamespaces{})
+}
+
+func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fixture {
+	t.Helper()
+
+	namespaces, err := namespace.NewService(
+		namespace.Config{Store: namespacesStore, Now: nil, Region: testRegion},
+	)
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	f := &fixture{
+		state:        &fakeStateStore{state: maintenance.StateNormal, onSet: nil, onSetIf: nil},
+		updates:      &fakeUpdates{updates: map[stack.UpdateID]stack.Update{}},
+		workspaces:   &fakeWorkspaces{workspaces: map[workspace.ID]workspace.Workspace{}},
+		stacks:       &fakeStacks{stacks: nil},
+		namespaces:   namespaces,
+		stackSvc:     nil,
+		updateSvc:    nil,
+		workspaceSvc: nil,
+		service:      nil,
+	}
+
+	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            f.updates,
+		Checkpoints:        fakeCheckpoints{},
+		Events:             fakeEvents{},
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("update service: %v", err)
+	}
+
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.workspaces,
+		States:             fakeStates{},
+		Blobs:              fakeBlobs{},
+		Namespaces:         namespaces,
+		Logger:             nil,
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("workspace service: %v", err)
+	}
+
+	f.stackSvc = stacks
+	f.updateSvc = updates
+	f.workspaceSvc = workspaces
+
+	f.service, err = maintenance.NewService(maintenance.Config{
+		Store:      f.state,
+		Namespaces: namespaces,
+		Stacks:     stacks,
+		Updates:    updates,
+		Workspaces: workspaces,
+	})
+	if err != nil {
+		t.Fatalf("maintenance service: %v", err)
+	}
+
+	return f
+}
+
+// mustRef parses acme/web/prod as the stack reference of the tests.
+func mustRef(t *testing.T) stack.Ref {
+	t.Helper()
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	return ref
+}
+
+// seedRunningUpdate registers a running mutating update on ref with the
+// service's stack list.
+func seedRunningUpdate(t *testing.T, f *fixture, ref stack.Ref) {
+	t.Helper()
+
+	addRunningUpdate(f, ref, "u1", "stk-test00000000000001")
+}
+
+// addRunningUpdate registers a running mutating update with id on ref with
+// the service's stack list.
+func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stack.ID) {
+	f.stacks.stacks = append(f.stacks.stacks, stack.Stack{
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Tags:      map[string]string{},
+		Ref:       ref,
+		ID:        stackID,
+		Version:   0,
+	})
+
+	f.updates.updates[id] = stack.Update{
+		CreatedAt:       time.Now(),
+		StartedAt:       time.Now(),
+		EndedAt:         time.Now(),
+		Lease:           stack.Lease{ExpiresAt: time.Now().Add(time.Hour), Digest: token.Digest{}},
+		ID:              id,
+		Kind:            stack.KindUpdate,
+		Status:          stack.StatusRunning,
+		Ref:             ref,
+		DryRun:          false,
+		Version:         1,
+		Revision:        2,
+		CreatedBy:       "admin",
+		RestoredFrom:    0,
+		CheckpointBytes: 0,
+	}
+}
+
+// seedLockedWorkspace registers a locked workspace called name.
+func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
+	t.Helper()
+
+	parsed, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Lock: workspace.Lock{
+			LockedAt: time.Now(),
+			ID:       "lock-1",
+			Holder:   "admin",
+			Reason:   "apply",
+		},
+		ID:       "ws-1",
+		Ref:      workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision: 2,
+	}
+	f.workspaces.workspaces[w.ID] = w
+}
+
+func TestNewServiceRequiresDependencies(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: fakeNamespaces{}, Now: nil, Region: testRegion})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	if err != nil {
+		t.Fatalf("stack service: %v", err)
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            f.updates,
+		Checkpoints:        fakeCheckpoints{},
+		Events:             fakeEvents{},
+		Namespaces:         namespaces,
+		Now:                nil,
+		MaxCheckpointBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("update service: %v", err)
+	}
+
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.workspaces,
+		States:             fakeStates{},
+		Blobs:              fakeBlobs{},
+		Namespaces:         namespaces,
+		Logger:             nil,
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("workspace service: %v", err)
+	}
+
+	complete := maintenance.Config{
+		Store:      f.state,
+		Namespaces: namespaces,
+		Stacks:     stacks,
+		Updates:    updates,
+		Workspaces: workspaces,
+	}
+
+	cases := []struct {
+		name string
+		drop func(*maintenance.Config)
+	}{
+		{name: "store", drop: func(c *maintenance.Config) { c.Store = nil }},
+		{name: "namespaces", drop: func(c *maintenance.Config) { c.Namespaces = nil }},
+		{name: "stacks", drop: func(c *maintenance.Config) { c.Stacks = nil }},
+		{name: "updates", drop: func(c *maintenance.Config) { c.Updates = nil }},
+		{name: "workspaces", drop: func(c *maintenance.Config) { c.Workspaces = nil }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := complete
+			tc.drop(&cfg)
+
+			if _, err := maintenance.NewService(cfg); !errors.Is(err, maintenance.ErrMissingDependency) {
+				t.Fatalf("NewService without %s: err = %v, want ErrMissingDependency", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestEnterAndLeave(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateNormal {
+		t.Fatalf("get state = %q, %v, want normal without error", got, err)
+	}
+
+	if _, err := f.service.Enter(ctx, false); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("get state = %q, %v, want maintenance without error", got, err)
+	}
+
+	if res, err := f.service.Enter(ctx, false); err != nil || len(res.Canceled) != 0 {
+		t.Fatalf("enter again = %+v, %v, want no names without error", res, err)
+	}
+
+	if err := f.service.Leave(ctx); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateNormal {
+		t.Fatalf("get state = %q, %v, want normal without error", got, err)
+	}
+
+	if err := f.service.Leave(ctx); err != nil {
+		t.Fatalf("leave again: %v", err)
+	}
+}
+
+func TestEnterRefusesRunningUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	ref := mustRef(t)
+	seedRunningUpdate(t, f, ref)
+
+	_, err := f.service.Enter(ctx, false)
+	if !errors.Is(err, maintenance.ErrActiveWork) {
+		t.Fatalf("enter with a running update: err = %v, want ErrActiveWork", err)
+	}
+
+	if !strings.Contains(err.Error(), "pulumi:acme/web/prod") {
+		t.Fatalf("enter with a running update: err = %v, want it to name pulumi:acme/web/prod", err)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateNormal {
+		t.Fatalf("state after a refused enter = %q, %v, want normal without error", got, err)
+	}
+}
+
+func TestEnterForceCancelsRunningUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	ref := mustRef(t)
+	seedRunningUpdate(t, f, ref)
+
+	res, err := f.service.Enter(ctx, true)
+	if err != nil {
+		t.Fatalf("force enter: %v", err)
+	}
+
+	if len(res.Canceled) != 1 || res.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("force enter canceled = %v, want [pulumi:acme/web/prod]", res.Canceled)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after a forced enter = %q, %v, want maintenance without error", got, err)
+	}
+
+	u := f.updates.updates["u1"]
+	if u.Status != stack.StatusCanceled {
+		//nolint:misspell // The Pulumi CLI's wire value; it must not change.
+		t.Fatalf("canceled update status = %q, want cancelled", u.Status)
+	}
+}
+
+func TestEnterRefusesLockedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedLockedWorkspace(t, f, "network")
+
+	_, err := f.service.Enter(ctx, false)
+	if !errors.Is(err, maintenance.ErrActiveWork) {
+		t.Fatalf("enter with a locked workspace: err = %v, want ErrActiveWork", err)
+	}
+
+	if !strings.Contains(err.Error(), "opentofu:acme/network") {
+		t.Fatalf("enter with a locked workspace: err = %v, want it to name opentofu:acme/network", err)
+	}
+}
+
+func TestEnterForceReleasesLockedWorkspace(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedLockedWorkspace(t, f, "network")
+
+	res, err := f.service.Enter(ctx, true)
+	if err != nil {
+		t.Fatalf("force enter: %v", err)
+	}
+
+	if len(res.Canceled) != 1 || res.Canceled[0] != "opentofu:acme/network" {
+		t.Fatalf("force enter canceled = %v, want [opentofu:acme/network]", res.Canceled)
+	}
+
+	if w := f.workspaces.workspaces["ws-1"]; w.Lock.Holder != "" {
+		t.Fatalf("workspace lock holder = %q, want empty after force enter", w.Lock.Holder)
+	}
+}
+
+// errTestUnavailable reports a failed state read or write in tests.
+var errTestUnavailable = errors.New("test database unavailable")
+
+// errStore fails every read, so the watcher proves its fallback.
+type errStore struct{}
+
+func (errStore) GetState(context.Context) (maintenance.State, error) {
+	return "", errTestUnavailable
+}
+
+func (errStore) SetState(context.Context, maintenance.State) error {
+	return errTestUnavailable
+}
+
+func (errStore) SetStateIf(context.Context, maintenance.State, maintenance.State) error {
+	return errTestUnavailable
+}
+
+// countStore counts its reads, so the watcher proves its cache limit.
+type countStore struct {
+	state maintenance.State
+	reads int
+}
+
+func (s *countStore) GetState(context.Context) (maintenance.State, error) {
+	s.reads++
+
+	return s.state, nil
+}
+
+func (s *countStore) SetState(_ context.Context, state maintenance.State) error {
+	s.state = state
+
+	return nil
+}
+
+func (s *countStore) SetStateIf(_ context.Context, expected, next maintenance.State) error {
+	if s.state != expected {
+		return fmt.Errorf("installation state is not %q: %w", expected, maintenance.ErrStateChanged)
+	}
+
+	s.state = next
+
+	return nil
+}
+
+func TestWatcherCachesWithinLimit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	store := &countStore{state: maintenance.StateNormal, reads: 0}
+	watcher := maintenance.NewWatcher(store, func() time.Time { return now }, time.Minute)
+
+	if got := watcher.State(t.Context()); got != maintenance.StateNormal {
+		t.Fatalf("watcher state = %q, want normal", got)
+	}
+
+	store.state = maintenance.StateMaintenance
+
+	if got := watcher.State(t.Context()); got != maintenance.StateNormal {
+		t.Fatalf("watcher state within the limit = %q, want the cached normal", got)
+	}
+
+	if store.reads != 1 {
+		t.Fatalf("watcher reads = %d, want 1 within the limit", store.reads)
+	}
+
+	now = now.Add(2 * time.Minute)
+
+	if got := watcher.State(t.Context()); got != maintenance.StateMaintenance {
+		t.Fatalf("watcher state past the limit = %q, want maintenance", got)
+	}
+
+	if store.reads != 2 {
+		t.Fatalf("watcher reads = %d, want 2 past the limit", store.reads)
+	}
+}
+
+func TestWatcherFallsBackOnError(t *testing.T) {
+	t.Parallel()
+
+	watcher := maintenance.NewWatcher(errStore{}, nil, 0)
+	if got := watcher.State(t.Context()); got != maintenance.StateNormal {
+		t.Fatalf("watcher state with no good read = %q, want normal", got)
+	}
+
+	store := &countStore{state: maintenance.StateMaintenance, reads: 0}
+	flaky := maintenance.NewWatcher(store, nil, time.Minute)
+
+	if got := flaky.State(t.Context()); got != maintenance.StateMaintenance {
+		t.Fatalf("flaky watcher state = %q, want maintenance", got)
+	}
+}
+
+// TestConcurrentForceEnterCancelsOnce proves concurrent enters run one after
+// another: exactly one names the running update, the rest answer empty, and
+// the installation ends in maintenance mode.
+func TestConcurrentForceEnterCancelsOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedRunningUpdate(t, f, mustRef(t))
+
+	const enters = 8
+
+	var mu sync.Mutex
+
+	named := 0
+
+	var wg sync.WaitGroup
+
+	for range enters {
+		wg.Go(func() {
+			res, err := f.service.Enter(ctx, true)
+			if err != nil {
+				t.Errorf("concurrent force enter: %v", err)
+
+				return
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if len(res.Canceled) == 1 && res.Canceled[0] == "pulumi:acme/web/prod" {
+				named++
+			} else if len(res.Canceled) != 0 {
+				t.Errorf("concurrent force enter canceled = %v, want empty or [pulumi:acme/web/prod]", res.Canceled)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if named != 1 {
+		t.Fatalf("enters naming the update = %d, want 1", named)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after concurrent enters = %q, %v, want maintenance without error", got, err)
+	}
+}
+
+// TestEnterCatchesRacedStart proves the re-check after the write: an update
+// that starts between the enter check and its write is refused without
+// force, and the installation moves back to normal.
+func TestEnterCatchesRacedStart(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	ref := mustRef(t)
+
+	f.state.onSetIf = func() {
+		if f.state.state == maintenance.StateNormal {
+			seedRunningUpdate(t, f, ref)
+		}
+	}
+
+	_, err := f.service.Enter(ctx, false)
+	if !errors.Is(err, maintenance.ErrActiveWork) {
+		t.Fatalf("enter with a raced start: err = %v, want ErrActiveWork", err)
+	}
+
+	if !strings.Contains(err.Error(), "pulumi:acme/web/prod") {
+		t.Fatalf("enter with a raced start: err = %v, want it to name pulumi:acme/web/prod", err)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateNormal {
+		t.Fatalf("state after a raced refused enter = %q, %v, want normal without error", got, err)
+	}
+}
+
+// TestForceEnterCancelsRacedStart proves the re-check after the write with
+// force: an update that starts between the enter check and its write is
+// canceled too and named in the result.
+func TestForceEnterCancelsRacedStart(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	seedRunningUpdate(t, f, mustRef(t))
+
+	other, err := stack.ParseRef("acme", "web", "staging")
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	f.state.onSetIf = func() {
+		if f.state.state == maintenance.StateNormal {
+			addRunningUpdate(f, other, "u2", "stk-test00000000000002")
+		}
+	}
+
+	res, err := f.service.Enter(ctx, true)
+	if err != nil {
+		t.Fatalf("force enter with a raced start: %v", err)
+	}
+
+	want := []string{"pulumi:acme/web/prod", "pulumi:acme/web/staging"}
+	if len(res.Canceled) != len(want) || res.Canceled[0] != want[0] || res.Canceled[1] != want[1] {
+		t.Fatalf("force enter canceled = %v, want %v", res.Canceled, want)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after a raced forced enter = %q, %v, want maintenance without error", got, err)
+	}
+}
+
+// gateNamespaces blocks ListNamespaces until released, so one enter stays
+// inside its critical section while a leave starts.
+type gateNamespaces struct {
+	fakeNamespaces
+
+	enterOnce sync.Once
+	entered   chan struct{}
+	release   chan struct{}
+}
+
+func (g *gateNamespaces) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	g.enterOnce.Do(func() { close(g.entered) })
+
+	select {
+	case <-g.release:
+		return g.fakeNamespaces.ListNamespaces(ctx)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for test release: %w", ctx.Err())
+	}
+}
+
+// overlapState holds one caller's result and the state it reads back after
+// both overlapping calls finished.
+type overlapState struct {
+	callErr error
+	back    maintenance.State
+	readErr error
+}
+
+// overlapReport runs op, waits for the other caller past both, then reads
+// the installation state back, so the test compares what each caller
+// observed after both calls finished.
+func overlapReport(
+	ctx context.Context,
+	both *sync.WaitGroup,
+	get func(context.Context) (maintenance.State, error),
+	op func(context.Context) error,
+	out chan<- overlapState,
+) {
+	var r overlapState
+
+	r.callErr = op(ctx)
+
+	both.Done()
+	both.Wait()
+
+	if r.callErr == nil {
+		r.back, r.readErr = get(ctx)
+	}
+
+	out <- r
+}
+
+// TestOverlappingEnterAndLeaveSerializes proves Enter and Leave share one
+// critical section: a leave that starts while an enter runs waits for it,
+// and each caller then reports the final state.
+func TestOverlappingEnterAndLeaveSerializes(t *testing.T) {
+	t.Parallel()
+
+	gate := &gateNamespaces{
+		fakeNamespaces: fakeNamespaces{},
+		enterOnce:      sync.Once{},
+		entered:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	f := newFixtureWithNamespaces(t, gate)
+	ctx := t.Context()
+
+	var both sync.WaitGroup
+
+	both.Add(2)
+
+	enterReport := make(chan overlapState, 1)
+	leaveReport := make(chan overlapState, 1)
+
+	go overlapReport(ctx, &both, f.service.Get, func(ctx context.Context) error {
+		_, err := f.service.Enter(ctx, false)
+
+		return err
+	}, enterReport)
+
+	// Wait until the enter holds the critical section, then start the leave.
+	<-gate.entered
+
+	go overlapReport(ctx, &both, f.service.Get, f.service.Leave, leaveReport)
+
+	// The leave must wait for the enter: it answers only after the release.
+	select {
+	case r := <-leaveReport:
+		t.Fatalf("leave answered %+v while an enter held the critical section", r)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(gate.release)
+
+	enter := <-enterReport
+	leave := <-leaveReport
+
+	if enter.callErr != nil {
+		t.Fatalf("enter: %v", enter.callErr)
+	}
+
+	if leave.callErr != nil {
+		t.Fatalf("leave: %v", leave.callErr)
+	}
+
+	if enter.readErr != nil {
+		t.Fatalf("read back after enter: %v", enter.readErr)
+	}
+
+	if leave.readErr != nil {
+		t.Fatalf("read back after leave: %v", leave.readErr)
+	}
+
+	final, err := f.service.Get(ctx)
+	if err != nil {
+		t.Fatalf("get final state: %v", err)
+	}
+
+	// The leave ran second, so every read reports normal.
+	if enter.back != maintenance.StateNormal || leave.back != maintenance.StateNormal ||
+		final != maintenance.StateNormal {
+		t.Fatalf(
+			"enter read %q, leave read %q, final %q, want all normal",
+			enter.back,
+			leave.back,
+			final,
+		)
+	}
+}
+
+// TestTwoInstancesKeepForceEnter proves a non-force enter never undoes
+// another instance's force enter on one store: the force enter lands between
+// the first enter's check and its write, so the first enter's compare-and-set
+// loses, it rolls nothing back, and the installation stays in maintenance
+// mode. Without the compare-and-set the first enter rolls back to normal and
+// loses the force enter.
+func TestTwoInstancesKeepForceEnter(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	second, err := maintenance.NewService(maintenance.Config{
+		Store:      f.state,
+		Namespaces: f.namespaces,
+		Stacks:     f.stackSvc,
+		Updates:    f.updateSvc,
+		Workspaces: f.workspaceSvc,
+	})
+	if err != nil {
+		t.Fatalf("second maintenance service: %v", err)
+	}
+
+	ref := mustRef(t)
+
+	other, err := stack.ParseRef("acme", "web", "staging")
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	var (
+		forced    maintenance.EnterResult
+		forcedErr error
+		hooked    bool
+	)
+
+	// The hook runs the second instance's force enter between the first
+	// enter's check and its write, then starts one more update after the
+	// force enter finished. It covers both write paths: the conditional
+	// write runs it before its expectation check, the plain write before it
+	// assigns, so the test fails before the compare-and-set and passes with
+	// it. The guard keeps the nested force enter from running it again.
+	hook := func() {
+		if hooked {
+			return
+		}
+
+		hooked = true
+
+		addRunningUpdate(f, ref, "u1", "stk-test00000000000001")
+
+		forced, forcedErr = second.Enter(ctx, true)
+
+		addRunningUpdate(f, other, "u2", "stk-test00000000000002")
+	}
+	f.state.onSet = hook
+	f.state.onSetIf = hook
+
+	res, err := f.service.Enter(ctx, false)
+	if err != nil {
+		t.Fatalf("first enter: %v", err)
+	}
+
+	if forcedErr != nil {
+		t.Fatalf("force enter of the second instance: %v", forcedErr)
+	}
+
+	if len(forced.Canceled) != 1 || forced.Canceled[0] != "pulumi:acme/web/prod" {
+		t.Fatalf("force enter canceled = %v, want [pulumi:acme/web/prod]", forced.Canceled)
+	}
+
+	if len(res.Canceled) != 0 {
+		t.Fatalf("first enter canceled = %v, want empty: it lost the compare-and-set", res.Canceled)
+	}
+
+	if got, err := f.service.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after the two enters = %q, %v, want maintenance without error", got, err)
+	}
+
+	if u := f.updates.updates["u2"]; u.Status != stack.StatusRunning {
+		t.Fatalf("second raced update status = %q, want running: no rollback canceled it", u.Status)
+	}
+}
