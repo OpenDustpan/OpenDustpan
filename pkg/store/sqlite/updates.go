@@ -7,7 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ncruces/go-sqlite3"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -48,7 +49,7 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			RestoredFrom:     row.RestoredFrom,
 		})
 		if err != nil {
-			if errors.Is(err, sqlite3.CONSTRAINT_FOREIGNKEY) {
+			if isForeignKeyViolation(err) {
 				// A concurrent DeleteStack removed the stack after the
 				// resolve above. The transaction holds the write lock from
 				// the start, so this cannot happen today, but the insert
@@ -638,4 +639,12 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		// holds no count, and the delete guard handles NULL itself.
 		ResourceCount: row.ResourceCount.Int64,
 	}
+}
+
+// isForeignKeyViolation reports whether err is a foreign key constraint
+// failure of the driver.
+func isForeignKeyViolation(err error) bool {
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+
+	return ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
 }

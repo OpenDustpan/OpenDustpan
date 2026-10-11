@@ -28,8 +28,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	// Registers the "sqlite3" database/sql driver for the upgrade check fixtures.
-	_ "github.com/ncruces/go-sqlite3/driver"
+	// Registers the "sqlite" database/sql driver for the upgrade check fixtures.
+	_ "modernc.org/sqlite"
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -6152,7 +6152,7 @@ func seedOldSQLite(ctx context.Context, t *testing.T, path string) {
 		t.Fatalf("write empty database: %v", err)
 	}
 
-	conn, err := sql.Open("sqlite3", "file:"+path)
+	conn, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -6203,7 +6203,7 @@ func migrateSQLiteViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, pat
 func insertFutureSQLite(ctx context.Context, t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite3", "file:"+path)
+	conn, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}

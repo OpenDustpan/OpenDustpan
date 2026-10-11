@@ -806,7 +806,7 @@ func newerSchemaDatabase(t *testing.T) (path string, dbVersion, binVersion int64
 		t.Fatalf("close store: %v", closeErr)
 	}
 
-	conn, connErr := sql.Open("sqlite3", "file:"+path)
+	conn, connErr := sql.Open("sqlite", "file:"+path)
 	if connErr != nil {
 		t.Fatalf("open raw database: %v", connErr)
 	}
@@ -942,7 +942,7 @@ func seedOldDatabase(t *testing.T, path string) {
 		t.Fatalf("write empty database: %v", err)
 	}
 
-	conn, err := sql.Open("sqlite3", "file:"+path)
+	conn, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -984,7 +984,7 @@ func migratedDatabase(t *testing.T, path string) int64 {
 		t.Fatalf("close store: %v", closeErr)
 	}
 
-	conn, err := sql.Open("sqlite3", "file:"+path)
+	conn, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}

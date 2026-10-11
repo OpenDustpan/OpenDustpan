@@ -31,7 +31,7 @@ func Inspect(ctx context.Context, path string) (schema.Inspection, error) {
 
 	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
 
-	conn, err := sql.Open("sqlite3", dsn)
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return schema.Inspection{}, fmt.Errorf("open sqlite database read-only %s: %w", path, err)
 	}
