@@ -8,7 +8,9 @@
 //	}
 //
 // RunUpdates covers the update-cycle ports (stack.UpdateStore,
-// stack.CheckpointStore, stack.EventStore) the same way.
+// stack.CheckpointStore, stack.EventStore) the same way. RunWorkspace in
+// workspaces.go covers the workspace ports (workspace.Store,
+// workspace.StateStore) the same way.
 package storetest
 
 import (
