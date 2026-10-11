@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -320,6 +321,139 @@ func checkRouteEnforcement(t *testing.T, route apiserver.Route) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
 	}
+}
+
+// recordedCall is one Authorize call: the action on the object wire form.
+type recordedCall struct {
+	action identity.Action
+	object string
+}
+
+// recordingAuthorizer allows every action and records every call, so tests
+// prove which object a route authorizes.
+type recordingAuthorizer struct {
+	calls []recordedCall
+}
+
+func (r *recordingAuthorizer) Authorize(
+	_ context.Context, _ identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	r.calls = append(r.calls, recordedCall{action: action, object: obj.String()})
+
+	return nil
+}
+
+// denyObjectAuthorizer denies the one object wire form in deny and allows
+// everything else, so tests prove a route authorizes the resolved object:
+// denying it answers 403.
+type denyObjectAuthorizer struct {
+	deny string
+}
+
+func (d denyObjectAuthorizer) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	if obj.String() == d.deny {
+		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+	}
+
+	return nil
+}
+
+// TestRoutesAuthorizeDeclaredObject proves every authorized route asks for
+// its declared actions on the object its resolver returns: the recording
+// Authorizer sees each declared action on the resolved object, and denying
+// that object answers 403. The table is empty at first, so the test passes
+// vacuously; a row that authorizes another object still fails.
+func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestHandler(t)
+
+	for _, route := range handler.Routes() {
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			t.Parallel()
+			checkRouteObject(t, route)
+		})
+	}
+}
+
+// checkRouteObject proves one route authorizes its declared actions on its
+// resolved object.
+func checkRouteObject(t *testing.T, route apiserver.Route) {
+	t.Helper()
+
+	if route.Scope == apiserver.ScopePublic {
+		checkPublicRouteObject(t, route)
+
+		return
+	}
+
+	checkAuthorizedRouteObject(t, route)
+}
+
+// checkPublicRouteObject proves a public route serves without sign-in and
+// never calls the Authorizer.
+func checkPublicRouteObject(t *testing.T, route apiserver.Route) {
+	t.Helper()
+
+	recorder := &recordingAuthorizer{calls: nil}
+	allowed := newEnforcingHandler(t, recorder)
+
+	rec := httptest.NewRecorder()
+	allowed.ServeHTTP(rec, routeRequest(t, route, ""))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	if len(recorder.calls) != 0 {
+		t.Fatalf("public route calls %v, want no Authorizer call", recorder.calls)
+	}
+}
+
+// checkAuthorizedRouteObject proves an authorized route asks for its declared
+// actions on its resolved object: the recorder sees each action on it, and
+// denying it answers 403.
+func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
+	t.Helper()
+
+	rec := httptest.NewRecorder()
+
+	expected, err := route.Resolve(rec, routeRequest(t, route, "test-token"))
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	recorder := &recordingAuthorizer{calls: nil}
+	allowed := newEnforcingHandler(t, recorder)
+
+	rec = httptest.NewRecorder()
+	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	for _, action := range route.Actions {
+		if !containsCall(recorder.calls, recordedCall{action: action, object: expected.String()}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, expected.String(), recorder.calls)
+		}
+	}
+
+	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected.String()})
+
+	rec = httptest.NewRecorder()
+	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("request denied on %q answers %d, want %d", expected.String(), rec.Code, http.StatusForbidden)
+	}
+}
+
+// containsCall reports whether calls holds want.
+func containsCall(calls []recordedCall, want recordedCall) bool {
+	return slices.Contains(calls, want)
 }
 
 // TestUnknownPathAnswersJSON404 proves a path the table does not hold answers

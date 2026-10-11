@@ -659,7 +659,7 @@ func parseRenameStackRequest(body []byte) (renameStackRequest, error) {
 
 type renameStackResponse struct{}
 
-func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	oldRef, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
@@ -715,6 +715,12 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	if err := h.authorizeRenameDestination(ctx, p, oldRef, name); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	if _, err := h.stacks.Rename(ctx, oldRef, name); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -722,6 +728,26 @@ func (h *Handler) renameStack(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, renameStackResponse{})
+}
+
+// authorizeRenameDestination authorizes unit:manage on the destination unit
+// of a rename: the same namespace and Pulumi project under the new stack
+// name. The wrapper already authorized the source unit in the path.
+func (h *Handler) authorizeRenameDestination(
+	ctx context.Context, p identity.Principal, oldRef stack.Ref, name stack.Name,
+) error {
+	dest := stack.Ref{Namespace: oldRef.Namespace, Project: oldRef.Project, Stack: name}
+
+	destObj, err := unitObject(dest)
+	if err != nil {
+		return err
+	}
+
+	if err := h.authz.Authorize(ctx, p, identity.ActionUnitManage, destObj); err != nil {
+		return fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, err)
+	}
+
+	return nil
 }
 
 // unitObject maps a stack reference to its tool-neutral unit reference.

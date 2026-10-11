@@ -554,6 +554,76 @@ func wantSecretSuccess(pattern string) int {
 	return http.StatusOK
 }
 
+// TestSecretRoutesAuthorizeDeclaredObject proves every secrets route asks
+// for its declared action on the unit its resolver returns: the recording
+// Authorizer sees the declared action on the resolved unit, and denying that
+// unit answers 403.
+func TestSecretRoutesAuthorizeDeclaredObject(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range secretPatterns() {
+		t.Run(pattern, func(t *testing.T) {
+			t.Parallel()
+			checkSecretRouteObject(t, pattern)
+		})
+	}
+}
+
+// checkSecretRouteObject proves one secrets route records its declared
+// action on the resolved unit and answers 403 once denied on it. State is
+// minted before the denial, so decrypt routes reuse the ciphertext of the
+// allowed phase.
+func checkSecretRouteObject(t *testing.T, pattern string) {
+	t.Helper()
+
+	route := secretRoute(t, newSecretFixture(t, allowAll(), 0).handler, pattern)
+	target := "/api/stacks/acme/web/prod" + strings.TrimPrefix(
+		pattern, "POST /api/stacks/{namespace}/{project}/{stack}",
+	)
+	const expected = "pulumi:acme/web/prod"
+
+	authz := &objectToggleAuthorizer{calls: nil, object: expected, deny: false}
+	f := newSecretFixture(t, authz, 0)
+	body := secretObjectBody(t, f, pattern)
+
+	status, resp := f.plain(t, route.Method, target, body)
+	if want := wantSecretSuccess(pattern); status != want {
+		t.Fatalf("allowed request answers %d, want %d (%s)", status, want, resp)
+	}
+
+	for _, action := range route.Actions {
+		if !slices.Contains(authz.calls, recordedCall{action: action, object: expected}) {
+			t.Fatalf("route never asks %s on %q (calls %v)", action, expected, authz.calls)
+		}
+	}
+
+	authz.deny = true
+
+	status, resp = f.plain(t, route.Method, target, body)
+	if status != http.StatusForbidden {
+		t.Fatalf("request denied on %q answers %d, want %d (%s)", expected, status, http.StatusForbidden, resp)
+	}
+}
+
+// secretObjectBody returns a valid body for pattern, minting a real
+// ciphertext first for decrypt routes while the Authorizer still allows.
+func secretObjectBody(t *testing.T, f secretFixture, pattern string) string {
+	t.Helper()
+
+	switch {
+	case strings.HasSuffix(pattern, "decryption"):
+		return `{"secretName":"apiKey"}`
+	case strings.HasSuffix(pattern, "/batch-decrypt"):
+		return f.batchDecryptBody(t, f.encryptOne(t, "hi"))
+	case strings.HasSuffix(pattern, "/decrypt"):
+		return f.decryptBody(t, f.encryptOne(t, "hi"))
+	case strings.HasSuffix(pattern, "/batch-encrypt"):
+		return `{"plaintexts":["aGk="]}`
+	default:
+		return `{"plaintext":"aGk="}`
+	}
+}
+
 // secretRoute returns the declared route for pattern.
 func secretRoute(t *testing.T, handler *pulumi.Handler, pattern string) pulumi.Route {
 	t.Helper()
