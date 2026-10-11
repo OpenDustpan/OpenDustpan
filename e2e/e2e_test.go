@@ -22,8 +22,9 @@ const (
 	stackName = "dev"
 	// installLimit plus every step's commandTimeout must stay under the
 	// go test -timeout in the Makefile, or a timeout loses every report. That
-	// holds per version only while all versions run at once, so the Makefile's
-	// -parallel must cover the whole matrix (6 versions by default).
+	// holds per version and store only while all runs go at once, so the
+	// Makefile's -parallel must cover the whole matrix (12 runs by default: 6
+	// versions on 2 stores).
 	installLimit = 10 * time.Minute
 )
 
@@ -63,6 +64,11 @@ func TestCLIs(t *testing.T) {
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
 
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
 	matrix := []struct {
 		scenario func(*testing.T, *e2e.Env)
 		tool     e2e.Tool
@@ -78,35 +84,78 @@ func TestCLIs(t *testing.T) {
 			for _, label := range m.tool.Versions() {
 				t.Run(label, func(t *testing.T) {
 					t.Parallel()
-					run(t, fetcher, m.tool, label, m.scenario)
+
+					run(t, runInput{
+						fetcher:   fetcher,
+						tool:      m.tool,
+						label:     label,
+						databases: databases,
+						scenario:  m.scenario,
+					})
 				})
 			}
 		})
 	}
 }
 
-func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenario func(*testing.T, *e2e.Env)) {
+// runInput groups what one CLI version needs to run on every store.
+type runInput struct {
+	fetcher   *e2e.Fetcher
+	tool      e2e.Tool
+	label     string
+	databases []e2e.Store
+	scenario  func(*testing.T, *e2e.Env)
+}
+
+func run(t *testing.T, in runInput) {
 	t.Helper()
+
+	tool := in.tool
+	label := in.label
+	databases := in.databases
 
 	if tool.Name == e2e.ToolTofu && runtime.GOOS != "linux" {
 		// OpenTofu must trust the test server's certificate, and Go honors
 		// SSL_CERT_FILE only on Linux; elsewhere it uses the system store.
 		reason := "needs Linux, not " + runtime.GOOS
-		writeReport(t, e2e.NotRun(tool.Name, label, reason, true))
+		for _, db := range databases {
+			writeReport(t, e2e.NotRun(tool.Name, label, db, reason, true))
+		}
+
 		t.Skipf("the OpenTofu suite %s", reason)
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	defer cancel()
 
-	cli, err := fetcher.Install(installCtx, tool, label)
+	cli, err := in.fetcher.Install(installCtx, tool, label)
 	if err != nil {
 		// Still report the version, so a broken download is visible in the summary.
-		writeReport(t, e2e.NotRun(tool.Name, label, err.Error(), false))
+		for _, db := range databases {
+			writeReport(t, e2e.NotRun(tool.Name, label, db, err.Error(), false))
+		}
+
 		t.Fatalf("install %s %s: %v", tool.Name, label, err)
 	}
 
 	t.Logf("%s %s (checksum %s) in %s", cli.Tool, cli.Version, cli.ChecksumSource, cli.Dir)
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runOnStore(t, cli, db, in.scenario)
+		})
+	}
+}
+
+func runOnStore(t *testing.T, cli e2e.Install, store e2e.Store, scenario func(*testing.T, *e2e.Env)) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		reason := "set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite"
+		writeReport(t, e2e.NotRun(cli.Tool, cli.Label, store, reason, true))
+		t.Skip(reason)
+	}
 
 	// If server setup fails, NewEnv ends the test before env exists; report
 	// the version as not run instead of dropping it from the summary.
@@ -114,7 +163,7 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 
 	t.Cleanup(func() {
 		if env == nil {
-			writeReport(t, e2e.NotRun(tool.Name, label, "server setup failed; see the test log", false))
+			writeReport(t, e2e.NotRun(cli.Tool, cli.Label, store, "server setup failed; see the test log", false))
 
 			return
 		}
@@ -122,7 +171,7 @@ func run(t *testing.T, fetcher *e2e.Fetcher, tool e2e.Tool, label string, scenar
 		writeReport(t, e2e.NewRun(env))
 	})
 
-	env = e2e.NewEnv(t.Context(), t, cli)
+	env = e2e.NewEnv(t.Context(), t, cli, store)
 
 	scenario(t, env)
 }
