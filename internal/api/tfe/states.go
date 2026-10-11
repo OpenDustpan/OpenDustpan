@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -36,7 +38,9 @@ const (
 // stateVersionAttributes are the attributes of a state version document: the
 // serial, lineage, MD5 and size the client declared at create, the status,
 // the absolute download URL and, only on the create response, the absolute
-// upload URLs of the capability the content follows through.
+// upload URLs of the capability the content follows through. Holder names who
+// held the lock when the version was declared, force marks a forced version
+// and restored-from names the version a restore copied, empty otherwise.
 type stateVersionAttributes struct {
 	CreatedAt          time.Time             `json:"created-at"`                             //nolint:tagliatelle // The TFE wire name; it must not change.
 	DownloadURL        string                `json:"hosted-state-download-url"`              //nolint:tagliatelle // The TFE wire name; it must not change.
@@ -49,6 +53,9 @@ type stateVersionAttributes struct {
 	Size               int64                 `json:"size"`
 	ResourcesProcessed bool                  `json:"resources-processed"` //nolint:tagliatelle // The TFE wire name; it must not change.
 	TerraformVersion   string                `json:"terraform-version"`   //nolint:tagliatelle // The TFE wire name; it must not change.
+	Holder             string                `json:"holder"`
+	Force              bool                  `json:"force"`
+	RestoredFrom       string                `json:"restored-from"` //nolint:tagliatelle // The TFE wire name; it must not change.
 }
 
 // relationshipList is one JSON:API relationship with several targets: the
@@ -69,6 +76,14 @@ type stateVersionResource struct {
 // stateVersionDocument is the response of a state version route.
 type stateVersionDocument struct {
 	Data stateVersionResource `json:"data"`
+}
+
+// stateVersionListDocument is the response of the state version list route:
+// one page of finalized versions, newest first, with the meta.pagination
+// object the client reads.
+type stateVersionListDocument struct {
+	Data []stateVersionResource `json:"data"`
+	Meta workspaceListMeta      `json:"meta"`
 }
 
 // stateVersionOutputAttributes are the attributes of one output: the name,
@@ -320,6 +335,9 @@ func (h *Handler) stateVersionDocument(
 			Size:               sv.Size,
 			ResourcesProcessed: true,
 			TerraformVersion:   "",
+			Holder:             sv.Holder,
+			Force:              sv.Force,
+			RestoredFrom:       sv.RestoredFrom.String(),
 		},
 		Relationships: map[string]relationshipList{"outputs": {Data: refs}},
 		Links:         map[string]string{linkSelf: "/api/v2/state-versions/" + sv.ID.String()},
@@ -495,6 +513,120 @@ func (h *Handler) writeStateOutputs(ctx context.Context, w http.ResponseWriter, 
 		Data: outputs,
 		Meta: workspaceListMeta{
 			Pagination: paginate(workspacePage{number: 1, size: len(outputs)}, len(outputs), pages),
+		},
+	})
+}
+
+// listFilters reads the workspace reference of a state version list from the
+// filter query: filter[organization][name] and filter[workspace][name]. A
+// missing filter fails with a 400 error; a bad name fails with a 422 error.
+func listFilters(r *http.Request) (workspace.Ref, error) {
+	query := r.URL.Query()
+	org := query.Get("filter[organization][name]")
+	name := query.Get("filter[workspace][name]")
+
+	if org == "" || name == "" {
+		return workspace.Ref{}, errMissingFilter
+	}
+
+	ns, err := namespace.ParseName(org)
+	if err != nil {
+		return workspace.Ref{}, err
+	}
+
+	parsed, err := workspace.ParseName(name)
+	if err != nil {
+		return workspace.Ref{}, err
+	}
+
+	return workspace.Ref{Namespace: ns, Name: parsed}, nil
+}
+
+// resolveStateVersionList returns the unit the state version list acts on:
+// the workspace the two filters name. A missing filter fails with a 400
+// error. It never reads the store, so a denied caller cannot tell an
+// existing workspace from an unknown one; the handler answers 404 for an
+// unknown workspace after authorization.
+func resolveStateVersionList(
+	_ http.ResponseWriter, r *http.Request,
+) (identity.Object, error) {
+	ref, err := listFilters(r)
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return unitObject(ref)
+}
+
+// listStateVersions serves GET /api/v2/state-versions: the finalized state
+// versions of the filtered workspace, newest first, with page[number] and
+// page[size] and the meta.pagination object the client reads. A missing
+// filter answers 400; an unknown workspace answers 404.
+func (h *Handler) listStateVersions(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	ref, err := listFilters(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	ws, err := h.workspaces.Get(ctx, ref)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	page, err := parseWorkspacePage(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	size := min(page.size, workspace.MaxStatePageSize)
+	offset := 0
+
+	if page.number > 1 {
+		if page.number-1 > math.MaxInt/size {
+			offset = math.MaxInt
+		} else {
+			offset = (page.number - 1) * size
+		}
+	}
+
+	list, total, err := h.workspaces.History(ctx, ws.ID, workspace.Page{Limit: size, Offset: offset})
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	pages := 0
+	if total > 0 {
+		pages = (total-1)/size + 1
+	}
+
+	items := make([]stateVersionResource, 0, len(list))
+
+	for i := range list {
+		doc, err := h.stateVersionDocument(r, list[i])
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+		items = append(items, doc)
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, stateVersionListDocument{
+		Data: items,
+		Meta: workspaceListMeta{
+			Pagination: paginate(workspacePage{number: page.number, size: size}, total, pages),
 		},
 	})
 }
