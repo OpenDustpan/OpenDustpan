@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/store/internal/codec"
 	"opendustpan.org/opendustpan/store/internal/migrate"
 	"opendustpan.org/opendustpan/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/store/schema"
 )
 
 //go:embed migrations/*.sql
@@ -521,6 +522,15 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
+	recorded, err := recordedVersions(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
+		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
+	}
+
 	for _, m := range all {
 		if err := apply(ctx, tx, m); err != nil {
 			return err
@@ -528,6 +538,45 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 	}
 
 	return nil
+}
+
+// embeddedVersions returns the versions the binary embeds, for the
+// newer-schema refusal.
+func embeddedVersions(all []migrate.Migration) []int64 {
+	out := make([]int64, 0, len(all))
+	for _, m := range all {
+		out = append(out, m.Version)
+	}
+
+	return out
+}
+
+// recordedVersions returns the versions schema_migrations records, ordered.
+// The caller holds the migration lock in the same transaction.
+func recordedVersions(ctx context.Context, tx pgx.Tx) ([]int64, error) {
+	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema versions: %w", err)
+	}
+
+	defer rows.Close()
+
+	var out []int64
+
+	for rows.Next() {
+		var version int64
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("read schema versions: %w", err)
+		}
+
+		out = append(out, version)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read schema versions: %w", err)
+	}
+
+	return out, nil
 }
 
 func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {

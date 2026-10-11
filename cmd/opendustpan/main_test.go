@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/namespace"
 	"opendustpan.org/opendustpan/secret"
+	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/sqlite"
 )
 
@@ -513,4 +516,99 @@ func checkBlobDir(t *testing.T, dir string) {
 	if perm := info.Mode().Perm(); perm != blobDirPerm {
 		t.Fatalf("blob directory %s mode %04o, want %04o", dir, perm, blobDirPerm)
 	}
+}
+
+//nolint:paralleltest // serve reads process environment, so this test sets it.
+func TestNewerSchemaRefusesCommands(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
+
+	path, dbVersion, binVersion := newerSchemaDatabase(t)
+
+	if err := serveDatabase(t, path); !isNewerSchemaError(t, err, dbVersion, binVersion) {
+		t.Fatalf("serve newer database: err = %v, want it to name %d, %d and %q", err, dbVersion, binVersion, version)
+	}
+
+	var out bytes.Buffer
+
+	err := createNamespace(t.Context(), []string{"--database", "sqlite:" + path, "acme"}, &out, io.Discard)
+	if !isNewerSchemaError(t, err, dbVersion, binVersion) {
+		t.Fatalf("namespace create on newer database: err = %v, want it to name %d, %d and %q",
+			err, dbVersion, binVersion, version)
+	}
+}
+
+// isNewerSchemaError reports whether err wraps ErrSchemaNewer and names the
+// schema version of the database, the schema version of the binary, the
+// version of the binary and the one action.
+func isNewerSchemaError(t *testing.T, err error, dbVersion, binVersion int64) bool {
+	t.Helper()
+
+	if err == nil || !errors.Is(err, schema.ErrSchemaNewer) {
+		return false
+	}
+
+	msg := err.Error()
+
+	for _, want := range []string{
+		strconv.FormatInt(dbVersion, 10),
+		strconv.FormatInt(binVersion, 10),
+		version,
+		"start a newer binary or restore a backup",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not name %q", msg, want)
+
+			return false
+		}
+	}
+
+	return true
+}
+
+// newerSchemaDatabase creates a SQLite database at the embedded migrations
+// plus one future version row, and returns its path with the database and
+// binary schema versions.
+//
+//nolint:nonamedreturns // The names keep the database and binary versions in order at callers.
+func newerSchemaDatabase(t *testing.T) (path string, dbVersion, binVersion int64) {
+	t.Helper()
+
+	path = filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatalf("close store: %v", closeErr)
+	}
+
+	conn, connErr := sql.Open("sqlite3", "file:"+path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	row := conn.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`)
+	if scanErr := row.Scan(&binVersion); scanErr != nil {
+		t.Fatalf("read binary schema version: %v", scanErr)
+	}
+
+	dbVersion = binVersion + 1
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+
+	name := fmt.Sprintf("%04d_future.sql", dbVersion)
+
+	if _, execErr := conn.ExecContext(t.Context(), record, dbVersion, name); execErr != nil {
+		t.Fatalf("record future version: %v", execErr)
+	}
+
+	return path, dbVersion, binVersion
 }

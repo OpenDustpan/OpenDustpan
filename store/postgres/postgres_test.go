@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/secret/secrettest"
 	"opendustpan.org/opendustpan/stack"
 	"opendustpan.org/opendustpan/store/postgres"
+	"opendustpan.org/opendustpan/store/schema"
 	"opendustpan.org/opendustpan/store/storetest"
 )
 
@@ -997,7 +1000,7 @@ func isolatedURL(t *testing.T, base string) string {
 		t.Fatalf("random schema name: %v", err)
 	}
 
-	schema := "test_" + hex.EncodeToString(suffix)
+	name := "test_" + hex.EncodeToString(suffix)
 
 	conn, err := pgx.Connect(t.Context(), base)
 	if err != nil {
@@ -1010,19 +1013,178 @@ func isolatedURL(t *testing.T, base string) string {
 		}
 	}()
 
-	_, err = conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize())
-	if err != nil {
-		t.Fatalf("create schema: %v", err)
+	if _, execErr := conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
+		t.Fatalf("create schema: %v", execErr)
 	}
 
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse %s: %v", envURL, err)
+	u, parseErr := url.Parse(base)
+	if parseErr != nil {
+		t.Fatalf("parse %s: %v", envURL, parseErr)
 	}
 
 	q := u.Query()
-	q.Set("search_path", schema)
+	q.Set("search_path", name)
 	u.RawQuery = q.Encode()
 
 	return u.String()
+}
+
+// TestOpenRefusesNewerSchema proves that a database with a version the binary
+// does not embed stops open and leaves the database unchanged.
+func TestOpenRefusesNewerSchema(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	s.Close()
+
+	beforeVersions, _ := newerSchemaSnapshot(t, migrated)
+	if len(beforeVersions) == 0 {
+		t.Fatal("schema versions are empty, want the embedded migrations")
+	}
+
+	extra := beforeVersions[len(beforeVersions)-1] + 1
+
+	insertFutureVersion(t, migrated, extra)
+
+	wantVersions := append(slices.Clone(beforeVersions), extra)
+	gotVersions, gotTables := newerSchemaSnapshot(t, migrated)
+
+	if !slices.Equal(gotVersions, wantVersions) {
+		t.Fatalf("seeded versions = %v, want %v", gotVersions, wantVersions)
+	}
+
+	if _, err := postgres.Open(t.Context(), migrated); !errors.Is(err, schema.ErrSchemaNewer) {
+		t.Fatalf("open newer database: err = %v, want ErrSchemaNewer", err)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, migrated)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, gotTables) {
+		t.Fatalf("tables after refusal = %v, want %v", afterTables, gotTables)
+	}
+}
+
+// newerSchemaSnapshot reads the recorded versions and the table names of the
+// database at migrated.
+func newerSchemaSnapshot(t *testing.T, migrated string) ([]int64, []string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	return readSchemaVersions(t, conn), readSchemaTables(t, conn)
+}
+
+// readSchemaVersions reads the recorded versions, ordered.
+func readSchemaVersions(t *testing.T, conn *pgx.Conn) []int64 {
+	t.Helper()
+
+	rows, queryErr := conn.Query(t.Context(), `SELECT version FROM schema_migrations ORDER BY version`)
+	if queryErr != nil {
+		t.Fatalf("read schema versions: %v", queryErr)
+	}
+
+	defer rows.Close()
+
+	var versions []int64
+
+	for rows.Next() {
+		var version int64
+		if scanErr := rows.Scan(&version); scanErr != nil {
+			rows.Close()
+			t.Fatalf("scan schema version: %v", scanErr)
+		}
+
+		versions = append(versions, version)
+	}
+
+	rows.Close()
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read schema versions: %v", iterErr)
+	}
+
+	return versions
+}
+
+// readSchemaTables reads the table names, ordered.
+func readSchemaTables(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+
+	rows, queryErr := conn.Query(
+		t.Context(),
+		`SELECT tablename FROM pg_tables WHERE schemaname = current_schema() ORDER BY tablename`,
+	)
+	if queryErr != nil {
+		t.Fatalf("read tables: %v", queryErr)
+	}
+
+	defer rows.Close()
+
+	var tables []string
+
+	for rows.Next() {
+		var name string
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			rows.Close()
+			t.Fatalf("scan table: %v", scanErr)
+		}
+
+		tables = append(tables, name)
+	}
+
+	rows.Close()
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read tables: %v", iterErr)
+	}
+
+	return tables
+}
+
+// insertFutureVersion records one version newer than the binary embeds.
+func insertFutureVersion(t *testing.T, migrated string, version int64) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	name := fmt.Sprintf("%04d_future.sql", version)
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+	if _, execErr := conn.Exec(t.Context(), record, version, name); execErr != nil {
+		t.Fatalf("record future version: %v", execErr)
+	}
 }
