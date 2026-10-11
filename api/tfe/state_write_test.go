@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -378,6 +379,36 @@ func TestCreateStateVersionErrors(t *testing.T) {
 
 		checkJSONAPIError(t, rec, http.StatusNotFound)
 	})
+}
+
+// TestCreateStateVersionTooLarge proves a create body over the create limit
+// answers 413 with a JSON:API error stating the limit.
+func TestCreateStateVersionTooLarge(t *testing.T) {
+	t.Parallel()
+
+	handler := newWriteHandler(t, stubWorkspaces{}, baseurl.Resolver{})
+
+	const limit = 32 << 20
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(
+		rec,
+		createStateRequest(
+			t,
+			"/api/v2/workspaces/ws-test123/state-versions",
+			strings.Repeat("x", limit+1),
+		),
+	)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("request answers %d, want %d: %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+
+	checkJSONAPIError(t, rec, http.StatusRequestEntityTooLarge)
+
+	if !strings.Contains(rec.Body.String(), strconv.Itoa(limit)) {
+		t.Fatalf("error detail lacks the limit %d: %s", limit, rec.Body.String())
+	}
 }
 
 // uploadTestSetup holds one upload test's handler and capability.
