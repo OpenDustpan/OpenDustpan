@@ -1,76 +1,61 @@
 # OpenDustpan
 
-Self-hosted state for your infrastructure as code. OpenDustpan is an
-open-source backend for infrastructure-as-code tools: point your CLI at your
-own server and keep state, history, locks and secrets on infrastructure you
-control, with one set of organizations, access rules and storage for every
-tool your teams use.
+A self-hosted backend for infrastructure-as-code state. Works with the Pulumi
+CLI and works with OpenTofu.
 
-## Supported tools
+[![CI](https://github.com/OpenDustpan/OpenDustpan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/OpenDustpan/OpenDustpan/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Each tool talks to OpenDustpan through the remote-backend protocol it already
-speaks, so the CLI needs no plugin.
+**Status: pre-alpha.** One node only. No release exists yet. Do not keep
+production state on it.
 
-| Tool | Protocol | Status |
-| --- | --- | --- |
-| Pulumi CLI | Pulumi Cloud-compatible API (`pulumi login <url>`) | Full deployments work on one node. Login, stacks, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm` and `stack tag set` work. |
-| OpenTofu | TFE-compatible remote API (`cloud` block) | Works with OpenTofu on one node. State, locks, `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select` and `destroy` work. Remote runs, `tofu login`, workspace tags, rename and delete are out. |
+<!-- Image: one real terminal recording of `pulumi login` and `tofu apply`
+against this server. It waits for an approved recording tool. -->
 
-More tools follow the same pattern (ADR 12). An end-to-end suite that drives
-the real CLI checks every supported version of every tool.
+OpenDustpan keeps state, history, locks and secrets on infrastructure that you
+control. Each CLI connects through the remote-backend protocol that it already
+speaks, so the CLI needs no plugin. All tools share one set of namespaces,
+tokens and storage.
 
-OpenDustpan is an independent project, built to work with the tools above. It
-is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
-or HashiCorp.
+## Quickstart
 
-> **Status: pre-alpha.** The Pulumi CLI runs full deployments on one node,
-> with SQLite or PostgreSQL. OpenDustpan works with OpenTofu as a remote
-> backend on one node.
-
-## Try it
-
-Requires Go 1.27.2+, the Pulumi CLI and OpenTofu.
-
-Build the server. Generate the two secrets it needs. The administrator
-signs in with the admin token. The key-encryption key protects secret
-config values. Both are random values. Store them outside the database.
+No release exists yet, so build the server from source. You need Go 1.27.2 or
+later, OpenSSL, and the Pulumi CLI or OpenTofu.
 
 ```sh
 go build -o bin/opendustpan ./cmd/opendustpan
-
 export DUSTPAN_ADMIN_TOKEN=$(openssl rand -hex 32)
 export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
 
-A lost key-encryption key means lost secrets. The server encrypts secret
-values with this key. Without the key, the server refuses to start once
-the database holds secret values. The server keeps no other copy of the key.
+The administrator signs in with the admin token. The key-encryption key
+protects secret values. Keep both values outside the server's data directory.
+The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
+`:8080`.
 
-Create a namespace through the API. Then log in. A new installation has no
-namespace. Start the server first, then create one before the first login
-(ADR 18, ADR 39).
+### Pulumi CLI
+
+Start the server:
 
 ```sh
-./bin/opendustpan serve             # SQLite in ./dustpan.db, API on :8080
-./bin/opendustpan namespace create --server http://localhost:8080 acme
+./bin/opendustpan serve
 ```
 
-Point the Pulumi CLI at the server. The commands below create an empty
-YAML project, create a stack and run the first update.
+A new installation has no namespace. In a second shell with the same
+`DUSTPAN_ADMIN_TOKEN`, create one. Then log in and run the first update:
 
 ```sh
+./bin/opendustpan namespace create --server http://localhost:8080 acme
 mkdir demo && cd demo
 export PULUMI_ACCESS_TOKEN=$DUSTPAN_ADMIN_TOKEN
 pulumi login http://localhost:8080
-pulumi whoami
-
 printf 'name: demo\nruntime: yaml\n' > Pulumi.yaml
 pulumi stack init acme/demo/dev
 pulumi up --yes --non-interactive
 ```
 
-The server encrypts secret config values with the key-encryption key. The
-commands below store a secret, deploy it and read it back.
+Secret config values go through the server, which encrypts them with the
+key-encryption key:
 
 ```sh
 pulumi config set --secret apiKey s3cr3t
@@ -78,33 +63,32 @@ pulumi up --yes --non-interactive
 pulumi config get apiKey
 ```
 
-The web console is a separate repository,
-[OpenDustpan/console](https://github.com/OpenDustpan/console). Run it in
-development against this server, or build it and let the server host it in one
-process: `opendustpan serve --console-dir <console>/dist`. Sign in with the
-value of `DUSTPAN_ADMIN_TOKEN`.
-
 ### OpenTofu
 
-OpenDustpan works with OpenTofu through the TFE-compatible API. The steps
-below store the state of one workspace on the server.
-
-Create a namespace through the API. Then log in. OpenTofu refuses plain
-HTTP for service discovery.
+OpenTofu refuses plain HTTP for service discovery, so the server needs TLS.
+Make a test certificate and start the server with it:
 
 ```sh
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
+  -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+  -keyout key.pem -out cert.pem
 ./bin/opendustpan serve --tls-cert cert.pem --tls-key key.pem
+```
+
+A new installation has no namespace. In a second shell with the same
+`DUSTPAN_ADMIN_TOKEN`, create one:
+
+```sh
 ./bin/opendustpan namespace create --server https://localhost:8080 --ca-file cert.pem acme
 ```
 
-Point OpenTofu at the server. The `cloud` block names the host and the
-workspace. The token comes from a `credentials` block or from
-`TF_TOKEN_<host>`.
+In a directory of its own, a `main.tf` with a `cloud` block names the server,
+the namespace and the workspace:
 
 ```hcl
 terraform {
   cloud {
-    hostname     = "dustpan.example"
+    hostname     = "localhost:8080"
     organization = "acme"
     workspaces {
       name = "web"
@@ -113,42 +97,121 @@ terraform {
 }
 ```
 
-```hcl
-credentials "dustpan.example" {
-  token = "REDACTED"
-}
-```
-
-Run `tofu init` to create the workspace. Run `tofu apply` to store state.
-When a lock stays behind, release it with `tofu force-unlock`.
+Give OpenTofu the token and the certificate, then run it. Replace
+`<path to cert.pem>` with the full path of the certificate file.
 
 ```sh
-export TF_TOKEN_dustpan_example="REDACTED"
+printf 'credentials "localhost:8080" {\n  token = "%s"\n}\n' "$DUSTPAN_ADMIN_TOKEN" > dev.tfrc
+export TF_CLI_CONFIG_FILE=$PWD/dev.tfrc SSL_CERT_FILE=<path to cert.pem>
 tofu init
 tofu apply
-tofu force-unlock acme/web
 ```
 
-The `remote` backend with a workspace prefix covers many workspaces. With
-the prefix `web-`, `tofu workspace new dev` creates the `web-dev`
-workspace.
+`SSL_CERT_FILE` works on Linux. On other systems, use a certificate that the
+system trusts. For a host name without a port, `TF_TOKEN_<host>` can hold the
+token instead of a credentials file. The [TFE-compatible API
+notes](docs/tfe-api.md) list the endpoints, the `remote` backend with a
+workspace prefix, and the differences from TFE.
 
-```hcl
-terraform {
-  backend "remote" {
-    hostname     = "dustpan.example"
-    organization = "acme"
-    workspaces {
-      prefix = "web-"
-    }
-  }
-}
-```
+### Web console
 
-A TLS-terminating reverse proxy is a supported setup. The server never
-trusts `X-Forwarded-*` headers. Set `--public-url` to the external base URL
-so absolute URLs point at the proxy. The supported endpoints and the
-differences from TFE are in `docs/tfe-api.md`.
+The web console is a separate repository,
+[OpenDustpan/console](https://github.com/OpenDustpan/console). Build it and
+let the server host it in the same process with
+`opendustpan serve --console-dir <console>/dist`. Sign in with the value of
+`DUSTPAN_ADMIN_TOKEN`.
+
+## What works
+
+The end-to-end suite drives each version below against the server, on SQLite
+and on PostgreSQL, on Linux in CI. `latest` is the newest release on the day
+of the run.
+
+| Tool | Tested versions | What works | What does not work yet |
+| --- | --- | --- | --- |
+| Pulumi CLI | 3.200.0, 3.250.0, latest | `login`, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm`, `stack tag set` | Pulumi Cloud features outside the state backend |
+| OpenTofu | 1.11.14, 1.12.7, latest | `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select`, `destroy` | Remote runs, `tofu login`, workspace tags, workspace rename and delete |
+
+The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
+
+## What the server stores
+
+| Data | Where | Protection |
+| --- | --- | --- |
+| Namespaces, stacks, workspaces, locks, history | The SQL database: a SQLite file, or PostgreSQL | None of its own. Protect the database. |
+| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is plain text. |
+| Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
+
+The server keeps no copy of the key-encryption key.
+
+### What to back up
+
+1. **The key-encryption key.** A lost key means lost secrets. With secrets in
+   the database, the server refuses to start without the key. Keep the key in
+   a different place from the backups.
+2. **A backup of the installation.** `opendustpan backup` writes the SQL data
+   and the blobs to a backup target. A backup holds OpenTofu state in plain
+   text, so protect the target.
+
+The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
+
+## When not to use OpenDustpan
+
+- **You need it in production now.** It is pre-alpha and has no release.
+  Formats and APIs can change.
+- **You need more than one node.** The server runs on one node. High
+  availability is a plan, not a feature.
+- **You need users, teams or roles.** Every token signs in as an
+  administrator. Single sign-on and scoped tokens do not exist yet.
+- **You need remote runs.** OpenDustpan stores state. It does not run
+  `pulumi up` or `tofu apply` for you.
+- **You need an audit log, policy checks or drift detection.** These do not
+  exist yet.
+- **Your file or S3 backend is enough.** A plain backend has fewer moving
+  parts. OpenDustpan adds a server, a database and a key to look after.
+
+## Documentation
+
+How-to guides:
+
+- [Import existing state](docs/guides/import.md) from a Pulumi service
+  backend, a file backend, or an OpenTofu backend.
+- [Back up, restore and upgrade](docs/guides/backup-restore-upgrade.md) the
+  installation.
+- [Use S3-compatible object storage](docs/guides/s3-blobs.md) for state
+  content.
+- [Observe the server](docs/guides/observe.md): probes, metrics and request
+  logs.
+
+Reference:
+
+- [Configuration](docs/reference/configuration.md): every flag and
+  environment variable.
+- [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
+- [Glossary](GLOSSARY.md): the words this project uses.
+
+Explanation:
+
+- [Concepts](#concepts) below.
+- [Roadmap](docs/roadmap.md): the milestones and their exit tests.
+- [Architecture decisions](docs/adr/) and [open proposals](docs/rfc/).
+
+## Concepts
+
+- **Namespace**: the unit of tenancy, what each tool calls an organization.
+  Each namespace has one home region.
+- **Stacks and workspaces**: each tool keeps its own model of deployable units
+  and their state (Pulumi stacks, OpenTofu workspaces). They share
+  namespaces, identity, storage and locking rules, not data models.
+- **History and restore**: each save of state makes a new version. A restore
+  copies an earlier version into a new version, and that new version becomes
+  current. The versions after the restored one stay in the history, and you
+  can restore them too. A restore changes no infrastructure: the next
+  `pulumi up` or `tofu apply` compares your code with the restored state.
+  Only the holder of the lock can restore a locked OpenTofu workspace.
+- **Storage**: a single node uses SQLite and local disk. Larger installations
+  use PostgreSQL and object storage. Each storage backend is an adapter that
+  you can replace.
 
 ## Container image
 
@@ -167,9 +230,9 @@ docker build -t opendustpan:dev \
   --build-arg CONSOLE_SHA256=<tarball SHA-256> .
 ```
 
-Run it. Mount a data directory and pass the two secrets. The data directory
-must be writable by the container user. Start the server first, then create a
-namespace through the API before the first login, as above.
+Run it. Mount a data directory and pass the two secrets. The container user
+must be able to write to the data directory. Start the server first, then
+create a namespace through the API before the first login, as above.
 
 ```sh
 mkdir -p data
@@ -183,86 +246,35 @@ docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --serve
 `make image-smoke` builds the image and runs the local smoke test. The test
 starts the container over TLS, checks the API (`/api/capabilities`) and the
 console page, waits until the container reports `healthy`, and checks that
-the process user is not root. Behind a
-TLS-intercepting proxy, set `EXTRA_CA_FILE` to a PEM bundle file so the build
-trusts it. It is not part of `make check`.
+the process user is not root. Behind a TLS-intercepting proxy, set
+`EXTRA_CA_FILE` to a PEM bundle file so the build trusts it. It is not part of
+`make check`.
 
 The image defines a `HEALTHCHECK` that probes `GET /health/ready` every 30
-seconds with `opendustpan health`. The command reads the same listen
-address and TLS settings as `serve` (`--listen` / `DUSTPAN_LISTEN`,
-`--tls-cert` / `DUSTPAN_TLS_CERT`) and exits 0 on a 2xx answer. When the
-server uses TLS, set `DUSTPAN_TLS_CERT` (with `DUSTPAN_TLS_KEY`) in the
-container environment, not only as a serve flag, so the check probes over
-HTTPS. When `--listen` differs from `:8080`, override the check. Read the
-status with `docker inspect --format '{{.State.Health.Status}}' dustpan`.
-Kubernetes ignores `HEALTHCHECK` and uses its own probes.
-
-## Concepts
-
-- **Namespace**: the unit of tenancy, what each tool calls an organization.
-  Every namespace is authoritative in one region (ADR 4, RFC 2).
-- **Stacks and workspaces**: each tool keeps its own model of deployable units
-  and their state (Pulumi stacks, OpenTofu workspaces). They share
-  namespaces, identity, storage and locking rules, not data models.
-- **History and restore**: each save of state makes a new version. A
-  restore copies an earlier version into a new version, and that new version
-  becomes current (ADR 28). The versions after the restored one stay in the
-  history, and you can restore them too. A restore changes no
-  infrastructure: the next `pulumi up` or `tofu apply` compares your code with
-  the restored state. Only the holder of the lock can restore a locked
-  OpenTofu workspace.
-- **Storage**: A single node uses SQLite and local disk. Larger installs use
-  PostgreSQL and object storage. Every storage backend is a swappable adapter
-  (ADR 2).
-- **Import**: move state from a Pulumi service backend, a file backend, or an
-  OpenTofu backend with `docs/guides/import.md`.
-
-## Guides
-
-- [Backup, restore and upgrade](docs/guides/backup-restore-upgrade.md):
-  back up the whole installation, check a backup, restore it into an empty
-  installation, and upgrade the server.
-- [S3-compatible object storage](docs/guides/s3-blobs.md):
-  hold state content in S3-compatible storage, with the settings, the
-  start probe and the limits.
-- [Observe the server](docs/guides/observe.md):
-  check liveness and readiness, scrape metrics, and read request logs.
+seconds with `opendustpan health`. The command reads the same listen address
+and TLS settings as `serve` (`--listen` / `DUSTPAN_LISTEN`, `--tls-cert` /
+`DUSTPAN_TLS_CERT`) and exits 0 on a 2xx answer. When the server uses TLS,
+set `DUSTPAN_TLS_CERT` (with `DUSTPAN_TLS_KEY`) in the container environment,
+not only as a serve flag, so the check probes over HTTPS. When `--listen`
+differs from `:8080`, override the check. Read the status with
+`docker inspect --format '{{.State.Health.Status}}' dustpan`. Kubernetes
+ignores `HEALTHCHECK` and uses its own probes.
 
 ## Configuration
 
-| Flag | Environment | Default |
-| --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...`) |
-| `--region` | `DUSTPAN_REGION` | `local` |
-| `--listen` | `DUSTPAN_LISTEN` | `:8080` |
-| `--console-dir` | `DUSTPAN_CONSOLE_DIR` | (none) |
-| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | (none) |
-| `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
-| `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
-| `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
-| `--log-level` | `DUSTPAN_LOG_LEVEL` | `info` (or `debug`, `warn`, `error`) |
-| `--log-format` | `DUSTPAN_LOG_FORMAT` | `json` (or `text`) |
-| `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
-| `--blob-store` | `DUSTPAN_BLOB_STORE` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
-| `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
-| `--s3-region` | `DUSTPAN_S3_REGION` | `us-east-1` |
-| `--backup-target` | `DUSTPAN_BACKUP_TARGET` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
-| | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | the S3 credentials. No flag takes them |
-| | `DUSTPAN_ADMIN_TOKEN` | required when you set no token file, at least 32 bytes (comma-separated tokens sign in as distinct administrators: admin, admin-2, ...). The server clears it from its environment after the read |
-| | `DUSTPAN_ADMIN_TOKEN_FILE` | file holding the tokens, one per line or comma-separated, readable only by its owner. When you set both, `DUSTPAN_ADMIN_TOKEN` wins |
-| | `DUSTPAN_KEY_ENCRYPTION_KEY` | base64 of 32 random bytes (unset while the database holds no secrets) |
-| | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | file holding that value, readable only by its owner |
+The [configuration reference](docs/reference/configuration.md) lists every
+flag and environment variable of `opendustpan serve`.
 
 ## Development
 
 `make check` runs every gate CI runs: `go mod tidy -diff`, `sqlc diff`, strict
-golangci-lint, NilAway, govulncheck, Semgrep and the tests with the race
-detector. goleak fails a test package that leaves a goroutine running. The
-`Makefile` lists the tool versions to install. NilAway and govulncheck need no
-install. Set
+golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
+check, the docs lint and the tests with the race detector. goleak fails a test
+package that leaves a goroutine running. The `Makefile` lists the tool
+versions to install. NilAway and govulncheck need no install. Set
 `DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
-real CLI versions against the server. It downloads them first, as `e2e/doc.go`
-describes.
+real CLI versions against the server. It downloads them first, as
+`e2e/doc.go` describes.
 
 Start with `CLAUDE.md` (rules for agents and contributors) and `docs/adr/`
 (why things are the way they are).
@@ -274,3 +286,7 @@ OpenDustpan is under the [Apache License 2.0](LICENSE).
 Each release archive holds the license files of the dependencies that its
 binary links, in `third_party_licenses/`. The container image holds them in
 `/licenses`. `scripts/third-party-licenses.sh` collects them.
+
+OpenDustpan is an independent project, built to work with the tools above. It
+is not affiliated with or endorsed by Pulumi Corporation, the OpenTofu project
+or HashiCorp.
