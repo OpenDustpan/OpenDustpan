@@ -130,7 +130,8 @@ func (s *Service) OpenState(
 }
 
 // SealOutputs seals one outputs document with the data key of the workspace
-// scope, creating the key on first use. Small values use Encrypt.
+// scope, creating the key on first use. It uses the stream seal, so a
+// document up to the workspace outputs limit seals whatever its size.
 func (s *Service) SealOutputs(
 	ctx context.Context, ns namespace.Name, workspaceID string, plain []byte,
 ) ([]byte, error) {
@@ -139,12 +140,17 @@ func (s *Service) SealOutputs(
 		return nil, err
 	}
 
-	sealed, err := s.Encrypt(ctx, scope, [][]byte{plain})
+	sealedReader, err := s.SealStream(ctx, scope, bytes.NewReader(plain))
 	if err != nil {
 		return nil, err
 	}
 
-	return sealed[0], nil
+	sealed, err := io.ReadAll(sealedReader)
+	if err != nil {
+		return nil, fmt.Errorf("seal outputs: %w", err)
+	}
+
+	return sealed, nil
 }
 
 // OpenOutputs opens one outputs document sealed by SealOutputs.
@@ -156,12 +162,17 @@ func (s *Service) OpenOutputs(
 		return nil, err
 	}
 
-	plain, err := s.Decrypt(ctx, scope, [][]byte{sealed})
+	opened, err := s.OpenStream(ctx, scope, bytes.NewReader(sealed))
 	if err != nil {
 		return nil, err
 	}
 
-	return plain[0], nil
+	plain, err := io.ReadAll(opened)
+	if err != nil {
+		return nil, fmt.Errorf("open outputs: %w", err)
+	}
+
+	return plain, nil
 }
 
 // sealReader seals one stream chunk at a time.

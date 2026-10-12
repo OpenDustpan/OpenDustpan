@@ -59,6 +59,10 @@ import (
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
 
+// The secret service seals OpenTofu state blobs and outputs documents behind
+// the workspace Sealer port.
+var _ workspace.Sealer = (*secret.Service)(nil)
+
 var (
 	// errBackupNeedsExporter reports a backup target with a namespace store
 	// that cannot capture exports.

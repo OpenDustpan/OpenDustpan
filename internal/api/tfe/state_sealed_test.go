@@ -500,3 +500,148 @@ func assertSingleOutputPlain(t *testing.T, env sealedTestEnv, id string) {
 		t.Fatalf("output = %s, want the plain value", output.Body.String())
 	}
 }
+
+// largeOutputs is one boundary outputs document with its plain value.
+type largeOutputs struct {
+	doc   string
+	value string
+}
+
+// largeSealedOutputs returns a flat outputs document of want bytes holding
+// one non-sensitive output whose value starts with marker, with the value.
+func largeSealedOutputs(want int, marker string) largeOutputs {
+	const prefix = `{"big":{"sensitive":false,"value":"`
+	const suffix = `","type":"string"}}`
+
+	fill := want - len(prefix) - len(suffix)
+	value := marker + strings.Repeat("x", fill-len(marker))
+
+	return largeOutputs{doc: prefix + value + suffix, value: value}
+}
+
+// largeSealedCreateBody returns a state version create body for content with
+// the outputs document doc.
+func largeSealedCreateBody(content, doc string) string {
+	sum := md5.Sum([]byte(content)) //nolint:gosec // The protocol under test names state by MD5 for integrity.
+
+	return fmt.Sprintf(
+		`{"data":{"type":"state-versions","attributes":{`+
+			`"serial":4,"lineage":"seed-lineage","md5":%q,"json-state-outputs":%q}}}`,
+		hex.EncodeToString(sum[:]),
+		base64.StdEncoding.EncodeToString([]byte(doc)),
+	)
+}
+
+// TestSealedLargeOutputsRoundTrip proves an outputs document just under
+// 16 MiB seals, stores, and reads back through the list route and the
+// one-output route, while a document over the limit still fails.
+func TestSealedLargeOutputsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	const limit = 16 << 20
+	const marker = "large-output-marker-"
+
+	env := sealedTestHandler(t)
+	content := sealedStateContent()
+
+	doc := largeSealedOutputs(limit-1024, marker)
+	createdDoc := createLargeVersion(t, env, content, doc.doc)
+
+	assertLargeStoredSealed(t, env, createdDoc.Data.ID, marker)
+	sealUploads(t, env, createdDoc, content)
+	assertLargeListRoute(t, env)
+	assertLargeSingleRoute(t, env, createdDoc.Data.ID, doc.value[:len(marker)+16])
+	assertOversizedOutputsDenied(t, env, content, limit+1, marker)
+}
+
+// createLargeVersion posts a state version create with the outputs document
+// doc and returns its document. The create must answer 201.
+func createLargeVersion(t *testing.T, env sealedTestEnv, content, doc string) sealedCreateDoc {
+	t.Helper()
+
+	target := "/api/v2/workspaces/" + env.ws.ID.String() + "/state-versions"
+	body := largeSealedCreateBody(content, doc)
+
+	created := httptest.NewRecorder()
+	env.handler.ServeHTTP(created, createStateRequest(t, target, body))
+
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create answers %d, want %d", created.Code, http.StatusCreated)
+	}
+
+	var createdDoc sealedCreateDoc
+
+	if err := json.Unmarshal(created.Body.Bytes(), &createdDoc); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	return createdDoc
+}
+
+// assertLargeStoredSealed proves the stored outputs hold sealed bytes only.
+func assertLargeStoredSealed(t *testing.T, env sealedTestEnv, id, marker string) {
+	t.Helper()
+
+	stored := readStoredVersion(t, env, id)
+
+	if bytes.Contains(stored.Outputs, []byte(marker)) {
+		t.Fatal("stored outputs hold the output value, want sealed bytes only")
+	}
+}
+
+// assertLargeListRoute proves the list route names the big output.
+func assertLargeListRoute(t *testing.T, env sealedTestEnv) {
+	t.Helper()
+
+	target := "/api/v2/workspaces/" + env.ws.ID.String() + "/current-state-version-outputs"
+
+	listed := httptest.NewRecorder()
+	env.handler.ServeHTTP(listed, authenticatedGet(t, target))
+
+	if listed.Code != http.StatusOK {
+		t.Fatalf("outputs list answers %d, want %d", listed.Code, http.StatusOK)
+	}
+
+	if !strings.Contains(listed.Body.String(), `"big"`) {
+		t.Fatal("outputs list lacks the big output")
+	}
+}
+
+// assertLargeSingleRoute proves the one-output route answers the plain value.
+func assertLargeSingleRoute(t *testing.T, env sealedTestEnv, id, want string) {
+	t.Helper()
+
+	single := httptest.NewRecorder()
+	env.handler.ServeHTTP(single, authenticatedGet(t, "/api/v2/state-version-outputs/"+id+".big"))
+
+	if single.Code != http.StatusOK {
+		t.Fatalf("output answers %d, want %d", single.Code, http.StatusOK)
+	}
+
+	if !strings.Contains(single.Body.String(), want) {
+		t.Fatal("single output lacks the plain value")
+	}
+}
+
+// assertOversizedOutputsDenied proves an outputs document over the limit
+// still fails the create.
+func assertOversizedOutputsDenied(t *testing.T, env sealedTestEnv, content string, want int, marker string) {
+	t.Helper()
+
+	over := largeSealedOutputs(want, marker)
+
+	target := "/api/v2/workspaces/" + env.ws.ID.String() + "/state-versions"
+	body := largeSealedCreateBody(content, over.doc)
+
+	denied := httptest.NewRecorder()
+	env.handler.ServeHTTP(denied, createStateRequest(t, target, body))
+
+	if denied.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf(
+			"oversized create answers %d, want %d: %s",
+			denied.Code,
+			http.StatusRequestEntityTooLarge,
+			denied.Body.String(),
+		)
+	}
+}

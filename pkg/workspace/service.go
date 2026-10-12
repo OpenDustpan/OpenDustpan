@@ -605,6 +605,13 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, fmt.Errorf("open state blob %q: %w", key, err)
 	}
 
+	// The key must name the workspace and the version it resolves to:
+	// a key whose workspace segment names another workspace opens
+	// nothing, so one workspace never opens another's sealed bytes.
+	if parts[1] != sv.Workspace.String() || parts[2] != sv.ID.String() {
+		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
+	}
+
 	r, err := s.blobs.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)

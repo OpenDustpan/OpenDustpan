@@ -3706,3 +3706,142 @@ func swapSealedFrames(sealed []byte) []byte {
 
 	return out
 }
+
+// TestOpenStateBlobRejectsForeignWorkspace proves a key whose workspace
+// segment names another workspace opens nothing, even when the blob exists
+// under that key: the open fails with ErrStateVersionNotFound and the
+// version's own key still opens.
+func TestOpenStateBlobRejectsForeignWorkspace(t *testing.T) {
+	t.Parallel()
+
+	f := newSealedFixture(t)
+
+	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
+
+	sv := uploadSealedState(t, f, content, "s3cr3t-output-value")
+	foreign := foreignWorkspaceKey(t, f, sv)
+	plantForeignBlob(t, f, sv, foreign)
+	assertForeignKeyDenied(t, f, foreign)
+	assertVersionKeyOpens(t, f, sv, content)
+}
+
+// foreignWorkspaceKey creates the other workspace and returns the key that
+// copies the version and attempt segments of sv.Content under its ID: a key
+// whose workspace segment names another workspace.
+func foreignWorkspaceKey(t *testing.T, f fixture, sv workspace.StateVersion) blob.Key {
+	t.Helper()
+
+	ctx := t.Context()
+
+	otherName, nameErr := workspace.ParseName("other")
+	if nameErr != nil {
+		t.Fatalf("parse name: %v", nameErr)
+	}
+
+	other, createErr := f.svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: otherName})
+	if createErr != nil {
+		t.Fatalf("create other workspace: %v", createErr)
+	}
+
+	parts := strings.Split(sv.Content.String(), "/")
+	if len(parts) != 4 {
+		t.Fatalf("content key = %q, want tofu/<workspace>/<version>/<attempt>", sv.Content)
+	}
+
+	foreign, keyErr := blob.ParseKey("tofu/" + other.ID.String() + "/" + parts[2] + "/" + parts[3])
+	if keyErr != nil {
+		t.Fatalf("foreign key: %v", keyErr)
+	}
+
+	return foreign
+}
+
+// plantForeignBlob stores the sealed bytes of sv under foreign, so the
+// denial below proves the segment check, not a missing blob.
+func plantForeignBlob(t *testing.T, f fixture, sv workspace.StateVersion, foreign blob.Key) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	sealed, readErr := readSealedBlobBytes(t, f, sv)
+	if readErr != nil {
+		t.Fatalf("read sealed blob: %v", readErr)
+	}
+
+	if putErr := f.blobs.Put(ctx, foreign, bytes.NewReader(sealed)); putErr != nil {
+		t.Fatalf("put foreign blob: %v", putErr)
+	}
+}
+
+// assertForeignKeyDenied proves the open of foreign fails with
+// ErrStateVersionNotFound and opens nothing.
+func assertForeignKeyDenied(t *testing.T, f fixture, foreign blob.Key) {
+	t.Helper()
+
+	foreignReader, foreignErr := f.svc.OpenStateBlob(t.Context(), foreign)
+	if errors.Is(foreignErr, workspace.ErrStateVersionNotFound) {
+		return
+	}
+
+	if foreignErr == nil {
+		if closeErr := foreignReader.Close(); closeErr != nil {
+			t.Errorf("close foreign reader: %v", closeErr)
+		}
+	}
+
+	t.Fatalf(
+		"open of a foreign workspace key: err = %v, want ErrStateVersionNotFound",
+		foreignErr,
+	)
+}
+
+// assertVersionKeyOpens proves the version's own key still opens with the
+// uploaded content.
+func assertVersionKeyOpens(t *testing.T, f fixture, sv workspace.StateVersion, content string) {
+	t.Helper()
+
+	opened, openErr := f.svc.OpenStateBlob(t.Context(), sv.Content)
+	if openErr != nil {
+		t.Fatalf("open of the version key: %v", openErr)
+	}
+
+	got, versionReadErr := io.ReadAll(opened)
+	closeErr := opened.Close()
+
+	if versionReadErr != nil {
+		t.Fatalf("read version key: %v", versionReadErr)
+	}
+
+	if closeErr != nil {
+		t.Fatalf("close version key: %v", closeErr)
+	}
+
+	if string(got) != content {
+		t.Fatalf("version content = %q, want %q", got, content)
+	}
+}
+
+// readSealedBlobBytes returns the sealed bytes the upload stored.
+func readSealedBlobBytes(t *testing.T, f fixture, sv workspace.StateVersion) ([]byte, error) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	raw, err := f.blobs.Get(ctx, sv.Content)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if closeErr := raw.Close(); closeErr != nil {
+			t.Errorf("close blob: %v", closeErr)
+		}
+	}()
+
+	data, err := io.ReadAll(raw)
+	if err != nil {
+		return nil, fmt.Errorf("read sealed blob: %w", err)
+	}
+
+	return data, nil
+}
