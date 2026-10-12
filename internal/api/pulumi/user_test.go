@@ -173,6 +173,8 @@ func newUserHandler(
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {

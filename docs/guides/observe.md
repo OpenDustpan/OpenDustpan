@@ -78,6 +78,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_go_heap_bytes` | (none) |
 | `dustpan_go_gc_cycles_total` | (none) |
 | `dustpan_readiness_failures_total` | (none) |
+| `dustpan_audit_append_failures_total` | (none) |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -86,6 +87,10 @@ No label holds a namespace, a user, a token or a unit name.
 The duration family also writes `_bucket`, `_sum` and `_count` series.
 `dustpan_build_info` holds 1 with the server version.
 `dustpan_process_start_time_seconds` holds the start time in seconds.
+`dustpan_audit_append_failures_total` counts audit entries lost because the
+append failed.
+Alert when it is above zero. The audit guide shows the rule.
+This is the alert for failed logging (PCI DSS 10.7).
 
 ## Request log
 

@@ -324,6 +324,8 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               base,
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
@@ -365,6 +367,8 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
@@ -1440,6 +1444,8 @@ func newDeleteHandler(
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
