@@ -117,6 +117,7 @@ func newReadinessServer(
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(pingBlobs{Store: disk, ping: orPing(blobPing)}),
