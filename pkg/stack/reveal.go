@@ -498,7 +498,7 @@ func streamResourceSecret(
 		return nil, notFoundCipher(path)
 	}
 
-	return streamSectionSecret(jsontext.NewDecoder(bytes.NewReader(body)), body, section, rest, path)
+	return streamSectionSecret(jsontext.NewDecoder(bytes.NewReader(body)), section, rest, path)
 }
 
 // resourceHasURN streams the resource object that dec streams and reports
@@ -536,11 +536,11 @@ func urnOrSkip(dec *jsontext.Decoder, name string) (bool, error) {
 	return false, skipStreamed(dec)
 }
 
-// streamSectionSecret walks the resource object that dec streams, in data, to
+// streamSectionSecret walks the resource object that dec streams to
 // the secret at section/rest. Once the section answers, the rest of the
 // resource is read so that the decoder checks it.
 func streamSectionSecret(
-	dec *jsontext.Decoder, data []byte, section string, rest []string, path string,
+	dec *jsontext.Decoder, section string, rest []string, path string,
 ) ([]byte, error) {
 	open, err := openStreamedObject(dec)
 	if err != nil {
@@ -552,7 +552,7 @@ func streamSectionSecret(
 	}
 
 	cipher, found, err := seekMember(dec, section, func() ([]byte, error) {
-		return streamDescend(dec, data, rest, path)
+		return streamDescend(dec, rest, path)
 	})
 	if err != nil {
 		return nil, err
@@ -589,30 +589,21 @@ func streamedURNPresent(dec *jsontext.Decoder) (bool, error) {
 	return tok.String() != "", nil
 }
 
-// streamDescend walks the streamed value that dec streams, in data, to the
-// value at rest and returns the ciphertext bytes when it is a secret. A secret
-// masks only itself, so an object that is a secret answers not-found for any
-// path below it, as maskValue stops at a secret.
-func streamDescend(dec *jsontext.Decoder, data []byte, rest []string, path string) ([]byte, error) {
+// streamDescend walks the streamed value that dec streams to the value at
+// rest and returns the ciphertext bytes when it is a secret. A secret masks
+// only itself, so an object that is a secret answers not-found for any path
+// below it, as maskValue stops at a secret.
+func streamDescend(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
 	if len(rest) == 0 {
 		return streamTargetSecret(dec, path)
 	}
 
 	if dec.PeekKind() == jsontext.KindBeginObject {
-		secret, err := secretAncestor(dec, data)
-		if err != nil {
-			return nil, err
-		}
-
-		if secret {
-			return nil, notFoundCipher(path)
-		}
-
-		return streamDescendObject(dec, data, rest, path)
+		return streamDescendObject(dec, rest, path)
 	}
 
 	if dec.PeekKind() == jsontext.KindBeginArray {
-		return streamDescendArray(dec, data, rest, path)
+		return streamDescendArray(dec, rest, path)
 	}
 
 	if skipErr := skipStreamed(dec); skipErr != nil {
@@ -622,57 +613,84 @@ func streamDescend(dec *jsontext.Decoder, data []byte, rest []string, path strin
 	return nil, notFoundCipher(path)
 }
 
-// secretAncestor reports whether the object that dec streams next is a
-// secret. It scans a copy of the object from its opening brace, so dec keeps
-// its position for the walk.
-func secretAncestor(dec *jsontext.Decoder, data []byte) (bool, error) {
-	at, err := objectAt(dec, data)
-	if err != nil {
-		return false, err
-	}
-
-	scan := jsontext.NewDecoder(bytes.NewReader(data[at:]))
-
-	fields, err := scanSecretObject(scan)
-	if err != nil {
-		return false, err
-	}
-
-	return fields.signed, nil
-}
-
 // streamDescendObject walks the streamed object that dec streams to the value
-// at rest. Once the value answers, the rest of the object is read.
-func streamDescendObject(
-	dec *jsontext.Decoder, data []byte, rest []string, path string,
-) ([]byte, error) {
+// at rest. It reads each member of the object once: the member at rest[0]
+// descends, the signature member records whether the object is a secret, and
+// every other member is skipped. The object answers only after it ends, so a
+// signed object answers not-found, and the cost of the walk is the size of
+// the document, whatever the depth of the path.
+func streamDescendObject(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
 	if _, err := dec.ReadToken(); err != nil {
 		return nil, decodeDeploymentFailed(err)
 	}
 
-	cipher, found, err := seekMember(dec, rest[0], func() ([]byte, error) {
-		return streamDescend(dec, data, rest[1:], path)
-	})
-	if err != nil {
-		return nil, err
+	walk := objectWalk{rest: rest, path: path, cipher: nil, descended: false, descendErr: nil, signed: false}
+
+	for {
+		name, end, err := streamedMember(dec)
+		if err != nil {
+			return nil, err
+		}
+
+		if end {
+			break
+		}
+
+		if err := walk.visit(dec, name); err != nil {
+			return nil, err
+		}
 	}
 
-	if !found {
+	if !walk.descended || walk.signed {
 		return nil, notFoundCipher(path)
 	}
 
-	if err := drainStreamedObject(dec); err != nil {
-		return nil, err
-	}
+	return walk.cipher, walk.descendErr
+}
 
-	return cipher, nil
+// objectWalk is the state of the walk of one object on the path: the result
+// of the descent and whether the object carries the secret signature.
+type objectWalk struct {
+	rest       []string
+	path       string
+	cipher     []byte
+	descended  bool
+	descendErr error
+	signed     bool
+}
+
+// visit reads the streamed value of the member named name. It returns an
+// error that ends the walk.
+func (w *objectWalk) visit(dec *jsontext.Decoder, name string) error {
+	switch {
+	case name == w.rest[0] && !w.descended:
+		w.descended = true
+		w.cipher, w.descendErr = streamDescend(dec, w.rest[1:], w.path)
+
+		// A secret without a usable ciphertext leaves the decoder after its
+		// object, so the walk goes on and the signature decides.
+		if w.descendErr != nil && !errors.Is(w.descendErr, ErrInvalidUpdate) {
+			return w.descendErr
+		}
+
+		return nil
+	case name == secretSigKey:
+		text, err := streamedText(dec)
+		if err != nil {
+			return err
+		}
+
+		w.signed = w.signed || text == secretSigValue
+
+		return nil
+	default:
+		return skipStreamed(dec)
+	}
 }
 
 // streamDescendArray walks the streamed array that dec streams to element
 // rest[0], then to the value below it. The index is a canonical decimal.
-func streamDescendArray(
-	dec *jsontext.Decoder, data []byte, rest []string, path string,
-) ([]byte, error) {
+func streamDescendArray(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
 	index, ok := parseIndex(rest[0])
 	if !ok {
 		return nil, notFoundCipher(path)
@@ -687,7 +705,7 @@ func streamDescendArray(
 		return nil, notFoundCipher(path)
 	}
 
-	cipher, err := streamDescend(dec, data, rest[1:], path)
+	cipher, err := streamDescend(dec, rest[1:], path)
 	if err != nil {
 		return nil, err
 	}

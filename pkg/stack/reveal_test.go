@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -623,5 +624,106 @@ func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
 			t.Errorf("%s: allocated = %d bytes, want at most %d for a %d-byte target",
 				name, growth, tc.bound, len(deployment))
 		}
+	}
+}
+
+// TestSecretCiphertextOfDeepPathReadsEachLevelOnce proves the cost of a deep
+// path follows the size of the document, not the depth times the size. A
+// deployment of 8 MiB nests 4000 objects, each with a 2 KiB string beside the
+// path. A lookup that reads the subtree again at each level takes seconds;
+// one pass takes milliseconds.
+func TestSecretCiphertextOfDeepPathReadsEachLevelOnce(t *testing.T) {
+	t.Parallel()
+
+	const (
+		depth = 4000
+		limit = 3 * time.Second
+	)
+
+	padding := strings.Repeat("p", 2048)
+	value := secretObject("deep-cipher", "")
+
+	var tokens strings.Builder
+
+	for range depth {
+		value = `{"pad":"` + padding + `","a":` + value + `}`
+
+		tokens.WriteString("/a")
+	}
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
+		`"outputs":` + value + `}]}`)
+
+	start := time.Now()
+
+	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs"+tokens.String())
+	if err != nil || string(got) != "deep-cipher" {
+		t.Fatalf("deep reveal = %q, %v; want deep-cipher", got, err)
+	}
+
+	if elapsed := time.Since(start); elapsed > limit {
+		t.Fatalf("deep reveal took %s, want at most %s for a %d-byte document", elapsed, limit, len(deployment))
+	}
+}
+
+// TestSecretCiphertextOfRejectsSignedAncestorInAnyOrder proves an object that
+// is a secret answers not-found for a path below it, whether its signature
+// member streams before or after the member on the path, and whether or not
+// the value below holds a usable ciphertext.
+func TestSecretCiphertextOfRejectsSignedAncestorInAnyOrder(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sig   = `"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270"`
+		inner = `"inner":{` + sig + `,"ciphertext":"aW5uZXI="}`
+		bare  = `"inner":{` + sig + `}`
+	)
+
+	cases := map[string]string{
+		"signature first":                `{` + sig + `,` + inner + `}`,
+		"signature last":                 `{` + inner + `,` + sig + `}`,
+		"signature last, no ciphertext":  `{` + bare + `,` + sig + `}`,
+		"signature first, no ciphertext": `{` + sig + `,` + bare + `}`,
+	}
+
+	for name, outer := range cases {
+		deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+			`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
+			`"outputs":{"a":` + outer + `}}]}`)
+
+		_, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a/inner")
+		if !isNotFound(err) {
+			t.Errorf("%s: reveal error = %v, want not-found", name, err)
+		}
+	}
+}
+
+// TestSecretCiphertextOfKeyWithTildeTwo proves the lookup escapes a key that
+// holds the text "~2". The key a~2b is named a~02b in a path. The path a~2b
+// holds an escape that does not exist, so it answers not-found.
+func TestSecretCiphertextOfKeyWithTildeTwo(t *testing.T) {
+	t.Parallel()
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
+		`"outputs":{"a~2b":` + secretObject("tilde-two", "") + `}}]}`)
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	if !slices.Contains(masked, "/resources/0/outputs/a~02b") {
+		t.Fatalf("masked = %q, want the escaped path a~02b", masked)
+	}
+
+	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~02b")
+	if err != nil || string(got) != "tilde-two" {
+		t.Fatalf("reveal of a~02b = %q, %v; want tilde-two", got, err)
+	}
+
+	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~2b"); !isNotFound(err) {
+		t.Fatalf("reveal of a~2b error = %v, want not-found", err)
 	}
 }
