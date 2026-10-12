@@ -115,7 +115,7 @@ func openPostgresStoreWithURL(ctx context.Context, tb testing.TB, base string) (
 	}
 
 	tb.Cleanup(func() {
-		st.Close()
+		st.CloseContext(ctx)
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 

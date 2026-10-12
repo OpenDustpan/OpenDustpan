@@ -102,7 +102,7 @@ func openProxiedPostgresStore(
 	}
 
 	tb.Cleanup(func() {
-		st.Close()
+		st.CloseContext(ctx)
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
