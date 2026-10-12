@@ -377,3 +377,85 @@ func TestSecretCiphertextOfDuplicateURN(t *testing.T) {
 		t.Fatal("reveal of /resources/0/outputs/k answered, want not-found")
 	}
 }
+
+// TestSecretCiphertextOfBoundsLargeStringToken pins the memory bound of the
+// lookup. The deployment is about 20 MiB and holds one 2 MiB string in a
+// resource before the target, so the lookup skips that string. jsontext
+// buffers a string token whole while it skips it, so the heap growth may reach
+// about four times the string. The bound is 4 MiB plus four times the string,
+// and it must not grow with the size of the document.
+//
+//nolint:paralleltest // The allocation measurement needs a quiet runtime, so this test never runs in parallel.
+func TestSecretCiphertextOfBoundsLargeStringToken(t *testing.T) {
+	const (
+		fillers    = 2600
+		largeBytes = 2 << 20
+	)
+
+	filler := `{"urn":"urn:pulumi:dev::web::filler:index:Filler::filler",` +
+		`"type":"filler:index:Filler","inputs":{"blob":"` + strings.Repeat("x", 8000) + `"},"outputs":{}}`
+
+	large := `{"urn":"urn:pulumi:dev::web::large:index:Large::large",` +
+		`"type":"large:index:Large","inputs":{},"outputs":{"blob":"` + strings.Repeat("y", largeBytes) + `"}}`
+
+	secret := `{"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` +
+		base64.StdEncoding.EncodeToString([]byte("large-cipher")) + `"}`
+
+	target := `{"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev",` +
+		`"type":"pulumi:pulumi:Stack","inputs":{},"outputs":{"password":` + secret + `}}`
+
+	var sb strings.Builder
+
+	sb.WriteString(`{"secrets_providers":{"type":"service"},"resources":[`)
+
+	for range fillers {
+		sb.WriteString(filler + ",")
+	}
+
+	sb.WriteString(large + "," + target + "]}")
+
+	deployment := []byte(sb.String())
+	sb.Reset()
+
+	if len(deployment) < 20<<20 {
+		t.Fatalf("deployment = %d bytes, want at least 20 MiB", len(deployment))
+	}
+
+	path := "/resources/" + strconv.Itoa(fillers+1) + "/outputs/password"
+
+	// Warm the path once, so one-time allocations stay out of the measurement.
+	if _, _, err := stack.SecretCiphertextOf(deployment, path); err != nil {
+		t.Fatalf("warm reveal: %v", err)
+	}
+
+	runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+	runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+
+	var before runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	got, masked, err := stack.SecretCiphertextOf(deployment, path)
+
+	var after runtime.MemStats
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if string(got) != "large-cipher" {
+		t.Fatalf("ciphertext = %q, want large-cipher", got)
+	}
+
+	if len(masked) != 1 || masked[0] != path {
+		t.Fatalf("masked = %q, want [%q]", masked, path)
+	}
+
+	bound := uint64(4<<20 + 4*largeBytes)
+	if growth := after.TotalAlloc - before.TotalAlloc; growth > bound {
+		t.Fatalf("allocated = %d bytes, want at most %d for a %d-byte deployment with one %d-byte string",
+			growth, bound, len(deployment), largeBytes)
+	}
+}

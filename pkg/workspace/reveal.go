@@ -19,6 +19,11 @@ import (
 // reveal lookup streams the state to the path and keeps no more than one
 // resource instance in memory, so no tree of the whole state is built.
 
+// Memory bound: heap growth of the lookup does not depend on the size of the
+// state. It grows with the largest single string token of the state, about
+// four times that string, because jsontext buffers a string token whole while
+// it skips it. A state with a 1 MiB string may cost about 4 MiB more per call.
+//
 // errUnexpectedValue reports streamed JSON of another shape than the lookup
 // walks. The state machine of the decoder already rejects malformed JSON, so
 // this only guards the Go switch. It carries no value.

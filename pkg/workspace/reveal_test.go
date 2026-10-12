@@ -329,3 +329,85 @@ func TestRevealValueRejectsResourceWithoutIdentity(t *testing.T) {
 		t.Fatalf("non-object resource error = %v, want a not-found error", err)
 	}
 }
+
+// TestRevealValueBoundsLargeStringToken pins the memory bound of the lookup.
+// The state is about 20 MiB and holds one 2 MiB string in a resource before
+// the target, so the lookup skips that string. jsontext buffers a string token
+// whole while it skips it, so the heap growth may reach about four times the
+// string. The bound is 4 MiB plus four times the string, and it must not grow
+// with the size of the document.
+//
+//nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
+func TestRevealValueBoundsLargeStringToken(t *testing.T) {
+	const (
+		fillers    = 2600
+		largeBytes = 2 << 20
+	)
+
+	filler := `{"mode":"managed","type":"terraform_data","name":"filler",` +
+		`"instances":[{"attributes":{"id":"filler-id","blob":"` + strings.Repeat("x", 8000) + `"}}]}`
+
+	large := `{"mode":"managed","type":"terraform_data","name":"large",` +
+		`"instances":[{"attributes":{"id":"large-id","blob":"` + strings.Repeat("y", largeBytes) + `"}}]}`
+
+	target := `{"mode":"managed","type":"terraform_data","name":"target",` +
+		`"instances":[{"attributes":{"id":"target-id","input":"s3cr3t-large"},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]]}]}`
+
+	var sb strings.Builder
+
+	sb.WriteString(`{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[`)
+
+	for range fillers {
+		sb.WriteString(filler + ",")
+	}
+
+	sb.WriteString(large + "," + target + "]}")
+
+	state := []byte(sb.String())
+	sb.Reset()
+
+	if len(state) < 20<<20 {
+		t.Fatalf("state = %d bytes, want at least 20 MiB", len(state))
+	}
+
+	marks := workspace.SensitiveMarks{"terraform_data.target": {"/input"}}
+	path := "/resources/" + strconv.Itoa(fillers+1) + "/instances/0/attributes/input"
+
+	// Warm the path once, so one-time allocations stay out of the measurement.
+	if _, _, err := workspace.RevealValue(state, marks, path); err != nil {
+		t.Fatalf("warm reveal: %v", err)
+	}
+
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+
+	var before runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	value, masked, err := workspace.RevealValue(state, marks, path)
+
+	var after runtime.MemStats
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if value != "s3cr3t-large" {
+		t.Fatalf("value = %#v, want s3cr3t-large", value)
+	}
+
+	if len(masked) != 1 || masked[0] != path {
+		t.Fatalf("masked = %q, want [%q]", masked, path)
+	}
+
+	bound := uint64(4<<20 + 4*largeBytes)
+	if growth := after.TotalAlloc - before.TotalAlloc; growth > bound {
+		t.Fatalf("allocated = %d bytes, want at most %d for a %d-byte state with one %d-byte string",
+			growth, bound, len(state), largeBytes)
+	}
+}

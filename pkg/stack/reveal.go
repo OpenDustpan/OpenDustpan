@@ -24,6 +24,12 @@ import (
 // The error text names the provider, never a value, a key or a scope.
 var ErrOtherSecretsProvider = errors.New("stack uses another secrets provider")
 
+// Memory bound: heap growth of the lookup does not depend on the size of the
+// deployment. It grows with the largest single string token of the deployment,
+// about four times that string, because jsontext buffers a string token whole
+// while it skips it. A deployment with a 1 MiB string may cost about 4 MiB
+// more per call.
+//
 // errUnexpectedValue reports streamed JSON of another shape than the lookup
 // walks. The state machine of the decoder already rejects malformed JSON, so
 // this only guards the Go switch. It carries no value.
