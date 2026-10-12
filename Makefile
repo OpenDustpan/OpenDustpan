@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test generate build image-smoke
+.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke
 
 check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench ## Everything CI checks.
 
@@ -21,7 +21,7 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	golangci-lint run ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
-ANALYSIS_TAGS := e2e,upgrade
+ANALYSIS_TAGS := e2e,upgrade,soak
 NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
@@ -112,6 +112,14 @@ upgrade-test: ## Restart the current binary on the same database and check data,
 
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
 	E2E_SERVER=binary go test -tags e2e -race -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
+
+SOAK_DURATION ?= 30m
+SOAK_PULUMI ?= 4
+SOAK_TOFU ?= 4
+SOAK_REPORT_DIR ?= soak-reports
+
+soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
+	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" -race -count=1 -v -timeout 60m ./e2e/ -run TestSoak
 
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
