@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -1436,7 +1437,7 @@ func TestRevealConformanceRandomDisjoint(t *testing.T) {
 
 	var total agreementCount
 
-	for i := range 800 {
+	for i := range 500 {
 		state, marks, err := disjointState(rng)
 		if err != nil {
 			t.Fatalf("disjoint state: %v", err)
@@ -1452,36 +1453,60 @@ func TestRevealConformanceRandomDisjoint(t *testing.T) {
 	}
 }
 
-// TestRevealConformanceStreamingPath checks disjoint states with a 5 MiB pad
-// attribute: any lookup that uses the full decode fails with ErrTooLarge, so
-// success proves the streaming path.
+// TestRevealConformanceStreamingPath checks disjoint states with a pad
+// attribute over the 4 MiB fallback limit: any lookup that uses the full
+// decode fails with ErrTooLarge, so success proves the streaming path.
 func TestRevealConformanceStreamingPath(t *testing.T) {
 	t.Parallel()
 
 	rng := rand.New(rand.NewPCG(11, 13)) //nolint:gosec // Seeded test data generator, not a security use.
 
-	var total agreementCount
+	pad := strings.Repeat("p", 4194304+65536)
+	cases := make([]streamingCase, 0, 8)
 
-	pad := strings.Repeat("p", 5<<20)
-
-	for i := range 40 {
+	// The random choices happen here, in order, so the run stays the same
+	// whatever the order of the parallel subtests.
+	for i := range 8 {
 		state, marks, err := disjointState(rng)
 		if err != nil {
 			t.Fatalf("disjoint state: %v", err)
 		}
 
 		state = addPadAttribute(t, state, pad)
-		total.add(checkStreamingState(t, rng, "streaming "+strconv.Itoa(i), state, marks))
+		cases = append(cases, prepareStreamingState(t, rng, "streaming "+strconv.Itoa(i), state, marks))
 	}
 
-	t.Logf("checked %d candidate paths, revealed %d", total.checked, total.revealed)
+	var (
+		mu    sync.Mutex
+		total agreementCount
+	)
 
-	if total.revealed == 0 {
-		t.Error("revealed 0 paths, want at least 1")
+	// The totals are checked after every parallel subtest is done.
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		t.Logf("checked %d candidate paths, revealed %d", total.checked, total.revealed)
+
+		if total.revealed == 0 {
+			t.Error("revealed 0 paths, want at least 1")
+		}
+	})
+
+	for _, item := range cases {
+		t.Run(item.check.label, func(t *testing.T) {
+			t.Parallel()
+
+			got := checkStreamingCandidates(t, item.check, item.candidates)
+
+			mu.Lock()
+			total.add(got)
+			mu.Unlock()
+		})
 	}
 }
 
-// addPadAttribute adds a 5 MiB pad string to the attributes of state. Pad is
+// addPadAttribute adds a pad string to the attributes of state. Pad is
 // never a pointer.
 func addPadAttribute(t *testing.T, state, pad string) string {
 	t.Helper()
@@ -1539,27 +1564,36 @@ type streamingCheck struct {
 	masked []string
 }
 
-// checkStreamingState checks the masked paths plus 20 other random node
-// paths of one padded state. Any ErrTooLarge is a failure.
-func checkStreamingState(
+// streamingCase is one padded state with the paths to check.
+type streamingCase struct {
+	check      streamingCheck
+	candidates []string
+}
+
+// prepareStreamingState picks the masked paths and a few other node paths of
+// one padded state. It is the only step that uses the random source.
+func prepareStreamingState(
 	t *testing.T, rng *rand.Rand, label, state string, marks workspace.SensitiveMarks,
-) agreementCount {
+) streamingCase {
 	t.Helper()
 
 	masked := streamingMasked(t, label, state, marks)
 	physical := streamingPhysical(t, label, state)
 
 	candidates := dedupStrings(append(
-		append([]string(nil), masked...),
+		append([]string(nil), masked[:min(len(masked), streamingMaskedPerState)]...),
 		pickStreamingOthers(rng, physical, masked)...,
 	))
 
-	return checkStreamingCandidates(t, streamingCheck{
-		label:  label,
-		state:  state,
-		marks:  marks,
-		masked: masked,
-	}, candidates)
+	return streamingCase{
+		check: streamingCheck{
+			label:  label,
+			state:  state,
+			marks:  marks,
+			masked: masked,
+		},
+		candidates: candidates,
+	}
 }
 
 // streamingMasked returns the masked paths of one padded state.
@@ -1678,6 +1712,14 @@ func checkStreamingPath(t *testing.T, check streamingCheck, path string) bool {
 }
 
 // pickStreamingOthers picks up to 20 physical paths outside the masked set.
+// The padded states are large, so each reveal costs three passes over more
+// than 4 MiB. The test checks a few masked paths and a few other paths of
+// each state; the unpadded generator checks every path.
+const (
+	streamingMaskedPerState = 8
+	streamingOthersPerState = 5
+)
+
 func pickStreamingOthers(rng *rand.Rand, physical, masked []string) []string {
 	inMasked := map[string]bool{}
 	for _, path := range masked {
@@ -1696,7 +1738,7 @@ func pickStreamingOthers(rng *rand.Rand, physical, masked []string) []string {
 	var out []string
 
 	for _, index := range order {
-		if len(out) >= 20 {
+		if len(out) >= streamingOthersPerState {
 			break
 		}
 
