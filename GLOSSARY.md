@@ -29,7 +29,7 @@ The tool, the namespace and the tool's own name for a unit, written as `<tool>:<
 _Avoid_: Unit ID, path, address
 
 **State**:
-The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state but never reads its contents.
+The record that a tool keeps of the resources it manages for one unit. OpenDustpan stores state and may read it. A read masks secret values (ADR 41).
 _Avoid_: State file (except for OpenTofu), snapshot
 
 **Inventory**:
@@ -165,6 +165,30 @@ _Avoid_: DEK, secret key
 **Key-encryption key**:
 The key, kept outside the OpenDustpan database, that encrypts data keys.
 _Avoid_: Master key, root key, KEK
+
+**Sealed**:
+Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41).
+_Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
+
+**Secret value**:
+A value in state that the tool marks as secret: a Pulumi secret, or an OpenTofu sensitive output or attribute.
+_Avoid_: Sensitive value (except for OpenTofu), password
+
+**Masked value**:
+A marker that replaces a secret value in a state read. It holds the value path and never the value.
+_Avoid_: Redacted value, hidden value
+
+**Value path**:
+A JSON Pointer to one value in the state document of one version, as the tool stores it.
+_Avoid_: Attribute path (except for OpenTofu), key
+
+**Reveal**:
+The call that answers the plain text of one secret value. It needs `unit:read-secrets` and writes an audit entry.
+_Avoid_: Decrypt (that is the Pulumi CLI's protocol), unmask, show secrets
+
+**Audit entry**:
+An append-only record of one action: the principal, the action, the object, the result and the time.
+_Avoid_: Audit log line, event
 
 ## Flagged ambiguities
 

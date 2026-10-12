@@ -182,6 +182,25 @@ type Importer interface {
 	Import(ctx context.Context, r io.Reader, want Summary) (Summary, error)
 }
 
+// Stager stages an export for an online restore (ADR 38 decision 3): it loads
+// the export into a staging area without touching the live data, then checks
+// the staged data. SQLite stages into a separate file, PostgreSQL into a
+// separate schema. A later change applies the staged data; this port only
+// checks it.
+type Stager interface {
+	// StageRestore loads the export in r into the staging area and checks it:
+	// the dialect and schema version against want, the row counts against
+	// want.RowCounts, the foreign keys, and the blob references against
+	// want.Blobs with size and checksum. It returns the Summary of the staged
+	// data. It returns ErrDialectMismatch, ErrSchemaMismatch or ErrCorrupt. A
+	// failed stage removes the staging area: the live data stays unchanged.
+	// Only one staging exists at a time: a new stage discards the previous one.
+	StageRestore(ctx context.Context, r io.Reader, want Summary) (Summary, error)
+	// DiscardStaging removes the staging area, if any. It leaves the live
+	// data unchanged. A check-only restore calls it after the checks.
+	DiscardStaging(ctx context.Context) error
+}
+
 // Registry tracks the backups table: one row for each backup that this
 // installation made. Rows carry no fence: they describe the installation,
 // not one namespace. A server that starts marks every running row failed.
