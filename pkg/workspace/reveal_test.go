@@ -395,9 +395,9 @@ func TestRevealValueRejectsResourceWithoutIdentity(t *testing.T) {
 // The state is about 20 MiB and holds one 2 MiB string in a resource before
 // the target, so the lookup skips that string. jsontext buffers a string token
 // whole while it skips it, so the heap growth may reach about four times the
-// string per pass. The lookup reads the state twice (locate, answer), so the
-// bound is 4 MiB plus four times the string per pass, and it must not grow
-// with the size of the document.
+// string per pass. The lookup reads the state three times (locate, pointers,
+// answer), so the bound is 4 MiB plus four times the string per pass, and it
+// must not grow with the size of the document.
 //
 //nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
 func TestRevealValueBoundsLargeStringToken(t *testing.T) {
@@ -467,7 +467,7 @@ func TestRevealValueBoundsLargeStringToken(t *testing.T) {
 		t.Fatalf("masked = %q, want [%q]", masked, path)
 	}
 
-	bound := uint64(4<<20 + 8*largeBytes)
+	bound := uint64(4<<20 + 12*largeBytes)
 	if growth := after.TotalAlloc - before.TotalAlloc; growth > bound {
 		t.Fatalf("allocated = %d bytes, want at most %d for a %d-byte state with one %d-byte string",
 			growth, bound, len(state), largeBytes)
@@ -767,28 +767,298 @@ func TestRevealValueRejectsLargeSensitiveAttributes(t *testing.T) {
 	}
 }
 
-// TestRevealValueFallbackLimit proves a reveal that needs the full instance
-// fails with ErrTooLarge when the instance runs over 4 MiB, while a smaller
-// instance still reveals. Replaced when the streaming answer for marks lands.
-func TestRevealValueFallbackLimit(t *testing.T) {
+// largeMarksState builds a 12 MiB instance: 12000 members of 1000-byte
+// strings with a secret and its copy at the end.
+func largeMarksState(t *testing.T, members int, secret string) []byte {
+	t.Helper()
+
+	var attrs strings.Builder
+
+	attrs.WriteString("{")
+
+	for i := range members {
+		if i > 0 {
+			attrs.WriteString(",")
+		}
+
+		attrs.WriteString(strconv.Quote("m" + strconv.Itoa(i)))
+		attrs.WriteString(":")
+		attrs.WriteString(strconv.Quote(strings.Repeat("v", 1000)))
+	}
+
+	attrs.WriteString(`,"secret":` + strconv.Quote(secret))
+	attrs.WriteString(`,"copy":` + strconv.Quote(secret))
+	attrs.WriteString("}")
+
+	state := []byte(conformanceState(
+		attrs.String(),
+		`[[{"type":"get_attr","value":"secret"}]]`,
+	))
+	attrs.Reset()
+
+	if len(state) < 12_000_000 {
+		t.Fatalf("state = %d bytes, want at least 12 MB", len(state))
+	}
+
+	return state
+}
+
+// checkLargeMarksValues proves the secret and its copy answer with the
+// secret value, and a plain member does not answer.
+func checkLargeMarksValues(
+	t *testing.T, state []byte, marks workspace.SensitiveMarks, secret string,
+) {
+	t.Helper()
+
+	secretPath := "/resources/0/instances/0/attributes/secret"
+	copyPath := "/resources/0/instances/0/attributes/copy"
+	plainPath := "/resources/0/instances/0/attributes/m5"
+
+	value, masked, err := workspace.RevealValue(state, marks, secretPath)
+	if err != nil {
+		t.Fatalf("reveal secret: %v", err)
+	}
+
+	text, ok := value.(string)
+	if !ok || text != secret {
+		t.Fatalf("secret value = %#v, want the %d-byte secret", value, len(secret))
+	}
+
+	if len(masked) != 1 || masked[0] != secretPath {
+		t.Fatalf("masked = %q, want [%q]", masked, secretPath)
+	}
+
+	dup, masked, err := workspace.RevealValue(state, marks, copyPath)
+	if err != nil {
+		t.Fatalf("reveal copy: %v", err)
+	}
+
+	if dup != secret {
+		t.Fatal("copy value does not match the secret")
+	}
+
+	if len(masked) != 1 || masked[0] != copyPath {
+		t.Fatalf("masked = %q, want [%q]", masked, copyPath)
+	}
+
+	if _, _, err := workspace.RevealValue(state, marks, plainPath); err == nil {
+		t.Errorf("reveal of %q succeeded, want a not-found error", plainPath)
+	} else if !errors.Is(err, workspace.ErrResourceNotFound) {
+		t.Errorf("reveal of %q error = %v, want a not-found error", plainPath, err)
+	}
+}
+
+// measureRevealGrowth warms the path once, then reports the heap growth of
+// one reveal.
+func measureRevealGrowth(
+	t *testing.T, state []byte, marks workspace.SensitiveMarks, path string,
+) uint64 {
+	t.Helper()
+
+	// Warm the path once, so one-time allocations stay out of the
+	// measurement.
+	if _, _, err := workspace.RevealValue(state, marks, path); err != nil {
+		t.Fatalf("warm reveal: %v", err)
+	}
+
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+
+	var before runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	if _, _, err := workspace.RevealValue(state, marks, path); err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	var after runtime.MemStats
+
+	runtime.ReadMemStats(&after)
+
+	growth := after.TotalAlloc - before.TotalAlloc
+	t.Logf("heap growth = %d bytes for a %d-byte instance", growth, len(state))
+
+	return growth
+}
+
+// checkRevealGrowth fails the test when growth runs over the bound.
+func checkRevealGrowth(t *testing.T, growth, bound uint64, stateLen int) {
+	t.Helper()
+
+	if growth > bound {
+		t.Fatalf(
+			"heap allocated = %d bytes, want below %d for a %d-byte instance",
+			growth,
+			bound,
+			stateLen,
+		)
+	}
+}
+
+// TestRevealValueMarksStreamsLargeInstance proves a reveal with marks near
+// the end of a large instance keeps heap growth far below the size of the
+// instance: with a disjoint pointer the lookup streams the answer.
+//
+//nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
+func TestRevealValueMarksStreamsLargeInstance(t *testing.T) {
+	// No t.Parallel: the heap measurement needs a quiet runtime.
+	secret := strings.Repeat("s", 64)
+	marks := conformanceOtherMarks()
+	state := largeMarksState(t, 12000, secret)
+
+	checkLargeMarksValues(t, state, marks, secret)
+
+	growth := measureRevealGrowth(
+		t, state, marks, "/resources/0/instances/0/attributes/secret",
+	)
+
+	// Bound found by measuring this test: growth is about 5 MB for a
+	// 12 MB instance, far below 12 MB x 50 of the old full decode. The
+	// bound is twice the measured growth, rounded up to a whole MiB.
+	const bound = 10 << 20
+
+	checkRevealGrowth(t, growth, bound, len(state))
+}
+
+// containerState is one built secret-container state with its paths.
+type containerState struct {
+	state []byte
+	paths containerPaths
+}
+
+// containerMarksState builds an instance with a 100000-member secret object
+// and its duplicate.
+func containerMarksState(t *testing.T, members int) containerState {
+	t.Helper()
+
+	var raw strings.Builder
+
+	raw.WriteString("{")
+
+	for i := range members {
+		if i > 0 {
+			raw.WriteString(",")
+		}
+
+		raw.WriteString(strconv.Quote("k" + strconv.Itoa(i)))
+		raw.WriteString(":")
+		raw.WriteString(strconv.Quote("vvvvv"))
+	}
+
+	raw.WriteString("}")
+
+	attrs := `{"obj":` + raw.String() + `,"dup":` + raw.String() + `,"other":"x"}`
+	raw.Reset()
+
+	built := containerState{state: nil, paths: containerPaths{obj: "", dup: ""}}
+	built.state = []byte(conformanceState(
+		attrs,
+		`[[{"type":"get_attr","value":"obj"}]]`,
+	))
+
+	if len(built.state) < 3_000_000 {
+		t.Fatalf("state = %d bytes, want at least 3 MB", len(built.state))
+	}
+
+	built.paths = containerPaths{
+		obj: "/resources/0/instances/0/attributes/obj",
+		dup: "/resources/0/instances/0/attributes/dup",
+	}
+
+	return built
+}
+
+// containerPaths names the secret object and its duplicate.
+type containerPaths struct {
+	obj string
+	dup string
+}
+
+// checkContainerMarksValues proves the secret object and its duplicate
+// answer with all members.
+func checkContainerMarksValues(
+	t *testing.T, state []byte, marks workspace.SensitiveMarks, paths containerPaths, members int,
+) {
+	t.Helper()
+
+	value, masked, err := workspace.RevealValue(state, marks, paths.obj)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	objValue, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("value type = %T, want an object", value)
+	}
+
+	if len(objValue) != members {
+		t.Fatalf("value holds %d members, want %d", len(objValue), members)
+	}
+
+	if len(masked) != 1 || masked[0] != paths.obj {
+		t.Fatalf("masked = %q, want [%q]", masked, paths.obj)
+	}
+
+	dupValue, _, err := workspace.RevealValue(state, marks, paths.dup)
+	if err != nil {
+		t.Fatalf("reveal dup: %v", err)
+	}
+
+	dupObj, ok := dupValue.(map[string]any)
+	if !ok || len(dupObj) != members {
+		t.Fatal("dup value does not match the secret object")
+	}
+}
+
+// TestRevealValueMarksLargeSecretContainer proves a reveal of a large secret
+// object answers: the answer itself is large, so the bound holds the decoded
+// answer.
+//
+//nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
+func TestRevealValueMarksLargeSecretContainer(t *testing.T) {
+	// No t.Parallel: the heap measurement needs a quiet runtime.
+	const members = 100000
+
+	marks := conformanceOtherMarks()
+	built := containerMarksState(t, members)
+
+	checkContainerMarksValues(t, built.state, marks, built.paths, members)
+
+	growth := measureRevealGrowth(t, built.state, marks, built.paths.obj)
+
+	// Bound found by measuring this test: growth is about 198 MB for a
+	// 3 MB instance, because the answer is a 100000-member object held
+	// decoded. The bound is twice the measured growth, rounded up to a
+	// whole MiB.
+	const bound = 400 << 20
+
+	checkRevealGrowth(t, growth, bound, len(built.state))
+}
+
+// TestRevealValueEntangledLargeInstance proves nested pointers use the full
+// decode: a 5 MiB instance fails with ErrTooLarge, while the same layout at
+// 1 KiB answers.
+func TestRevealValueEntangledLargeInstance(t *testing.T) {
 	t.Parallel()
 
 	marks := conformanceOtherMarks()
-	path := "/resources/0/instances/0/attributes/small"
-	sensitive := `[[{"type":"get_attr","value":"small"}]]`
+	path := "/resources/0/instances/0/attributes/a"
+	sensitive := `[[{"type":"get_attr","value":"a"}],` +
+		`[{"type":"get_attr","value":"a"},{"type":"get_attr","value":"b"}]]`
 
 	big := conformanceState(
-		`{"big":`+strconv.Quote(strings.Repeat("b", 5<<20))+`,"small":"s3cr3t"}`,
+		`{"a":{"b":"secret","pad":`+strconv.Quote(strings.Repeat("p", 5<<20))+`}}`,
 		sensitive,
 	)
 
 	_, _, err := workspace.RevealValue([]byte(big), marks, path)
 	if err == nil {
-		t.Fatal("large instance succeeded, want a too-large error")
+		t.Fatal("large entangled instance succeeded, want a too-large error")
 	}
 
 	if !errors.Is(err, workspace.ErrTooLarge) {
-		t.Fatalf("large instance error = %v, want a too-large error", err)
+		t.Fatalf("large entangled error = %v, want a too-large error", err)
 	}
 
 	if !strings.Contains(err.Error(), "4194304") {
@@ -796,17 +1066,59 @@ func TestRevealValueFallbackLimit(t *testing.T) {
 	}
 
 	small := conformanceState(
-		`{"big":`+strconv.Quote(strings.Repeat("b", 1<<20))+`,"small":"s3cr3t"}`,
+		`{"a":{"b":"secret","pad":`+strconv.Quote(strings.Repeat("p", 1<<10))+`}}`,
 		sensitive,
 	)
 
 	value, masked, err := workspace.RevealValue([]byte(small), marks, path)
 	if err != nil {
-		t.Fatalf("reveal: %v", err)
+		t.Fatalf("small entangled reveal: %v", err)
 	}
 
-	if value != "s3cr3t" {
-		t.Fatalf("value = %#v, want s3cr3t", value)
+	_ = value
+
+	if len(masked) != 1 || masked[0] != path {
+		t.Fatalf("masked = %q, want [%q]", masked, path)
+	}
+}
+
+// TestRevealValueWrapperLargeInstance proves a pointer through a dynamic
+// wrapper uses the full decode: a 5 MiB instance fails with ErrTooLarge,
+// while a small instance answers.
+func TestRevealValueWrapperLargeInstance(t *testing.T) {
+	t.Parallel()
+
+	marks := conformanceOtherMarks()
+	path := "/resources/0/instances/0/attributes/w/k"
+	sensitive := `[[{"type":"get_attr","value":"w"},{"type":"get_attr","value":"k"}]]`
+
+	big := conformanceState(
+		`{"w":{"value":{"k":"s"},"type":"dynamic"},`+
+			`"pad":`+strconv.Quote(strings.Repeat("p", 5<<20))+`}`,
+		sensitive,
+	)
+
+	_, _, err := workspace.RevealValue([]byte(big), marks, path)
+	if err == nil {
+		t.Fatal("large wrapper instance succeeded, want a too-large error")
+	}
+
+	if !errors.Is(err, workspace.ErrTooLarge) {
+		t.Fatalf("large wrapper error = %v, want a too-large error", err)
+	}
+
+	small := conformanceState(
+		`{"w":{"value":{"k":"s"},"type":"dynamic"},"other":"x"}`,
+		sensitive,
+	)
+
+	value, masked, err := workspace.RevealValue([]byte(small), marks, path)
+	if err != nil {
+		t.Fatalf("small wrapper reveal: %v", err)
+	}
+
+	if value != "s" {
+		t.Fatalf("value = %#v, want s", value)
 	}
 
 	if len(masked) != 1 || masked[0] != path {

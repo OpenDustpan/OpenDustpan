@@ -864,6 +864,80 @@ func conformanceCases() []conformanceCase {
 			marks:      conformanceOtherMarks(),
 			mustReveal: true,
 		},
+		{
+			name: "dup of pointer value deep in sibling",
+			state: conformanceState(
+				`{"token":"deep-secret","sib":{"l1":{"l2":"deep-secret"}},"other":"x"}`,
+				`[[{"type":"get_attr","value":"token"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "dup ancestor blocks deeper",
+			state: conformanceState(
+				`{"a":"inner","o":{"k":"inner"},"t":{"k":"inner"},"other":"x"}`,
+				`[[{"type":"get_attr","value":"a"}],[{"type":"get_attr","value":"o"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "dup inside applied location",
+			state: conformanceState(
+				`{"a":"s","p":{"q":"s","r":"x"},"other":"y"}`,
+				`[[{"type":"get_attr","value":"a"}],[{"type":"get_attr","value":"p"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "pointer to marker shaped value",
+			state: conformanceState(
+				`{"m":{"secret":true},"other":"z"}`,
+				`[[{"type":"get_attr","value":"m"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: false,
+		},
+		{
+			name: "non-canonical index pointer",
+			state: conformanceState(
+				`{"l":["s","t"],"c":["s","t"],"d":"t"}`,
+				`[[{"type":"get_attr","value":"l"},{"type":"index","value":"01"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "dirty node is not a duplicate",
+			state: conformanceState(
+				`{"s":{"k":"v"},"t":{"k":"v"}}`,
+				`[[{"type":"get_attr","value":"s"}],`+
+					`[{"type":"get_attr","value":"t"},{"type":"get_attr","value":"k"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "dirty ancestor does not block a duplicate",
+			state: conformanceState(
+				`{"s":{"k":"v","z":"v"},"t":{"k":"v","z":"v"}}`,
+				`[[{"type":"get_attr","value":"s"}],`+
+					`[{"type":"get_attr","value":"t"},{"type":"get_attr","value":"k"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "clean ancestor blocks a duplicate",
+			state: conformanceState(
+				`{"s":{"k":"v"},"t":{"u":{"k":"v"}},"w":{"k":"v"}}`,
+				`[[{"type":"get_attr","value":"s"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
 	}
 }
 
@@ -1077,6 +1151,559 @@ func TestRevealConformanceRandom(t *testing.T) {
 	if total.revealed < 300 {
 		t.Errorf("revealed %d paths, want at least 300", total.revealed)
 	}
+}
+
+// disjointLeafValues holds the small leaf pool of the disjoint generator,
+// so duplicates are frequent.
+func disjointLeafValues() []any {
+	return []any{"dup1", "dup2", "dup3", "", 1, true, false, nil}
+}
+
+// disjointLeaf picks one leaf.
+func disjointLeaf(rng *rand.Rand) any {
+	pool := disjointLeafValues()
+	return pool[rng.IntN(len(pool))]
+}
+
+// disjointMapKeys holds the key alphabet of the disjoint generator.
+func disjointMapKeys() []string {
+	return []string{"a", "b", "c", "d", "value", "type"}
+}
+
+// disjointTree builds one value with depth at most 4 and no dynamic wrapper
+// shaped map: a map with exactly the keys value and type gains a third key.
+func disjointTree(rng *rand.Rand, depth int) any {
+	if depth >= 4 {
+		return disjointLeaf(rng)
+	}
+
+	switch rng.IntN(10) {
+	case 0, 1, 2, 3:
+		return disjointTreeMap(rng, depth)
+	case 4, 5:
+		return disjointTreeList(rng, depth)
+	default:
+		return disjointLeaf(rng)
+	}
+}
+
+// disjointTreeMap builds one map without a wrapper shape.
+func disjointTreeMap(rng *rand.Rand, depth int) any {
+	keys := disjointMapKeys()
+	count := rng.IntN(5)
+	picked := map[string]bool{}
+	out := map[string]any{}
+
+	for range count {
+		key := keys[rng.IntN(len(keys))]
+		if picked[key] {
+			continue
+		}
+
+		picked[key] = true
+		out[key] = disjointTree(rng, depth+1)
+	}
+
+	if len(out) == 2 {
+		_, hasValue := out["value"]
+		_, hasType := out["type"]
+
+		if hasValue && hasType {
+			out["extra"] = disjointTree(rng, depth+1)
+		}
+	}
+
+	return out
+}
+
+// disjointTreeList builds one list of 0 to 3 elements.
+func disjointTreeList(rng *rand.Rand, depth int) any {
+	count := rng.IntN(4)
+	out := make([]any, 0, count)
+
+	for range count {
+		out = append(out, disjointTree(rng, depth+1))
+	}
+
+	return out
+}
+
+// disjointAttributes builds the top attributes object.
+func disjointAttributes(rng *rand.Rand) map[string]any {
+	impl := disjointTreeMap(rng, 0)
+	if obj, ok := impl.(map[string]any); ok {
+		return obj
+	}
+
+	return map[string]any{"a": impl}
+}
+
+// isTokenPrefix reports whether prefix is a prefix of tokens, equal length
+// included.
+func isTokenPrefix(prefix, tokens []string) bool {
+	if len(prefix) > len(tokens) {
+		return false
+	}
+
+	for i := range prefix {
+		if prefix[i] != tokens[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// disjointPicks picks up to 3 pairwise non-nested real node paths.
+func disjointPicks(rng *rand.Rand, tokens [][]string) [][]string {
+	order := rng.Perm(len(tokens))
+	var out [][]string
+
+	for _, index := range order {
+		if len(out) >= 3 {
+			break
+		}
+
+		candidate := tokens[index]
+		if len(candidate) == 0 {
+			continue
+		}
+
+		nested := false
+
+		for _, kept := range out {
+			if isTokenPrefix(kept, candidate) || isTokenPrefix(candidate, kept) {
+				nested = true
+
+				break
+			}
+		}
+
+		if !nested {
+			out = append(out, candidate)
+		}
+	}
+
+	return out
+}
+
+// deepCopyConformance returns a deep copy of a generator value.
+func deepCopyConformance(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			out[key] = deepCopyConformance(child)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = deepCopyConformance(child)
+		}
+
+		return out
+	default:
+		return v
+	}
+}
+
+// plantDisjointCopies adds duplicate values for the picked pointers: for each
+// pointer, with probability 1/2 a deep copy of the pointed value under a new
+// dup key, and with probability 1/3 a deep copy of its parent container under
+// a new par key. The new keys are top level, so they hold no pointer.
+func plantDisjointCopies(rng *rand.Rand, attrs map[string]any, picks [][]string) {
+	for i, pick := range picks {
+		plantDisjointCopyForPick(rng, attrs, pick, i)
+	}
+}
+
+// plantDisjointCopyForPick plants the copies for one picked pointer.
+func plantDisjointCopyForPick(rng *rand.Rand, attrs map[string]any, pick []string, i int) {
+	if len(pick) == 0 {
+		return
+	}
+
+	plantDupCopy(rng, attrs, pick, i)
+	plantParCopy(rng, attrs, pick, i)
+}
+
+// plantDupCopy plants a copy of the pointed value under a new dup key.
+func plantDupCopy(rng *rand.Rand, attrs map[string]any, pick []string, i int) {
+	if rng.IntN(2) != 0 {
+		return
+	}
+
+	value, ok := directChildAt(attrs, pick)
+	if !ok {
+		return
+	}
+
+	key := "dup" + strconv.Itoa(i)
+	if _, exists := attrs[key]; exists {
+		return
+	}
+
+	attrs[key] = deepCopyConformance(value)
+}
+
+// plantParCopy plants a copy of the parent container under a new par key.
+func plantParCopy(rng *rand.Rand, attrs map[string]any, pick []string, i int) {
+	roll := rng.IntN(3)
+	if roll != 0 {
+		return
+	}
+
+	if len(pick) < 2 {
+		return
+	}
+
+	parent, ok := directChildAt(attrs, pick[:len(pick)-1])
+	if !ok {
+		return
+	}
+
+	key := "par" + strconv.Itoa(i)
+	if _, exists := attrs[key]; exists {
+		return
+	}
+
+	attrs[key] = deepCopyConformance(parent)
+}
+
+// disjointState builds one state with pairwise non-nested pointers from rng.
+func disjointState(rng *rand.Rand) (string, workspace.SensitiveMarks, error) {
+	attrs := disjointAttributes(rng)
+
+	var tokens [][]string
+
+	collectRandomTokens(attrs, nil, &tokens)
+
+	picks := disjointPicks(rng, tokens)
+
+	plantDisjointCopies(rng, attrs, picks)
+
+	var sensitive []any
+
+	var marks workspace.SensitiveMarks
+
+	switch {
+	case len(picks) == 0:
+		marks = conformanceOtherMarks()
+	case rng.IntN(4) != 0:
+		for _, pick := range picks {
+			sensitive = append(sensitive, ctyPathOf(attrs, pick))
+		}
+
+		marks = conformanceOtherMarks()
+	default:
+		kept := picks[rng.IntN(len(picks))]
+		for _, pick := range picks {
+			if slices.Equal(pick, kept) {
+				continue
+			}
+
+			sensitive = append(sensitive, ctyPathOf(attrs, pick))
+		}
+
+		marks = workspace.SensitiveMarks{"terraform_data.x": {pointerOf(kept)}}
+	}
+
+	if sensitive == nil {
+		sensitive = []any{}
+	}
+
+	attrsRaw, err := json.Marshal(attrs)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal attributes: %w", err)
+	}
+
+	sensitiveRaw, err := json.Marshal(sensitive)
+	if err != nil {
+		return "", nil, fmt.Errorf("marshal sensitive: %w", err)
+	}
+
+	return conformanceState(string(attrsRaw), string(sensitiveRaw)), marks, nil
+}
+
+// TestRevealConformanceRandomDisjoint checks 800 generated states without
+// wrapper shapes and with pairwise non-nested pointers.
+func TestRevealConformanceRandomDisjoint(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(7, 9)) //nolint:gosec // Seeded test data generator, not a security use.
+
+	var total agreementCount
+
+	for i := range 800 {
+		state, marks, err := disjointState(rng)
+		if err != nil {
+			t.Fatalf("disjoint state: %v", err)
+		}
+
+		total.add(checkAgreement(t, "disjoint "+strconv.Itoa(i), state, marks))
+	}
+
+	t.Logf("checked %d candidate paths, revealed %d", total.checked, total.revealed)
+
+	if total.revealed < 300 {
+		t.Errorf("revealed %d paths, want at least 300", total.revealed)
+	}
+}
+
+// TestRevealConformanceStreamingPath checks disjoint states with a 5 MiB pad
+// attribute: any lookup that uses the full decode fails with ErrTooLarge, so
+// success proves the streaming path.
+func TestRevealConformanceStreamingPath(t *testing.T) {
+	t.Parallel()
+
+	rng := rand.New(rand.NewPCG(11, 13)) //nolint:gosec // Seeded test data generator, not a security use.
+
+	var total agreementCount
+
+	pad := strings.Repeat("p", 5<<20)
+
+	for i := range 40 {
+		state, marks, err := disjointState(rng)
+		if err != nil {
+			t.Fatalf("disjoint state: %v", err)
+		}
+
+		state = addPadAttribute(t, state, pad)
+		total.add(checkStreamingState(t, rng, "streaming "+strconv.Itoa(i), state, marks))
+	}
+
+	t.Logf("checked %d candidate paths, revealed %d", total.checked, total.revealed)
+
+	if total.revealed == 0 {
+		t.Error("revealed 0 paths, want at least 1")
+	}
+}
+
+// addPadAttribute adds a 5 MiB pad string to the attributes of state. Pad is
+// never a pointer.
+func addPadAttribute(t *testing.T, state, pad string) string {
+	t.Helper()
+
+	doc, ok := decodeConformanceDoc([]byte(state))
+	if !ok {
+		t.Fatal("decode state for pad")
+	}
+
+	top, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatal("state top is not an object")
+	}
+
+	list, ok := top["resources"].([]any)
+	if !ok || len(list) == 0 {
+		t.Fatal("state has no resources")
+	}
+
+	obj, ok := list[0].(map[string]any)
+	if !ok {
+		t.Fatal("resource is not an object")
+	}
+
+	raw, ok := obj["instances"].([]any)
+	if !ok || len(raw) == 0 {
+		t.Fatal("resource has no instances")
+	}
+
+	instance, ok := raw[0].(map[string]any)
+	if !ok {
+		t.Fatal("instance is not an object")
+	}
+
+	attrs, ok := instance["attributes"].(map[string]any)
+	if !ok {
+		t.Fatal("attributes is not an object")
+	}
+
+	attrs["pad"] = pad
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal padded state: %v", err)
+	}
+
+	return string(out)
+}
+
+// streamingCheck holds the inputs for one padded-state check.
+type streamingCheck struct {
+	label  string
+	state  string
+	marks  workspace.SensitiveMarks
+	masked []string
+}
+
+// checkStreamingState checks the masked paths plus 20 other random node
+// paths of one padded state. Any ErrTooLarge is a failure.
+func checkStreamingState(
+	t *testing.T, rng *rand.Rand, label, state string, marks workspace.SensitiveMarks,
+) agreementCount {
+	t.Helper()
+
+	masked := streamingMasked(t, label, state, marks)
+	physical := streamingPhysical(t, label, state)
+
+	candidates := dedupStrings(append(
+		append([]string(nil), masked...),
+		pickStreamingOthers(rng, physical, masked)...,
+	))
+
+	return checkStreamingCandidates(t, streamingCheck{
+		label:  label,
+		state:  state,
+		marks:  marks,
+		masked: masked,
+	}, candidates)
+}
+
+// streamingMasked returns the masked paths of one padded state.
+func streamingMasked(
+	t *testing.T, label, state string, marks workspace.SensitiveMarks,
+) []string {
+	t.Helper()
+
+	masked, err := workspace.MaskedPaths([]byte(state), marks)
+	if err != nil {
+		t.Fatalf("%s: masked paths: %v; state holds %d bytes", label, err, len(state))
+	}
+
+	return masked
+}
+
+// streamingPhysical returns the physical node paths of one padded state.
+func streamingPhysical(t *testing.T, label, state string) []string {
+	t.Helper()
+
+	doc, ok := decodeConformanceDoc([]byte(state))
+	if !ok {
+		t.Fatalf("%s: decode state", label)
+	}
+
+	list := conformanceResourceList(doc)
+	parts := make([][]string, 0, len(list))
+
+	for r, elem := range list {
+		parts = append(parts, streamingResourcePaths(elem, r))
+	}
+
+	return slices.Concat(parts...)
+}
+
+// streamingResourcePaths returns the physical node paths of one resource.
+func streamingResourcePaths(elem any, resource int) []string {
+	obj, ok := elem.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	raw, ok := obj["instances"].([]any)
+	if !ok {
+		return nil
+	}
+
+	var out []string
+
+	position := 0
+
+	for _, item := range raw {
+		instance, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		attrs, present := instance["attributes"]
+		if !present {
+			attrs = map[string]any{}
+		}
+
+		paths, _ := physicalForInstance(attrs, instanceBase(resource, position))
+
+		out = append(out, paths...)
+		position++
+	}
+
+	return out
+}
+
+// checkStreamingCandidates checks one candidate list and counts reveals.
+func checkStreamingCandidates(t *testing.T, check streamingCheck, candidates []string) agreementCount {
+	t.Helper()
+
+	var out agreementCount
+
+	out.checked = len(candidates)
+
+	for _, path := range candidates {
+		if checkStreamingPath(t, check, path) {
+			out.revealed++
+		}
+	}
+
+	return out
+}
+
+// checkStreamingPath checks one path of a padded state. It reports whether
+// the reveal succeeded.
+func checkStreamingPath(t *testing.T, check streamingCheck, path string) bool {
+	t.Helper()
+
+	got, _, rerr := workspace.RevealValue([]byte(check.state), check.marks, path)
+	if rerr != nil && errors.Is(rerr, workspace.ErrTooLarge) {
+		t.Errorf("%s: reveal of %q used the full decode: %v", check.label, path, rerr)
+	}
+
+	plain, found := plainAt([]byte(check.state), path)
+	in := agreementInput{
+		label:  check.label,
+		state:  "(padded state)",
+		path:   path,
+		masked: check.masked,
+		got:    got,
+		err:    rerr,
+		plain:  plain,
+		found:  found,
+	}
+
+	if msg := agreementError(in); msg != "" {
+		t.Error(msg)
+	}
+
+	return rerr == nil
+}
+
+// pickStreamingOthers picks up to 20 physical paths outside the masked set.
+func pickStreamingOthers(rng *rand.Rand, physical, masked []string) []string {
+	inMasked := map[string]bool{}
+	for _, path := range masked {
+		inMasked[path] = true
+	}
+
+	var others []string
+
+	for _, path := range physical {
+		if !inMasked[path] {
+			others = append(others, path)
+		}
+	}
+
+	order := rng.Perm(len(others))
+	var out []string
+
+	for _, index := range order {
+		if len(out) >= 20 {
+			break
+		}
+
+		out = append(out, others[index])
+	}
+
+	return out
 }
 
 // errDriftBoom is a distinct error for the drift test.

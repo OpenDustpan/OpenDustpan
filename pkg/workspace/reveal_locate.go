@@ -77,6 +77,8 @@ type walkResult struct {
 // same rule as revealFromResource. A visitor that returns errStopWalk ends
 // the walk at once with found set: only passes that run after pass 0 has
 // validated the whole state may return it.
+//
+//nolint:unparam // passes after pass 0 ignore the fields and found results; pass 0 validated them.
 func locateInstance(
 	dec *jsontext.Decoder, target revealTarget, visit instanceVisitor,
 ) (map[string]any, bool, error) {

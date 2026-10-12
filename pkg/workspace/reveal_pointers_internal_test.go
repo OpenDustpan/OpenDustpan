@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json/jsontext"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ type pointerCase struct {
 	attributes    string
 	literals      []string
 	wantApplied   []string
+	wantRoutes    [][]string
 	wantSecrets   []bool
 	wantEntangled bool
 }
@@ -43,6 +45,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a":"s","b":{"c":[1,"x"]},"n":7}`,
 			literals:      []string{"/a", "/b/c/1", "/n"},
 			wantApplied:   []string{"/a", "/b/c/1", "/n"},
+			wantRoutes:    [][]string{{"a"}, {"b", "c", "1"}, {"n"}},
 			wantSecrets:   []bool{true, true, false},
 			wantEntangled: false,
 		},
@@ -51,6 +54,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"o":{"k":1},"e":{},"l":[],"z":"","t":true,"u":null}`,
 			literals:      []string{"/o", "/e", "/l", "/z", "/t", "/u"},
 			wantApplied:   []string{"/o", "/e", "/l", "/z", "/t", "/u"},
+			wantRoutes:    [][]string{{"o"}, {"e"}, {"l"}, {"z"}, {"t"}, {"u"}},
 			wantSecrets:   []bool{true, false, false, false, false, false},
 			wantEntangled: false,
 		},
@@ -59,6 +63,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a":"s","b":{"c":[1,"x"]},"n":7,"u":null}`,
 			literals:      []string{"/missing", "/b/x", "/b/c/5", "/a/x", "/u/x", "/n/0"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: false,
 		},
@@ -67,6 +72,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/1"},
 			wantApplied:   []string{"/l/1"},
+			wantRoutes:    [][]string{{"l", "1"}},
 			wantSecrets:   []bool{true},
 			wantEntangled: false,
 		},
@@ -75,6 +81,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/01"},
 			wantApplied:   []string{"/l/01"},
+			wantRoutes:    [][]string{{"l", "1"}},
 			wantSecrets:   []bool{true},
 			wantEntangled: false,
 		},
@@ -83,6 +90,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/1", "/l/01"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -91,6 +99,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/+1"},
 			wantApplied:   []string{"/l/+1"},
+			wantRoutes:    [][]string{{"l", "1"}},
 			wantSecrets:   []bool{true},
 			wantEntangled: false,
 		},
@@ -99,6 +108,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/-1"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: false,
 		},
@@ -107,6 +117,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"l":["p","q"]}`,
 			literals:      []string{"/l/x"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: false,
 		},
@@ -115,6 +126,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a":{"b":"s"}}`,
 			literals:      []string{"/a", "/a/b"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -123,6 +135,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a":{"b":"s"}}`,
 			literals:      []string{"/a/b", "/a"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -131,6 +144,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a":{"b":"s"}}`,
 			literals:      []string{"/a", "/a/zz"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -139,6 +153,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"~":"s"}`,
 			literals:      []string{"/~", "/~0"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -147,6 +162,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"w":{"value":{"k":"s"},"type":"dynamic"}}`,
 			literals:      []string{"/w"},
 			wantApplied:   []string{"/w"},
+			wantRoutes:    [][]string{{"w"}},
 			wantSecrets:   []bool{true},
 			wantEntangled: false,
 		},
@@ -155,6 +171,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"w":{"value":{"k":"s"},"type":"dynamic"}}`,
 			literals:      []string{"/w/k"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -163,6 +180,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"w":{"value":{"k":"s"},"type":"dynamic"}}`,
 			literals:      []string{"/w/value/k"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -171,6 +189,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"w":{"value":{"k":"s"},"type":"dynamic"}}`,
 			literals:      []string{"/w/type"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -179,6 +198,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"o":{"value":1,"x":2}}`,
 			literals:      []string{"/o/k"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: false,
 		},
@@ -187,6 +207,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"p":{"a":"v"}}`,
 			literals:      []string{"/p", "/p/secret"},
 			wantApplied:   nil,
+			wantRoutes:    nil,
 			wantSecrets:   nil,
 			wantEntangled: true,
 		},
@@ -195,6 +216,7 @@ func TestScanPointers(t *testing.T) {
 			attributes:    `{"a/b":"s1","c~d":"s2"}`,
 			literals:      []string{"/a~1b", "/c~0d"},
 			wantApplied:   []string{"/a~1b", "/c~0d"},
+			wantRoutes:    [][]string{{"a/b"}, {"c~d"}},
 			wantSecrets:   []bool{true, true},
 			wantEntangled: false,
 		},
@@ -224,25 +246,68 @@ func checkPointerScan(t *testing.T, got pointerScan, tc pointerCase) {
 	}
 
 	if tc.wantEntangled {
-		if len(got.applied) != 0 {
-			t.Fatalf("applied = %d pointers, want none when entangled", len(got.applied))
-		}
+		checkNoApplied(t, got)
 
 		return
 	}
 
+	checkAppliedCount(t, got, tc)
+	checkAppliedPointers(t, got, tc)
+}
+
+// checkNoApplied proves an entangled scan holds no applied pointer.
+func checkNoApplied(t *testing.T, got pointerScan) {
+	t.Helper()
+
+	if len(got.applied) != 0 {
+		t.Fatalf("applied = %d pointers, want none when entangled", len(got.applied))
+	}
+}
+
+// checkAppliedCount proves the scan holds the wanted number of pointers.
+func checkAppliedCount(t *testing.T, got pointerScan, tc pointerCase) {
+	t.Helper()
+
 	if len(got.applied) != len(tc.wantApplied) {
 		t.Fatalf("applied = %d pointers, want %d", len(got.applied), len(tc.wantApplied))
 	}
+}
+
+// checkAppliedPointers proves each applied pointer holds the wanted literal,
+// secret flag and physical route.
+func checkAppliedPointers(t *testing.T, got pointerScan, tc pointerCase) {
+	t.Helper()
 
 	for i, want := range tc.wantApplied {
-		if got.applied[i].literal != want {
-			t.Fatalf("applied %d = %q, want %q", i, got.applied[i].literal, want)
-		}
+		checkOnePointer(t, got.applied[i], i, want, tc)
+	}
+}
 
-		if (got.applied[i].secret != nil) != tc.wantSecrets[i] {
-			t.Fatalf("secret of %q mismatch, want present %v", want, tc.wantSecrets[i])
-		}
+// checkOnePointer proves one applied pointer matches the expectation.
+func checkOnePointer(t *testing.T, got appliedPointer, i int, want string, tc pointerCase) {
+	t.Helper()
+
+	if got.literal != want {
+		t.Fatalf("applied %d = %q, want %q", i, got.literal, want)
+	}
+
+	if (got.secret != nil) != tc.wantSecrets[i] {
+		t.Fatalf("secret of %q mismatch, want present %v", want, tc.wantSecrets[i])
+	}
+
+	checkOneRoute(t, got, want, tc, i)
+}
+
+// checkOneRoute proves the physical route of one applied pointer.
+func checkOneRoute(t *testing.T, got appliedPointer, want string, tc pointerCase, i int) {
+	t.Helper()
+
+	if tc.wantRoutes == nil || i >= len(tc.wantRoutes) {
+		return
+	}
+
+	if !slices.Equal(got.route, tc.wantRoutes[i]) {
+		t.Fatalf("route of %q = %q, want %q", want, got.route, tc.wantRoutes[i])
 	}
 }
 

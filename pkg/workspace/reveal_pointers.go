@@ -42,6 +42,7 @@ func instancePointers(info instanceInfo, address string, marks SensitiveMarks) [
 type appliedPointer struct {
 	literal string
 	tokens  []string
+	route   []string
 	secret  *digest // digest of the original value when it is propagable, else nil
 }
 
@@ -68,6 +69,8 @@ type pointerWalk struct {
 	pointers []revealPointer
 	have     []bool
 	secrets  []*digest
+	route    []string
+	routes   [][]string
 }
 
 // scanPointers walks the attributes value that dec streams and resolves the
@@ -83,6 +86,8 @@ func scanPointers(dec *jsontext.Decoder, pointers []revealPointer) (pointerScan,
 		pointers: pointers,
 		have:     make([]bool, len(pointers)),
 		secrets:  make([]*digest, len(pointers)),
+		route:    nil,
+		routes:   make([][]string, len(pointers)),
 	}
 
 	states := make([]pointerState, len(pointers))
@@ -113,6 +118,7 @@ func (w *pointerWalk) ordered() []appliedPointer {
 		out = append(out, appliedPointer{
 			literal: w.pointers[i].literal,
 			tokens:  w.pointers[i].tokens,
+			route:   w.routes[i],
 			secret:  w.secrets[i],
 		})
 	}
@@ -173,6 +179,7 @@ func (w *pointerWalk) finishHit(dec *jsontext.Decoder, ptr int) error {
 		}
 
 		w.have[ptr] = true
+		w.routes[ptr] = append([]string(nil), w.route...)
 
 		if shape.propagable() {
 			kept := sum
@@ -192,6 +199,7 @@ func (w *pointerWalk) finishHit(dec *jsontext.Decoder, ptr int) error {
 		}
 
 		w.have[ptr] = true
+		w.routes[ptr] = append([]string(nil), w.route...)
 
 		return nil
 	}
@@ -306,7 +314,7 @@ func (w *pointerWalk) walkObject(dec *jsontext.Decoder, conts []pointerState) er
 
 		walk.note(name)
 
-		if err := w.walkObjectMember(dec, byName[name]); err != nil {
+		if err := w.walkObjectMember(dec, name, byName[name]); err != nil {
 			return err
 		}
 	}
@@ -321,12 +329,17 @@ func (w *pointerWalk) walkObject(dec *jsontext.Decoder, conts []pointerState) er
 }
 
 // walkObjectMember reads the streamed value of one object member.
-func (w *pointerWalk) walkObjectMember(dec *jsontext.Decoder, derived []pointerState) error {
+func (w *pointerWalk) walkObjectMember(dec *jsontext.Decoder, name string, derived []pointerState) error {
 	if len(derived) == 0 {
 		return skipStreamed(dec)
 	}
 
-	return w.node(dec, derived)
+	w.route = append(w.route, name)
+
+	err := w.node(dec, derived)
+	w.route = w.route[:len(w.route)-1]
+
+	return err
 }
 
 // hasDeepState reports whether a state already stepped below the attributes.
@@ -358,19 +371,24 @@ func (w *pointerWalk) walkArray(dec *jsontext.Decoder, conts []pointerState) err
 			return nil
 		}
 
-		if err := w.walkArrayElement(dec, byIndex[index]); err != nil {
+		if err := w.walkArrayElement(dec, index, byIndex[index]); err != nil {
 			return err
 		}
 	}
 }
 
 // walkArrayElement reads one array element with the states that step to it.
-func (w *pointerWalk) walkArrayElement(dec *jsontext.Decoder, derived []pointerState) error {
+func (w *pointerWalk) walkArrayElement(dec *jsontext.Decoder, index int, derived []pointerState) error {
 	if len(derived) == 0 {
 		return skipStreamed(dec)
 	}
 
-	return w.node(dec, derived)
+	w.route = append(w.route, strconv.Itoa(index))
+
+	err := w.node(dec, derived)
+	w.route = w.route[:len(w.route)-1]
+
+	return err
 }
 
 // pointerVisitor returns the instanceVisitor for pass A: for the attributes
