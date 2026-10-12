@@ -111,6 +111,12 @@ var (
 	errKeyPromptDeclined = errors.New(
 		"no key-encryption key file was made: the operator did not answer yes",
 	)
+	// errKeyFileMissing reports serve with no key and no key file while the
+	// database already holds wrapped keys (issue 355). A new key cannot open
+	// them, so serve makes no key file and stops before the database is used.
+	errKeyFileMissing = errors.New(
+		"key-encryption key file does not exist, and the database holds secrets that a new key cannot open",
+	)
 )
 
 // version is the server version. The build stamps it with
@@ -297,7 +303,10 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
 // It resolves the key-encryption key before it opens the database, so a
-// missing key stops with the key error and never makes a key silently.
+// missing key stops with the key error and never makes a key silently. Only
+// when serve is about to make a key file does it open the store first: the
+// store must hold no wrapped keys, because a new key cannot open them (issue
+// 355). Serve then uses the same store.
 func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer, terminal bool) error {
 	logger, err := f.loggerFor(stderr)
 	if err != nil {
@@ -313,18 +322,69 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 		return authErr
 	}
 
-	wrapper, keyErr := f.loadOrMakeKey(keyPrompt{stdin: stdin, stderr: stderr, terminal: terminal}, logger)
+	var st store
+
+	defer func() {
+		if st != nil {
+			st.close()
+		}
+	}()
+
+	open := func() (store, error) {
+		if st == nil {
+			opened, err := openStore(ctx, f.database)
+			if err != nil {
+				return nil, err
+			}
+
+			st = opened
+		}
+
+		return st, nil
+	}
+
+	beforeMake := func(path string) error {
+		keys, err := open()
+		if err != nil {
+			return err
+		}
+
+		return refuseNewKeyFile(ctx, keys, path)
+	}
+
+	wrapper, keyErr := f.loadOrMakeKey(
+		keyPrompt{stdin: stdin, stderr: stderr, terminal: terminal}, beforeMake, logger,
+	)
 	if keyErr != nil {
 		return keyErr
 	}
 
-	st, storeErr := openStore(ctx, f.database)
+	opened, storeErr := open()
 	if storeErr != nil {
 		return storeErr
 	}
-	defer st.close()
 
-	return f.serveWithStores(ctx, st, authn, wrapper, logger)
+	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
+}
+
+// refuseNewKeyFile stops serve before it makes a key file at path when the
+// store already holds wrapped keys: a new key cannot open them (issue 355).
+// It reads the wrapper IDs through the secret.KeyStore port, with the ADR 23
+// check and no wrapper, so cmd holds no SQL.
+func refuseNewKeyFile(ctx context.Context, keys secret.KeyStore, path string) error {
+	err := secret.CheckWrapper(ctx, keys, nil)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, secret.ErrKeyNotConfigured):
+		return fmt.Errorf(
+			"%w: restore the original key file at %s, or set %s to the original key",
+			errKeyFileMissing, path, keyEnvVar,
+		)
+	default:
+		return fmt.Errorf("read wrapped keys before making a key file: %w", err)
+	}
 }
 
 // checkDatabaseFlag rejects a --database value with an unknown form before
@@ -400,11 +460,15 @@ type keyPrompt struct {
 // wins when set. Else the key file at the resolved path is read with the
 // existing owner-only rules. When no key and no key file exist, the opt-in
 // makes the file with no prompt, a terminal prompts for an explicit yes, and
-// without either serve stops before the database opens. It logs one line with
-// the path of the key file in use, never the key.
+// without either serve stops before the database opens. Before it makes a
+// file, it calls beforeMake with the path, and makes no file when beforeMake
+// fails. It logs one line with the path of the key file in use, never the
+// key.
 //
 //nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
-func (f *serveFlags) loadOrMakeKey(in keyPrompt, logger *slog.Logger) (secret.Wrapper, error) {
+func (f *serveFlags) loadOrMakeKey(
+	in keyPrompt, beforeMake func(path string) error, logger *slog.Logger,
+) (secret.Wrapper, error) {
 	if wrapper, present, err := directKeyWrapper(); present || err != nil {
 		return wrapper, err
 	}
@@ -416,11 +480,15 @@ func (f *serveFlags) loadOrMakeKey(in keyPrompt, logger *slog.Logger) (secret.Wr
 	}
 
 	if f.generateKey {
+		if err := beforeMake(path); err != nil {
+			return nil, err
+		}
+
 		return makeKeyFile(path, logger)
 	}
 
 	if in.terminal {
-		return promptAndMakeKeyFile(in, path, logger)
+		return promptAndMakeKeyFile(in, path, beforeMake, logger)
 	}
 
 	return nil, errKeyGenerateRequired
@@ -511,11 +579,14 @@ func makeKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
 }
 
 // promptAndMakeKeyFile asks for an explicit yes and makes the key file at
-// path on yes. On anything else serve stops with exit status 1 and makes no
-// file.
+// path on yes, when beforeMake allows it. On anything else serve stops with
+// exit status 1 and makes no file. The prompt comes first, so a declined
+// prompt stops before the database opens.
 //
 //nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
-func promptAndMakeKeyFile(in keyPrompt, path string, logger *slog.Logger) (secret.Wrapper, error) {
+func promptAndMakeKeyFile(
+	in keyPrompt, path string, beforeMake func(path string) error, logger *slog.Logger,
+) (secret.Wrapper, error) {
 	agreed, err := promptForKeyFile(in.stdin, in.stderr, path)
 	if err != nil {
 		return nil, err
@@ -523,6 +594,10 @@ func promptAndMakeKeyFile(in keyPrompt, path string, logger *slog.Logger) (secre
 
 	if !agreed {
 		return nil, errKeyPromptDeclined
+	}
+
+	if checkErr := beforeMake(path); checkErr != nil {
+		return nil, checkErr
 	}
 
 	return makeKeyFile(path, logger)
