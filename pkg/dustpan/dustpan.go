@@ -980,14 +980,9 @@ func (s *Server) startUp(ctx context.Context) error {
 
 // sealUnsealedStates seals the OpenTofu state versions that still hold plain
 // content (ADR 41 decision 11). It runs after the fencing recovery of
-// failStoppedRestores, so its writes carry current fences. Without a
-// key-encryption key it seals nothing: rows stay readable as before until an
-// operator configures one.
+// failStoppedRestores, so its writes carry current fences. NewServer refuses
+// to build without a key-encryption key (#367), so the server always seals.
 func (s *Server) sealUnsealedStates(ctx context.Context) error {
-	if s.secretWrapper == nil {
-		return nil
-	}
-
 	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
 		return fmt.Errorf("seal unsealed state: %w", err)
 	}
@@ -1242,7 +1237,7 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  sealAfterRestore(cfg, deps),
+		AfterApply:  sealAfterRestore(deps),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -1255,16 +1250,10 @@ func newRestoreService(
 
 // sealAfterRestore returns the after-apply step of a restore: it seals the
 // OpenTofu state versions that the restored backup holds unsealed (ADR 41
-// decision 11), with the same job the server runs at start-up. Nil means
-// no key-encryption key is configured: the restore seals nothing, and the
-// restored rows stay readable until a key is configured.
-func sealAfterRestore(
-	cfg settings, deps installationDeps,
-) func(ctx context.Context) error {
-	if cfg.secretWrapper == nil {
-		return nil
-	}
-
+// decision 11), with the same job the server runs at start-up. NewServer
+// refuses to build without a key-encryption key (#367), so the step is
+// always set.
+func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
 			return fmt.Errorf("seal unsealed state: %w", err)
