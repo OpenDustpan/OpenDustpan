@@ -42,7 +42,7 @@ resources, journaling took 44 s for create and 61 s for change, against
   journaling, 37 client-only, 7 additive, 3 semantic and 4 wire-break
   (section 3). It also gives the CLI version support (section 4), the
   protocol (section 5), the measured error behavior (section 6) and the
-  requirements R1 to R36 (section 7).
+  requirements R1 to R37 (section 7).
 - **The spike code** on `spike/pulumi-journaling` at `8ba6721`:
   `internal/pulumijournal/journal.go` (762 lines) and `links.go` (205 lines),
   a port of the upstream replayer, and `internal/api/pulumi/journal.go`
@@ -112,6 +112,22 @@ The main module path is `opendustpan.org/opendustpan` (`go.mod` at
 `48ca134`). A nested module in `x/pulumijournal/` with its own `go.mod`
 gets the path `opendustpan.org/opendustpan/x/pulumijournal`.
 
+This is the owner's own suggestion. It gives three real gains:
+
+- **The instability is visible.** The `x/` segment of the import path and
+  the `v0` version tell each reader and each tool that the API can change.
+  Go users know this convention from `golang.org/x/exp`. A package in the
+  main module says the same thing only in a comment.
+- **Embedders can upgrade it alone (ADR 35).** An SDK embedder can take a
+  journal fix with one line in its own `go.mod`, without a new version of
+  the whole server. The conditions are below.
+- **The main module stays clean.** The wire types of a format that the
+  project does not control stay out of the API of the main module. When
+  `pkg/` gets a stability promise (for example at the first release, ADR
+  21), the unstable types are already outside it.
+
+The rest of this subsection gives the mechanics and the costs.
+
 **No import of the main module.** The main module requires the new module.
 If the new module also required the main module, each version of one would
 name a version of the other. Go permits a cycle in the module graph, but a
@@ -177,8 +193,8 @@ project must keep that API stable by its own rule, or the embedder's build
 fails. No embedder exists yet: ADR 35 says that no release of OpenDustpan
 exists, so no embedder depends on the import paths.
 
-**What a binary user gains.** Nothing. The binary links one version of the
-module. A fix in the journal module reaches an operator only in a new
+**What a binary user gains.** No faster fix. The binary links one version
+of the module. A fix in the journal module reaches an operator only in a new
 `opendustpan` binary. These changes could alter that:
 
 - **A patch release for each journal fix.** Cost: an owner tag of the
@@ -240,6 +256,8 @@ domain packages. One more rule keeps the journal package free of imports of
 
 | | 1A. Separate module | 1B. `internal/pulumijournal` |
 | --- | --- | --- |
+| Instability visible to readers and tools | yes: `x/` path and `v0` version | only in a package comment |
+| Unstable wire types outside the main module's API | yes | yes, while the package is under `internal/`; a later public API would have to wrap them |
 | Binary user gets a fix | new binary | new binary |
 | Embedder gets a fix | bump one line in `go.mod`, if the API stayed the same | bump the main module |
 | A journal change | 3 steps, one owner tag, maybe 2 weeks of wait (ADR 7) | 1 pull request |
@@ -253,6 +271,35 @@ Note the row "Dependency graph of the binary". If the journal module
 imports `github.com/pulumi/pulumi/sdk/v3` (section 2), the binary links it
 in both options. A separate module does not keep a dependency out of
 `govulncheck`, `make licenses` or Trivy for the binary.
+
+### Why this RFC recommends 1B now, and what would change that
+
+This is a recommendation. The owner decides.
+
+1B now, because today the gains of 1A have no user and its costs arrive at
+once:
+
+- No SDK embedder exists (ADR 35), so nobody uses the separate upgrade
+  path yet.
+- Under `internal/`, the wire types are already out of the public API of
+  the main module. So 1B gets the "clean main module" gain too, as long as
+  no `pkg/` API exposes them.
+- The journal format changed in 9 of the last 18 Pulumi releases in a way
+  that the watch of section 3 would report. With 1A, each such change
+  needs three steps and an owner tag, and maybe two weeks (ADR 7).
+
+The depguard rule of 1B keeps the move to 1A a move of files. Take 1A when
+one of these triggers occurs:
+
+- **The first SDK embedder that needs journaling**, and that cannot wait for
+  a server release to get a journal fix.
+- **A need to ship journal fixes faster than server releases**, for
+  example when the project starts a release cadence for the server that is
+  slower than the Pulumi release cadence (about one release each 5.4 days,
+  section 3).
+- **A public API in `pkg/` that must expose journal types**, for example a
+  replay call for embedders. Then the `x/` path and the `v0` version mark
+  those types as unstable, which `internal/` cannot do.
 
 ## 2. No hand-written parser
 
@@ -360,28 +407,57 @@ CLI change that touches the entry.
 
 #### Option 2C. Types generated from the upstream source
 
-A small generator in this repository reads
+A small generator lives in this repository (for example
+`internal/pulumijournal/internal/gen`). It reads
 `sdk/go/common/apitype/journal.go` at a pinned upstream commit with
 `go/parser`, and writes Go types for `JournalEntry`, `JournalEntries` and
 the kind constants. Rules:
 
-- Fields of types from `core.go` (`ResourceV3`, `OperationV2`,
-  `DeploymentV3`, `SecretsProvidersV1`, `SnippetV1`) become raw JSON, so the
-  output has no generic tree and imports nothing from Pulumi.
-- The input is pinned by commit and by the SHA-256 of the file. The
-  generator reads the file from the Go module zip of `sdk/v3` at that
-  version, which `go.sum`-style checks can verify, or from a vendored copy
-  in `testdata/` with its hash.
-- `make generate` runs it. `make lint` runs it again and fails on a
-  difference, as `sqlc diff` does today.
-- The generated file carries the Apache-2.0 header of the input file and a
-  line that names the commit, because it is a derived work of that file.
+- **The pin.** The first pin is the commit
+  `128d3f2ec94e147915a6a928fdf7449d561d560e`, which is the release tag
+  `v3.268.0` and also the tag `sdk/v3.268.0`. The input file has the SHA-256
+  `088753b1c35890644e63168c05e35fe2c88751f6317418a6db65fdf8455464cc` at
+  that commit. The file is the same at `2255563`, the commit that the spike
+  port names (research note in #390, section 2). The generator keeps the
+  commit, the tag and the hash in one small file next to it.
+- **The input.** The generator reads a copy of the file in `testdata/`
+  and refuses to run when the SHA-256 of the copy is not the pinned hash.
+  So `make generate` needs no network, and a person who changes the copy by
+  hand gets an error.
+- **The output.** Fields of types from `core.go` (`ResourceV3`,
+  `OperationV2`, `DeploymentV3`, `SecretsProvidersV1`, `SnippetV1`) become
+  raw JSON, so the output has no generic tree and imports nothing from
+  Pulumi. The generated file carries the Apache-2.0 header of the input
+  file and a line that names the commit and the tag, because it is a
+  derived work of that file.
+- **In `make generate`.** The target runs the generator after `sqlc
+  generate`.
+- **In CI.** `make lint` runs the generator into a temporary directory and
+  fails on a difference with the file in the tree, as `sqlc diff` does
+  today. A hand edit of the generated file fails CI.
+
+**How the pin moves.**
+
+1. The upstream watch (section 3, layer B) finds a change in
+   `apitype/journal.go` (or in another file of its list) between the pin and
+   the newest release tag. It opens an issue in this repository, with the
+   diff.
+2. A person reads the diff and marks it client-only, additive, semantic or
+   wire-break, as the research note in #390 does.
+3. The person copies the file at the new tag into `testdata/`, changes the
+   pinned commit, tag and hash, and runs `make generate`. The diff of the
+   generated file shows each new field and kind.
+4. The person changes the replay code when the diff needs it, and records
+   the new release in the corpus (section 3, layer C).
+5. The corpus test must pass, and the e2e run of that CLI with journaling
+   on and off must give the same normalized export, before the pull request
+   merges. Only then does the newest verified CLI version of the version
+   gate (section 3, layer D) move to that release.
 
 Cost: about 200 lines of generator, plus the cost of 2B for the types that
 the generator cannot know (the link fields of a resource). Gain: a CLI
-change in `journal.go` shows as a diff in a generated file, which the
-upstream watch (section 3, layer B) can open as an issue in this
-repository, with the diff.
+change in `journal.go` shows as a diff in a generated file, in a pull
+request with a known procedure.
 
 ### Replay: port or import
 
@@ -620,6 +696,104 @@ that falls back to checkpoints, these weak points are safe:
 keeps users of a new CLI on checkpoints. Strict reject stops a client that
 the gate let through but that sends something unknown.
 
+### The cost of strict reject
+
+Strict reject has a cost that this RFC states plainly. The CLI has no
+fallback to checkpoints, and it does not retry a 400 or a 409 (research
+note in #390, section 6). So when a CLI that the gate let through sends an
+entry that the server does not know, the user's `pulumi up` fails at once.
+The state holds what the accepted batches built, with pending operations
+for the steps that did not finish (R34). With real cloud resources, a
+failed update can leave resources that exist but are not in the state
+(research note in #390, section 6). The next `pulumi refresh` or `pulumi up`
+must repair that.
+
+This can happen to a verified CLI too. A verified version can send
+something that the corpus did not hold: a kind that only some programs
+make (kinds 8 and 9 come only with extension parameterization or snippets,
+and `requiresByteString` only with strings that are not UTF-8; research
+note in #390, section 3), or a combination that no recorded program had.
+
+Three layers make it rare:
+
+- **The version gate (D)** keeps every CLI that is newer than the newest
+  verified version on checkpoints. A new release cannot reach strict
+  reject until a person has moved the pin and the verified version (section
+  2, option 2C).
+- **The nightly run (A)** drives each new release with journaling on and
+  off, the night after the release, before a person verifies it.
+- **The corpus (C)** holds each kind, each flag and each case that RFC 62
+  names, for each verified release. A program that uses a rare feature must
+  be in the corpus before its release is verified.
+
+They do not make it impossible. The corpus holds only the programs that
+the project recorded.
+
+**What an operator does when it happens.**
+
+1. Set `DUSTPAN_DISABLE_PULUMI_JOURNALING=true` (or the flag) and restart
+   the server. From then on, each new update gets `journalVersion` 0 and
+   saves checkpoints, with the same CLI.
+2. The update that failed has already ended: the CLI sent `complete` with
+   `failed` (research note in #390, section 6). The user runs `pulumi up`
+   again. That update uses checkpoints.
+3. An update that is running in journal mode at the moment of the restart
+   stays in journal mode, because the CLI chose its persister at start
+   (section 4). The server keeps its negotiated version on the update row,
+   and accepts its batches after the restart. During the restart, the CLI
+   gets a transport error on the batch in flight. The CLI retries a
+   transport error up to 4 attempts, 1 s, 2 s and 4 s apart (research note
+   in #390, section 5.6, from the source; this case was not measured). A
+   restart that takes more than about 7 s can therefore fail that update
+   too. The user then runs `pulumi up` again, with checkpoints.
+4. The operator reports the failing program and CLI version in this
+   repository, so that a person can add it to the corpus and fix the
+   replay.
+
+### How a stuck update ends (R37)
+
+R37 in the research note in #390 says: a `complete` with `succeeded` on an
+update with a refused batch or a sequence gap must not end as `succeeded`.
+The CLI can send `succeeded` after a refused batch when that batch held
+only elided entries: it ignores that refusal and exits 0 (R37, section 5.8).
+
+The research note measured what a refused `complete` does (section 6,
+"Results: errors on the `complete` call"): the CLI exits 1, the update
+stays `in-progress`, and the next `pulumi up` fails with 409 "another
+update of this stack is in progress". Open question 19 of the note asks if
+`pulumi cancel` or a lease expiry then ends the update. No run tested it.
+
+In this project, ADR 20 already gives the answer for the lease part:
+
+- An expired lease does not free the stack. Only `pulumi cancel` does
+  (ADR 20, decision 1).
+- Anyone with the right to update the stack may cancel, and the cancel
+  route needs no lease (ADR 20, decision 2). The CLI finds the update
+  through `activeUpdate` in the stack response (ADR 20, decision 4).
+
+So for an update with a refused batch or a gap, the server has two choices
+on `complete` with `succeeded`:
+
+| | Refuse `complete` (409) | Accept `complete`, record `failed` |
+| --- | --- | --- |
+| CLI | exits 1 with the server message | exits 0. The user sees success |
+| Update | stays `in-progress`, the stack stays locked | ends as `failed`, the stack is free |
+| Way out | `pulumi cancel`, by anyone with the update right | none needed |
+| State | what the accepted batches built (R34) | the same |
+
+This RFC prefers the refusal: it tells the user that something failed. The
+server must then make sure that the update does end:
+
+- The 409 message names the one command that helps: `pulumi cancel`.
+- The cancel route ends an update in journal mode like any other update,
+  and builds its checkpoint from the stored entries first (R33, R34).
+- An e2e step proves it: a refused batch of elided entries, then
+  `complete` with `succeeded` refused, then `pulumi cancel`, then a
+  `pulumi up` that succeeds. This step answers open question 19 of the
+  research note for this server.
+- RFC 18 may add a force release for an operator. Until then,
+  `pulumi cancel` is the only way out, as for any update after ADR 20.
+
 ### Which layers act before a user meets a break
 
 | Layer | When it fires | Before users? |
@@ -630,8 +804,10 @@ the gate let through but that sends something unknown.
 | C | on each pull request in this project | yes, for changes in our replay code; for a new CLI, only after the release is recorded |
 | D | at each start-update | yes: an unverified CLI never journals |
 
-Only D keeps every user safe. A, B and C make the time short until a
-binary can verify a new CLI.
+D keeps every user of an unverified CLI on checkpoints. For a verified
+CLI, A and C make a failed update rare, but not impossible (see "The cost
+of strict reject"). A, B and C also make the time short until a binary can
+verify a new CLI.
 
 ## 4. The configuration option
 
@@ -714,13 +890,16 @@ The new ADR must also decide:
    ported files.
 6. Storage: entries as blobs, when the server builds the checkpoint, and
    the limits for one update.
-7. Order and retries: apply by sequence ID or by arrival (R16), how to
+7. The answer to `complete` with `succeeded` after a refused batch or a
+   sequence gap (R37): refuse with 409 and rely on `pulumi cancel`, or
+   accept and record `failed`.
+8. Order and retries: apply by sequence ID or by arrival (R16), how to
    find a retried batch (R12), what to do with batches after a refused one
    (R35).
-8. The version gate: where the newest verified version lives, and who
+9. The version gate: where the newest verified version lives, and who
    raises it.
-9. The CI layers A to C, and who reads the issues of layer B.
-10. Whether ADR 7's two-week rule applies to a module of this project
+10. The CI layers A to C, and who reads the issues of layer B.
+11. Whether ADR 7's two-week rule applies to a module of this project
     (only for 1A) and to `sdk/v3` (only for 2A).
 
 ## Options
@@ -750,17 +929,29 @@ checkpoint, and CI layers A (newest release, nightly), B and C.
 
 Reasons:
 
-- A separate module gives a binary user nothing, and no embedder exists.
-  It costs 5 `make check` targets, 6 CI steps and an owner tag for each
-  journal change. A depguard rule keeps the package free of imports of the
-  rest of the module, so a move to 1A later is a move of files.
+- 1A, the owner's suggestion, makes the instability visible in the path
+  and the version, lets embedders upgrade it alone, and keeps unstable wire
+  types out of the main module. Today no embedder exists, `internal/`
+  already keeps the types out of the public API, and 1A costs 5 `make
+  check` targets, 6 CI steps and an owner tag for each journal change. A
+  depguard rule keeps the package free of imports of the rest of the
+  module, so a move to 1A later is a move of files. The triggers for that
+  move are in section 1: the first SDK embedder that needs journaling, a
+  need to ship journal fixes faster than server releases, or a public API
+  that must expose journal types.
 - `sdk/v3` brings 164 modules and builds generic trees, which #389 forbids.
 - Generated types make an upstream change visible as a diff, with no new
   dependency.
 - The version gate is the only layer that keeps every user of a new CLI
-  safe, because the CLI has no fallback.
+  safe, because the CLI has no fallback. Strict reject still fails the
+  update of a verified CLI that sends something unexpected. The nightly run
+  and the corpus make that rare, and the disable setting with a restart is
+  the operator's way out (section 3).
+- On `complete` with `succeeded` after a refused batch, the server answers
+  409 with a message that names `pulumi cancel`, and the cancel route ends
+  the update (R37, ADR 20).
 
-Decision: for the owner.
+This is a recommendation. Decision: for the owner.
 
 ## Open questions
 
