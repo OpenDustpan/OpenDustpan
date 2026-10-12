@@ -1133,37 +1133,36 @@ func TestRoutesEnforceAuthentication(t *testing.T) {
 
 	t.Run("test routes", func(t *testing.T) {
 		t.Parallel()
-
-		handler := newTestHandler(t)
-
-		for _, route := range handler.Routes() {
-			if route.Scope != tfe.ScopeAuthorized {
-				continue
-			}
-
-			t.Run(route.Method+" "+route.Path, func(t *testing.T) {
-				t.Parallel()
-				checkRouteAuthentication(t, route)
-			})
-		}
+		checkAuthTable(t, newTestHandler(t))
 	})
 
 	t.Run("production table", func(t *testing.T) {
 		t.Parallel()
-
-		handler := newProductionHandler(t)
-
-		for _, route := range handler.Routes() {
-			if route.Scope != tfe.ScopeAuthorized {
-				continue
-			}
-
-			t.Run(route.Method+" "+route.Path, func(t *testing.T) {
-				t.Parallel()
-				checkRouteAuthentication(t, route)
-			})
-		}
+		checkAuthTable(t, newProductionHandler(t))
 	})
+}
+
+// checkAuthTable proves every authorized route of handler answers 401
+// without a token, 401 with a wrong token, 403 when denied, and 200 when
+// allowed. The reveal route is skipped: it needs a state with a masked
+// secret, so its dedicated test proves it instead.
+func checkAuthTable(t *testing.T, handler *tfe.Handler) {
+	t.Helper()
+
+	for _, route := range handler.Routes() {
+		if route.Scope != tfe.ScopeAuthorized {
+			continue
+		}
+
+		if route.Method+" "+route.Path == revealPattern() {
+			continue
+		}
+
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			t.Parallel()
+			checkRouteAuthentication(t, route)
+		})
+	}
 }
 
 // checkRouteAuthentication proves one authorized route answers 401 without a
@@ -1607,6 +1606,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	handler := newProductionHandler(t)
 
 	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path == revealPattern() {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteObject(t, route)

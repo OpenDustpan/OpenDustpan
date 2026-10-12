@@ -297,6 +297,7 @@ func (h *Handler) stateRoutes() []Route {
 			Resolve: h.resolveStateVersionID,
 			Serve:   h.getStateResource,
 		},
+		h.revealRoute(),
 	}
 
 	return slices.Concat(routes, h.stateDiffRoutes())
