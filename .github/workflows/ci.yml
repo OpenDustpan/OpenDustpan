@@ -6,24 +6,38 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Draft pull requests run no jobs: mark a PR ready to run CI on it.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
+# The project has two self-hosted runners. A new push to a pull request
+# cancels the run for the older head of that pull request. Runs on main
+# are never canceled.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The repository variable CI_RUNS_ON picks the runners, as a JSON value:
+# unset means GitHub-hosted "ubuntu-latest"; ["self-hosted","linux","x64"]
+# means the project's own machines. Never point a public repository's
+# pull requests from forks at self-hosted runners.
+
 jobs:
   go:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
         image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
+        # A random host port, so two jobs on one self-hosted machine never collide.
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -45,8 +59,13 @@ jobs:
         run: make nilaway
       - name: Known vulnerabilities
         run: make vuln
+      # Put the pipx directory first on PATH: a self-hosted machine can have
+      # another semgrep (for example a snap, which cannot read the workspace).
+      # --force makes the pin apply on a machine that keeps an older install.
       - name: Install Semgrep
-        run: pipx install semgrep==1.178.0
+        run: |
+          pipx install --force semgrep==1.178.0
+          echo "${PIPX_BIN_DIR:-$HOME/.local/bin}" >> "$GITHUB_PATH"
       - name: Semgrep rules
         run: make semgrep
       - name: Each linked module has a license file to ship
@@ -54,6 +73,8 @@ jobs:
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
       - name: Test
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: go test -race -count=1 ./...
       - name: Build
         run: go build ./cmd/opendustpan
@@ -62,7 +83,8 @@ jobs:
   # the upstream releases, and each archive is checked against the SHA-256
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     env:
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -100,19 +122,19 @@ jobs:
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
-    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       postgres:
         image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
+        # A random host port, so two jobs on one self-hosted machine never collide.
+        ports: ["5432"]
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -126,6 +148,8 @@ jobs:
           path: ~/.cache/opendustpan-e2e
           key: e2e-clis-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
       - name: End-to-end suite
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make e2e
       - name: Show the report
         if: ${{ !cancelled() }}

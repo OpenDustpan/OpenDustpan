@@ -43,10 +43,23 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.Registry
 	backup.Inspector
 	maintenance.Store
+	backup.Stager
 }
 
 // BackupFactory returns a fresh, empty store for one subtest.
 type BackupFactory func(t *testing.T) BackupStore
+
+// ExportTamperer is an optional BackupStore capability for the foreign-key
+// refusal case: it empties the namespaces table of an export stream, leaving
+// orphan stacks. No port writes an orphan, so each store tampers its own
+// stream format in its test wrapper, and the fake tampers its frames.
+type ExportTamperer interface {
+	BackupStore
+	// TamperNamespaces empties the namespaces of the export and returns the
+	// tampered bytes with a manifest whose namespace count matches them, so
+	// only the foreign-key check of the stage can fail.
+	TamperNamespaces(t *testing.T, data []byte, sum backup.Summary) ([]byte, backup.Summary)
+}
 
 // Reopener is an optional BackupStore capability for the close-and-reopen
 // case: Close releases the store and Reopen returns a new handle to the same
@@ -57,6 +70,19 @@ type Reopener interface {
 	Close() error
 	// Reopen returns a new handle to the same backing storage.
 	Reopen() BackupStore
+}
+
+// StagingWitness is an optional BackupStore capability for the
+// stage-replaces case: it exposes the identity of the current staging area,
+// so the suite can prove a new stage discards the previous one. IDs are
+// opaque: a file path for SQLite, a schema name for PostgreSQL, a generation
+// for the fake. An empty ID means no staging area exists.
+type StagingWitness interface {
+	BackupStore
+	// CurrentStagingID returns the ID of the current staging area, or empty.
+	CurrentStagingID() string
+	// StagingAlive reports whether the staging area with id still exists.
+	StagingAlive(id string) bool
 }
 
 // RunBackup executes the conformance suite of the backup ports against stores
@@ -83,6 +109,15 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
+		{name: "staging loads a backup without touching live data", test: testBackupStagingKeepsLive},
+		{name: "a new stage discards the previous staging area", test: testBackupStagingReplacesPrevious},
+		{name: "staging refuses a manifest that omits a table", test: testBackupStagingRefusesOmittedTable},
+		{name: "staging refuses another dialect", test: testBackupStagingRefusesDialect},
+		{name: "staging refuses another schema version", test: testBackupStagingRefusesVersion},
+		{name: "staging refuses a corrupt stream", test: testBackupStagingRefusesCorrupt},
+		{name: "staging refuses row counts that differ from the manifest", test: testBackupStagingRefusesCounts},
+		{name: "staging refuses blob references that differ from the manifest", test: testBackupStagingRefusesBlobs},
+		{name: "staging refuses stacks without their namespace", test: testBackupStagingRefusesForeignKeys},
 	}
 
 	for _, tc := range cases {
@@ -116,7 +151,11 @@ type backupSeed struct {
 // tags, a finished and a waiting update, one checkpoint, events, secret keys
 // under two wrappers, workspaces with a finalized and a pending state
 // version, and one finished backup row. Inventory rows follow from the tool
-// writes.
+// writes. The finished update carries a creator, the waiting update is a
+// restore with a creator and a restore source, the checkpoint manages one
+// resource, and the pending state version is a restore of the finalized one,
+// so the round trip proves the columns that later migrations added survive
+// an export and an import.
 func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	t.Helper()
 
@@ -139,8 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	dev := mustCreateStack(t, s, acme, "dev")
 	otherProd := mustCreateStack(t, s, other, "prod")
 
-	running := f.run(t, f.ref, "u1", mutating())
-	checkpoint := newCheckpoint(running, 0, `{"v":1}`)
+	running := f.run(t, f.ref, "u1", stack.Plan{
+		Kind:         stack.KindUpdate,
+		DryRun:       false,
+		CreatedBy:    "alice@example.com",
+		RestoredFrom: 0,
+	})
+	checkpoint := newCheckpoint(running, 0, resourcedDeployment)
 
 	if err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
@@ -152,7 +196,12 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 
 	finished := f.end(t, running, stack.StatusSucceeded)
-	waiting := f.create(t, f.ref, "u2", mutating())
+	waiting := f.create(t, f.ref, "u2", stack.Plan{
+		Kind:         stack.KindRestore,
+		DryRun:       false,
+		CreatedBy:    "bob@example.com",
+		RestoredFrom: finished.Version,
+	})
 
 	scopes := []secret.Scope{
 		seedBackupKey(t, s, acme, prod, "kek-1"),
@@ -174,6 +223,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 
 	pending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
+	pending.RestoredFrom = current.ID
 	createPendingVersion(t, s, acme, pending)
 
 	plain := createTestWorkspace(t, s, other, "plain")
@@ -1605,4 +1655,430 @@ func checkReopenedBackups(
 	if gotFinished := mustGetBackup(t, reopened, finished.ID); gotFinished != finished {
 		t.Fatalf("finished backup after reopen = %+v, want %+v", gotFinished, finished)
 	}
+}
+
+// stageBackup stages data with want into dst, failing on error.
+func stageBackup(t *testing.T, dst BackupStore, data []byte, want backup.Summary) backup.Summary {
+	t.Helper()
+
+	staged, err := dst.StageRestore(t.Context(), bytes.NewReader(data), want)
+	if err != nil {
+		t.Fatalf("stage backup: %v", err)
+	}
+
+	return staged
+}
+
+// discardStaging removes the staging area of dst, failing on error.
+func discardStaging(t *testing.T, dst BackupStore) {
+	t.Helper()
+
+	if err := dst.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging area: %v", err)
+	}
+}
+
+// liveSummary exports the live data of s into a summary, failing on error. The
+// staging cases compare it before and after, so any write to the live data fails.
+func liveSummary(t *testing.T, s BackupStore) backup.Summary {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	sum, err := s.Export(t.Context(), &buf)
+	if err != nil {
+		t.Fatalf("export live data: %v", err)
+	}
+
+	return sum
+}
+
+// testBackupStagingKeepsLive stages a backup into a store that holds live rows:
+// the staged summary equals the manifest, the live rows stay, and discarding
+// the staging area keeps them too. The foreign-key check runs on the staged
+// data: only a consistent backup stages. The refusal case below covers a
+// violation through the ExportTamperer hook.
+func testBackupStagingKeepsLive(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+	assertExportGroundTruth(t, src, newStore, &seed, sum)
+
+	dst := newStore(t)
+	live := seedBackupStore(t, dst)
+	before := liveSummary(t, dst)
+	beforeNS := mustGetNamespace(t, dst, live.acme.Name)
+
+	staged := stageBackup(t, dst, data, sum)
+	assertSummary(t, staged, sum)
+
+	assertSummary(t, liveSummary(t, dst), before)
+
+	if got := mustGetNamespace(t, dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after staging = %+v, want %+v", got, beforeNS)
+	}
+
+	discardStaging(t, dst)
+	assertSummary(t, liveSummary(t, dst), before)
+
+	if got := mustGetNamespace(t, dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after discarding the staging area = %+v, want %+v", got, beforeNS)
+	}
+
+	// The staging area is gone: the same bytes stage cleanly again.
+	stageBackup(t, dst, data, sum)
+	discardStaging(t, dst)
+	assertSummary(t, liveSummary(t, dst), before)
+}
+
+// testBackupStagingReplacesPrevious stages two backups without an
+// intervening discard: only one staging area exists at a time, so the second
+// stage discards the first. The staged summary equals the second manifest,
+// the live data is unchanged, and discarding cleans the second staging area.
+// Stores with the StagingWitness capability also prove the first staging area
+// is gone after the second stage: a mutant that forgets to drop it keeps it
+// alive and fails.
+func testBackupStagingReplacesPrevious(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	exports := twoStagingExports(t, newStore)
+
+	dst := newStore(t)
+	live := seedBackupStore(t, dst)
+	before := liveSummary(t, dst)
+	beforeNS := mustGetNamespace(t, dst, live.acme.Name)
+
+	assertSummary(t, stageBackup(t, dst, exports.first.data, exports.first.sum), exports.first.sum)
+	assertSummary(t, liveSummary(t, dst), before)
+
+	firstID := requireStaging(t, dst)
+
+	assertSummary(t, stageBackup(t, dst, exports.second.data, exports.second.sum), exports.second.sum)
+	assertSummary(t, liveSummary(t, dst), before)
+
+	if got := mustGetNamespace(t, dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after the second stage = %+v, want %+v", got, beforeNS)
+	}
+
+	secondID := requireReplacedStaging(t, dst, firstID)
+
+	discardStaging(t, dst)
+	requireNoStaging(t, dst, secondID)
+	assertSummary(t, liveSummary(t, dst), before)
+
+	if got := mustGetNamespace(t, dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after discarding the staging area = %+v, want %+v", got, beforeNS)
+	}
+}
+
+// stagedExport pairs an export stream with its manifest.
+type stagedExport struct {
+	sum  backup.Summary
+	data []byte
+}
+
+// stagingPair holds two exports of one store with an extra stack between
+// them, so the second backup holds one more stack than the first.
+type stagingPair struct {
+	first  stagedExport
+	second stagedExport
+}
+
+// twoStagingExports exports one store twice with an extra stack between the
+// exports, so the second backup holds one more stack than the first.
+func twoStagingExports(t *testing.T, newStore BackupFactory) stagingPair {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	sum1, data1 := exportBackup(t, src)
+	mustCreateStack(t, src, seed.acme, "extra")
+	sum2, data2 := exportBackup(t, src)
+
+	if sum2.RowCounts["stacks"] != sum1.RowCounts["stacks"]+1 {
+		t.Fatalf(
+			"second export stacks = %d, want one more than %d",
+			sum2.RowCounts["stacks"],
+			sum1.RowCounts["stacks"],
+		)
+	}
+
+	return stagingPair{
+		first:  stagedExport{sum: sum1, data: data1},
+		second: stagedExport{sum: sum2, data: data2},
+	}
+}
+
+// requireStaging returns the ID of the current staging area, failing when a
+// witness reports none. Stores without the StagingWitness capability return
+// empty: the summary checks above already prove the stage landed.
+func requireStaging(t *testing.T, dst BackupStore) string {
+	t.Helper()
+
+	witness, ok := dst.(StagingWitness)
+	if !ok {
+		return ""
+	}
+
+	id := witness.CurrentStagingID()
+
+	if id == "" {
+		t.Fatal("current staging ID after the first stage is empty, want the staging area")
+	}
+
+	if !witness.StagingAlive(id) {
+		t.Fatalf("staging area %q is not alive after the first stage, want it alive", id)
+	}
+
+	return id
+}
+
+// requireReplacedStaging returns the ID of the current staging area after the
+// second stage, failing when it equals the first or the first is still alive.
+// A mutant that forgets to discard the previous staging area keeps it alive
+// and fails here. Stores without the capability return empty.
+func requireReplacedStaging(t *testing.T, dst BackupStore, firstID string) string {
+	t.Helper()
+
+	witness, ok := dst.(StagingWitness)
+	if !ok {
+		return ""
+	}
+
+	secondID := witness.CurrentStagingID()
+
+	if secondID == "" {
+		t.Fatal("current staging ID after the second stage is empty, want the staging area")
+	}
+
+	if secondID == firstID {
+		t.Fatalf("staging ID after the second stage = %q, want a new staging area", secondID)
+	}
+
+	if witness.StagingAlive(firstID) {
+		t.Fatalf("staging area %q is still alive after the second stage, want it discarded", firstID)
+	}
+
+	if !witness.StagingAlive(secondID) {
+		t.Fatalf("staging area %q is not alive after the second stage, want it alive", secondID)
+	}
+
+	return secondID
+}
+
+// requireNoStaging fails when the staging area with id is still alive or a
+// witness reports a current staging area after the discard.
+func requireNoStaging(t *testing.T, dst BackupStore, id string) {
+	t.Helper()
+
+	witness, ok := dst.(StagingWitness)
+	if !ok {
+		return
+	}
+
+	if witness.StagingAlive(id) {
+		t.Fatalf("staging area %q is still alive after discard, want it discarded", id)
+	}
+
+	if got := witness.CurrentStagingID(); got != "" {
+		t.Fatalf("current staging ID after discard = %q, want none", got)
+	}
+}
+
+// testBackupStagingRefusesOmittedTable stages with a manifest that omits an
+// empty table and expects ErrCorrupt, with the live data still empty. An
+// omitted empty table reads as zero rows, so only the explicit omission check
+// refuses it: the count comparison alone passes.
+func testBackupStagingRefusesOmittedTable(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	sum, data := exportBackup(t, src)
+
+	omitted := ""
+	for _, table := range backup.Tables {
+		if sum.RowCounts[table] == 0 {
+			omitted = table
+
+			break
+		}
+	}
+
+	if omitted == "" {
+		t.Fatal("export names no empty table, want one table to omit")
+	}
+
+	sum.RowCounts = maps.Clone(sum.RowCounts)
+	delete(sum.RowCounts, omitted)
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data), sum); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("stage backup that omits empty table %q: err = %v, want ErrCorrupt", omitted, err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupStagingRefusesDialect stages with a manifest of another dialect and
+// expects ErrDialectMismatch, with the live data still empty and no staging left.
+func testBackupStagingRefusesDialect(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	sum.Dialect = otherDialect(sum.Dialect)
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data), sum); !errors.Is(
+		err, backup.ErrDialectMismatch,
+	) {
+		t.Fatalf("stage backup of another dialect: err = %v, want ErrDialectMismatch", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+
+	sum.Dialect = otherDialect(sum.Dialect)
+	stageBackup(t, dst, data, sum)
+	discardStaging(t, dst)
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupStagingRefusesVersion stages with a manifest of another schema
+// version and expects ErrSchemaMismatch, with the live data still empty.
+func testBackupStagingRefusesVersion(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	sum.SchemaVersion++
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data), sum); !errors.Is(
+		err, backup.ErrSchemaMismatch,
+	) {
+		t.Fatalf("stage backup of another schema version: err = %v, want ErrSchemaMismatch", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+}
+
+// testBackupStagingRefusesCorrupt stages truncated bytes and expects an error,
+// with the live data still empty and no staging left.
+func testBackupStagingRefusesCorrupt(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data[:len(data)/2]), sum); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("stage backup of truncated data: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+
+	stageBackup(t, dst, data, sum)
+	discardStaging(t, dst)
+	assertBackupEmpty(t, dst)
+}
+
+// testBackupStagingRefusesForeignKeys stages an export whose stacks miss
+// their namespace and expects ErrCorrupt, with the live data still empty.
+// Stores without the ExportTamperer capability skip this case: no port writes
+// an orphan, so the suite tampers the stream through the hook.
+func testBackupStagingRefusesForeignKeys(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	dst := newStore(t)
+
+	tamperer, ok := dst.(ExportTamperer)
+	if !ok {
+		t.Skip("store cannot tamper an export stream")
+	}
+
+	tampered, want := tamperer.TamperNamespaces(t, data, sum)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(tampered), want); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("stage backup of stacks without their namespace: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+}
+
+// testBackupStagingRefusesCounts stages with a manifest whose row counts differ
+// and expects ErrCorrupt, with the live data still empty.
+func testBackupStagingRefusesCounts(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	sum.RowCounts["namespaces"]++
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data), sum); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("stage backup of wrong row counts: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
+}
+
+// testBackupStagingRefusesBlobs stages with a manifest whose blob references
+// differ and expects ErrCorrupt, with the live data still empty. The seed holds
+// one finalized state version, so the manifest always names one blob.
+func testBackupStagingRefusesBlobs(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sum, data := exportBackup(t, src)
+
+	if len(sum.Blobs) == 0 {
+		t.Fatal("export names no blob, want the blob of the finalized state version")
+	}
+
+	sum.Blobs[0].Size++
+
+	dst := newStore(t)
+
+	if _, err := dst.StageRestore(t.Context(), bytes.NewReader(data), sum); !errors.Is(
+		err, backup.ErrCorrupt,
+	) {
+		t.Fatalf("stage backup of wrong blob references: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+	discardStaging(t, dst)
 }

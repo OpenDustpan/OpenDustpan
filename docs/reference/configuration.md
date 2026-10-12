@@ -24,6 +24,7 @@ same list.
 | `--s3-region` | `DUSTPAN_S3_REGION` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
 | `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `0`: 32 MiB, the largest Pulumi checkpoint |
+| `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `0`: 512 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `0`: 128 MiB of large Pulumi request bodies at the same time |
@@ -48,13 +49,13 @@ openssl rand -base64 32
 
 ## Client commands
 
-`opendustpan namespace create` and `opendustpan backup` call a running server.
+`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
+check` and `opendustpan upgrade check` call a running server.
 They read the server URL from `--server` or `DUSTPAN_SERVER`, and the token
 from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a
 PEM bundle of CA certificates to the system store.
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
-`opendustpan backup check`, `opendustpan restore` and `opendustpan upgrade
-check` are offline commands. The
-[backup guide](../guides/backup-restore-upgrade.md) shows their flags.
+`opendustpan restore` is an offline command. The
+[backup guide](../guides/backup-restore-upgrade.md) shows its flags.

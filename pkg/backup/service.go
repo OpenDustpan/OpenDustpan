@@ -212,6 +212,19 @@ func (s *Service) Get(ctx context.Context, id ID) (Record, error) {
 	return record, nil
 }
 
+// Check checks that the configured target holds every object the manifest
+// of backup id names with the recorded size. It returns nil when the backup
+// is complete, else the first missing or short object by key wrapping
+// ErrCorrupt. The installation API answers it, so the command reads no
+// target.
+func (s *Service) Check(ctx context.Context, id ID) error {
+	if err := Check(ctx, s.target, id); err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	return nil
+}
+
 // ReadManifest returns the manifest of backup id from the target. A backup
 // without a readable manifest reports ErrCorrupt: only a complete backup
 // counts.

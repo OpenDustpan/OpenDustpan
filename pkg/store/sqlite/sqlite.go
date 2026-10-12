@@ -4,8 +4,9 @@
 // SQLite allows one writer at a time. Transactions start as IMMEDIATE so a
 // fenced write takes the write lock before it reads the failover version.
 //
-// Inspect opens a database read-only and reports its schema state. It is the
-// one place `opendustpan upgrade check` reads.
+// AppliedMigrations reports the rows of schema_migrations ordered by
+// version. It is the one place `opendustpan upgrade check` reads, through
+// the installation API: only the server opens the database.
 package sqlite
 
 import (
@@ -18,6 +19,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	// Registers the "sqlite" database/sql driver.
@@ -43,6 +45,9 @@ type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
 	path    string
+	// stagingMu guards stagingPath: one staged restore at a time.
+	stagingMu   sync.Mutex
+	stagingPath string
 }
 
 var (
@@ -66,7 +71,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 
-	s := &Store{conn: conn, queries: db.New(conn), path: abs}
+	s := &Store{conn: conn, queries: db.New(conn), path: abs, stagingMu: sync.Mutex{}, stagingPath: ""}
 	if err := s.migrate(ctx); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
@@ -97,8 +102,11 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 	return conn, nil
 }
 
-// Close closes the database.
+// Close closes the database. It removes a staged restore file first, so no
+// scratch file survives the handle.
 func (s *Store) Close() error {
+	s.discardStagingFile()
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close sqlite database: %w", err)
 	}
@@ -613,6 +621,17 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	}
 
 	return out, nil
+}
+
+// discardStagingFile removes the staged restore file, if any.
+func (s *Store) discardStagingFile() {
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingPath != "" {
+		removeSnapshot(s.stagingPath)
+		s.stagingPath = ""
+	}
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {

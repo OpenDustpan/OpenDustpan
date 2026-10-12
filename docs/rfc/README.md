@@ -67,9 +67,9 @@ both together.
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
 | [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted |
-| [19](0019-users-teams-roles.md) | Users, teams and roles | draft |
-| [20](0020-access-tokens.md) | Access tokens and machine identity | draft |
-| [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | draft |
+| [19](0019-users-teams-roles.md) | Users, teams and roles | discussing |
+| [20](0020-access-tokens.md) | Access tokens and machine identity | discussing |
+| [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing |
 | [22](0022-audit-log.md) | Audit log | draft |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | draft |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
@@ -87,7 +87,7 @@ both together.
 | [36](0036-high-availability.md) | High availability and scale-out | draft |
 | [37](0037-federation.md) | One view over many OpenDustpan installs | draft |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
-| [39](0039-reading-state.md) | Reading state contents | draft |
+| [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |
 | [41](0041-agent-interface.md) | An interface for AI agents | draft |
 | [42](0042-migration-import.md) | Migration from other backends and operators | accepted |

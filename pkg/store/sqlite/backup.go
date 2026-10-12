@@ -26,6 +26,7 @@ var (
 	_ backup.Registry  = (*Store)(nil)
 	_ backup.Inspector = (*Store)(nil)
 	_ backup.KeyPeeker = (*Store)(nil)
+	_ backup.Stager    = (*Store)(nil)
 )
 
 // CreateBackup implements backup.Registry: it stores r as a running backup.
@@ -260,6 +261,100 @@ func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (b
 	return sum, nil
 }
 
+// StageRestore implements backup.Stager: it stages the export stream in a
+// temporary file next to the live database and checks it (integrity, schema
+// version, row counts, foreign keys, blob references), without touching the
+// live database. The file stays as the staging area until DiscardStaging
+// removes it; a later change applies it. A failed stage removes the file. Only
+// one staging exists at a time: a new stage discards the previous one.
+func (s *Store) StageRestore(
+	ctx context.Context, r io.Reader, want backup.Summary,
+) (backup.Summary, error) {
+	if want.Dialect != backup.DialectSQLite {
+		return backup.Summary{}, fmt.Errorf(
+			"stage backup of dialect %q into %q: %w",
+			want.Dialect,
+			backup.DialectSQLite,
+			backup.ErrDialectMismatch,
+		)
+	}
+
+	version, err := schemaVersion(ctx, s.conn)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if want.SchemaVersion != int(version) {
+		return backup.Summary{}, fmt.Errorf(
+			"stage backup of schema version %d into version %d: %w",
+			want.SchemaVersion,
+			version,
+			backup.ErrSchemaMismatch,
+		)
+	}
+
+	temp, err := stageRestore(r, filepath.Dir(s.path))
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	kept := false
+
+	defer func() {
+		if !kept {
+			removeSnapshot(temp)
+		}
+	}()
+
+	sum, err := checkRestoreFile(ctx, temp, want)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if err := checkStagedBlobs(sum.Blobs, want.Blobs); err != nil {
+		return backup.Summary{}, err
+	}
+
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingPath != "" {
+		if err := removeSnapshotErr(s.stagingPath); err != nil {
+			return backup.Summary{}, fmt.Errorf("discard previous staging area: %w", err)
+		}
+	}
+
+	s.stagingPath = temp
+	kept = true
+
+	return sum, nil
+}
+
+// DiscardStaging implements backup.Stager: it removes the staged restore file,
+// if any. It leaves the live database unchanged. A failed remove returns the
+// error and retains the staging area for retry, matching the PostgreSQL
+// adapter.
+func (s *Store) DiscardStaging(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("discard staging area: %w", err)
+	}
+
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingPath == "" {
+		return nil
+	}
+
+	if err := removeSnapshotErr(s.stagingPath); err != nil {
+		return fmt.Errorf("discard staging area: %w", err)
+	}
+
+	s.stagingPath = ""
+
+	return nil
+}
+
 // PeekKey implements backup.KeyPeeker: it stages the export stream in a
 // temporary file and reads one wrapped data key of wrapperID from its
 // secret_keys table, without loading the destination. The caller streams the
@@ -442,6 +537,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(integrityErr))
 	}
 
+	if keysErr := checkForeignKeys(ctx, conn); keysErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(keysErr))
+	}
+
 	sum, err := summarizeConn(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -464,9 +563,15 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 }
 
 // checkRowCounts compares loaded row counts with the manifest. A count that
-// differs, or a table the backup list does not know, reports corruption.
+// differs, a table the backup list does not know, or a table the manifest
+// omits reports corruption: an omitted empty table cannot slip through the
+// count check, matching the PostgreSQL adapter.
 func checkRowCounts(loaded, want map[string]int64) error {
 	for _, table := range backup.Tables {
+		if _, ok := want[table]; !ok {
+			return fmt.Errorf("import manifest omits table %q: %w", table, backup.ErrCorrupt)
+		}
+
 		if loaded[table] != want[table] {
 			return fmt.Errorf(
 				"import row counts %v differ from manifest %v: %w",
@@ -481,6 +586,79 @@ func checkRowCounts(loaded, want map[string]int64) error {
 		if !slices.Contains(backup.Tables, table) {
 			return fmt.Errorf("import manifest names unknown table %q: %w", table, backup.ErrCorrupt)
 		}
+	}
+
+	return nil
+}
+
+// checkForeignKeys runs PRAGMA foreign_key_check on the staged database: any
+// row reports a child row without its parent. A valid backup never reports
+// one: the live database enforces its foreign keys on every write.
+func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
+	rows, err := conn.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("check backup foreign keys: %w", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	tables := []string{}
+
+	for rows.Next() {
+		var (
+			table  string
+			rowid  int64
+			parent string
+			index  int64
+		)
+
+		if scanErr := rows.Scan(&table, &rowid, &parent, &index); scanErr != nil {
+			return fmt.Errorf("read backup foreign keys: %w", scanErr)
+		}
+
+		if !slices.Contains(tables, table) {
+			tables = append(tables, table)
+		}
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return fmt.Errorf("read backup foreign keys: %w", iterErr)
+	}
+
+	if len(tables) > 0 {
+		return fmt.Errorf("backup breaks foreign keys of %q: %w", tables, backup.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkStagedBlobs compares the blob references of the staged data with the
+// manifest: the staged data must name exactly the keys of the manifest, each
+// with its size and checksum.
+func checkStagedBlobs(staged, want []backup.BlobRef) error {
+	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
+
+	ordered := slices.Clone(staged)
+	slices.SortFunc(ordered, byKey)
+
+	wanted := slices.Clone(want)
+	slices.SortFunc(wanted, byKey)
+
+	same := func(a, b backup.BlobRef) bool {
+		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+	}
+
+	if !slices.EqualFunc(ordered, wanted, same) {
+		return fmt.Errorf(
+			"staged backup names %d blob references, the manifest names %d: %w",
+			len(ordered),
+			len(wanted),
+			backup.ErrCorrupt,
+		)
 	}
 
 	return nil
@@ -809,6 +987,22 @@ func removeSnapshot(path string) {
 	for _, name := range []string{path, path + "-wal", path + "-shm"} {
 		_ = os.Remove(name) //nolint:errcheck // Best-effort cleanup of scratch files.
 	}
+}
+
+// removeSnapshotErr removes a snapshot file with its WAL sidecars. A missing
+// file is not an error, so discarding an already-removed staging area
+// succeeds; any other remove error reports and the caller retains the path
+// for retry.
+func removeSnapshotErr(path string) error {
+	var errs []error
+
+	for _, name := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // quoteLiteral quotes s as a SQL string literal. VACUUM INTO takes no bound

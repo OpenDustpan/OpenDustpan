@@ -19,9 +19,13 @@ package backup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Dialect names the SQL dialect that holds the data.
@@ -92,6 +96,24 @@ func (id ID) String() string {
 	return string(id)
 }
 
+// backupIDPrefix prefixes every backup ID the server mints.
+const backupIDPrefix = "bkp-"
+
+// maxBackupIDLength bounds a backup ID: the minted form is far shorter, and
+// longer input is never a real ID.
+const maxBackupIDLength = 128
+
+// ParseID validates s as a backup ID: the bkp- prefix with identifier
+// characters. It returns ErrInvalidID for anything else, so callers answer
+// 400 with a fixed message instead of sending a malformed ID to the target.
+func ParseID(s string) (ID, error) {
+	if !ident.Valid(s, maxBackupIDLength) || !strings.HasPrefix(s, backupIDPrefix) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidID, s)
+	}
+
+	return ID(s), nil
+}
+
 // Record is one row of the backups table: the backups that this installation
 // made, newest first. Target names where the backup went, for example
 // "dir:/var/backups" or "s3://bucket/prefix". Error holds the failure text
@@ -151,6 +173,10 @@ var (
 	// ErrCorrupt reports that the stream does not hold a complete export, or
 	// that its row counts differ from the manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
+	// ErrInvalidID reports a backup ID that fails validation: empty,
+	// overlong, without the bkp- prefix, or with characters outside the
+	// identifier set.
+	ErrInvalidID = errors.New("invalid backup ID")
 )
 
 // Exporter captures the SQL data in one read transaction and writes it to w.
@@ -180,6 +206,25 @@ type Importer interface {
 	// complete export or its row counts differ from want. A failed import
 	// leaves an empty store: it never leaves partial rows.
 	Import(ctx context.Context, r io.Reader, want Summary) (Summary, error)
+}
+
+// Stager stages an export for an online restore (ADR 38 decision 3): it loads
+// the export into a staging area without touching the live data, then checks
+// the staged data. SQLite stages into a separate file, PostgreSQL into a
+// separate schema. A later change applies the staged data; this port only
+// checks it.
+type Stager interface {
+	// StageRestore loads the export in r into the staging area and checks it:
+	// the dialect and schema version against want, the row counts against
+	// want.RowCounts, the foreign keys, and the blob references against
+	// want.Blobs with size and checksum. It returns the Summary of the staged
+	// data. It returns ErrDialectMismatch, ErrSchemaMismatch or ErrCorrupt. A
+	// failed stage removes the staging area: the live data stays unchanged.
+	// Only one staging exists at a time: a new stage discards the previous one.
+	StageRestore(ctx context.Context, r io.Reader, want Summary) (Summary, error)
+	// DiscardStaging removes the staging area, if any. It leaves the live
+	// data unchanged. A check-only restore calls it after the checks.
+	DiscardStaging(ctx context.Context) error
 }
 
 // Registry tracks the backups table: one row for each backup that this
