@@ -897,3 +897,47 @@ func TestDeleteAllowsLargeEmptyCheckpointAboveDefaultLimit(t *testing.T) {
 		t.Fatalf("guard digest = %x, want the digest of the counted checkpoint", guard.Digest)
 	}
 }
+
+// TestStartWithJournalVersionKeepsIt checks that a start keeps the journal
+// version that the server negotiated, and that Start keeps version 0 (ADR 43,
+// decision 1.3).
+func TestStartWithJournalVersionKeepsIt(t *testing.T) {
+	t.Parallel()
+
+	f := newSequencedDeleteFixture(t)
+	ctx := t.Context()
+
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+
+	journaled, err := f.updates.Create(ctx, f.ref, plan)
+	if err != nil {
+		t.Fatalf("create update: %v", err)
+	}
+
+	started, err := f.updates.StartWithJournalVersion(ctx, f.ref, journaled.ID, 2)
+	if err != nil {
+		t.Fatalf("start with journal version 2: %v", err)
+	}
+
+	if started.Update.JournalVersion != 2 {
+		t.Fatalf("started journal version = %d, want 2", started.Update.JournalVersion)
+	}
+
+	// A dry run does not hold the stack lock, so it can start while the
+	// update above runs.
+	dryRun := stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0}
+
+	plain, err := f.updates.Create(ctx, f.ref, dryRun)
+	if err != nil {
+		t.Fatalf("create second update: %v", err)
+	}
+
+	startedPlain, err := f.updates.Start(ctx, f.ref, plain.ID)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if startedPlain.Update.JournalVersion != 0 {
+		t.Fatalf("Start journal version = %d, want 0", startedPlain.Update.JournalVersion)
+	}
+}

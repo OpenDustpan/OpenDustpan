@@ -490,26 +490,27 @@ func allowAll() selectiveAuthorizer {
 // update-token credential when not empty, access as the access token
 // otherwise. Either may be empty for the unauthenticated cases.
 type updateRequest struct {
-	Method string
-	Target string
-	Access string
-	Lease  string
-	Body   string
+	Method    string
+	Target    string
+	Access    string
+	Lease     string
+	Body      string
+	UserAgent string
 }
 
 // accessRequest builds a request that signs in with the test access token.
 func accessRequest(method, target, body string) updateRequest {
-	return updateRequest{Method: method, Target: target, Access: "test-token", Lease: "", Body: body}
+	return updateRequest{Method: method, Target: target, Access: "test-token", Lease: "", Body: body, UserAgent: ""}
 }
 
 // leaseRequest builds a request that presents the update lease token.
 func leaseRequest(method, target, lease, body string) updateRequest {
-	return updateRequest{Method: method, Target: target, Access: "", Lease: lease, Body: body}
+	return updateRequest{Method: method, Target: target, Access: "", Lease: lease, Body: body, UserAgent: ""}
 }
 
 // anonymousRequest builds a request with no credential.
 func anonymousRequest(method, target, body string) updateRequest {
-	return updateRequest{Method: method, Target: target, Access: "", Lease: "", Body: body}
+	return updateRequest{Method: method, Target: target, Access: "", Lease: "", Body: body, UserAgent: ""}
 }
 
 // doUpdate sends one update-route request.
@@ -521,6 +522,10 @@ func (f updateFixture) doUpdate(t *testing.T, req updateRequest) (int, string) {
 		httpReq = httptest.NewRequestWithContext(t.Context(), req.Method, req.Target, http.NoBody)
 	} else {
 		httpReq = httptest.NewRequestWithContext(t.Context(), req.Method, req.Target, strings.NewReader(req.Body))
+	}
+
+	if req.UserAgent != "" {
+		httpReq.Header.Set("User-Agent", req.UserAgent)
 	}
 
 	switch {
@@ -2983,5 +2988,56 @@ func TestStartAnswersJournalVersion(t *testing.T) {
 
 	if *started.JournalVersion != 0 {
 		t.Fatalf("journalVersion = %d, want 0 until the version gate lands", *started.JournalVersion)
+	}
+}
+
+// TestStartNegotiatesJournalVersion checks that a start answers the journal
+// version of the gate. The production server supports only version 0, so a
+// CLI that offers version 2 still gets 0, and a start that carries a body
+// that is not JSON is refused.
+func TestStartNegotiatesJournalVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	id := createPreviewUpdate(t, f)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, updateRequest{
+		Method:    http.MethodPost,
+		Target:    paths.Start,
+		Access:    "test-token",
+		Lease:     "",
+		Body:      `{"journalVersion":2}`,
+		UserAgent: "pulumi-cli/1 (v3.268.0; linux)",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("start answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var started struct {
+		JournalVersion int `json:"journalVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil {
+		t.Fatalf("decode start: %v (%s)", err, body)
+	}
+
+	if started.JournalVersion != 0 {
+		t.Fatalf("journalVersion = %d, want 0 with the production server", started.JournalVersion)
+	}
+}
+
+// TestStartRefusesMalformedOffer checks that a start whose body is not JSON is
+// refused, and that the update stays not started.
+func TestStartRefusesMalformedOffer(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	id := createPreviewUpdate(t, f)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Start, `{"journalVersion":`))
+	if status != http.StatusBadRequest {
+		t.Fatalf("start with a malformed body answers %d, want %d (%s)", status, http.StatusBadRequest, body)
 	}
 }

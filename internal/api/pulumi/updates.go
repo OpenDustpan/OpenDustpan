@@ -1,6 +1,7 @@
 package pulumi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -400,7 +401,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -428,7 +429,8 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 }
 
 // startUpdate starts the update and hands out its lease. The request tags
-// are ignored in milestone 1: they only annotate the stack.
+// are ignored in milestone 1: they only annotate the stack. The journal version
+// is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
 func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -437,7 +439,14 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	started, err := h.updates.Start(ctx, ref, id)
+	offer, ok := h.startOffer(w, r)
+	if !ok {
+		return
+	}
+
+	journal := h.journalVersionFor(r.UserAgent(), offer)
+
+	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -450,6 +459,39 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		Version:         int(started.Update.Version),
 		JournalVersion:  int(started.Update.JournalVersion),
 	})
+}
+
+// journalVersionFor answers the journal version of a start. With journaling
+// off, the CLI gets checkpoints whatever it offers, so the gate does not run.
+func (h *Handler) journalVersionFor(userAgent string, offer startUpdateOffer) int {
+	if h.disablePulumiJournaling {
+		return 0
+	}
+
+	return negotiateJournalVersion(userAgent, offer.JournalVersion, h.supportedJournal)
+}
+
+// startOffer reads the start-update body. An empty body offers no journal
+// version, because some clients send no body.
+func (h *Handler) startOffer(w http.ResponseWriter, r *http.Request) (startUpdateOffer, bool) {
+	var offer startUpdateOffer
+
+	body, ok := h.readBody(w, r)
+	if !ok {
+		return offer, false
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return offer, true
+	}
+
+	if err := json.Unmarshal(body, &offer); err != nil {
+		h.writeInvalidBody(r.Context(), w)
+
+		return offer, false
+	}
+
+	return offer, true
 }
 
 // renewLease extends the update's lease. The lease token arrives in the
@@ -467,7 +509,7 @@ func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, _ identity.
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -534,7 +576,7 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -886,9 +928,11 @@ func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Toke
 	return tok, raw, true
 }
 
-// readBody reads at most limit request bytes. An oversized body answers 413,
-// an unreadable one 400.
-func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+// readBody reads at most maxBodyBytes request bytes. An oversized body answers
+// 413, an unreadable one 400.
+func (h *Handler) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	limit := int64(maxBodyBytes)
+
 	body, err := io.ReadAll(io.LimitReader(http.MaxBytesReader(w, r.Body, limit), limit+1))
 	if err != nil {
 		if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok && tooLarge != nil {
