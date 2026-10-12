@@ -27,6 +27,7 @@ type AuditEntry struct {
 	RequestID  string
 	PrevHash   string
 	Hash       string
+	ValueCount pgtype.Int8
 }
 
 type Backup struct {

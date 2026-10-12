@@ -295,6 +295,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		Object:     a.object.String(),
 		Version:    a.version,
 		ValuePath:  a.path,
+		ValueCount: nil,
 		SourceIP:   sourceIP(a.request),
 		UserAgent:  truncateUserAgent(a.request.UserAgent()),
 		Channel:    audit.NormalizeChannel(a.request.Header.Get(channelHeader)),

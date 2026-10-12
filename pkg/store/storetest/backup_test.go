@@ -1663,6 +1663,68 @@ func (s *fakeBackupStore) DeleteExpiredPendingStateVersions(
 	return out, nil
 }
 
+// ListUnsealedStateVersions implements workspace.StateStore.
+func (s *fakeBackupStore) ListUnsealedStateVersions(
+	_ context.Context,
+) ([]workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	var out []workspace.StateVersion
+
+	for key := range s.data.states {
+		if sv := s.data.states[key]; !sv.Sealed && sv.Status == workspace.StatusFinalized && sv.Content != "" {
+			out = append(out, sv)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+
+	return out, nil
+}
+
+// SealStateVersion implements workspace.StateStore.
+func (s *fakeBackupStore) SealStateVersion(
+	_ context.Context,
+	id workspace.StateVersionID,
+	content blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return err
+	}
+
+	sv, ok := s.data.states[id.String()]
+	if !ok {
+		return workspace.ErrStateVersionNotFound
+	}
+
+	if sv.Sealed {
+		return nil
+	}
+
+	sv.Content = content
+	sv.Outputs = outputs
+	sv.Sealed = true
+	s.data.states[id.String()] = sv
+
+	return nil
+}
+
 // Ping implements namespace.Store: it returns namespace.ErrUnavailable once
 // the fake is closed.
 func (s *fakeBackupStore) Ping(_ context.Context) error {

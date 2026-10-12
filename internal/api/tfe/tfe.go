@@ -170,13 +170,13 @@ type Config struct {
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
-	// Audit is the audit store that the reveal call appends to. Nil means
-	// no audit store is configured: the reveal call still answers, as the
-	// decrypt audit routes of the other tool adapter do without one.
+	// Audit is the audit store that the reveal call, the state download and
+	// the single output route append to. Nil means no audit store is
+	// configured: the routes answer without an entry.
 	Audit audit.Store
 	// OnAuditFailure runs when an audit append fails. The server wires it
 	// to the dustpan_audit_append_failures_total counter. Nil means no
-	// counter: the reveal call still answers 500 and no value.
+	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
 }
 

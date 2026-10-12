@@ -24,6 +24,7 @@ func testEntry() audit.Entry {
 		Object:     "pulumi:acme/web/prod",
 		Version:    "",
 		ValuePath:  "",
+		ValueCount: nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,
@@ -95,6 +96,50 @@ func TestComputeHashIsStableAndCoversTheFields(t *testing.T) {
 
 	if got := audit.ComputeHash(testEntry(), "prev"); got == first {
 		t.Fatal("hash did not change after the previous hash changed")
+	}
+}
+
+func TestComputeHashKeepsEntriesWithoutACountValid(t *testing.T) {
+	t.Parallel()
+
+	// want pins the encoding of one fixed entry with a nil value count, as
+	// the code before the count computed it. An entry written before the
+	// count keeps its hash only while this hash stays.
+	const want = "a58b9c9f9ef0c3ce0e47e4137c6fed46c9ff48dfd1944380cdfe1d8c5de48b66"
+
+	if got := audit.ComputeHash(testEntry(), ""); got != want {
+		t.Fatalf("hash of an entry with a nil count = %q, want %q", got, want)
+	}
+}
+
+func TestComputeHashCoversTheValueCount(t *testing.T) {
+	t.Parallel()
+
+	before := audit.ComputeHash(testEntry(), "")
+
+	with := testEntry()
+	count := int64(2)
+	with.ValueCount = &count
+
+	got := audit.ComputeHash(with, "")
+	if got == "" {
+		t.Fatal("hash is empty")
+	}
+
+	if got == before {
+		t.Fatal("hash did not change after the value count changed")
+	}
+
+	if again := audit.ComputeHash(with, ""); again != got {
+		t.Fatalf("hash = %q, want stable %q", again, got)
+	}
+
+	other := testEntry()
+	otherCount := int64(3)
+	other.ValueCount = &otherCount
+
+	if same := audit.ComputeHash(other, ""); same == got {
+		t.Fatal("hash did not change after the value count changed")
 	}
 }
 

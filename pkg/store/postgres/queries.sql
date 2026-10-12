@@ -457,6 +457,25 @@ UPDATE state_versions
 SET content_key = $1
 WHERE id = $2 AND status = 'pending';
 
+-- name: ListUnsealedStateVersions :many
+-- Finalized versions that still hold plain content, ordered by ID, so the
+-- seal job seals them in a stable order. A version without content stays
+-- out: a pending row names no content yet.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC;
+
+-- name: SealStateVersion :execrows
+-- Moves one unsealed version to its sealed blob with its sealed outputs and
+-- marks it sealed. The write matches only an unsealed row, so a retry after
+-- a crash succeeds and changes nothing.
+UPDATE state_versions
+SET content_key = @content_key, outputs = @outputs, sealed = TRUE
+WHERE id = @id AND NOT sealed;
+
 -- name: SaveSensitiveMarks :execrows
 -- Stores the secret paths of the json-state rendering of one version. It
 -- works on a pending and on a finalized version: the rendering may land
@@ -602,7 +621,7 @@ ORDER BY content_key;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -611,14 +630,14 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -635,7 +654,7 @@ WHERE namespace = $1;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC

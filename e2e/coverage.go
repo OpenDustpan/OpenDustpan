@@ -556,17 +556,16 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:    coverageAuthenticator{},
-		Authorizer:       coverageAuthorizer{},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       coverageNamespaces(tb),
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      coverageMaintenance{},
-		Metrics:          coverageMetrics{},
-		Version:          "test",
-		Schema:           coverageSchema{},
-		KeyEncryptionKey: false,
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    coverageNamespaces(tb),
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   coverageMaintenance{},
+		Metrics:       coverageMetrics{},
+		Version:       "test",
+		Schema:        coverageSchema{},
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)

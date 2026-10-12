@@ -1400,8 +1400,8 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 `
 
 type InsertAuditEntryParams struct {
@@ -1423,6 +1423,7 @@ type InsertAuditEntryParams struct {
 	RequestID  string
 	PrevHash   string
 	Hash       string
+	ValueCount pgtype.Int8
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -1445,13 +1446,14 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.RequestID,
 		arg.PrevHash,
 		arg.Hash,
+		arg.ValueCount,
 	)
 	return err
 }
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -1482,6 +1484,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.RequestID,
 		&i.PrevHash,
 		&i.Hash,
+		&i.ValueCount,
 	)
 	return i, err
 }
@@ -1528,7 +1531,7 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgty
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -1573,6 +1576,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.RequestID,
 			&i.PrevHash,
 			&i.Hash,
+			&i.ValueCount,
 		); err != nil {
 			return nil, err
 		}
@@ -1586,7 +1590,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -1629,6 +1633,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.RequestID,
 			&i.PrevHash,
 			&i.Hash,
+			&i.ValueCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2145,6 +2150,58 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 	return items, nil
 }
 
+const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC
+`
+
+// Finalized versions that still hold plain content, ordered by ID, so the
+// seal job seals them in a stable order. A version without content stays
+// out: a pending row names no content yet.
+func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
+	rows, err := q.db.Query(ctx, listUnsealedStateVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateVersion
+	for rows.Next() {
+		var i StateVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.Serial,
+			&i.Lineage,
+			&i.Md5,
+			&i.Size,
+			&i.ContentKey,
+			&i.Outputs,
+			&i.Force,
+			&i.UploadDigest,
+			&i.UploadExpiresAtMs,
+			&i.Holder,
+			&i.LockID,
+			&i.CreatedAtMs,
+			&i.FinalizedAtMs,
+			&i.RestoredFrom,
+			&i.Sealed,
+			&i.SensitiveMarks,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -2559,6 +2616,29 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.ID,
 		arg.ExpectedRevision,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sealStateVersion = `-- name: SealStateVersion :execrows
+UPDATE state_versions
+SET content_key = $1, outputs = $2, sealed = TRUE
+WHERE id = $3 AND NOT sealed
+`
+
+type SealStateVersionParams struct {
+	ContentKey string
+	Outputs    []byte
+	ID         string
+}
+
+// Moves one unsealed version to its sealed blob with its sealed outputs and
+// marks it sealed. The write matches only an unsealed row, so a retry after
+// a crash succeeds and changes nothing.
+func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
 	if err != nil {
 		return 0, err
 	}

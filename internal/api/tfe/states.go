@@ -399,9 +399,11 @@ func (h *Handler) readStateVersion(
 // downloadState serves GET
 // /api/v2/state-versions/{state_version_id}/download. It streams the state
 // content. The CLI sends its token, so this is a normal authorized route,
-// not a capability.
+// not a capability. It writes one audit entry of the kind tool-operation
+// before it sends a byte: a failed append answers 500 with no content, so a
+// download without its entry never reaches the CLI (ADR 41 decision 5).
 func (h *Handler) downloadState(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -424,6 +426,13 @@ func (h *Handler) downloadState(
 			h.logger.WarnContext(ctx, "close state content failed", slog.String("error", err.Error()))
 		}
 	}()
+
+	if err := h.appendToolOperationAudit(r, p, obj, sv.ID.String(), ""); err != nil {
+		h.failAudit(ctx)
+		h.writeInternal(ctx, w)
+
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -517,9 +526,12 @@ func (h *Handler) readCurrentOutputs(
 }
 
 // readStateOutput serves GET /api/v2/state-version-outputs/{output_id}. An
-// unknown output answers 404.
+// unknown output answers 404. A sensitive output writes one audit entry of
+// the kind tool-operation with the value path of the output before it
+// answers: a failed append answers 500 with no value (ADR 41 decision 5). A
+// non-sensitive output writes no entry.
 func (h *Handler) readStateOutput(
-	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -545,11 +557,22 @@ func (h *Handler) readStateOutput(
 	}
 
 	for _, output := range outputs {
-		if output.Attributes.Name == name {
-			h.writeJSON(ctx, w, http.StatusOK, stateVersionOutputDocument{Data: output})
-
-			return
+		if output.Attributes.Name != name {
+			continue
 		}
+
+		if output.Attributes.Sensitive {
+			if err := h.appendToolOperationAudit(r, p, obj, sv.ID.String(), "/outputs/"+name); err != nil {
+				h.failAudit(ctx)
+				h.writeInternal(ctx, w)
+
+				return
+			}
+		}
+
+		h.writeJSON(ctx, w, http.StatusOK, stateVersionOutputDocument{Data: output})
+
+		return
 	}
 
 	h.writeError(ctx, w, fmt.Errorf("%w: %q", workspace.ErrStateVersionNotFound, r.PathValue("output_id")))
