@@ -1,0 +1,152 @@
+# Security model
+
+This page says what the OpenDustpan server protects, how, and what it does not
+protect. It describes the server as it is on `main` today. A planned change
+carries the word "planned" and the number of the decision (ADR) or the open
+proposal (RFC) that holds it.
+
+OpenDustpan is pre-alpha. Do not keep production state on it.
+
+## Sign-in
+
+- **Administrator tokens are the only sign-in.** The server reads them from
+  `DUSTPAN_ADMIN_TOKEN` (comma-separated) or from the file in
+  `DUSTPAN_ADMIN_TOKEN_FILE`. No flag takes a token, because flags show in
+  process lists. The server deletes `DUSTPAN_ADMIN_TOKEN` from its
+  environment after it reads it.
+- **Each token is at least 32 bytes.** The server refuses an empty or a
+  duplicate token, and a token file that the group or others can read.
+- **The server keeps no token in its database.** It holds a SHA-256 hash of
+  each token in memory and compares in constant time.
+- **Each tool sends the token in its own header:** the Pulumi CLI as
+  `Authorization: token <token>`, OpenTofu as `Authorization: Bearer <token>`.
+- **Two short-lived capabilities need no token.** A Pulumi update uses an
+  update lease token. An OpenTofu state upload uses a random token in its
+  URL. Each is 32 random bytes, and the server keeps only its SHA-256 hash.
+
+Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
+single sign-on with directory sync (RFC 21).
+
+## Authorization
+
+- **Every token signs in as an administrator,** and an administrator can do
+  every action. No other kind of principal exists today.
+- **Every route declares its actions.** Before a handler runs, the server
+  signs in the caller, finds the object of each action, and checks each
+  action. A test in each API fails when a route has no action and is not on
+  the explicit list of public routes.
+- **Routes that need no sign-in:** `GET /api/capabilities`,
+  `GET /.well-known/terraform.json`, `GET /api/v2/ping`, `GET /health/live`,
+  `GET /health/ready`, and the files of the web console when you set
+  `--console-dir`.
+
+The actions already split, for example, reading a unit from reading its
+secrets. With only administrators, that split has no effect yet.
+
+## Pulumi secrets
+
+The Pulumi CLI sends each secret config value to the server to encrypt and
+decrypt it. The server uses envelope encryption:
+
+- **One data key for each stack.** It is 256 random bits, and it encrypts
+  the values of that stack with AES-256-GCM, a random 12-byte nonce, and the
+  stack as associated data. A ciphertext of one stack does not decrypt as
+  another stack.
+- **The key-encryption key wraps each data key,** also with AES-256-GCM.
+  The database holds only wrapped data keys.
+- **The server checks the key at start.** When the database holds wrapped
+  keys and the key-encryption key is missing or is a different key, the
+  server refuses to start.
+- **A stack delete deletes its data key.** After that, no old ciphertext of
+  that stack can be decrypted.
+
+The values stay encrypted in your stack configuration and in the checkpoints,
+because the Pulumi CLI writes only the ciphertext there.
+
+## The key-encryption key
+
+<!-- Placeholder: written from the merged code of #344, which makes the key
+required and adds a key file and a prompt. -->
+
+## What the server stores in plain text
+
+The server applies no encryption of its own to the database or to the blob
+store. Protect both, for example with disk encryption and with access rules
+on the S3 bucket.
+
+| Data | Where | Encrypted by the server |
+| --- | --- | --- |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | No |
+| Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
+| Pulumi secret config values | Your stack configuration | Yes, as above |
+| Wrapped data keys | Database | Yes, by the key-encryption key |
+| Backups | Backup target | No. A backup holds no key-encryption key |
+
+The server creates the blob directory with access for its owner only.
+
+Planned: the server encrypts OpenTofu state and outputs with a data key per
+workspace (ADR 41, decision 10). Encryption of a whole backup is not decided
+(ADR 30, RFC 8).
+
+## Integrity
+
+- **OpenTofu state: MD5.** The protocol of OpenTofu names each state version
+  by its MD5. The server refuses an upload whose size or MD5 differs from
+  what the client declared, and checks both again on each copy. MD5 finds
+  accidental damage, for example a cut-off upload or a bad disk. It does not
+  stop tampering: a person who can write the blob store can make a changed
+  state with a matching MD5.
+- **Pulumi checkpoints: SHA-256.** The server stores the SHA-256 of each
+  checkpoint and checks it on each read.
+- **Backups.** A restore checks the manifest, the dialect and the schema
+  version, the SHA-256 of the SQL data, the key, and the size and MD5 of each
+  blob. It writes nothing before the key check passes, and it compares the
+  row counts at the end.
+
+## Transport
+
+- **TLS.** `--tls-cert` and `--tls-key` turn on HTTPS, with TLS 1.2 or later.
+  On plain HTTP on an address that is not loopback, the server logs a warning
+  and serves anyway. OpenTofu needs HTTPS.
+- **Behind a reverse proxy.** The server never reads `X-Forwarded-*`
+  headers. Set `--public-url` to the external URL.
+- **Browsers.** Only origins in `--allowed-origins` get CORS headers.
+- **Response headers.** The server sets no `Content-Security-Policy`,
+  `Strict-Transport-Security`, `X-Content-Type-Options` or `X-Frame-Options`
+  header. Set them in a reverse proxy if you need them.
+
+## Logs
+
+The server writes one log line for each request: the method, the route
+pattern, the status, the duration, the size, a request ID, the API and the
+signed-in subject. It does not write the path, the body or any token, so the
+upload capability in a path stays out of the log. Tests send known values
+through each API and check that the log and the metrics do not hold them.
+
+## Limits
+
+- Each request body has a size limit. The Pulumi CLI checkpoints have a
+  limit of 32 MiB and OpenTofu states a limit of 512 MiB by default. The
+  [configuration reference](../reference/configuration.md) lists each limit.
+- Large Pulumi bodies share 128 MiB at the same time. Over that, the server
+  answers 503 with `Retry-After`.
+- The server waits at most 10 seconds for the request headers.
+- No rate limit exists today. Planned in a new RFC (ADR 32).
+
+## Outbound connections
+
+The server sends no telemetry. It connects only to the PostgreSQL database
+and the S3-compatible storage that you configure. The commands
+`namespace create`, `backup`, `backup check` and `upgrade check` call only the
+server in `--server`. `health` calls only the listen address of the local
+server.
+
+## Audit log
+
+<!-- Placeholder: written from the merged code of #356, which adds the audit
+log. -->
+
+## Report a vulnerability
+
+[SECURITY.md](../../SECURITY.md) says how to report a vulnerability in
+private.

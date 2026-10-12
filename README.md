@@ -234,6 +234,8 @@ Reference:
 
 Explanation:
 
+- [Security model](docs/explanation/security-model.md): what the server
+  protects, how, and what it does not protect.
 - [Concepts](#concepts) below.
 - [Roadmap](docs/roadmap.md): the milestones and their exit tests.
 - [Architecture decisions](docs/adr/) and [open proposals](docs/rfc/).
