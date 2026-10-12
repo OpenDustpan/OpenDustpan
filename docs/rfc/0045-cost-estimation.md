@@ -24,8 +24,18 @@ OpenTaco, Terrakube).
 
 ## Open questions
 
-- Which estimator, and is it a recommended step or a built-in?
-  - Find out what competitors do, and do it better.
+- (research) Which estimator, and is it a recommended step or a built-in?
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Which estimator, and is it a recommended step or a built-in?": "Find
+  out what competitors do, and do it better." The question stays in "Open
+  questions".
 
 ## Outcome
 

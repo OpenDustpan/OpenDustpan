@@ -49,24 +49,8 @@ The project owner chose this export. It helps a reviewer check access.
 
 ## Open questions
 
-- Which built-in roles, and is "planner" one of them (env zero has Planner and
-  Deployer)?
-  - Copy-pasta from the competitors here, rather too comprehensive than too narrow.
-- Can a role be granted on a label (RFC 4), as Spacelift grants on spaces and
-  Pulumi on tags?
-  - Yes.
-- How do roles map to the Pulumi CLI's and the TFE API's own team and
+- (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
-  - No idea yet. Research and/or spike.
-- Does the export list only current grants, or past grants as well?
-  - Cool idea. It would be cool to do both a historic audit export (between two timestamps), and a snapshot of the
-    current.
-- Does the export cover grants on every object, or only on namespaces and
-  units?
-  - every grant. But the export can allow scoping when it's generated.
-- How does the export show a principal that never signed in or never used an
-  access token?
-  - It shows the last accessed time as "Never"?
 
 ## Owner direction (2026-10-11)
 
@@ -79,11 +63,33 @@ spreadsheets. The export needs its own action, for example
 with periodic access reviews (ISO/IEC 27002:2022 5.18, SOC 2 CC6.2 and CC6.3).
 The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Which built-in roles, and is \"planner\" one of them": "Copy-pasta from
+  the competitors here, rather too comprehensive than too narrow."
+- Question "Can a role be granted on a label (RFC 4)": "Yes."
+- Question "How do roles map to the Pulumi CLI's and the TFE API's own team and
+  permission endpoints?": "No idea yet. Research and/or spike." The question
+  stays in "Open questions".
+- Question "Does the export list only current grants, or past grants as well?":
+  "Cool idea. It would be cool to do both a historic audit export (between two
+  timestamps), and a snapshot of the current."
+- Question "Does the export cover grants on every object, or only on namespaces
+  and units?": "every grant. But the export can allow scoping when it's
+  generated."
+- Question "How does the export show a principal that never signed in or never
+  used an access token?": "It shows the last accessed time as \"Never\"?" The
+  owner wrote this with a question mark.
+- Comment, with no question named: "Teams are too narrow. In most businesses,
+  \"teams\" are a mess. Users switch teams, they temporarily join projects on
+  different teams, etc. So long as we assume that a user can be a member of
+  more than one group we should be fine."
+
 ## Outcome
 
 None yet.
-
-### Comments
-
-Teams are too narrow. In most businesses, "teams" are a mess. Users switch teams, they temporarily join projects on
-different teams, etc. So long as we assume that a user can be a member of more than one group we should be fine.

@@ -173,23 +173,23 @@ request that the server still checks? Needs a check with `make e2e`.
 
 ### Open questions for groups
 
-- The word. Not "project" (both tools use it). Candidates: group, space,
-  folder, system, collection. "Space" is Spacelift's word for a similar,
-  harder construct.
-  - I guess collection sounds good.
-- Can a unit be in more than one group? One group is simple to reason about
-  for access and maps to one TFE project. Labels can cover the rest (a unit
-  can be in group `payments` with label `pci`).
-  - No.
-- How do rules from two groups combine: union of allows, with any deny
-  winning (RFC 19)?
-  - See above.
-- Does a blueprint (RFC 14) choose the group of the unit it makes, and can
-  the person who makes the unit change it?
-  - It optionally can, and it can optionally prevent changing it.
-- Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
-  group?
-  - No we should not make that assumption.
+The owner answered every question of this list. See "Owner direction
+(2026-10-12)".
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "The word": "I guess collection sounds good."
+- Question "Can a unit be in more than one group?": "No."
+- Question "How do rules from two groups combine": "See above."
+- Question "Does a blueprint (RFC 14) choose the group of the unit it makes":
+  "It optionally can, and it can optionally prevent changing it."
+- Question "Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
+  group": "No we should not make that assumption."
 
 ## Outcome
 

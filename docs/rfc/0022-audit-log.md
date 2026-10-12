@@ -29,13 +29,21 @@ requests in RFC 16) but have no common log.
 
 ## Open questions
 
-- Is the audit log a port with adapters (database, file, syslog, object
-  storage)?
-  - Yes.
-- Which events are always on, and which can an operator turn off?
-  - It's either fully on or off until someone decides otherwise.
-- How does the log stay tamper-evident, for example with a hash chain?
-  - Spike it if it's required. I don't know if it is, and how this would work.
+- (spike) How does the log stay tamper-evident, for example with a hash chain?
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Is the audit log a port with adapters": "Yes."
+- Question "Which events are always on, and which can an operator turn off?":
+  "It's either fully on or off until someone decides otherwise."
+- Question "How does the log stay tamper-evident": "Spike it if it's required. I
+  don't know if it is, and how this would work." The question stays in "Open
+  questions".
 
 ## Outcome
 
