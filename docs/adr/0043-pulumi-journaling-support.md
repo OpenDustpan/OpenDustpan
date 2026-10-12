@@ -437,6 +437,20 @@ the research note for this server.
 10.5. **Other ends.** The server accepts `complete` with `failed` or
 `cancelled` as today. It builds the checkpoint first (decision 7.1).
 
+10.6. **Limit.** Decisions 10.1 and 10.2 close the case of a batch that the
+server saw: a refused batch, or a batch that failed to store. They cannot
+close the case of a last batch that never arrived. After its retries, the
+CLI ignores the error of a batch that holds only elided entries, and then
+sends `complete` with `succeeded` (`pkg/backend/httpstate/journal/snapshot.go`
+at 128d3f2: `ElideWrite` in `AddJournalEntry`, and `Close`). If that batch
+never reached the server, the server has no refusal to record. It sees no
+gap, because the missing sequence IDs come after the highest stored one.
+`complete` passes, and the checkpoint lacks those entries. The protocol
+carries no count or end marker that could show the loss: `complete` holds
+only `status` (`CompleteUpdateRequest`), and a batch holds only `entries`
+(`JournalEntries`). No signal exists to detect this case. This case is not
+measured.
+
 ### 11. CI layers
 
 11.1. **Layer A: nightly run with the newest CLI release.** A scheduled
@@ -519,6 +533,9 @@ same delete after the commit, the same sweep and the same backups.
   build (decision 6.7), so a fixed binary cannot build that checkpoint
   again. The next update of the stack, or a `pulumi refresh`, must fix the
   state. The corpus holds the cases for a replay fix.
+- If the last journal batch never reaches the server, the server cannot
+  see the loss (decision 10.6). The update ends as `succeeded`, and the
+  checkpoint lacks those entries. A `pulumi refresh` fixes the outputs.
 - The blob store holds the journal blobs of an update only while it runs:
   about 450 KB for a create of 3,000 resources (RFC 62).
 - A downgrade to a binary without the journal route answers 404 to a
