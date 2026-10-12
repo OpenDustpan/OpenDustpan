@@ -159,7 +159,8 @@ var errRevealAuditFailed = errors.New("audit entry failed")
 
 // revealPath reads the value path of one reveal body: a JSON:API document
 // that holds the path. An empty path and an unreadable body answer 422; an
-// oversized body answers 413.
+// oversized body answers 413. Every answer carries Cache-Control: no-store,
+// so no reveal answer lands in a cache.
 func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	ctx := r.Context()
 
@@ -168,29 +169,29 @@ func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bo
 	)
 	if err != nil {
 		if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok && tooLarge != nil {
-			h.writeError(ctx, w, fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, revealBodyLimit))
+			h.writeNoStore(ctx, w, fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, revealBodyLimit))
 		} else {
-			h.writeError(ctx, w, errInvalidBody)
+			h.writeNoStore(ctx, w, errInvalidBody)
 		}
 
 		return "", false
 	}
 
 	if int64(len(body)) > revealBodyLimit {
-		h.writeError(ctx, w, fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, revealBodyLimit))
+		h.writeNoStore(ctx, w, fmt.Errorf("%w: body over %d bytes", workspace.ErrTooLarge, revealBodyLimit))
 
 		return "", false
 	}
 
 	var doc revealDocument
 	if err := json.Unmarshal(body, &doc); err != nil {
-		h.writeError(ctx, w, errInvalidBody)
+		h.writeNoStore(ctx, w, errInvalidBody)
 
 		return "", false
 	}
 
 	if doc.Data.Attributes.Path == "" {
-		h.writeError(ctx, w, errInvalidBody)
+		h.writeNoStore(ctx, w, errInvalidBody)
 
 		return "", false
 	}

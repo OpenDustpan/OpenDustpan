@@ -107,7 +107,11 @@ func (h *Handler) revealStateValue(
 	provider := stack.SecretsProvider(current.Deployment)
 	if provider != serviceSecretsProviderName() {
 		entry.outcome = audit.OutcomeFailure
-		h.appendRevealEntry(ctx, entry)
+		if !h.appendRevealEntry(ctx, entry) {
+			h.writeNoStore(ctx, w, errAuditFailed)
+
+			return
+		}
 		h.writeNoStore(ctx, w, fmt.Errorf("%w: %q", stack.ErrOtherSecretsProvider, provider))
 
 		return
@@ -132,7 +136,11 @@ func (h *Handler) answerReveal(
 	plain, err := h.secrets.Decrypt(ctx, scope, [][]byte{cipher})
 	if err != nil {
 		entry.outcome = audit.OutcomeFailure
-		h.appendRevealEntry(ctx, entry)
+		if !h.appendRevealEntry(ctx, entry) {
+			h.writeNoStore(ctx, w, errAuditFailed)
+
+			return
+		}
 		h.logger.WarnContext(ctx, "reveal decrypt failed", slog.String("path", entry.path))
 		h.writeNoStore(ctx, w, fmt.Errorf("reveal %q: %w", entry.path, errRevealDecrypt))
 
@@ -165,9 +173,15 @@ var errRevealDecrypt = errors.New("cannot reveal the value")
 var errAuditFailed = errors.New("audit entry failed")
 
 // revealPath reads the value path of one reveal body. An empty path and an
-// unreadable body answer 400; an oversized body answers 413.
+// unreadable body answer 400; an oversized body answers 413. Every answer
+// carries Cache-Control: no-store, so no reveal answer lands in a cache.
 func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	ctx := r.Context()
+
+	// Set no-store before the gate writes: hold, largeReader, writeTooLarge
+	// and writeInvalidBody answer without it, and the header must already be
+	// set when they write.
+	w.Header().Set("Cache-Control", noStoreValue)
 
 	releaseHold, ok := h.hold(w, r, revealBodyLimit)
 	if !ok {

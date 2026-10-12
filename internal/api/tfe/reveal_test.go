@@ -510,12 +510,61 @@ func TestRevealClientEncryptedAnswers409(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 	)
 
-	status, _, body := sendReveal(
+	status, header, body := sendReveal(
 		t, handler, "/api/v2/state-versions/sv-encrypted123/actions/reveal",
 		revealBody(t, "/resources/0/instances/0/attributes/id"),
 	)
 
 	if status != http.StatusConflict {
 		t.Fatalf("encrypted reveal answers %d, want %d (%s)", status, http.StatusConflict, body)
+	}
+
+	if strings.Contains(body, "pw-s3cr3t") {
+		t.Fatalf("409 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+// TestRevealBodyOverLimitAnswers413 proves a body over 8 KiB answers 413
+// with no secret value, Cache-Control: no-store, and no audit entry.
+func TestRevealBodyOverLimitAnswers413(t *testing.T) {
+	t.Parallel()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		entries,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+
+	large := revealBody(t, "/resources/0/instances/0/attributes/"+strings.Repeat("x", 9<<10))
+
+	status, header, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-test123/actions/reveal", large,
+	)
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large reveal answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	if strings.Contains(body, "pw-s3cr3t") {
+		t.Fatalf("413 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 0 {
+		t.Fatalf("entries = %d, want none for an oversized body", len(entries.entries))
 	}
 }

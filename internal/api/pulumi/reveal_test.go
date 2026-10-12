@@ -528,3 +528,101 @@ func TestRevealOtherProviderAnswers409(t *testing.T) {
 		t.Fatalf("entry outcome = %q, want failure", entries.entries[0].Outcome)
 	}
 }
+
+// TestRevealOtherProviderAuditFailureAnswers500 proves a stack with another
+// secrets provider answers 500 and no value when the audit append fails,
+// writes a log line with the path but never the value, and counts the
+// failure.
+func TestRevealOtherProviderAuditFailureAnswers500(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	var failures int
+
+	entries := &memAuditStore{entries: nil, err: errAuditBoom, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: func() { failures++ }, logger: logger},
+	)
+
+	_, path := seedRevealVersion(t, f, "passphrase")
+
+	status, header, body := reveal(t, f, revealBody(t, path))
+
+	if status != http.StatusInternalServerError {
+		t.Fatalf("passphrase reveal with a failed audit answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("500 body holds the secret value: %s", body)
+	}
+
+	if strings.Contains(body, "passphrase") {
+		t.Fatalf("500 body holds provider detail: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	if failures != 1 {
+		t.Fatalf("failures = %d, want 1", failures)
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, "audit append failed") {
+		t.Fatalf("log misses the failure line: %q", line)
+	}
+
+	if !strings.Contains(line, path) {
+		t.Fatalf("log misses the path: %q", line)
+	}
+
+	if strings.Contains(line, revealSecretValue) {
+		t.Fatalf("log holds the value: %q", line)
+	}
+}
+
+// TestRevealBodyOverLimitAnswers413 proves a body over 8 KiB answers 413
+// with no secret value, Cache-Control: no-store, and no audit entry.
+func TestRevealBodyOverLimitAnswers413(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	seedRevealVersion(t, f, "service")
+
+	large := `{"path":"` + strings.Repeat("x", 9<<10) + `"}`
+
+	status, header, body := reveal(t, f, large)
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large reveal answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("413 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 0 {
+		t.Fatalf("entries = %d, want none for an oversized body", len(entries.entries))
+	}
+}
