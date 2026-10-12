@@ -5695,8 +5695,8 @@ func checkStateVersionListThree(body string) error {
 		)
 	}
 
-	if doc.Meta.Pagination.TotalCount != 2 {
-		return fmt.Errorf("%w: total count is %d, want 2: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	if doc.Meta.Pagination.TotalCount != 3 {
+		return fmt.Errorf("%w: total count is %d, want 3: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
 	}
 
 	return nil
@@ -6017,8 +6017,8 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 		t.Fatalf("decode state versions after restore: %v", err)
 	}
 
-	if len(doc.Data) != 4 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 4", len(doc.Data))
+	if len(doc.Data) != 6 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 6", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
@@ -6056,8 +6056,8 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("decode state versions for restore: %v", err)
 	}
 
-	if len(doc.Data) != 2 {
-		t.Fatalf("list holds %d versions, want 2 before the restore", len(doc.Data))
+	if len(doc.Data) != 4 {
+		t.Fatalf("list holds %d versions, want 4 before the restore", len(doc.Data))
 	}
 
 	newest, oldest := doc.Data[0].ID, doc.Data[1].ID
