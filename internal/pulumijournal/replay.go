@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// This file is derived from pkg/backend/journal.go (rebuildDependencies and
-//
 // This file is derived from pkg/backend/journal.go (JournalReplayer.Add,
 // GenerateDeployment and the manifest of the deployment) and from
 // pkg/resource/deploy/manifest.go (NewMagic) of pulumi/pulumi at commit
@@ -450,7 +448,11 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 		}
 		s.addFeatures(scan.features, view.Resource)
 	}
-	if s.snippetCountOut(scan) > 0 {
+	count, cerr := s.snippetCountOut(scan)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if count > 0 {
 		scan.features[snippetsFeature] = true
 	}
 	return scan, nil
@@ -489,8 +491,9 @@ func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value
 }
 
 // snippetCountOut returns the number of snippets in the output.
-func (s *replayState) snippetCountOut(scan *baseScan) int {
-	return len(s.snippetsOut(scan))
+func (s *replayState) snippetCountOut(scan *baseScan) (int, error) {
+	snippets, err := s.snippetsOut(scan)
+	return len(snippets), err
 }
 
 // addBasePending keeps the pending operations of the base that are being
@@ -521,8 +524,6 @@ func (s *replayState) addBasePending(scan *baseScan, raw jsontext.Value) error {
 // creatingOperation is the type of a pending operation that creates a resource
 // (upstream apitype.OperationTypeCreating).
 const creatingOperation = "creating"
-
-// snippetCount returns the number of snippets in a raw snippets array.
 
 // sortedIncomplete returns the operations that are begun and have an operation
 // body, in the order of their operation IDs. Upstream takes them from a map,
@@ -590,6 +591,10 @@ func walkBaseMember(
 	// The token is void after the next read, so the name is copied first.
 	name := key.String()
 	if name == "resources" {
+		// Upstream reads a null resources member as no resources.
+		if dec.PeekKind() == 'n' {
+			return readDelim(dec, 'n')
+		}
 		return walkResources(dec, onResource)
 	}
 	var raw jsontext.Value
@@ -713,12 +718,20 @@ func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
 			return err
 		}
 	}
-	if snippets := s.snippetsOut(scan); len(snippets) > 0 {
+	snippets, serr := s.snippetsOut(scan)
+	if serr != nil {
+		return serr
+	}
+	if len(snippets) > 0 {
 		if err := writeKeyValue(enc, "snippets", snippets); err != nil {
 			return err
 		}
 	}
-	if ext := s.extensionsOut(scan); len(ext) > 0 {
+	ext, eerr := s.extensionsOut(scan)
+	if eerr != nil {
+		return eerr
+	}
+	if len(ext) > 0 {
 		return writeKeyValue(enc, "extensions", ext)
 	}
 	return nil
@@ -792,31 +805,32 @@ func (s *replayState) secretsOut(scan *baseScan) jsontext.Value {
 
 // snippetsOut returns the snippets of the output: the entry list when an entry
 // set one, else the base list.
-func (s *replayState) snippetsOut(scan *baseScan) []jsontext.Value {
+func (s *replayState) snippetsOut(scan *baseScan) ([]jsontext.Value, error) {
 	if s.snippetsSet {
-		return s.snippets
+		return s.snippets, nil
 	}
 	var snippets []jsontext.Value
 	if raw := scan.members["snippets"]; present(raw) {
 		if err := json.Unmarshal(raw, &snippets); err != nil {
-			return nil
+			return nil, fmt.Errorf("pulumijournal: read base snippets: %w", err)
 		}
 	}
-	return snippets
+	return snippets, nil
 }
 
 // extensionsOut merges the extensions of the entries with those of the base.
 // The base value wins for a reference that both hold (upstream maps.Copy).
-func (s *replayState) extensionsOut(scan *baseScan) map[string]jsontext.Value {
+func (s *replayState) extensionsOut(scan *baseScan) (map[string]jsontext.Value, error) {
 	merged := make(map[string]jsontext.Value, len(s.extensions))
 	maps.Copy(merged, s.extensions)
 	if raw := scan.members["extensions"]; present(raw) {
 		var base map[string]jsontext.Value
-		if err := json.Unmarshal(raw, &base); err == nil {
-			maps.Copy(merged, base)
+		if err := json.Unmarshal(raw, &base); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read base extensions: %w", err)
 		}
+		maps.Copy(merged, base)
 	}
-	return merged
+	return merged, nil
 }
 
 // resourceWriter writes the resources of the output. With a refresh, it rebuilds
@@ -929,13 +943,13 @@ func patchObject(raw jsontext.Value, patch map[string]any) (jsontext.Value, erro
 			delete(members, key)
 			continue
 		}
-		encoded, err := json.Marshal(value)
+		encoded, err := marshalDeterministic(value)
 		if err != nil {
 			return nil, fmt.Errorf("pulumijournal: encode resource member: %w", err)
 		}
 		members[key] = encoded
 	}
-	out, err := json.Marshal(members)
+	out, err := marshalDeterministic(members)
 	if err != nil {
 		return nil, fmt.Errorf("pulumijournal: encode resource for patch: %w", err)
 	}
@@ -944,11 +958,21 @@ func patchObject(raw jsontext.Value, patch map[string]any) (jsontext.Value, erro
 
 // writeKeyValue writes an object member whose value is encoded with json.
 func writeKeyValue(enc *jsontext.Encoder, key string, value any) error {
-	encoded, err := json.Marshal(value)
+	encoded, err := marshalDeterministic(value)
 	if err != nil {
 		return fmt.Errorf("pulumijournal: encode deployment member %s: %w", key, err)
 	}
 	return writeKeyRaw(enc, key, encoded)
+}
+
+// marshalDeterministic encodes a value with its map keys in sorted order, so that
+// the same replay gives the same bytes (json.Deterministic).
+func marshalDeterministic(value any) (jsontext.Value, error) {
+	out, err := json.Marshal(value, json.Deterministic(true))
+	if err != nil {
+		return nil, fmt.Errorf("pulumijournal: encode value: %w", err)
+	}
+	return out, nil
 }
 
 // writeKeyRaw writes an object member whose value is already JSON.

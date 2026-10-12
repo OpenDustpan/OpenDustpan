@@ -10,7 +10,6 @@ import (
 	"errors"
 	"io"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -75,9 +74,9 @@ func magic() string {
 }
 
 // expectDeployment checks the output against the expected deployment resources and version.
-func expectDeployment(t *testing.T, got string, version int, resources string) {
+func expectDeployment(t *testing.T, got, resources string) {
 	t.Helper()
-	want := `{"version":` + strconv.Itoa(version) + `,"deployment":{"manifest":{"time":"` + replayTime +
+	want := `{"version":3,"deployment":{"manifest":{"time":"` + replayTime +
 		`","magic":"` + magic() + `","version":"` + cliVersion + `"},"resources":[` + resources + `]}}`
 	if !reflect.DeepEqual(decodeAny(t, got), decodeAny(t, want)) {
 		t.Fatalf("output is\n%s\nwant\n%s", got, want)
@@ -97,7 +96,7 @@ func TestReplaySuccessAddsAndDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectDeployment(t, got, 3, resourceJSON("urn:c")+","+resourceJSON("urn:a")+
+	expectDeployment(t, got, resourceJSON("urn:c")+","+resourceJSON("urn:a")+
 		`,{"urn":"urn:b","custom":true,"type":"t:mod:T","id":"x","delete":true}`)
 }
 
@@ -135,7 +134,7 @@ func TestReplayRefreshRebuildsLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectDeployment(t, got, 3, `{"urn":"urn:b","custom":true,"type":"t:mod:T"}`)
+	expectDeployment(t, got, `{"urn":"urn:b","custom":true,"type":"t:mod:T"}`)
 }
 
 // TestReplayRefusesMissingReference checks that a reference to an operation no entry created is an error.
@@ -248,7 +247,91 @@ func TestReplayWritesNewResourcesBeforeBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectDeployment(t, got, 3, resourceJSON("urn:n")+","+resourceJSON("urn:m")+
+	expectDeployment(t, got, resourceJSON("urn:n")+","+resourceJSON("urn:m")+
 		`,{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x","delete":true}`+","+replaced+
 		`,{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","pendingReplacement":true}`)
+}
+
+// TestReplayIsDeterministic checks that the same input gives the same bytes on
+// each run, with several maps in the output (extensions and property dependencies).
+func TestReplayIsDeterministic(t *testing.T) {
+	t.Parallel()
+	b := `{"urn":"urn:b","custom":true,"type":"t:mod:T",` +
+		`"propertyDependencies":{"p":["urn:a"],"q":["urn:a"],"r":["urn:a"]}}`
+	base := baseJSON(resourceJSON("urn:a"), b,
+		`{"name":"x"}`)
+	entries := batch(
+		`{"version":1,"kind":8,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"extensionRef":"ext-b","extension":{"blob":"b"}}`,
+		`{"version":1,"kind":8,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"extensionRef":"ext-a","extension":{"blob":"a"}}`,
+		`{"version":1,"kind":8,"sequenceID":3,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"extensionRef":"ext-c","extension":{"blob":"c"}}`,
+	)
+	first, err := replay(base, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		again, err := replay(base, entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Fatalf("two runs differ:\n%s\n%s", first, again)
+		}
+	}
+}
+
+// TestReplayRefusesBrokenBaseMembers checks that a base member that does not decode is an error, not dropped.
+func TestReplayRefusesBrokenBaseMembers(t *testing.T) {
+	t.Parallel()
+	base := `{"resources":[],"snippets":"not a list"}`
+	if _, err := replay(base, batch()); err == nil {
+		t.Fatal("broken snippets member did not return an error")
+	}
+	base = `{"resources":[],"extensions":[1]}`
+	if _, err := replay(base, batch()); err == nil {
+		t.Fatal("broken extensions member did not return an error")
+	}
+}
+
+// TestReplayAcceptsNullResources checks that a null resources member is an empty base, as upstream reads it.
+func TestReplayAcceptsNullResources(t *testing.T) {
+	t.Parallel()
+	got, err := replay(`{"resources":null}`, batch(
+		`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectDeployment(t, got, "")
+}
+
+// TestReplayRefusesMissingMembers checks that a secrets entry without a provider, and an
+// extension entry without a reference, return ErrMissingMember (upstream panics here).
+func TestReplayRefusesMissingMembers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{
+			name:  "secrets provider",
+			entry: `{"version":1,"kind":6,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
+		},
+		{
+			name:  "extension reference",
+			entry: `{"version":1,"kind":8,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := replay(baseJSON(), batch(tt.entry))
+			if !errors.Is(err, pulumijournal.ErrMissingMember) {
+				t.Fatalf("error is %v, want ErrMissingMember", err)
+			}
+		})
+	}
 }

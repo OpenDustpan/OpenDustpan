@@ -8,7 +8,7 @@ import (
 
 // portedFiles returns the files of this package that port upstream code (ADR 43, decision 4.2).
 func portedFiles() []string {
-	return []string{"features.go", "links.go", "replay.go"}
+	return []string{"features.go", "links.go", "replay.go", "resource.go"}
 }
 
 // upstreamCommit is the pinned commit of pulumi/pulumi that the ported code comes from.
