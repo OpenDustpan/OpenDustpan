@@ -25,6 +25,7 @@ business unit or per network zone. ADR 4 covers regions of one install only.
 ## Open questions
 
 - Is there a real need, beyond regions in one install?
+  - Yes. We can proxy traffic between instances.
 
 ## Outcome
 

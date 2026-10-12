@@ -176,15 +176,20 @@ request that the server still checks? Needs a check with `make e2e`.
 - The word. Not "project" (both tools use it). Candidates: group, space,
   folder, system, collection. "Space" is Spacelift's word for a similar,
   harder construct.
+  - I guess collection sounds good.
 - Can a unit be in more than one group? One group is simple to reason about
   for access and maps to one TFE project. Labels can cover the rest (a unit
   can be in group `payments` with label `pci`).
+  - No.
 - How do rules from two groups combine: union of allows, with any deny
   winning (RFC 19)?
+  - See above.
 - Does a blueprint (RFC 14) choose the group of the unit it makes, and can
   the person who makes the unit change it?
+  - It optionally can, and it can optionally prevent changing it.
 - Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
   group?
+  - No we should not make that assumption.
 
 ## Outcome
 
