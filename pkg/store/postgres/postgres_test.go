@@ -176,6 +176,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 // backupStore wraps a PostgreSQL store with the URL of its schema, so the
 // suite can close and reopen the same backing storage.
 type backupStore struct {

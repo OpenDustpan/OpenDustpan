@@ -158,9 +158,9 @@ The server keeps no copy of the key-encryption key.
 The server sends no telemetry. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
-check` and `opendustpan upgrade check` call only the server that `--server`
-names. `opendustpan health` calls only the listen address of the local
-server.
+check`, `opendustpan upgrade check` and `opendustpan restore` call only the
+server that `--server` names. `opendustpan health` calls only the listen
+address of the local server.
 
 ### What to back up
 

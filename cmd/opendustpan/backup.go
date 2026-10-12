@@ -155,7 +155,7 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile)
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup again")
 	if err != nil {
 		return err
 	}
@@ -211,10 +211,11 @@ func backupToken() (string, error) {
 	)
 }
 
-// newBackupHTTPClient returns the backup API client: the system store with
-// the PEM bundle in caFile added when set. An empty caFile trusts the
-// system store alone.
-func newBackupHTTPClient(caFile string) (*http.Client, error) {
+// newBackupHTTPClient returns the API client of the backup and restore
+// commands: the system store with the PEM bundle in caFile added when set.
+// An empty caFile trusts the system store alone. rerun names the one command
+// that helps, for example "run opendustpan backup again".
+func newBackupHTTPClient(caFile, rerun string) (*http.Client, error) {
 	if strings.TrimSpace(caFile) == "" {
 		return &http.Client{Timeout: backupRequestTimeout}, nil
 	}
@@ -222,9 +223,10 @@ func newBackupHTTPClient(caFile string) (*http.Client, error) {
 	pemData, err := os.ReadFile(strings.TrimSpace(caFile))
 	if err != nil {
 		return nil, fmt.Errorf(
-			"read CA file %q: %w: check --ca-file and run opendustpan backup again",
+			"read CA file %q: %w: check --ca-file and %s",
 			caFile,
 			err,
+			rerun,
 		)
 	}
 
@@ -235,17 +237,19 @@ func newBackupHTTPClient(caFile string) (*http.Client, error) {
 
 	if !pool.AppendCertsFromPEM(pemData) {
 		return nil, fmt.Errorf(
-			"read CA file %q: %w: check --ca-file and run opendustpan backup again",
+			"read CA file %q: %w: check --ca-file and %s",
 			caFile,
 			errBackupNoCA,
+			rerun,
 		)
 	}
 
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		return nil, fmt.Errorf(
-			"%w: check --ca-file and run opendustpan backup again",
+			"%w: check --ca-file and %s",
 			errBackupTransport,
+			rerun,
 		)
 	}
 

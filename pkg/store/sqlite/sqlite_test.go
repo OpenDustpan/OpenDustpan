@@ -183,6 +183,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		restorable, ok := openBackup(t).(storetest.RestoreStore)
+		if !ok {
+			t.Fatal("backup store keeps no restore ports")
+		}
+
+		return restorable
+	})
+}
+
 // backupStore wraps a Store with its path for the close-and-reopen case of
 // the backup suite: Close releases the handle and Reopen returns a new handle
 // to the same database file.

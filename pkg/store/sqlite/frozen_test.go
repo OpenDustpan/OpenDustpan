@@ -40,6 +40,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0015_maintenance.sql":               "dd34cbf7f918f2c0282a9e4bbd5ffa7bcef4444ded393bf7268086c3527488d8",
 		"0016_checkpoint_blobs.sql":          "ca9d54e8ad8d1569a41a071ce694098f24c35945055dc1b17b3dac4563a2df77",
 		"0017_inventory_lock.sql":            "c8a5cb4ba39f9dee84629ff5e004d70da5c4b2f84ab56e4f1daa40a373c197e2",
+		"0018_restores.sql":                  "969dcd5e80a58822244a937de4aafeac485982dc40905566a5b79f0e3ea94aba",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
