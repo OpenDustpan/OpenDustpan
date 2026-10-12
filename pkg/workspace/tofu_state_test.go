@@ -45,7 +45,7 @@ func tofuTestMarks() workspace.SensitiveMarks {
 func listTestPage(t *testing.T, cursor string, size int) workspace.StatePage {
 	t.Helper()
 
-	page, err := workspace.ListStateResources([]byte(tofuTestState), nil, cursor, size)
+	page, err := workspace.ListStateResources([]byte(tofuTestState), nil, cursor, size, "")
 	if err != nil {
 		t.Fatalf("list state resources: %v", err)
 	}
@@ -174,13 +174,122 @@ func checkTestListPaging(t *testing.T) {
 	}
 }
 
+// listTestFilteredPage returns one filtered page of the masked resource list
+// of the test state, failing the test otherwise.
+func listTestFilteredPage(t *testing.T, filter, cursor string, size int) workspace.StatePage {
+	t.Helper()
+
+	page, err := workspace.ListStateResources([]byte(tofuTestState), nil, cursor, size, filter)
+	if err != nil {
+		t.Fatalf("list state resources with filter %q: %v", filter, err)
+	}
+
+	return page
+}
+
+// TestListTofuFilterMatchesType proves the filter with a type substring
+// answers only resources of that type, on one complete page.
+func TestListTofuFilterMatchesType(t *testing.T) {
+	t.Parallel()
+
+	page := listTestFilteredPage(t, "terraform_data", "", 0)
+
+	if len(page.Resources) != 1 || page.Resources[0].Address != "terraform_data.smoke" {
+		t.Fatalf("filtered list = %+v, want only the data resource", page.Resources)
+	}
+
+	if page.NextCursor != "" || page.Incomplete {
+		t.Fatalf("filtered list = %+v, want one complete page", page)
+	}
+}
+
+// TestListTofuFilterMatchesAddress proves the filter with an address
+// substring answers the named resource.
+func TestListTofuFilterMatchesAddress(t *testing.T) {
+	t.Parallel()
+
+	page := listTestFilteredPage(t, "random_password.pw", "", 0)
+
+	if len(page.Resources) != 1 || page.Resources[0].Address != "random_password.pw" {
+		t.Fatalf("filtered list = %+v, want only the provider resource", page.Resources)
+	}
+}
+
+// TestListTofuFilterIgnoresValues proves the filter never matches attribute
+// values or sensitive values: an id, a plain-adjacent value and each secret
+// answer no resources.
+func TestListTofuFilterIgnoresValues(t *testing.T) {
+	t.Parallel()
+
+	for _, filter := range []string{"smoke-id", "pw-id", "s3cr3t", "pw-s3cr3t", "pw-hash"} {
+		page := listTestFilteredPage(t, filter, "", 0)
+
+		if len(page.Resources) != 0 {
+			t.Fatalf("filter %q matched %+v, want none", filter, page.Resources)
+		}
+
+		if page.NextCursor != "" {
+			t.Fatalf("filter %q next cursor = %q, want empty", filter, page.NextCursor)
+		}
+	}
+}
+
+// TestListTofuFilterPaging proves paging applies after the filter: a page
+// holds only matching resources and the cursor walks them.
+func TestListTofuFilterPaging(t *testing.T) {
+	t.Parallel()
+
+	first := listTestFilteredPage(t, "_", "", 1)
+
+	if len(first.Resources) != 1 || first.NextCursor == "" {
+		t.Fatalf("first filtered page = %+v, want 1 match with a cursor", first)
+	}
+
+	second := listTestFilteredPage(t, "_", first.NextCursor, 1)
+
+	if len(second.Resources) != 1 || second.NextCursor != "" {
+		t.Fatalf("second filtered page = %+v, want 1 match with no cursor", second)
+	}
+
+	if first.Resources[0].Address == second.Resources[0].Address {
+		t.Fatalf("filtered pages overlap on %q", second.Resources[0].Address)
+	}
+}
+
+// TestListTofuFilterKeepsIncomplete proves the filter keeps the incomplete
+// marker: entries the server skips still mark the page, which holds only
+// matching resources.
+func TestListTofuFilterKeepsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	state := `{"version":4,"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]","instances":[]},` +
+		`"junk",{"mode":"managed"},` +
+		`{"mode":"managed","type":"random_password","name":"pw",` +
+		`"provider":"provider[\"registry.opentofu.org/hashicorp/random\"]","instances":[]}]}`
+
+	page, err := workspace.ListStateResources([]byte(state), nil, "", 0, "terraform_data")
+	if err != nil {
+		t.Fatalf("list state resources with a filter: %v", err)
+	}
+
+	if !page.Incomplete {
+		t.Fatalf("filtered list = %+v, want incomplete with skipped entries", page)
+	}
+
+	if len(page.Resources) != 1 || page.Resources[0].Address != "terraform_data.smoke" {
+		t.Fatalf("filtered list = %+v, want only the data resource", page.Resources)
+	}
+}
+
 // TestListTofuChanged proves the changed markers: a second list over the
 // same state reads every resource unchanged, and over a state with another
 // input reads only the data resource changed.
 func TestListTofuChanged(t *testing.T) {
 	t.Parallel()
 
-	same, err := workspace.ListStateResources([]byte(tofuTestState), []byte(tofuTestState), "", 0)
+	same, err := workspace.ListStateResources([]byte(tofuTestState), []byte(tofuTestState), "", 0, "")
 	if err != nil {
 		t.Fatalf("list state resources over the same state: %v", err)
 	}
@@ -193,7 +302,7 @@ func TestListTofuChanged(t *testing.T) {
 
 	changedState := strings.ReplaceAll(tofuTestState, `"value":"s3cr3t"`, `"value":"other"`)
 
-	changed, err := workspace.ListStateResources([]byte(changedState), []byte(tofuTestState), "", 0)
+	changed, err := workspace.ListStateResources([]byte(changedState), []byte(tofuTestState), "", 0, "")
 	if err != nil {
 		t.Fatalf("list state resources over a changed state: %v", err)
 	}
@@ -737,7 +846,7 @@ func TestMaskedReadThroughService(t *testing.T) {
 	secondContent := strings.ReplaceAll(tofuTestState, `"value":"s3cr3t"`, `"value":"other"`)
 	second, _ := f.pushMasked(t, 2, secondContent, maskedRendering())
 
-	page, err := f.svc.ReadResources(ctx, second.ID, "", 0)
+	page, err := f.svc.ReadResources(ctx, second.ID, "", 0, "")
 	if err != nil {
 		t.Fatalf("read resources: %v", err)
 	}
@@ -880,7 +989,7 @@ func TestMaskedReadClientEncryptedThroughService(t *testing.T) {
 
 	sv, _ := f.pushMasked(t, 1, encrypted, maskedRendering())
 
-	if _, err := f.svc.ReadResources(ctx, sv.ID, "", 0); !errors.Is(err, workspace.ErrClientEncrypted) {
+	if _, err := f.svc.ReadResources(ctx, sv.ID, "", 0, ""); !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Errorf("read resources of encrypted state: err = %v, want ErrClientEncrypted", err)
 	}
 
