@@ -300,9 +300,13 @@ golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set
-`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
-real CLI versions against the server. It downloads them first, as
-`e2e/doc.go` describes.
+`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make test-s3`
+runs the S3 blob suite. It needs `DUSTPAN_TEST_S3_ENDPOINT`,
+`DUSTPAN_TEST_S3_BUCKET`, `DUSTPAN_TEST_S3_ACCESS_KEY` and
+`DUSTPAN_TEST_S3_SECRET_KEY`. `make e2e` drives real CLI versions against the
+server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
+with the four S3 variables drives the runs with the live blobs on the
+S3-compatible server.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
 agents and contributors) and `docs/adr/` (why things are the way they are).

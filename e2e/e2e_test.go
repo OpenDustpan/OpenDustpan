@@ -38,6 +38,7 @@ import (
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -199,6 +200,14 @@ func runOnStore(t *testing.T, cli e2e.Install, store e2e.Store, scenario func(*t
 		reason := "set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite"
 		writeReport(t, e2e.NotRun(cli.Tool, cli.Label, store, reason, true))
 		t.Skip(reason)
+	}
+
+	if e2e.UseS3Blobs(t) {
+		if _, ok := e2e.LookupS3Config(); !ok {
+			reason := e2e.S3SkipReason()
+			writeReport(t, e2e.NotRun(cli.Tool, cli.Label, store, reason, true))
+			t.Skip(reason)
+		}
 	}
 
 	// If server setup fails, NewEnv ends the test before env exists; report
@@ -8822,12 +8831,18 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
 	}
 
+	if e2e.UseS3Blobs(t) {
+		if _, ok := e2e.LookupS3Config(); !ok {
+			t.Skip(e2e.S3SkipReason())
+		}
+	}
+
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, tools.pulumi, store)
 
 	target := env.BackupTarget(t)
-	if dir, ok := strings.CutPrefix(target, "dir:"); !ok || strings.TrimSpace(dir) == "" {
-		t.Fatalf("backup target = %q, want dir:<path> on server A", target)
+	if !validBackupTarget(target) {
+		t.Fatalf("backup target = %q, want dir:<path> or s3://<bucket>[/<prefix>] on server A", target)
 	}
 
 	writeExitTestState(ctx, t, env, tools.pulumi, tools.tofu)
@@ -9305,6 +9320,20 @@ func parseBackupID(stdout string) string {
 	return ""
 }
 
+// validBackupTarget reports whether target names a backup target the test
+// restores from: dir:<path> or s3://<bucket>[/<prefix>], with no blank path.
+func validBackupTarget(target string) bool {
+	if dir, ok := strings.CutPrefix(target, "dir:"); ok {
+		return strings.TrimSpace(dir) != ""
+	}
+
+	if rest, ok := strings.CutPrefix(target, "s3://"); ok {
+		return strings.TrimSpace(rest) != ""
+	}
+
+	return false
+}
+
 // runBackupCheck runs `opendustpan backup check` for id through the running
 // server and proves it exits 0 with the complete verdict.
 func runBackupCheck(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
@@ -9331,7 +9360,7 @@ func wipeRestoreDestination(ctx context.Context, t *testing.T, env *e2e.Env, sto
 
 	switch store {
 	case e2e.StoreSQLite:
-		wipeSQLiteDestination(t, env)
+		wipeSQLiteDestination(ctx, t, env)
 	case e2e.StorePostgres:
 		wipePostgresDestination(ctx, t, env)
 	default:
@@ -9340,8 +9369,8 @@ func wipeRestoreDestination(ctx context.Context, t *testing.T, env *e2e.Env, sto
 }
 
 // wipeSQLiteDestination removes the SQLite file with its journals and the
-// blob directory. The restore recreates both.
-func wipeSQLiteDestination(t *testing.T, env *e2e.Env) {
+// live blobs. The restore recreates them.
+func wipeSQLiteDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	dbURL := env.DatabaseURL(t)
@@ -9357,13 +9386,11 @@ func wipeSQLiteDestination(t *testing.T, env *e2e.Env) {
 		}
 	}
 
-	if err := os.RemoveAll(env.BlobDir(t)); err != nil {
-		t.Fatalf("remove blob directory: %v", err)
-	}
+	env.ClearLiveBlobs(ctx, t)
 }
 
 // wipePostgresDestination drops the PostgreSQL schema the environment serves
-// and recreates it empty, and removes the blob directory. The restore
+// and recreates it empty, and removes the live blobs. The restore
 // migrates the empty schema and finds no rows and no blobs: a copied blob
 // that the destination already holds is an error.
 func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
@@ -9392,9 +9419,7 @@ func wipePostgresDestination(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("create schema: %v", err)
 	}
 
-	if err := os.RemoveAll(env.BlobDir(t)); err != nil {
-		t.Fatalf("remove blob directory: %v", err)
-	}
+	env.ClearLiveBlobs(ctx, t)
 }
 
 // restoreSchema returns the search_path schema of schemaURL: the isolated
@@ -9417,18 +9442,23 @@ func restoreSchema(t *testing.T, schemaURL string) string {
 }
 
 // restoreBinaryArgs returns the restore arguments the test runs: the backup
-// id from target into the database and blob directory of the environment.
+// id from target into the database and blob store of the environment. On the
+// S3 store the blob flags name --blob-store with --s3-endpoint, which also
+// opens the S3 backup source; on the directory store they name --blob-dir.
 func restoreBinaryArgs(t *testing.T, env *e2e.Env, target, id string) []string {
 	t.Helper()
 
-	return []string{
+	blobs := env.RestoreBlobArgs(t)
+	args := make([]string, 0, len(blobs)+6)
+	args = append(args,
 		"restore",
 		"--from", target,
 		"--backup", id,
 		"--database", env.DatabaseURL(t),
-		"--blob-dir", env.BlobDir(t),
 		"--region", restoreRegion,
-	}
+	)
+
+	return append(args, blobs...)
 }
 
 // runRestoreBinary restores the backup id from target into the empty
@@ -9508,8 +9538,8 @@ func runRestoreWrongKey(ctx context.Context, t *testing.T, env *e2e.Env, target,
 const installationTable = "installation"
 
 // checkRestoreDestinationEmpty proves a refused restore wrote nothing: every
-// data table holds no rows except the seeded installation row, and the blob
-// directory holds no files.
+// data table holds no rows except the seeded installation row, and the live
+// blob store holds no objects.
 func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
@@ -9528,8 +9558,8 @@ func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.En
 		}
 	}
 
-	if got := countBlobFiles(t, env); got != 0 {
-		t.Fatalf("blob directory holds %d files after the refused restore, want none", got)
+	if got := env.CountLiveBlobs(ctx, t); got != 0 {
+		t.Fatalf("live blob store holds %d objects after the refused restore, want none", got)
 	}
 }
 
@@ -9583,41 +9613,16 @@ func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.
 	}
 }
 
-// countBlobFiles returns the number of files in the blob directory of the
-// environment, or 0 when the directory is gone.
-func countBlobFiles(t *testing.T, env *e2e.Env) int {
-	t.Helper()
-
-	files := 0
-
-	err := filepath.WalkDir(env.BlobDir(t), func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-
-			return err
-		}
-
-		if !entry.IsDir() {
-			files++
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk blob directory: %v", err)
-	}
-
-	return files
-}
-
-// tamperManifestSchema copies the backup target to a new directory and moves
+// tamperManifestSchema copies the backup target to a new target and moves
 // its manifest to a schema version the binary never wrote, so a restore from
 // the copy names the schema versions and exits 1. The backup target stays
 // intact.
 func tamperManifestSchema(t *testing.T, target, id string) string {
 	t.Helper()
+
+	if strings.HasPrefix(target, "s3://") {
+		return tamperS3ManifestSchema(t, target, id)
+	}
 
 	dir, ok := strings.CutPrefix(target, "dir:")
 	if !ok || strings.TrimSpace(dir) == "" {
@@ -9710,6 +9715,101 @@ func runRestoreSchemaMismatch(ctx context.Context, t *testing.T, env *e2e.Env, t
 	if out := res.Stdout + res.Stderr; !strings.Contains(out, "schema version") {
 		t.Fatalf("restore refusal lacks %q:\n%s", "schema version", out)
 	}
+}
+
+// tamperS3ManifestSchema copies the S3 backup target to a new prefix and
+// moves its manifest to a schema version the binary never wrote, so a restore
+// from the copy names the schema versions and exits 1. The backup target
+// stays intact. The copied prefix is removed when the test ends.
+func tamperS3ManifestSchema(t *testing.T, target, id string) string {
+	t.Helper()
+
+	ctx := t.Context()
+	src := e2e.OpenS3TargetStore(ctx, t, target)
+
+	rest, ok := strings.CutPrefix(target, "s3://")
+	if !ok || strings.TrimSpace(rest) == "" {
+		t.Fatalf("backup target = %q, want s3://<bucket>[/<prefix>]", target)
+	}
+
+	bucket, _, _ := strings.Cut(strings.TrimSpace(rest), "/")
+
+	rawPrefix := make([]byte, 8)
+	if _, err := rand.Read(rawPrefix); err != nil {
+		t.Fatalf("generate tampered prefix: %v", err)
+	}
+
+	dstTarget := "s3://" + strings.TrimSpace(bucket) + "/e2e-" + hex.EncodeToString(rawPrefix) + "/backup-tampered"
+	dst := e2e.OpenS3TargetStore(ctx, t, dstTarget)
+
+	manifestName := "backups/" + id + "/manifest.json"
+
+	objects, err := src.List(ctx, "")
+	if err != nil {
+		t.Fatalf("list backup target: %v", err)
+	}
+
+	for _, obj := range objects {
+		data := readS3Object(ctx, t, src, obj.Key.String())
+
+		if obj.Key.String() == manifestName {
+			data = tamperManifestData(t, data)
+		}
+
+		if err := dst.Put(ctx, obj.Key, bytes.NewReader(data)); err != nil {
+			t.Fatalf("copy backup object %s: %v", obj.Key, err)
+		}
+	}
+
+	return dstTarget
+}
+
+// readS3Object returns the content of the object under key in store.
+func readS3Object(ctx context.Context, t *testing.T, store blob.Store, key string) []byte {
+	t.Helper()
+
+	parsed, err := blob.ParseKey(key)
+	if err != nil {
+		t.Fatalf("parse backup object key %q: %v", key, err)
+	}
+
+	body, err := store.Get(ctx, parsed)
+	if err != nil {
+		t.Fatalf("read backup object %s: %v", key, err)
+	}
+
+	defer func() {
+		if closeErr := body.Close(); closeErr != nil {
+			t.Errorf("close backup object %s: %v", key, closeErr)
+		}
+	}()
+
+	data, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("read backup object %s: %v", key, err)
+	}
+
+	return data
+}
+
+// tamperManifestData moves raw to a schema version the binary never wrote.
+func tamperManifestData(t *testing.T, raw []byte) []byte {
+	t.Helper()
+
+	var manifest backup.Manifest
+
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+
+	manifest.SchemaVersion += 1000
+
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+
+	return data
 }
 
 // maintenanceStateDoc decodes the installation state in tests.

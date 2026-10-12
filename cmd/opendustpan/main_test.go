@@ -1146,14 +1146,54 @@ func seedRestoreState(
 func seedRestoreSource(t *testing.T, dir string, id backup.ID, key []byte) string {
 	t.Helper()
 
+	targetDir := filepath.Join(dir, "target")
+
+	target, err := blobfs.Open(targetDir)
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	defer func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}()
+
+	seedRestoreSourceToTarget(t, restoreSeed{
+		dir:        dir,
+		id:         id,
+		key:        key,
+		target:     target,
+		targetName: "dir:" + targetDir,
+	})
+
+	return targetDir
+}
+
+// restoreSeed groups what seedRestoreSourceToTarget needs to take a backup:
+// the source directory with the key, and the target with its name.
+type restoreSeed struct {
+	dir        string
+	id         backup.ID
+	key        []byte
+	target     blob.Store
+	targetName string
+}
+
+// seedRestoreSourceToTarget creates a SQLite source installation in seed.dir
+// with one namespace, one wrapped key and one finalized state version, then
+// takes backup seed.id into seed.target with seed.key.
+func seedRestoreSourceToTarget(t *testing.T, seed restoreSeed) {
+	t.Helper()
+
 	ctx := t.Context()
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(seed.dir, 0o700); err != nil {
 		t.Fatalf("create source directory: %v", err)
 	}
 
-	dbPath := filepath.Join(dir, "dustpan.db")
-	seedMainKey(t, dbPath, key)
+	dbPath := filepath.Join(seed.dir, "dustpan.db")
+	seedMainKey(t, dbPath, seed.key)
 
 	st, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
@@ -1166,7 +1206,7 @@ func seedRestoreSource(t *testing.T, dir string, id backup.ID, key []byte) strin
 		}
 	}()
 
-	srcBlobs, err := blobfs.Open(filepath.Join(dir, "blobs"))
+	srcBlobs, err := blobfs.Open(filepath.Join(seed.dir, "blobs"))
 	if err != nil {
 		t.Fatalf("open source blobs: %v", err)
 	}
@@ -1184,25 +1224,12 @@ func seedRestoreSource(t *testing.T, dir string, id backup.ID, key []byte) strin
 
 	seedRestoreState(ctx, t, st, srcBlobs, namespaces)
 
-	targetDir := filepath.Join(dir, "target")
-
-	target, err := blobfs.Open(targetDir)
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
-
-	defer func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
-	}()
-
 	svc, err := backup.NewService(backup.Config{
 		Exporter:    st,
 		Registry:    st,
 		Blobs:       srcBlobs,
-		Target:      target,
-		TargetName:  "dir:" + targetDir,
+		Target:      seed.target,
+		TargetName:  seed.targetName,
 		Now:         nil,
 		Version:     "",
 		MaxSQLBytes: 0,
@@ -1211,11 +1238,9 @@ func seedRestoreSource(t *testing.T, dir string, id backup.ID, key []byte) strin
 		t.Fatalf("backup service: %v", err)
 	}
 
-	if _, err := svc.Run(ctx, id); err != nil {
+	if _, err := svc.Run(ctx, seed.id); err != nil {
 		t.Fatalf("run backup: %v", err)
 	}
-
-	return targetDir
 }
 
 // countRestoreRows returns the row count of each table in the SQLite
@@ -1666,7 +1691,14 @@ func (f *s3Fake) servePut(w http.ResponseWriter, r *http.Request, body []byte) {
 }
 
 // serveGet answers one GET of the fake with the held object or NoSuchKey.
+// A ListObjectsV2 request gets the held objects under the requested prefix.
 func (f *s3Fake) serveGet(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("list-type") == "2" {
+		f.serveList(w, r)
+
+		return
+	}
+
 	if held, ok := f.holds[r.URL.Path]; ok {
 		w.WriteHeader(http.StatusOK)
 
@@ -1683,6 +1715,38 @@ func (f *s3Fake) serveGet(w http.ResponseWriter, r *http.Request) {
 	const missing = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code></Error>`
 
 	if _, err := io.WriteString(w, missing); err != nil {
+		return
+	}
+}
+
+// serveList answers one ListObjectsV2 request of the fake with the held
+// objects under the requested prefix. Keys stay in URL-path form in the
+// fake, so it strips the bucket segment before it compares the prefix.
+func (f *s3Fake) serveList(w http.ResponseWriter, r *http.Request) {
+	bucket, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	prefix := r.URL.Query().Get("prefix")
+
+	var b strings.Builder
+
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><IsTruncated>false</IsTruncated>`)
+
+	for name := range f.holds {
+		object, ok := strings.CutPrefix(strings.TrimPrefix(name, "/"), bucket+"/")
+		if !ok || !strings.HasPrefix(object, prefix) {
+			continue
+		}
+
+		b.WriteString(`<Contents><Key>`)
+		b.WriteString(object)
+		b.WriteString(`</Key><LastModified>2026-10-11T00:00:00Z</LastModified></Contents>`)
+	}
+
+	b.WriteString(`</ListBucketResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
 		return
 	}
 }
@@ -2157,6 +2221,128 @@ func TestOpenS3StoreEmptyRegion(t *testing.T) {
 	})
 
 	checkBackupTargetRoundTrip(t, target)
+}
+
+//nolint:paralleltest // The test sets credentials through a helper that calls t.Setenv.
+func TestOpenRestoreSourceS3(t *testing.T) {
+	setS3EnvForTest(t)
+
+	fake := newS3Fake(true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	source, err := openRestoreSource(t.Context(), "s3://cmd-bucket/backups", server.URL, "us-east-1", nil)
+	if err != nil {
+		t.Fatalf("open s3 restore source: %v", err)
+	}
+
+	if source == nil {
+		t.Fatal("open s3 restore source = nil, want a store")
+	}
+
+	t.Cleanup(func() {
+		closeRestoreTarget(t.Context(), slog.Default(), source)
+	})
+
+	checkBackupTargetRoundTrip(t, source)
+}
+
+func TestOpenRestoreSourceS3BadValue(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{"s3://", "s3://cmd-bucket/a//b"} {
+		source, err := openRestoreSource(t.Context(), raw, "http://s3.example", "us-east-1", nil)
+		if source != nil {
+			closeRestoreTarget(t.Context(), slog.Default(), source)
+		}
+
+		if err == nil || !errors.Is(err, errRestoreSource) {
+			t.Fatalf("open restore source %q: err = %v, want errRestoreSource", raw, err)
+		}
+
+		if !strings.Contains(err.Error(), "--from") {
+			t.Fatalf("open restore source %q: err = %v, want it to name --from", raw, err)
+		}
+
+		if strings.Contains(err.Error(), "--blob-store") {
+			t.Fatalf("open restore source %q: err = %v, want no --blob-store", raw, err)
+		}
+	}
+}
+
+//nolint:paralleltest // restore reads process environment, so this test sets it.
+func TestRestoreS3SourceToS3Blobs(t *testing.T) {
+	setRestoreEnv(t, testKeyBase64())
+	setS3EnvForTest(t)
+
+	fake := newS3Fake(true)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+	destDir := filepath.Join(dir, "dest")
+
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		t.Fatalf("create destination directory: %v", err)
+	}
+
+	source, err := openBackupTarget(t.Context(), "s3://cmd-bucket/src", server.URL, "us-east-1", nil)
+	if err != nil {
+		t.Fatalf("open s3 backup target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		closeBackupTarget(t, source)
+	})
+
+	seedRestoreSourceToTarget(t, restoreSeed{
+		dir:        filepath.Join(dir, "src"),
+		id:         restoreBackupID,
+		key:        []byte(testKeyString),
+		target:     source,
+		targetName: "s3://cmd-bucket/src",
+	})
+
+	destDB := "sqlite:" + filepath.Join(destDir, "dustpan.db")
+
+	setRestoreEnv(t, testKeyBase64())
+
+	out, err := runRestoreCommand(t,
+		"--from", "s3://cmd-bucket/src",
+		"--backup", restoreBackupID.String(),
+		"--database", destDB,
+		"--blob-store", "s3://cmd-bucket/dest",
+		"--s3-endpoint", server.URL,
+		"--s3-region", "us-east-1",
+		"--region", "local",
+	)
+	if err != nil {
+		t.Fatalf("restore from an s3 source into s3 blobs: %v", err)
+	}
+
+	checkRestoreSuccess(t, out)
+
+	counts := countRestoreRows(t, filepath.Join(dir, "dest", "dustpan.db"))
+	checkRestoreCounts(t, out, counts)
+	checkRestoredTables(t, counts)
+
+	dest, err := openRestoreSource(t.Context(), "s3://cmd-bucket/dest", server.URL, "us-east-1", nil)
+	if err != nil {
+		t.Fatalf("open s3 destination blobs: %v", err)
+	}
+
+	t.Cleanup(func() {
+		closeRestoreTarget(t.Context(), slog.Default(), dest)
+	})
+
+	objects, err := dest.List(t.Context(), "")
+	if err != nil {
+		t.Fatalf("list restored s3 blobs: %v", err)
+	}
+
+	if len(objects) == 0 {
+		t.Fatal("restored s3 blobs hold no object, want the state content")
+	}
 }
 
 // TestServeDeltaCutoffDefault proves the checkpoint delta cutoff defaults

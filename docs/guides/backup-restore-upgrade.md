@@ -58,6 +58,8 @@ Run the restore command. It opens the destination store, reads the manifest, che
 opendustpan restore --from dir:/var/backups/dustpan --backup bkp-aaa --database sqlite:/var/data/dustpan.db --blob-dir /var/data/blobs --region local
 ```
 
+To restore from an S3-compatible target, pass `--from s3://<bucket>[/<prefix>]` with `--s3-endpoint` and `--s3-region` as for `serve`. To load the blobs into an S3-compatible live store, pass `--blob-store s3://<bucket>[/<prefix>]` in place of `--blob-dir`. The command reads the S3 credentials from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` only.
+
 The command prints the steps with the row count of each table. It ends with `restored backup bkp-aaa`. Then start the server on the restored data and read back state with both tools.
 
 The command refuses a destination that is not empty. It writes nothing in that case. Use a new `--database` with a new `--blob-dir` and run the command again.

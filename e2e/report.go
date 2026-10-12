@@ -25,6 +25,7 @@ type Run struct {
 	Tool           string       `json:"tool"`
 	Label          string       `json:"label"`
 	Store          Store        `json:"store"`
+	Blobs          string       `json:"blobs"`
 	Version        string       `json:"version"`
 	ChecksumSource string       `json:"checksumSource"`
 	Steps          []StepResult `json:"steps"`
@@ -48,6 +49,7 @@ func NewRun(env *Env) Run {
 		Tool:           cli.Tool,
 		Label:          cli.Label,
 		Store:          env.Store(),
+		Blobs:          env.BlobName(),
 		Version:        cli.Version,
 		ChecksumSource: cli.ChecksumSource,
 		Steps:          env.Steps(),
@@ -57,12 +59,19 @@ func NewRun(env *Env) Run {
 
 // NotRun is the report of a version and store whose scenario could not run:
 // the CLI did not install, the store is not configured, or the platform does
-// not support it (skipped).
+// not support it (skipped). It names the selected blob store, so a skipped S3
+// run still shows what was selected.
 func NotRun(tool, label string, store Store, reason string, skipped bool) Run {
+	blobs, err := BlobStoreName()
+	if err != nil {
+		blobs = ""
+	}
+
 	return Run{
 		Tool:           tool,
 		Label:          label,
 		Store:          store,
+		Blobs:          blobs,
 		Version:        "",
 		ChecksumSource: "",
 		Steps: []StepResult{{
@@ -78,7 +87,8 @@ func NotRun(tool, label string, store Store, reason string, skipped bool) Run {
 	}
 }
 
-// WriteRun saves run as <dir>/<tool>-<label>-<store>-v<version>.json. The label
+// WriteRun saves run as <dir>/<tool>-<label>-<store>-v<version>.json, with
+// -<blobs> before the version when the run used no directory store. The label
 // is part of the name so that "latest" and the same version pinned do not
 // overwrite each other, and the store is part of it so runs on SQLite and
 // PostgreSQL do not overwrite each other.
@@ -92,10 +102,12 @@ func WriteRun(dir string, run Run) error {
 		return fmt.Errorf("encode report: %w", err)
 	}
 
-	name := filepath.Join(
-		dir,
-		run.Tool+"-"+strings.ReplaceAll(run.Label, "/", "_")+"-"+string(run.Store)+"-v"+run.Version+reportExt,
-	)
+	base := run.Tool + "-" + strings.ReplaceAll(run.Label, "/", "_") + "-" + string(run.Store)
+	if run.Blobs != "" && run.Blobs != blobFS {
+		base += "-" + run.Blobs
+	}
+
+	name := filepath.Join(dir, base+"-v"+run.Version+reportExt)
 	if err := os.WriteFile(name, append(data, '\n'), fileMode); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
@@ -280,7 +292,13 @@ func versionTitle(r Run) string {
 		return base
 	}
 
-	return base + " on " + string(r.Store)
+	base += " on " + string(r.Store)
+
+	if r.Blobs != "" && r.Blobs != blobFS {
+		base += " with " + r.Blobs
+	}
+
+	return base
 }
 
 func stepNames(runs []Run) []string {

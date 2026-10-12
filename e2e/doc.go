@@ -18,10 +18,13 @@
 //
 // With E2E_SERVER=binary the server is the real cmd/opendustpan binary,
 // built once and run with --tls-cert, --tls-key, a database and a blob
-// directory, fronted by a recording proxy. The CLI trusts the proxy through
-// SSL_CERT_FILE with a generated certificate. The binary variant is the
-// proof for the milestone 2 exit test. Without the variable the suite runs
-// the same scenarios against an in-process TLS server for fast runs.
+// directory, fronted by a recording proxy. With E2E_BLOBS=s3 the binary gets
+// --blob-store with --s3-endpoint instead of the blob directory, and the S3
+// test credentials as AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. The CLI
+// trusts the proxy through SSL_CERT_FILE with a generated certificate. The
+// binary variant is the proof for the milestone 2 exit test. Without the
+// variable the suite runs the same scenarios against an in-process TLS server
+// for fast runs, with the blob/s3 store in process for E2E_BLOBS=s3.
 //
 // In the binary mode the environment keeps the binary path, the backend
 // settings (database URL, blob directory, certificate and key files, tokens)
@@ -43,6 +46,12 @@
 //	                     plus postgres when DUSTPAN_TEST_POSTGRES_URL is set)
 //	DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the postgres store; each run gets its own
 //	                           schema (default: postgres runs are skipped)
+//	E2E_BLOBS            live blob store of every run: fs (default, a directory) or
+//	                     s3 (an S3-compatible bucket with a unique prefix per run)
+//	DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY,
+//	DUSTPAN_TEST_S3_SECRET_KEY  S3-compatible server for E2E_BLOBS=s3; each run
+//	                           gets its own key prefix that is removed at the end
+//	                           (default: S3 runs are skipped)
 //	E2E_CACHE_DIR        where CLI archives are cached (default: user cache dir)
 //	E2E_REPORT_DIR       where the request log and summary are written (default: ./report)
 //	E2E_SERVER           "binary" runs the real server binary with TLS flags (default:
