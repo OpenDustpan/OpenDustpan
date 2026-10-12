@@ -273,6 +273,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Object:     "pulumi:" + acme.Name.String() + "/web/prod",
 			Version:    "",
 			ValuePath:  "",
+			ValueCount: nil,
 			SourceIP:   "192.0.2.1",
 			UserAgent:  "test",
 			Channel:    audit.ChannelAPI,

@@ -294,7 +294,7 @@ func TestDecryptWritesToolOperationEntry(t *testing.T) {
 		t.Fatalf("entries = %d, want 1", len(entries.entries))
 	}
 
-	checkToolOperationEntry(t, entries.entries[0], "1")
+	checkToolOperationEntry(t, entries.entries[0], 1)
 }
 
 // TestBatchDecryptWritesToolOperationEntry proves a batch decrypt call writes
@@ -356,13 +356,14 @@ func TestBatchDecryptWritesToolOperationEntry(t *testing.T) {
 		t.Fatalf("entries = %d, want 1", len(entries.entries))
 	}
 
-	checkToolOperationEntry(t, entries.entries[0], "2")
+	checkToolOperationEntry(t, entries.entries[0], 2)
 }
 
 // checkToolOperationEntry fails the test unless e is the tool-operation entry
 // of a server-side decrypt: the action unit:decrypt with the kind
-// tool-operation, carrying the unit, the count of values and no value path.
-func checkToolOperationEntry(t *testing.T, e audit.Entry, count string) {
+// tool-operation, carrying the unit, the count of values in the value count
+// field, an empty version and no value path.
+func checkToolOperationEntry(t *testing.T, e audit.Entry, count int64) {
 	t.Helper()
 
 	if e.Action != string(identity.ActionUnitDecrypt) {
@@ -381,8 +382,12 @@ func checkToolOperationEntry(t *testing.T, e audit.Entry, count string) {
 		t.Fatalf("object = %q, want the unit reference", e.Object)
 	}
 
-	if e.Version != count {
-		t.Fatalf("version = %q, want the count of values %q", e.Version, count)
+	if e.Version != "" {
+		t.Fatalf("version = %q, want empty", e.Version)
+	}
+
+	if e.ValueCount == nil || *e.ValueCount != count {
+		t.Fatalf("value count = %+v, want %d", e.ValueCount, count)
 	}
 
 	if e.ValuePath != "" {

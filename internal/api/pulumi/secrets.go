@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -357,12 +356,13 @@ func (h *Handler) drainAuditBody(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // auditDetail groups what one audit entry records: the action, the state
-// version, the value path and the kind of access.
+// version, the value path, the count of values and the kind of access.
 type auditDetail struct {
-	action    string
-	version   string
-	valuePath string
-	kind      audit.Kind
+	action     string
+	version    string
+	valuePath  string
+	valueCount *int64
+	kind       audit.Kind
 }
 
 // appendRevealAudit writes one audit entry for a third-party decryption that
@@ -378,10 +378,11 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 	ctx := r.Context()
 
 	entry := h.newAuditEntry(r, p, obj, auditDetail{
-		action:    string(identity.ActionUnitDecrypt),
-		version:   "",
-		valuePath: "",
-		kind:      audit.KindReveal,
+		action:     string(identity.ActionUnitDecrypt),
+		version:    "",
+		valuePath:  "",
+		valueCount: nil,
+		kind:       audit.KindReveal,
 	})
 
 	if err := h.appendEntry(ctx, entry); err != nil {
@@ -391,8 +392,9 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 
 // appendToolOperationAudit writes one audit entry for a decrypt call that the
 // server answers itself: the action unit:decrypt with the kind tool-operation
-// and the count of values in the version field, so a reader never confuses it
-// with a person who asked to see a secret value. It returns the append error,
+// and the count of values in the value count field, so a reader never confuses it
+// with a person who asked to see a secret value. Version stays empty: it
+// names a state version. It returns the append error,
 // so the route answers 500 with no secret value when it cannot record the
 // entry (ADR 41 decision 5). A nil audit store writes no entry.
 func (h *Handler) appendToolOperationAudit(
@@ -402,11 +404,14 @@ func (h *Handler) appendToolOperationAudit(
 		return nil
 	}
 
+	valueCount := int64(count)
+
 	entry := h.newAuditEntry(r, p, obj, auditDetail{
-		action:    string(identity.ActionUnitDecrypt),
-		version:   strconv.Itoa(count),
-		valuePath: "",
-		kind:      audit.KindToolOperation,
+		action:     string(identity.ActionUnitDecrypt),
+		version:    "",
+		valuePath:  "",
+		valueCount: &valueCount,
+		kind:       audit.KindToolOperation,
 	})
 
 	return h.appendEntry(r.Context(), entry)
@@ -414,7 +419,7 @@ func (h *Handler) appendToolOperationAudit(
 
 // newAuditEntry builds one audit entry for the request: who acted, what
 // happened and where it came from, with the given action, version, value
-// path and kind. The store assigns the sequence, the previous hash and the
+// path, value count and kind. The store assigns the sequence, the previous hash and the
 // hash on append.
 func (h *Handler) newAuditEntry(
 	r *http.Request, p identity.Principal, obj identity.Object, detail auditDetail,
@@ -431,6 +436,7 @@ func (h *Handler) newAuditEntry(
 		Object:     obj.String(),
 		Version:    detail.version,
 		ValuePath:  detail.valuePath,
+		ValueCount: detail.valueCount,
 		SourceIP:   sourceIP(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),

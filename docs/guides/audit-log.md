@@ -18,8 +18,8 @@ kind `tool-operation`, so a reader never confuses a tool that needed secrets
 with a person who asked to see one:
 
 - The Pulumi `decrypt` and `batch-decrypt` routes write one entry each with
-  the action `unit:decrypt`, the count of values in `version` and an empty
-  value path.
+  the action `unit:decrypt`, the count of values in `valueCount` and an empty
+  `version` and value path.
 - The OpenTofu state download writes one entry with the action
   `unit:read-secrets`, the state version in `version` and an empty value
   path.
@@ -40,7 +40,8 @@ An entry holds these fields:
 - Who: `subject`, `idpSubject` (empty until an identity provider exists),
   `tokenID` (empty until tokens have IDs).
 - What: `action`, `object` (a unit reference or a namespace), `version` and
-  `valuePath` (for a state read, else empty).
+  `valuePath` (for a state read, else empty), `valueCount` (the count of
+  secret values of a decrypt call, else omitted).
 - When: `atMs` (UTC, Unix milliseconds).
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
@@ -53,6 +54,10 @@ An entry holds these fields:
   (ADR 32).
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
+  When `valueCount` is set, the encoding appends one more field after
+  `prevHash`: the text `value_count=` with the decimal count. When it is
+  omitted, the encoding is unchanged, so an entry written before the count
+  keeps its hash.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41

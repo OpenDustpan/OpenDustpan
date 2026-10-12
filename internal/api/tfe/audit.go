@@ -41,6 +41,7 @@ func (h *Handler) appendToolOperationAudit(
 		Object:     obj.String(),
 		Version:    version,
 		ValuePath:  valuePath,
+		ValueCount: nil,
 		SourceIP:   sourceIP(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),

@@ -3126,18 +3126,19 @@ func exportHidesSecrets(r e2e.Result) error {
 // auditListItem is one entry of GET /api/audit/entries, with the fields
 // the check below needs.
 type auditListItem struct {
-	Subject   string `json:"subject"`
-	Action    string `json:"action"`
-	Object    string `json:"object"`
-	Version   string `json:"version"`
-	ValuePath string `json:"valuePath"`
-	SourceIP  string `json:"sourceIP"`
-	UserAgent string `json:"userAgent"`
-	Channel   string `json:"channel"`
-	Kind      string `json:"kind"`
-	Outcome   string `json:"outcome"`
-	RequestID string `json:"requestID"`
-	Hash      string `json:"hash"`
+	Subject    string `json:"subject"`
+	Action     string `json:"action"`
+	Object     string `json:"object"`
+	Version    string `json:"version"`
+	ValuePath  string `json:"valuePath"`
+	ValueCount *int64 `json:"valueCount"`
+	SourceIP   string `json:"sourceIP"`
+	UserAgent  string `json:"userAgent"`
+	Channel    string `json:"channel"`
+	Kind       string `json:"kind"`
+	Outcome    string `json:"outcome"`
+	RequestID  string `json:"requestID"`
+	Hash       string `json:"hash"`
 }
 
 // fetchAuditEntries lists every audit entry of org through the API, one page
@@ -3387,14 +3388,19 @@ func upAuditRouteCall(env *e2e.Env) string {
 }
 
 // checkDecryptToolOperationFields proves entry is the tool-operation decrypt
-// entry for unit: the count of values and no value path.
+// entry for unit: the count of values in the value count field, an empty
+// version and no value path.
 func checkDecryptToolOperationFields(entry *auditListItem, unit string) error {
 	if entry == nil {
 		return fmt.Errorf("%w: no tool-operation decrypt entry for %q", errUnexpected, unit)
 	}
 
-	if entry.Version == "" {
+	if entry.ValueCount == nil || *entry.ValueCount <= 0 {
 		return fmt.Errorf("%w: tool-operation decrypt entry holds no value count", errUnexpected)
+	}
+
+	if entry.Version != "" {
+		return fmt.Errorf("%w: tool-operation decrypt entry holds version %q", errUnexpected, entry.Version)
 	}
 
 	if entry.ValuePath != "" {
