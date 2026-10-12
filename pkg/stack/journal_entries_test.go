@@ -255,7 +255,6 @@ func TestJournalAppendRefusesMalformedBatch(t *testing.T) {
 
 	for name, body := range map[string][]byte{
 		"not json":     []byte("{"),
-		"no entries":   []byte(`{"entries":[]}`),
 		"zero seq":     []byte(`{"entries":[{"sequenceID":0,"operationID":1}]}`),
 		"repeated seq": []byte(`{"entries":[{"sequenceID":2},{"sequenceID":2}]}`),
 	} {
@@ -290,5 +289,25 @@ func TestJournalAppendReadsBackTheSameBytes(t *testing.T) {
 
 	if len(rows.calls) != 1 {
 		t.Fatalf("rows written = %d, want 1", len(rows.calls))
+	}
+}
+
+// TestJournalAppendAcceptsEmptyBatch checks that a batch with no entries is accepted
+// and writes neither a blob nor a row, as the CLI sends it when it has no entries.
+func TestJournalAppendAcceptsEmptyBatch(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range [][]byte{[]byte("{}"), []byte(`{"entries":[]}`)} {
+		blobs := newFakeBlobs()
+		rows := &fakeRows{err: nil, rows: nil, retried: false, calls: nil}
+		entries := stack.NewJournalEntries(blobs, rows)
+
+		if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
+			t.Fatalf("empty batch %s: %v", body, err)
+		}
+
+		if len(blobs.calls) != 0 || len(rows.calls) != 0 {
+			t.Fatalf("empty batch %s wrote to the stores", body)
+		}
 	}
 }

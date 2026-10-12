@@ -102,6 +102,12 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		return err
 	}
 
+	// An empty batch is valid: the CLI sends {} when it has no entries (the
+	// upstream field is omitempty). It writes no blob and no row.
+	if len(ids.sequences) == 0 {
+		return nil
+	}
+
 	sum := sha256.Sum256(batch.Content)
 	key := journalKey(batch.StackID, batch.Update, lowest(ids.sequences))
 
@@ -199,15 +205,12 @@ func (j *JournalEntries) digestOf(ctx context.Context, key blob.Key) ([sha256.Si
 }
 
 // batchIDs returns the sequence IDs and the operation IDs of a batch body. Each
-// sequence ID must be positive and appear once (ADR 43, decision 5.5).
+// sequence ID must be positive and appear once (ADR 43, decision 5.5). A body with
+// no entries returns no IDs and no error.
 func batchIDs(content []byte) (journalIDs, error) {
 	var body journalBody
 	if err := json.Unmarshal(content, &body); err != nil {
 		return journalIDs{}, fmt.Errorf("%w: %w", ErrJournalBatch, err)
-	}
-
-	if len(body.Entries) == 0 {
-		return journalIDs{}, fmt.Errorf("%w: no entries", ErrJournalBatch)
 	}
 
 	seen := make(map[int64]bool, len(body.Entries))
