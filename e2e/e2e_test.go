@@ -831,6 +831,121 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	consoleURLSteps(t, env)
+
+	pulumiChangeSecretsProviderScenario(t, env, org)
+}
+
+// changeSecretsProviderProgram is the scratch YAML program for the
+// change-secrets-provider steps. Its secret output proves that state
+// encrypted under each provider still decrypts after the change.
+const changeSecretsProviderProgram = "name: " + e2e.Project + "\nruntime: yaml\noutputs:\n  key:\n    fn::secret: abc\n"
+
+// pulumiChangeSecretsProviderScenario proves both directions of
+// `stack change-secrets-provider` on a stack with a secret config value
+// and a secret output: to the passphrase provider and back to the service
+// provider. The CLI prompts for the new passphrase and ignores
+// PULUMI_CONFIG_PASSPHRASE for that prompt, so the change step pipes the
+// passphrase on standard input (twice: the new passphrase and its
+// confirmation) while later steps read through the per-step environment.
+// An empty input would silently migrate to the empty passphrase. The stack
+// is removed at the end, so the scenario leaves no state behind.
+func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	passphrase := fileImportPassphrase(t)
+	qualified := fmt.Sprintf("%s/%s/secrets", org, e2e.Project)
+	passEnv := []string{"PULUMI_CONFIG_PASSPHRASE=" + passphrase}
+
+	env.WritePulumiProject(t, changeSecretsProviderProgram)
+
+	env.Step(ctx, t, step("stack init secrets", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret before provider change",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", "s3cr3t",
+		),
+	)
+	env.Step(ctx, t, step("up before provider change", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"stack output before provider change",
+			contains("abc"),
+			"stack", "output", "key", "--show-secrets", "--stack", qualified,
+		),
+	)
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("Migrating old configuration and state to new secrets provider"),
+		Name:   "change secrets provider to passphrase",
+		Args:   []string{"stack", "change-secrets-provider", "passphrase", "--stack", qualified},
+		Env:    passEnv,
+		Stdin:  passphrase + "\n" + passphrase + "\n",
+		Fail:   false,
+		Redact: false,
+	})
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("s3cr3t"),
+		Name:   "config get after passphrase change",
+		Args:   []string{"config", "get", "--stack", qualified, "apiKey"},
+		Env:    passEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("abc"),
+		Name:   "stack output after passphrase change",
+		Args:   []string{"stack", "output", "key", "--show-secrets", "--stack", qualified},
+		Env:    passEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  upHasNoChanges,
+		Name:   "up after passphrase change",
+		Args:   []string{"up", "--yes", "--non-interactive", "--stack", qualified},
+		Env:    passEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	// Changing back needs the passphrase too: the CLI decrypts with the
+	// old provider before it encrypts with the service provider.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("Migrating old configuration and state to new secrets provider"),
+		Name:   "change secrets provider to default",
+		Args:   []string{"stack", "change-secrets-provider", "default", "--stack", qualified},
+		Env:    passEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	env.Step(
+		ctx,
+		t,
+		step("config get after default change", contains("s3cr3t"), "config", "get", "--stack", qualified, "apiKey"),
+	)
+	env.Step(
+		ctx,
+		t,
+		step(
+			"stack output after default change",
+			contains("abc"),
+			"stack", "output", "key", "--show-secrets", "--stack", qualified,
+		),
+	)
+	env.Step(
+		ctx,
+		t,
+		step("up after default change", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified),
+	)
+	env.Step(ctx, t, step("stack rm secrets", nil, "stack", "rm", "--yes", "--stack", qualified))
 }
 
 // pulumiSetupSteps returns the scenario steps before the rename: login
@@ -8644,7 +8759,7 @@ func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.
 			t.Fatalf("open destination store: %v", err)
 		}
 
-		defer st.Close()
+		defer st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
 
 		sum, err := st.Export(ctx, io.Discard)
 		if err != nil {

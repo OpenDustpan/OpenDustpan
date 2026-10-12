@@ -166,7 +166,11 @@ type backupStore struct {
 	t   *testing.T
 }
 
-var _ storetest.Reopener = (*backupStore)(nil)
+var (
+	_ storetest.Reopener       = (*backupStore)(nil)
+	_ storetest.ExportTamperer = (*backupStore)(nil)
+	_ storetest.StagingWitness = (*backupStore)(nil)
+)
 
 // openBackup returns a backup store in a fresh schema of the database at base.
 func openBackup(t *testing.T, base string) *backupStore {
@@ -182,6 +186,18 @@ func openBackup(t *testing.T, base string) *backupStore {
 	t.Cleanup(s.Close)
 
 	return &backupStore{Store: s, url: schemaURL, t: t}
+}
+
+// TamperNamespaces implements storetest.ExportTamperer: it empties the
+// namespaces table of the export, leaving orphan stacks, and returns the
+// tampered bytes with a manifest whose namespace count matches them, so only
+// the foreign-key check of the stage can fail.
+func (s *backupStore) TamperNamespaces(
+	t *testing.T, data []byte, sum backup.Summary,
+) ([]byte, backup.Summary) {
+	t.Helper()
+
+	return postgres.EmptyNamespacesForStagingTest(t, data, sum)
 }
 
 // Close implements storetest.Reopener: it releases the pool. Closing twice is
@@ -204,6 +220,42 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	s.t.Cleanup(reopened.Close)
 
 	return &backupStore{Store: reopened, url: s.url, t: s.t}
+}
+
+// CurrentStagingID implements storetest.StagingWitness: the name of the kept
+// staging schema, or empty when no staging area exists.
+func (s *backupStore) CurrentStagingID() string {
+	return s.StagingSchemaForTest()
+}
+
+// StagingAlive implements storetest.StagingWitness: whether the staging schema
+// with id still exists. A query error reads as not alive, so the conformance
+// case fails instead of passing on a broken check.
+func (s *backupStore) StagingAlive(id string) bool {
+	if id == "" {
+		return false
+	}
+
+	ctx := context.Background()
+
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return false
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // Test-only existence check.
+	}()
+
+	var count int
+
+	const query = `SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = $1`
+
+	if err := conn.QueryRow(ctx, query, id).Scan(&count); err != nil {
+		return false
+	}
+
+	return count == 1
 }
 
 // open returns a store in a fresh schema of the database at base.

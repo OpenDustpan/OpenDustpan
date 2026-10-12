@@ -3,6 +3,7 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
@@ -21,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
@@ -30,6 +32,7 @@ var (
 	_ backup.Registry  = (*Store)(nil)
 	_ backup.Inspector = (*Store)(nil)
 	_ backup.KeyPeeker = (*Store)(nil)
+	_ backup.Stager    = (*Store)(nil)
 )
 
 // pgDumpVersion is the version of the export stream below. Import rejects any
@@ -523,6 +526,470 @@ func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (b
 	}
 
 	return s.summarize(ctx)
+}
+
+// stagingSchemaPrefix prefixes every staging schema name. The prefix check in
+// dropStagingSchema keeps a programming error from dropping a live schema.
+const stagingSchemaPrefix = "restore_stage_"
+
+// StageRestore implements backup.Stager: it loads the export into a staging
+// schema and checks it (row counts, foreign keys, blob references), without
+// touching the live tables. The schema stays as the staging area until
+// DiscardStaging drops it; a later change applies it. A failed stage drops the
+// schema. Only one staging exists at a time: a new stage drops the previous one.
+func (s *Store) StageRestore(
+	ctx context.Context, r io.Reader, want backup.Summary,
+) (backup.Summary, error) {
+	if want.Dialect != backup.DialectPostgres {
+		return backup.Summary{}, fmt.Errorf(
+			"stage backup of dialect %q into postgres: %w",
+			want.Dialect,
+			backup.ErrDialectMismatch,
+		)
+	}
+
+	version, err := s.schemaVersion(ctx)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if want.SchemaVersion != version {
+		return backup.Summary{}, fmt.Errorf(
+			"stage backup of schema version %d into version %d: %w",
+			want.SchemaVersion,
+			version,
+			backup.ErrSchemaMismatch,
+		)
+	}
+
+	var dump pgDump
+
+	if decodeErr := gob.NewDecoder(r).Decode(&dump); decodeErr != nil {
+		return backup.Summary{}, fmt.Errorf("decode backup stream: %w", backup.ErrCorrupt)
+	}
+
+	frames, framesErr := pgDumpFrames(dump)
+	if framesErr != nil {
+		return backup.Summary{}, framesErr
+	}
+
+	if tablesErr := checkWantTables(want); tablesErr != nil {
+		return backup.Summary{}, tablesErr
+	}
+
+	staging, err := newStagingSchema()
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	return s.buildStaging(ctx, stagingInput{
+		staging: staging,
+		frames:  frames,
+		want:    want,
+	})
+}
+
+// stagingInput groups what buildStaging needs: the staging schema, the decoded
+// tables, and the manifest summary.
+type stagingInput struct {
+	frames  map[string]pgTableDump
+	want    backup.Summary
+	staging string
+}
+
+// buildStaging creates the staging schema, loads and checks the dump, and keeps
+// the schema as the staging area. A failure drops the schema: the live tables
+// stay unchanged.
+func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summary, error) {
+	kept := false
+
+	defer func() {
+		if !kept {
+			// Best-effort cleanup of the scratch schema after a failed stage.
+			_ = s.dropStagingSchema(context.WithoutCancel(ctx), in.staging) //nolint:errcheck // Best-effort cleanup.
+		}
+	}()
+
+	if createErr := s.createStagingSchema(ctx, in.staging); createErr != nil {
+		return backup.Summary{}, createErr
+	}
+
+	if loadErr := s.loadStagingDump(ctx, in.staging, in.frames, in.want); loadErr != nil {
+		return backup.Summary{}, loadErr
+	}
+
+	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if blobErr := checkStagedBlobRefs(sum.Blobs, in.want.Blobs); blobErr != nil {
+		return backup.Summary{}, blobErr
+	}
+
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingSchema != "" {
+		if dropErr := s.dropStagingSchema(context.WithoutCancel(ctx), s.stagingSchema); dropErr != nil {
+			return backup.Summary{}, dropErr
+		}
+	}
+
+	s.stagingSchema = in.staging
+	kept = true
+
+	return sum, nil
+}
+
+// DiscardStaging implements backup.Stager: it drops the staging schema, if
+// any. It leaves the live tables unchanged.
+func (s *Store) DiscardStaging(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("discard staging area: %w", err)
+	}
+
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingSchema == "" {
+		return nil
+	}
+
+	if err := s.dropStagingSchema(ctx, s.stagingSchema); err != nil {
+		return err
+	}
+
+	s.stagingSchema = ""
+
+	return nil
+}
+
+// stagingRandBytes is the entropy of one staging schema name in bytes, as hex.
+const stagingRandBytes = 8
+
+// newStagingSchema returns a fresh staging schema name: the staging prefix
+// with hex entropy. The name holds letters, digits and underscores only, so
+// pgIdent quotes it safely.
+func newStagingSchema() (string, error) {
+	raw := make([]byte, stagingRandBytes)
+
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("name staging schema: %w", err)
+	}
+
+	return stagingSchemaPrefix + hex.EncodeToString(raw), nil
+}
+
+// createStagingSchema creates the staging schema and replays every migration
+// in it, so its tables with their foreign keys match the live schema. The
+// migration DDL runs with the search path on the staging schema only: the
+// live tables stay untouched. It records every migration in the staging
+// schema_migrations, so the staged data carries its own schema version.
+func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
+	all, err := migrate.Load(migrations, "migrations")
+	if err != nil {
+		return err
+	}
+
+	if _, err := s.pool.Exec(ctx, "CREATE SCHEMA "+pgIdent(staging)); err != nil {
+		return fmt.Errorf("create staging schema: %w", err)
+	}
+
+	opts := pgx.TxOptions{
+		IsoLevel:       pgx.ReadCommitted,
+		AccessMode:     pgx.ReadWrite,
+		DeferrableMode: pgx.NotDeferrable,
+		BeginQuery:     "",
+		CommitQuery:    "",
+	}
+
+	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(staging)); err != nil {
+			return fmt.Errorf("set staging search path: %w", err)
+		}
+
+		const createMigrations = `CREATE TABLE schema_migrations (
+			version BIGINT NOT NULL PRIMARY KEY,
+			name    TEXT   NOT NULL
+		)`
+
+		if _, err := tx.Exec(ctx, createMigrations); err != nil {
+			return fmt.Errorf("create staging schema_migrations: %w", err)
+		}
+
+		for _, m := range all {
+			// No arguments, so pgx uses the simple protocol, which allows
+			// several statements, as the migration runner does.
+			if _, err := tx.Exec(ctx, m.SQL); err != nil {
+				return fmt.Errorf("build staging schema at migration %s: %w", m.Name, err)
+			}
+
+			const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+			if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
+				return fmt.Errorf("record staging migration %s: %w", m.Name, err)
+			}
+		}
+
+		return nil
+	})
+}
+
+// loadStagingDump loads frames into the staging schema in one transaction, in
+// the foreign-key order of backup.Tables. The COPY checks enforce the foreign
+// keys: a child without its parent fails the load with ErrCorrupt. A failure
+// rolls back and leaves no staged rows.
+func (s *Store) loadStagingDump(
+	ctx context.Context, staging string, frames map[string]pgTableDump, want backup.Summary,
+) error {
+	opts := pgx.TxOptions{
+		IsoLevel:       pgx.ReadCommitted,
+		AccessMode:     pgx.ReadWrite,
+		DeferrableMode: pgx.NotDeferrable,
+		BeginQuery:     "",
+		CommitQuery:    "",
+	}
+
+	return inBackupTx(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		// The unqualified COPY statements below resolve to the staging schema
+		// through the search path, as does every foreign key they enforce.
+		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(staging)); err != nil {
+			return fmt.Errorf("set staging search path: %w", err)
+		}
+
+		// The migration seeds the installation row in the staging schema as
+		// it does in a fresh destination. Clear it, as the import does, so
+		// the COPY below loads the row the backup holds.
+		if _, err := tx.Exec(ctx, `DELETE FROM installation`); err != nil {
+			return fmt.Errorf("clear staged installation state: %w", err)
+		}
+
+		for _, table := range backup.Tables {
+			if err := copyTableIn(ctx, tx, table, frames[table], want); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+// summarizeStaging reads the summary of the staging schema: the dialect, the
+// schema version the staging schema_migrations records, the home regions, the
+// wrapper IDs, the row count of each table, and the blob references. The live
+// tables stay out of every query: each one names the staging schema. A staged
+// version that differs from the manifest reports ErrCorrupt.
+func (s *Store) summarizeStaging(
+	ctx context.Context, staging string, want backup.Summary,
+) (backup.Summary, error) {
+	regions, err := stagingStrings(ctx, s.pool, staging, "namespaces", "home_region")
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	wrappers, err := stagingStrings(ctx, s.pool, staging, "secret_keys", "wrapper_id")
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	counts := make(map[string]int64, len(backup.Tables))
+
+	for _, table := range backup.Tables {
+		count, countErr := stagingCount(ctx, s.pool, staging, table)
+		if countErr != nil {
+			return backup.Summary{}, countErr
+		}
+
+		counts[table] = count
+	}
+
+	blobs, err := stagingBlobRefs(ctx, s.pool, staging)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	version, err := stagingSchemaVersion(ctx, s.pool, staging)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	if version != want.SchemaVersion {
+		return backup.Summary{}, fmt.Errorf(
+			"staged backup schema version %d differs from manifest %d: %w",
+			version,
+			want.SchemaVersion,
+			backup.ErrCorrupt,
+		)
+	}
+
+	return backup.Summary{
+		Dialect:       backup.DialectPostgres,
+		HomeRegions:   regions,
+		WrapperIDs:    wrappers,
+		RowCounts:     counts,
+		Blobs:         blobs,
+		SchemaVersion: version,
+	}, nil
+}
+
+// stagingSchemaVersion returns the highest migration version the staging
+// schema records in its own schema_migrations.
+func stagingSchemaVersion(ctx context.Context, pool *pgxpool.Pool, staging string) (int, error) {
+	var version int64
+
+	query := "SELECT COALESCE(MAX(version), 0) FROM " + stagingTable(staging, "schema_migrations")
+
+	if err := pool.QueryRow(ctx, query).Scan(&version); err != nil {
+		return 0, fmt.Errorf("read staged schema version: %w", err)
+	}
+
+	return int(version), nil
+}
+
+// stagingTable qualifies table in staging for the hand-written staging
+// queries. Both names come from constants, never from the network.
+func stagingTable(staging, table string) string {
+	return pgIdent(staging) + "." + pgIdent(table)
+}
+
+// stagingStrings returns the distinct values of column in the staging table,
+// ordered, never nil.
+func stagingStrings(
+	ctx context.Context, pool *pgxpool.Pool, staging, table, column string,
+) ([]string, error) {
+	rows, err := pool.Query(
+		ctx,
+		"SELECT DISTINCT "+pgIdent(column)+" FROM "+stagingTable(staging, table)+" ORDER BY "+pgIdent(column),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read staged backup summary: %w", err)
+	}
+
+	defer rows.Close()
+
+	out := []string{}
+
+	for rows.Next() {
+		var value string
+
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("read staged backup summary: %w", err)
+		}
+
+		out = append(out, value)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read staged backup summary: %w", err)
+	}
+
+	return out, nil
+}
+
+// stagingCount returns the row count of the staging table. The table name
+// comes from the allowlist backup.Tables, never from the network.
+func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string) (int64, error) {
+	var count int64
+
+	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM "+stagingTable(staging, table)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count staged table %s: %w", table, err)
+	}
+
+	return count, nil
+}
+
+// stagingBlobRefs reads the blob references of the staging schema: the
+// content key, size and MD5 of every state version that names content, ordered
+// by key. A pending version names no content, so only finalized versions appear.
+func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
+	rows, err := pool.Query(
+		ctx,
+		"SELECT content_key, size, md5 FROM "+stagingTable(staging, "state_versions")+
+			" WHERE content_key <> '' ORDER BY content_key",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read staged blob references: %w", err)
+	}
+
+	defer rows.Close()
+
+	out := []backup.BlobRef{}
+
+	for rows.Next() {
+		var (
+			key  string
+			size int64
+			raw  []byte
+		)
+
+		if err := rows.Scan(&key, &size, &raw); err != nil {
+			return nil, fmt.Errorf("read staged blob references: %w", err)
+		}
+
+		if len(raw) != pgMD5Len {
+			return nil, fmt.Errorf(
+				"staged state version with key %q has an MD5 of %d bytes: %w",
+				key,
+				len(raw),
+				backup.ErrCorrupt,
+			)
+		}
+
+		var sum [pgMD5Len]byte
+
+		copy(sum[:], raw)
+		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read staged blob references: %w", err)
+	}
+
+	return out, nil
+}
+
+// checkStagedBlobRefs compares the blob references of the staged data with the
+// manifest: the staged data must name exactly the keys of the manifest, each
+// with its size and checksum.
+func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
+	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
+
+	ordered := slices.Clone(staged)
+	slices.SortFunc(ordered, byKey)
+
+	wanted := slices.Clone(want)
+	slices.SortFunc(wanted, byKey)
+
+	same := func(a, b backup.BlobRef) bool {
+		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+	}
+
+	if !slices.EqualFunc(ordered, wanted, same) {
+		return fmt.Errorf(
+			"staged backup names %d blob references, the manifest names %d: %w",
+			len(ordered),
+			len(wanted),
+			backup.ErrCorrupt,
+		)
+	}
+
+	return nil
+}
+
+// dropStagingSchema removes the staging schema with its tables. The name comes
+// from newStagingSchema, never from the network; the prefix check keeps a
+// programming error from dropping a live schema.
+func (s *Store) dropStagingSchema(ctx context.Context, staging string) error {
+	if !strings.HasPrefix(staging, stagingSchemaPrefix) {
+		return fmt.Errorf("drop staging schema %q: %w", staging, backup.ErrCorrupt)
+	}
+
+	if _, err := s.pool.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging)+" CASCADE"); err != nil {
+		return fmt.Errorf("drop staging schema: %w", err)
+	}
+
+	return nil
 }
 
 // PeekKey implements backup.KeyPeeker: it decodes the export stream and reads
