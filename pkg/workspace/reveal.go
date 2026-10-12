@@ -82,7 +82,7 @@ func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string
 // instance. Heap growth therefore grows with the size of the target instance,
 // not only with its largest string. A two-pass lookup that keeps only the
 // kept secrets is designed in #416.
-//
+
 // RevealValueFromReader returns the plain value at path of the state that r
 // streams, and the masked set holding the path. The path must be in the
 // masked set, else it fails with ErrResourceNotFound, so a caller cannot
