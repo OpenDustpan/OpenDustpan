@@ -204,6 +204,10 @@ func rememberFuncDecl(found *decls, node *ast.FuncDecl) {
 }
 
 // keptType reports whether a field type stays typed in the output.
+// Every other named type is raw JSON. That covers the upstream state types that
+// ADR 43 decision 8.3 names (resource states, operations, deployments, secrets
+// providers and snippets). It also covers ExtensionRef and Extension, by the
+// same rule: the output holds no generic tree and imports nothing from Pulumi.
 func keptType(name string) bool {
 	switch name {
 	case "int", "int64", "bool", "string",
