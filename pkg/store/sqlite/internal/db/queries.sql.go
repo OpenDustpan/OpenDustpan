@@ -2047,6 +2047,61 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 	return items, nil
 }
 
+const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC
+`
+
+// Finalized versions that still hold plain content, ordered by ID, so the
+// seal job seals them in a stable order. A version without content stays
+// out: a pending row names no content yet.
+func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
+	rows, err := q.db.QueryContext(ctx, listUnsealedStateVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateVersion
+	for rows.Next() {
+		var i StateVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.Serial,
+			&i.Lineage,
+			&i.Md5,
+			&i.Size,
+			&i.ContentKey,
+			&i.Outputs,
+			&i.Force,
+			&i.UploadDigest,
+			&i.UploadExpiresAtMs,
+			&i.Holder,
+			&i.LockID,
+			&i.CreatedAtMs,
+			&i.FinalizedAtMs,
+			&i.RestoredFrom,
+			&i.Sealed,
+			&i.SensitiveMarks,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -2382,6 +2437,29 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.ID,
 		arg.ExpectedRevision,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const sealStateVersion = `-- name: SealStateVersion :execrows
+UPDATE state_versions
+SET content_key = ?1, outputs = ?2, sealed = 1
+WHERE id = ?3 AND sealed = 0
+`
+
+type SealStateVersionParams struct {
+	ContentKey string
+	Outputs    []byte
+	ID         string
+}
+
+// Moves one unsealed version to its sealed blob with its sealed outputs and
+// marks it sealed. The write matches only an unsealed row, so a retry after
+// a crash succeeds and changes nothing.
+func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
 	if err != nil {
 		return 0, err
 	}
