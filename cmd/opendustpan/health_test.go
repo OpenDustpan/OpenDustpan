@@ -257,18 +257,18 @@ func TestHealthFlagDefaults(t *testing.T) {
 	var f healthFlags
 
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
-	f.register(fs)
+	f.Register(fs)
 
 	if err := fs.Parse(nil); err != nil {
 		t.Fatalf("parse defaults: %v", err)
 	}
 
-	if f.listen != ":8080" {
-		t.Fatalf("listen = %q, want :8080 as serve uses", f.listen)
+	if f.Listen != ":8080" {
+		t.Fatalf("listen = %q, want :8080 as serve uses", f.Listen)
 	}
 
-	if f.tlsCert != "" {
-		t.Fatalf("tls-cert = %q, want empty for plain HTTP", f.tlsCert)
+	if f.TLSCert != "" {
+		t.Fatalf("tls-cert = %q, want empty for plain HTTP", f.TLSCert)
 	}
 }
 
