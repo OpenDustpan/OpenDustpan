@@ -451,6 +451,24 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 	tb.Logf("migration server output:\n%s", handle.logs.String())
 }
 
+// BackupTargetDir returns the backup target directory of the binary
+// environment, so a test can corrupt the target after a backup. It needs
+// E2E_SERVER=binary.
+func (e *Env) BackupTargetDir(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BackupTargetDir needs E2E_SERVER=binary")
+	}
+
+	dir, ok := strings.CutPrefix(e.backendCfg.backupTarget, "dir:")
+	if !ok || dir == "" {
+		tb.Fatalf("BackupTargetDir: the server has no dir: backup target")
+	}
+
+	return dir
+}
+
 // RunBinary runs `opendustpan <args>` as a child process with the environment
 // tokens. It reuses the binary that serverBinary built and the environment
 // that backendEnv builds. Callers pass the flags the subcommand needs. It

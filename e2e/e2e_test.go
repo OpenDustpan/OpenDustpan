@@ -37,8 +37,6 @@ import (
 
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/blob"
-	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -7058,10 +7056,12 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 	}
 }
 
-// TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary: on a
-// fresh, an old, an up-to-date and a newer database, on SQLite and on
-// PostgreSQL, the verdict and the exit code match and the command writes
-// nothing. It runs only with E2E_SERVER=binary, on every store under test.
+// TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
+// the running binary server: on the migrated database the verdict is
+// `up to date` with exit 0, and on the newer, old and fresh states reached by
+// editing schema_migrations while the server runs the verdicts of ADR 33 and
+// the exit codes match, with the command writing nothing to the server
+// database. It runs only with E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
@@ -7097,8 +7097,12 @@ func TestUpgradeCheck(t *testing.T) {
 	}
 }
 
-// runUpgradeCheckOnStore runs the upgrade check cases on one store: a fresh,
-// an old, an up-to-date and a newer database through RunBinary.
+// runUpgradeCheckOnStore runs the upgrade check cases on one store through
+// the running binary server: the migrated database is up to date, and the
+// newer, old and fresh states are reached by editing schema_migrations while
+// the server runs, each through `upgrade check --server` with the environment
+// token. The cases run in order on one server and restore its rows, so they
+// never run in parallel.
 func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -7109,14 +7113,584 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, cli, store)
 
+	checkUpgradeUpToDateServer(ctx, t, env, store)
+	checkUpgradeNewerServer(ctx, t, env, store)
+	checkUpgradeOldServer(ctx, t, env, store)
+	checkUpgradeFreshServer(ctx, t, env, store)
+}
+
+// runUpgradeCheckServer runs `opendustpan upgrade check --server` against the
+// running server of env. The token travels in DUSTPAN_ADMIN_TOKEN in the
+// RunBinary environment, and the command trusts the server through --ca-file
+// with the same certificate bundle the CLIs trust.
+func runUpgradeCheckServer(ctx context.Context, t *testing.T, env *e2e.Env) e2e.BinaryResult {
+	t.Helper()
+
+	return env.RunBinary(ctx, t, "upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
+}
+
+// serverMigrationRow is one schema_migrations row the test edits while the
+// server runs: the direct database access is the test setup, never the
+// command, which only calls the upgrade check route.
+type serverMigrationRow struct {
+	version int64
+	name    string
+}
+
+// serverSchemaSnapshot holds the schema_migrations rows and table list of the
+// server database, so the test proves upgrade check wrote nothing.
+type serverSchemaSnapshot struct {
+	versions []string
+	tables   []string
+}
+
+// checkServerDBUnchanged proves upgrade check wrote nothing: the rows and the
+// table list match the snapshot taken before the call.
+func checkServerDBUnchanged(t *testing.T, before, after serverSchemaSnapshot) {
+	t.Helper()
+
+	if !slices.Equal(after.tables, before.tables) {
+		t.Fatalf("tables after check = %v, want %v", after.tables, before.tables)
+	}
+
+	if !slices.Equal(after.versions, before.versions) {
+		t.Fatalf("versions after check = %v, want %v", after.versions, before.versions)
+	}
+}
+
+// sqliteServerPath returns the database file path the binary server of env
+// serves.
+func sqliteServerPath(t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
+	if !ok {
+		t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
+	}
+
+	return path
+}
+
+// openServerSQLite opens a direct handle on the SQLite file at path, so the
+// test can edit schema_migrations while the server runs.
+func openServerSQLite(t *testing.T, path string) *sql.DB {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open server database: %v", err)
+	}
+
+	return conn
+}
+
+// readServerSQLiteRows returns every schema_migrations row ordered by
+// version.
+func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
+	t.Helper()
+
+	conn := openServerSQLite(t, path)
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close server database: %v", closeErr)
+		}
+	}()
+
+	rows, err := conn.QueryContext(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("read schema versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close schema versions: %v", closeErr)
+		}
+	}()
+
+	var out []serverMigrationRow
+
+	for rows.Next() {
+		var row serverMigrationRow
+
+		if scanErr := rows.Scan(&row.version, &row.name); scanErr != nil {
+			t.Fatalf("read schema version: %v", scanErr)
+		}
+
+		out = append(out, row)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("read schema versions: %v", rowsErr)
+	}
+
+	return out
+}
+
+// execServerSQLite runs one write on the SQLite file at path.
+func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
+	t.Helper()
+
+	conn := openServerSQLite(t, path)
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close server database: %v", closeErr)
+		}
+	}()
+
+	if _, err := conn.ExecContext(ctx, stmt, args...); err != nil {
+		t.Fatalf("write server database: %v", err)
+	}
+}
+
+// snapshotServerSQLite returns the schema_migrations rows with the table
+// names of the SQLite file at path.
+func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
+	t.Helper()
+
+	conn := openServerSQLite(t, path)
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close server database: %v", closeErr)
+		}
+	}()
+
+	return serverSchemaSnapshot{
+		versions: snapshotServerSQLiteVersions(ctx, t, conn),
+		tables:   snapshotServerSQLiteTables(ctx, t, conn),
+	}
+}
+
+// snapshotServerSQLiteTables returns the table names of conn ordered by
+// name.
+func snapshotServerSQLiteTables(ctx context.Context, t *testing.T, conn *sql.DB) []string {
+	t.Helper()
+
+	tableRows, err := conn.QueryContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+	)
+	if err != nil {
+		t.Fatalf("list tables: %v", err)
+	}
+
+	defer func() {
+		if closeErr := tableRows.Close(); closeErr != nil {
+			t.Errorf("close tables: %v", closeErr)
+		}
+	}()
+
+	var tables []string
+
+	for tableRows.Next() {
+		var name string
+
+		if scanErr := tableRows.Scan(&name); scanErr != nil {
+			t.Fatalf("read table name: %v", scanErr)
+		}
+
+		tables = append(tables, name)
+	}
+
+	if rowsErr := tableRows.Err(); rowsErr != nil {
+		t.Fatalf("read tables: %v", rowsErr)
+	}
+
+	return tables
+}
+
+// snapshotServerSQLiteVersions returns the schema_migrations rows of conn as
+// version:name ordered by version.
+func snapshotServerSQLiteVersions(ctx context.Context, t *testing.T, conn *sql.DB) []string {
+	t.Helper()
+
+	versionRows, err := conn.QueryContext(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("read schema versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := versionRows.Close(); closeErr != nil {
+			t.Errorf("close schema versions: %v", closeErr)
+		}
+	}()
+
+	var versions []string
+
+	for versionRows.Next() {
+		var version int64
+
+		var name string
+
+		if scanErr := versionRows.Scan(&version, &name); scanErr != nil {
+			t.Fatalf("read schema version: %v", scanErr)
+		}
+
+		versions = append(versions, strconv.FormatInt(version, 10)+":"+name)
+	}
+
+	if rowsErr := versionRows.Err(); rowsErr != nil {
+		t.Fatalf("read schema versions: %v", rowsErr)
+	}
+
+	return versions
+}
+
+// snapshotServerDB returns the rows and tables of the server database of env
+// on store.
+func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) serverSchemaSnapshot {
+	t.Helper()
+
 	switch store {
 	case e2e.StoreSQLite:
-		checkUpgradeSQLite(ctx, t, env)
+		return snapshotServerSQLite(ctx, t, sqliteServerPath(t, env))
 	case e2e.StorePostgres:
-		checkUpgradePostgres(ctx, t, env)
+		got := snapshotPostgres(ctx, t, env.DatabaseURL(t))
+
+		return serverSchemaSnapshot{versions: got.versions, tables: got.tables}
+	default:
+		t.Fatalf("unknown store: %s", store)
+
+		//nolint:exhaustruct_v5 // t.Fatalf ends the test; the value never leaves this branch.
+		return serverSchemaSnapshot{}
+	}
+}
+
+// insertServerFuture records one version above the newest in the server
+// database of env on store, so upgrade check sees a newer database. It
+// returns the future version.
+func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) int64 {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		path := sqliteServerPath(t, env)
+		rows := readServerSQLiteRows(ctx, t, path)
+
+		var newest int64
+
+		for _, row := range rows {
+			newest = max(newest, row.version)
+		}
+
+		future := newest + 1
+		execServerSQLite(ctx, t, path,
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
+			future, fmt.Sprintf("%04d_future.sql", future))
+
+		return future
+	case e2e.StorePostgres:
+		schemaURL := env.DatabaseURL(t)
+
+		conn, err := pgx.Connect(ctx, schemaURL)
+		if err != nil {
+			t.Fatalf("connect to postgres: %v", err)
+		}
+
+		defer func() {
+			if closeErr := conn.Close(ctx); closeErr != nil {
+				t.Errorf("close postgres connection: %v", closeErr)
+			}
+		}()
+
+		var newest int64
+
+		if err := conn.QueryRow(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+			t.Fatalf("read newest version: %v", err)
+		}
+
+		future := newest + 1
+		name := fmt.Sprintf("%04d_future.sql", future)
+
+		const recordFuture = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+		if _, execErr := conn.Exec(ctx, recordFuture, future, name); execErr != nil {
+			t.Fatalf("record future version: %v", execErr)
+		}
+
+		return future
+	default:
+		t.Fatalf("unknown store: %s", store)
+
+		return 0
+	}
+}
+
+// deleteServerVersion removes one schema_migrations row from the server
+// database of env on store.
+func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, version int64) {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		execServerSQLite(ctx, t, sqliteServerPath(t, env),
+			`DELETE FROM schema_migrations WHERE version = ?`, version)
+	case e2e.StorePostgres:
+		conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
+		if err != nil {
+			t.Fatalf("connect to postgres: %v", err)
+		}
+
+		defer func() {
+			if closeErr := conn.Close(ctx); closeErr != nil {
+				t.Errorf("close postgres connection: %v", closeErr)
+			}
+		}()
+
+		if _, err := conn.Exec(ctx, `DELETE FROM schema_migrations WHERE version = $1`, version); err != nil {
+			t.Fatalf("delete version %d: %v", version, err)
+		}
 	default:
 		t.Fatalf("unknown store: %s", store)
 	}
+}
+
+// trimServerVersions removes every schema_migrations row above keep from the
+// server database of env on store and returns the removed rows, so the caller
+// restores them after the check.
+func trimServerVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, keep int64,
+) []serverMigrationRow {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		return trimServerSQLiteVersions(ctx, t, env, keep)
+	case e2e.StorePostgres:
+		return trimServerPostgresVersions(ctx, t, env, keep)
+	default:
+		t.Fatalf("unknown store: %s", store)
+
+		return nil
+	}
+}
+
+// trimServerSQLiteVersions removes every schema_migrations row above keep
+// from the SQLite file the server of env serves and returns the removed
+// rows.
+func trimServerSQLiteVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
+) []serverMigrationRow {
+	t.Helper()
+
+	path := sqliteServerPath(t, env)
+
+	var removed []serverMigrationRow
+
+	for _, row := range readServerSQLiteRows(ctx, t, path) {
+		if row.version > keep {
+			removed = append(removed, row)
+		}
+	}
+
+	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version > ?`, keep)
+
+	return removed
+}
+
+// trimServerPostgresVersions removes every schema_migrations row above keep
+// from the PostgreSQL schema the server of env serves and returns the
+// removed rows.
+func trimServerPostgresVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
+) []serverMigrationRow {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	versionRows, err := conn.Query(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatalf("read schema versions: %v", err)
+	}
+
+	defer func() {
+		versionRows.Close()
+	}()
+
+	var removed []serverMigrationRow
+
+	for versionRows.Next() {
+		var row serverMigrationRow
+
+		if scanErr := versionRows.Scan(&row.version, &row.name); scanErr != nil {
+			t.Fatalf("read schema version: %v", scanErr)
+		}
+
+		if row.version > keep {
+			removed = append(removed, row)
+		}
+	}
+
+	if rowsErr := versionRows.Err(); rowsErr != nil {
+		t.Fatalf("read schema versions: %v", rowsErr)
+	}
+
+	if _, err := conn.Exec(ctx, `DELETE FROM schema_migrations WHERE version > $1`, keep); err != nil {
+		t.Fatalf("trim versions above %d: %v", keep, err)
+	}
+
+	return removed
+}
+
+// restoreServerVersions inserts rows back into the server database of env on
+// store.
+func restoreServerVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, rows []serverMigrationRow,
+) {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		path := sqliteServerPath(t, env)
+
+		for _, row := range rows {
+			execServerSQLite(ctx, t, path,
+				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+		}
+	case e2e.StorePostgres:
+		conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
+		if err != nil {
+			t.Fatalf("connect to postgres: %v", err)
+		}
+
+		defer func() {
+			if closeErr := conn.Close(ctx); closeErr != nil {
+				t.Errorf("close postgres connection: %v", closeErr)
+			}
+		}()
+
+		const recordRow = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+
+		for _, row := range rows {
+			if _, execErr := conn.Exec(ctx, recordRow, row.version, row.name); execErr != nil {
+				t.Fatalf("restore version %d: %v", row.version, execErr)
+			}
+		}
+	default:
+		t.Fatalf("unknown store: %s", store)
+	}
+}
+
+// checkRestoredServerDB proves the server database of env on store holds the
+// rows of want after the test restores them.
+func checkRestoredServerDB(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, want serverSchemaSnapshot,
+) {
+	t.Helper()
+
+	if got := snapshotServerDB(ctx, t, env, store); !slices.Equal(got.versions, want.versions) {
+		t.Fatalf("versions after restore = %v, want %v", got.versions, want.versions)
+	}
+}
+
+// checkUpgradeUpToDateServer proves upgrade check on the migrated server
+// database: it exits 0 with `up to date` and writes nothing.
+func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	before := snapshotServerDB(ctx, t, env, store)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database != binary {
+		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+}
+
+// checkUpgradeNewerServer proves upgrade check with one extra version row in
+// the server database: it exits 1 with `cannot start` and writes nothing. It
+// removes the row after the check.
+func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	pristine := snapshotServerDB(ctx, t, env, store)
+	future := insertServerFuture(ctx, t, env, store)
+
+	before := snapshotServerDB(ctx, t, env, store)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
+
+	database, binary := parseUpgradeVersions(t, res.Stdout)
+	if database <= binary {
+		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+
+	deleteServerVersion(ctx, t, env, store, future)
+	restoreServerVersions(ctx, t, env, store, nil)
+	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeOldServer proves upgrade check with only versions 1 through
+// oldFixtureMaxVersion in the server database: it exits 0 with `upgrade
+// possible` and writes nothing. It restores the removed rows after the
+// check.
+func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	pristine := snapshotServerDB(ctx, t, env, store)
+	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
+
+	if len(removed) == 0 {
+		t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+	}
+
+	before := snapshotServerDB(ctx, t, env, store)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+	) {
+		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+
+	restoreServerVersions(ctx, t, env, store, removed)
+	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeFreshServer proves upgrade check with no version row in the
+// server database: it exits 0 with `upgrade possible` and writes nothing. It
+// restores the removed rows after the check.
+func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	pristine := snapshotServerDB(ctx, t, env, store)
+	removed := trimServerVersions(ctx, t, env, store, 0)
+
+	if len(removed) == 0 {
+		t.Fatal("trim above 0 removed nothing, want every migration pending")
+	}
+
+	before := snapshotServerDB(ctx, t, env, store)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+	if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+
+	restoreServerVersions(ctx, t, env, store, removed)
+	checkRestoredServerDB(ctx, t, env, store, pristine)
 }
 
 // wantUpgradeResult holds the expected outcome of one upgrade check run:
@@ -7226,402 +7800,6 @@ func parseUpgradeVersions(t *testing.T, out string) (database, binary int64) {
 // pending migrations. Bump it only with the fixture name and assertions.
 const oldFixtureMaxVersion = 8
 
-// checkUpgradeSQLite runs the four upgrade check cases on SQLite files: a
-// fresh file, a file with versions 1 through oldFixtureMaxVersion, a file the
-// binary migrated and a migrated file with one extra version row.
-func checkUpgradeSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	t.Run("fresh", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeFreshSQLite(ctx, t, env)
-	})
-
-	t.Run("old", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeOldSQLite(ctx, t, env)
-	})
-
-	t.Run("up to date", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeCurrentSQLite(ctx, t, env)
-	})
-
-	t.Run("newer", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeNewerSQLite(ctx, t, env)
-	})
-}
-
-// checkUpgradeFreshSQLite proves upgrade check on an empty file: it exits 0
-// with `upgrade possible` and leaves the file unchanged.
-func checkUpgradeFreshSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatalf("write empty database: %v", err)
-	}
-
-	before := readSQLiteFile(t, path)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
-
-	if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
-		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
-	}
-
-	checkSQLiteUnchanged(t, path, before)
-}
-
-// checkUpgradeOldSQLite proves upgrade check on versions 1 through
-// oldFixtureMaxVersion: it exits 0 with `upgrade possible` and leaves the
-// file unchanged.
-func checkUpgradeOldSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-	seedOldSQLite(ctx, t, path)
-
-	before := readSQLiteFile(t, path)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
-
-	if out := res.Stdout; !strings.Contains(
-		out,
-		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
-	) {
-		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
-	}
-
-	checkSQLiteUnchanged(t, path, before)
-}
-
-// checkUpgradeCurrentSQLite proves upgrade check on a migrated file: it exits
-// 0 with `up to date` and leaves the file unchanged.
-func checkUpgradeCurrentSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-	migrateSQLiteViaBinary(ctx, t, env, path)
-
-	before := readSQLiteFile(t, path)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
-
-	database, binary := parseUpgradeVersions(t, res.Stdout)
-	if database != binary {
-		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
-	}
-
-	checkSQLiteUnchanged(t, path, before)
-}
-
-// checkUpgradeNewerSQLite proves upgrade check on a migrated file with one
-// extra version row: it exits 1 with `cannot start` and leaves the file
-// unchanged.
-func checkUpgradeNewerSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-	migrateSQLiteViaBinary(ctx, t, env, path)
-	insertFutureSQLite(ctx, t, path)
-
-	before := readSQLiteFile(t, path)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", "sqlite:"+path)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
-
-	database, binary := parseUpgradeVersions(t, res.Stdout)
-	if database <= binary {
-		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
-	}
-
-	checkSQLiteUnchanged(t, path, before)
-}
-
-// seedOldSQLite creates a SQLite database at path with schema versions 1
-// through oldFixtureMaxVersion recorded, so upgrade check sees an old database.
-func seedOldSQLite(ctx context.Context, t *testing.T, path string) {
-	t.Helper()
-
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatalf("write empty database: %v", err)
-	}
-
-	conn, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	const createTable = `CREATE TABLE schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(ctx, createTable); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	for v := int64(1); v <= oldFixtureMaxVersion; v++ {
-		if _, err := conn.ExecContext(ctx, record, v, fmt.Sprintf("%04d_old.sql", v)); err != nil {
-			t.Fatalf("record version %d: %v", v, err)
-		}
-	}
-}
-
-// migrateSQLiteViaBinary migrates the SQLite file at path by serving it with
-// the environment binary and creating a namespace through the API, so upgrade
-// check later sees an up-to-date database.
-func migrateSQLiteViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, path string) {
-	t.Helper()
-
-	env.MigrateDatabase(ctx, t, "sqlite:"+path)
-}
-
-// insertFutureSQLite records one version above the newest in path, so upgrade
-// check sees a newer database.
-func insertFutureSQLite(ctx context.Context, t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	var newest int64
-
-	row := conn.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`)
-	if scanErr := row.Scan(&newest); scanErr != nil {
-		t.Fatalf("read newest version: %v", scanErr)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	future := newest + 1
-
-	if _, execErr := conn.ExecContext(ctx, record, future, fmt.Sprintf("%04d_future.sql", future)); execErr != nil {
-		t.Fatalf("record future version: %v", execErr)
-	}
-}
-
-// readSQLiteFile returns the raw bytes of the database file at path.
-func readSQLiteFile(t *testing.T, path string) []byte {
-	t.Helper()
-
-	data, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
-	if err != nil {
-		t.Fatalf("read database file: %v", err)
-	}
-
-	return data
-}
-
-// checkSQLiteUnchanged proves upgrade check wrote nothing: the database file
-// at path is byte-identical to before.
-func checkSQLiteUnchanged(t *testing.T, path string, before []byte) {
-	t.Helper()
-
-	if after := readSQLiteFile(t, path); !bytes.Equal(after, before) {
-		t.Fatal("upgrade check changed the database file, want it unchanged")
-	}
-}
-
-// checkUpgradePostgres runs the four upgrade check cases on PostgreSQL
-// schemas: an empty schema, versions 1 through oldFixtureMaxVersion, a schema
-// the binary migrated and a migrated schema with one extra version row.
-func checkUpgradePostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	t.Run("fresh", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeFreshPostgres(ctx, t, env)
-	})
-
-	t.Run("old", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeOldPostgres(ctx, t, env)
-	})
-
-	t.Run("up to date", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeCurrentPostgres(ctx, t, env)
-	})
-
-	t.Run("newer", func(t *testing.T) {
-		t.Parallel()
-		checkUpgradeNewerPostgres(ctx, t, env)
-	})
-}
-
-// checkUpgradeFreshPostgres proves upgrade check on an empty schema: it exits
-// 0 with `upgrade possible` and creates no table.
-func checkUpgradeFreshPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	schemaURL := upgradePostgresSchema(ctx, t)
-	before := snapshotPostgres(ctx, t, schemaURL)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
-
-	if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
-		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
-	}
-
-	after := snapshotPostgres(ctx, t, schemaURL)
-	checkPostgresUnchanged(t, before, after)
-
-	if slices.Contains(after.tables, "schema_migrations") {
-		t.Fatal("upgrade check created schema_migrations, want no such table")
-	}
-}
-
-// checkUpgradeOldPostgres proves upgrade check on versions 1 through
-// oldFixtureMaxVersion: it exits 0 with `upgrade possible` and changes no
-// table or version row.
-func checkUpgradeOldPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	schemaURL := upgradePostgresSchema(ctx, t)
-	seedOldPostgres(ctx, t, schemaURL)
-
-	before := snapshotPostgres(ctx, t, schemaURL)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
-
-	if out := res.Stdout; !strings.Contains(
-		out,
-		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
-	) {
-		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
-	}
-
-	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
-}
-
-// checkUpgradeCurrentPostgres proves upgrade check on a migrated schema: it
-// exits 0 with `up to date` and changes no table or version row.
-func checkUpgradeCurrentPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	schemaURL := upgradePostgresSchema(ctx, t)
-	migratePostgresViaBinary(ctx, t, env, schemaURL)
-
-	before := snapshotPostgres(ctx, t, schemaURL)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
-
-	database, binary := parseUpgradeVersions(t, res.Stdout)
-	if database != binary {
-		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
-	}
-
-	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
-}
-
-// checkUpgradeNewerPostgres proves upgrade check on a migrated schema with
-// one extra version row: it exits 1 with `cannot start` and changes no table
-// or version row.
-func checkUpgradeNewerPostgres(ctx context.Context, t *testing.T, env *e2e.Env) {
-	t.Helper()
-
-	schemaURL := upgradePostgresSchema(ctx, t)
-	migratePostgresViaBinary(ctx, t, env, schemaURL)
-	insertFuturePostgres(ctx, t, schemaURL)
-
-	before := snapshotPostgres(ctx, t, schemaURL)
-	res := env.RunBinary(ctx, t, "upgrade", "check", "--database", schemaURL)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
-
-	database, binary := parseUpgradeVersions(t, res.Stdout)
-	if database <= binary {
-		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
-	}
-
-	checkPostgresUnchanged(t, before, snapshotPostgres(ctx, t, schemaURL))
-}
-
-// upgradePostgresSchema creates a fresh schema and returns the base URL with
-// the search path set to it. The schema is dropped when the test ends.
-func upgradePostgresSchema(ctx context.Context, t *testing.T) string {
-	t.Helper()
-
-	base := e2e.PostgresURL()
-	if base == "" {
-		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
-	}
-
-	raw := make([]byte, 8)
-	if _, err := rand.Read(raw); err != nil {
-		t.Fatalf("generate schema name: %v", err)
-	}
-
-	schema := "e2e_" + hex.EncodeToString(raw)
-
-	conn, err := pgx.Connect(ctx, base)
-	if err != nil {
-		t.Fatalf("connect to postgres: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	if _, execErr := conn.Exec(ctx, "CREATE SCHEMA "+pgx.Identifier{schema}.Sanitize()); execErr != nil {
-		t.Fatalf("create schema: %v", execErr)
-	}
-
-	t.Cleanup(func() {
-		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-
-		dropConn, dropErr := pgx.Connect(dropCtx, base)
-		if dropErr != nil {
-			t.Errorf("connect to postgres: %v", dropErr)
-
-			return
-		}
-
-		defer func() {
-			if closeErr := dropConn.Close(dropCtx); closeErr != nil {
-				t.Errorf("close postgres connection: %v", closeErr)
-			}
-		}()
-
-		dropStmt := "DROP SCHEMA " + pgx.Identifier{schema}.Sanitize() + " CASCADE"
-		if _, dropExecErr := dropConn.Exec(dropCtx, dropStmt); dropExecErr != nil {
-			t.Errorf("drop schema: %v", dropExecErr)
-		}
-	})
-
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse postgres URL: %v", err)
-	}
-
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
-
-	return u.String()
-}
-
 // postgresSnapshot holds the table list and schema_migrations rows of one
 // PostgreSQL schema, so the test proves upgrade check wrote nothing.
 type postgresSnapshot struct {
@@ -7702,70 +7880,11 @@ func snapshotPostgres(ctx context.Context, t *testing.T, schemaURL string) postg
 	return postgresSnapshot{tables: tables, versions: versions}
 }
 
-// checkPostgresUnchanged proves upgrade check wrote nothing: the table list
-// and the schema_migrations rows match the snapshot taken before the call.
-func checkPostgresUnchanged(t *testing.T, before, after postgresSnapshot) {
-	t.Helper()
-
-	if !slices.Equal(after.tables, before.tables) {
-		t.Fatalf("tables after check = %v, want %v", after.tables, before.tables)
-	}
-
-	if !slices.Equal(after.versions, before.versions) {
-		t.Fatalf("versions after check = %v, want %v", after.versions, before.versions)
-	}
-}
-
-// seedOldPostgres records schema versions 1 through oldFixtureMaxVersion in
-// schemaURL, so upgrade check sees an old database.
-func seedOldPostgres(ctx context.Context, t *testing.T, schemaURL string) {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, schemaURL)
-	if err != nil {
-		t.Fatalf("connect to postgres: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	const createTable = `CREATE TABLE schema_migrations (
-		version BIGINT NOT NULL PRIMARY KEY,
-		name    TEXT   NOT NULL
-	)`
-
-	if _, err := conn.Exec(ctx, createTable); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const recordOld = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-	for v := int64(1); v <= oldFixtureMaxVersion; v++ {
-		name := fmt.Sprintf("%04d_old.sql", v)
-
-		_, execErr := conn.Exec(ctx, recordOld, v, name)
-		if execErr != nil {
-			t.Fatalf("record version %d: %v", v, execErr)
-		}
-	}
-}
-
-// migratePostgresViaBinary migrates the schema at schemaURL by serving it
-// with the environment binary and creating a namespace through the API, so
-// upgrade check later sees an up-to-date database.
-func migratePostgresViaBinary(ctx context.Context, t *testing.T, env *e2e.Env, schemaURL string) {
-	t.Helper()
-
-	env.MigrateDatabase(ctx, t, schemaURL)
-}
-
-// TestBackupCheck proves `opendustpan backup check` with RunBinary: it takes
-// a backup into a target directory, the check exits 0 with one verdict, then
-// one deleted blob file makes the check exit 1 naming the key. It runs only
-// with E2E_SERVER=binary, on every store under test.
+// TestBackupCheck proves `opendustpan backup check` with RunBinary against
+// the running binary server: a backup started through the installation API
+// polls to succeeded, the check exits 0 with one verdict, then one deleted
+// object in the server backup target makes the check exit 1 naming the key.
+// It runs only with E2E_SERVER=binary, on every store under test.
 func TestBackupCheck(t *testing.T) {
 	t.Parallel()
 
@@ -7802,8 +7921,8 @@ func TestBackupCheck(t *testing.T) {
 }
 
 // runBackupCheckOnStore runs the backup check steps on one store: a backup
-// into a target directory, a check with exit 0, a deleted blob file, and a
-// check with exit 1 naming the key.
+// through the installation API, a check with exit 0, a deleted target object,
+// and a check with exit 1 naming the key.
 func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -7814,12 +7933,12 @@ func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, cli, store)
 
-	const id = "bkp-e2e-check"
+	id := startBackupForCheck(ctx, t, env)
 
-	targetDir := writeE2EBackup(t, id)
-	blobKey := "blobs/tofu/ws1/sv1/a1"
-
-	complete := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", "dir:"+targetDir)
+	complete := env.RunBinary(
+		ctx, t, "backup", "check",
+		"--server", env.URL, "--ca-file", env.CABundle(), "--backup", id,
+	)
 	if complete.ExitCode != 0 {
 		t.Fatalf(
 			"backup check exits with status %d, want 0:\n%s%s",
@@ -7833,11 +7952,12 @@ func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Fatalf("backup check output lacks the verdict:\n%s%s", complete.Stdout, complete.Stderr)
 	}
 
-	if err := os.Remove(filepath.Join(targetDir, filepath.FromSlash(blobKey))); err != nil {
-		t.Fatalf("delete blob file: %v", err)
-	}
+	blobKey := corruptServerBackupTarget(ctx, t, env, id)
 
-	broken := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", "dir:"+targetDir)
+	broken := env.RunBinary(
+		ctx, t, "backup", "check",
+		"--server", env.URL, "--ca-file", env.CABundle(), "--backup", id,
+	)
 	if broken.ExitCode != 1 {
 		t.Fatalf(
 			"backup check after the delete exits with status %d, want 1:\n%s%s",
@@ -7852,100 +7972,82 @@ func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 }
 
-// writeE2EBackup writes a complete backup with id into a new target directory:
-// the SQL part, one blob and the manifest last. It returns the target directory.
-func writeE2EBackup(t *testing.T, id string) string {
-	t.Helper()
-
-	dir := t.TempDir()
-
-	target, err := blobfs.Open(dir)
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
-
-	db := []byte("e2e backup database part")
-	content := []byte(`{"state":1}`)
-	blobKey := "tofu/ws1/sv1/a1"
-	md5Sum := md5.Sum(content) //nolint:gosec // The test computes the MD5 the manifest records.
-	shaSum := sha256.Sum256(db)
-
-	manifest := backup.Manifest{
-		CreatedAt:   time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		ID:          backup.ID(id),
-		Dialect:     backup.DialectSQLite,
-		HomeRegions: []string{"e2e"},
-		WrapperIDs:  nil,
-		RowCounts:   nil,
-		Blobs: []backup.ManifestBlob{
-			{Key: blobKey, Size: int64(len(content)), MD5: hex.EncodeToString(md5Sum[:])},
-		},
-		Version:       "e2e",
-		SQLSHA256:     hex.EncodeToString(shaSum[:]),
-		Format:        backup.FormatVersion,
-		SchemaVersion: 1,
-		SQLSize:       int64(len(db)),
-	}
-
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("encode manifest: %v", err)
-	}
-
-	ctx := t.Context()
-
-	for key, body := range map[string][]byte{
-		"backups/" + id + "/db":            db,
-		"blobs/" + blobKey:                 content,
-		"backups/" + id + "/manifest.json": data,
-	} {
-		parsed, err := blob.ParseKey(key)
-		if err != nil {
-			t.Fatalf("parse key %q: %v", key, err)
-		}
-
-		if err := target.Put(ctx, parsed, bytes.NewReader(body)); err != nil {
-			t.Fatalf("put %q: %v", key, err)
-		}
-	}
-
-	if err := target.Close(); err != nil {
-		t.Fatalf("close backup target: %v", err)
-	}
-
-	return dir
+// backupCheckManifestDoc decodes the manifest of one backup: only the blob
+// keys the check names when one goes missing.
+type backupCheckManifestDoc struct {
+	Blobs []backupCheckBlobDoc `json:"blobs"`
 }
 
-// insertFuturePostgres records one version above the newest in schemaURL, so
-// upgrade check sees a newer database.
-func insertFuturePostgres(ctx context.Context, t *testing.T, schemaURL string) {
+// backupCheckBlobDoc decodes one manifest blob entry.
+type backupCheckBlobDoc struct {
+	Key string `json:"key"`
+}
+
+// backupCheckDoc decodes one backup with its manifest.
+type backupCheckDoc struct {
+	State    string                 `json:"state"`
+	Manifest backupCheckManifestDoc `json:"manifest"`
+}
+
+// startBackupForCheck starts a backup through the installation API and polls
+// it to succeeded, returning its ID.
+func startBackupForCheck(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	conn, err := pgx.Connect(ctx, schemaURL)
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
 	if err != nil {
-		t.Fatalf("connect to postgres: %v", err)
+		t.Fatalf("POST backups: %v", err)
 	}
 
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	var newest int64
-	if err := conn.QueryRow(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
-		t.Fatalf("read newest version: %v", err)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST backups answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
 
-	future := newest + 1
-	name := fmt.Sprintf("%04d_future.sql", future)
-
-	const recordFuture = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-	_, execErr := conn.Exec(ctx, recordFuture, future, name)
-	if execErr != nil {
-		t.Fatalf("record future version: %v", execErr)
+	var started struct {
+		ID string `json:"id"`
 	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &started); decodeErr != nil || started.ID == "" {
+		t.Fatalf("POST backups answers %q, want an id: %v", body, decodeErr)
+	}
+
+	doc := pollBackupState(ctx, t, env, started.ID, "succeeded")
+	t.Logf("backup %s succeeded with SQL size %d", doc.ID, doc.Manifest.SQLSize)
+
+	return started.ID
+}
+
+// corruptServerBackupTarget deletes one object of backup id from the server
+// backup target and returns the key the next check names: the first manifest
+// blob, or the SQL part when the backup holds no blob.
+func corruptServerBackupTarget(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups/"+id, "")
+	if err != nil {
+		t.Fatalf("GET backup %s: %v", id, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
+	}
+
+	var doc backupCheckDoc
+
+	if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
+		t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
+	}
+
+	key := "backups/" + id + "/db"
+	if len(doc.Manifest.Blobs) > 0 {
+		key = "blobs/" + doc.Manifest.Blobs[0].Key
+	}
+
+	if err := os.Remove(filepath.Join(env.BackupTargetDir(t), filepath.FromSlash(key))); err != nil {
+		t.Fatalf("delete target object %q: %v", key, err)
+	}
+
+	return key
 }
 
 // backupPadBytes grows the backup with one padded checkpoint, so a backup
@@ -8590,7 +8692,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	id := backupWhileWriting(ctx, t, env, tools.pulumi, tools.tofu)
 	after := captureExitState(ctx, t, env, tools, "after backup")
 	checkExitStateStable(t, before, after)
-	runBackupCheck(ctx, t, env, target, id)
+	runBackupCheck(ctx, t, env, id)
 
 	env.StopServer(ctx, t)
 	wipeRestoreDestination(ctx, t, env, store)
@@ -9059,12 +9161,15 @@ func parseBackupID(stdout string) string {
 	return ""
 }
 
-// runBackupCheck runs `opendustpan backup check` for id against target and
-// proves it exits 0 with the complete verdict.
-func runBackupCheck(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
+// runBackupCheck runs `opendustpan backup check` for id through the running
+// server and proves it exits 0 with the complete verdict.
+func runBackupCheck(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, "backup", "check", "--backup", id, "--backup-target", target)
+	res := env.RunBinary(
+		ctx, t, "backup", "check",
+		"--server", env.URL, "--ca-file", env.CABundle(), "--backup", id,
+	)
 	if res.ExitCode != 0 {
 		t.Fatalf("backup check exits with status %d, want 0:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
