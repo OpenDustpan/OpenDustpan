@@ -179,6 +179,21 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
+UPDATE namespaces
+SET failover_version = failover_version + 1
+`
+
+// Increments the failover version of every namespace by one (ADR 38
+// decision 7), so leases and locks from before the restore stop working.
+func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpFailoverVersions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -254,6 +269,40 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createRestore = `-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT DO NOTHING
+`
+
+type CreateRestoreParams struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
+}
+
+func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createRestore,
+		arg.ID,
+		arg.State,
+		arg.BackupID,
+		arg.PreBackupID,
+		arg.RequestedBy,
+		arg.StartedAtMs,
+		arg.EndedAtMs,
+		arg.Error,
 	)
 	if err != nil {
 		return 0, err
@@ -563,6 +612,22 @@ func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackups
 	return err
 }
 
+const failRunningRestores = `-- name: FailRunningRestores :exec
+UPDATE restores
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state IN ('checking', 'applying')
+`
+
+type FailRunningRestoresParams struct {
+	Error     string
+	EndedAtMs pgtype.Int8
+}
+
+func (q *Queries) FailRunningRestores(ctx context.Context, arg FailRunningRestoresParams) error {
+	_, err := q.db.Exec(ctx, failRunningRestores, arg.Error, arg.EndedAtMs)
+	return err
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET status = 'finalized', finalized_at_ms = $1, size = $2
@@ -608,6 +673,32 @@ type FinishBackupParams struct {
 
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
 	result, err := q.db.Exec(ctx, finishBackup,
+		arg.State,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishRestore = `-- name: FinishRestore :execrows
+UPDATE restores
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state IN ('checking', 'applying')
+`
+
+type FinishRestoreParams struct {
+	State     string
+	Error     string
+	EndedAtMs pgtype.Int8
+	ID        string
+}
+
+func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishRestore,
 		arg.State,
 		arg.Error,
 		arg.EndedAtMs,
@@ -880,6 +971,28 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 		&i.HomeRegion,
 		&i.FailoverVersion,
 		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getRestore = `-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = $1
+`
+
+func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
+	row := q.db.QueryRow(ctx, getRestore, id)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.BackupID,
+		&i.PreBackupID,
+		&i.RequestedBy,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.Error,
 	)
 	return i, err
 }
@@ -1480,6 +1593,41 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 	return items, nil
 }
 
+const listRestores = `-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC
+`
+
+func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Restore
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.BackupID,
+			&i.PreBackupID,
+			&i.RequestedBy,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSecretWrapperIDs = `-- name: ListSecretWrapperIDs :many
 SELECT DISTINCT wrapper_id
 FROM secret_keys
@@ -1908,6 +2056,27 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 		&i.UpdatedAtMs,
 	)
 	return i, err
+}
+
+const markRestoreApplying = `-- name: MarkRestoreApplying :execrows
+UPDATE restores
+SET state = 'applying', pre_backup_id = $1
+WHERE id = $2 AND state = 'checking'
+`
+
+type MarkRestoreApplyingParams struct {
+	PreBackupID string
+	ID          string
+}
+
+// Moves one checking restore to applying with the backup taken before the
+// apply. Any other state matches no row, so a retry reports no change.
+func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markRestoreApplying, arg.PreBackupID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const putCheckpoint = `-- name: PutCheckpoint :exec

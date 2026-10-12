@@ -734,3 +734,47 @@ func TestListFilterKeepsIncomplete(t *testing.T) {
 		t.Fatalf("filtered urns = %q, want only the matching resource", urns)
 	}
 }
+
+func TestDiffSecretAddedOrRemovedIsChangedSecret(t *testing.T) {
+	t.Parallel()
+
+	urn := "urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev"
+	deployment := func(outputs string) []byte {
+		return []byte(`{"resources":[{"urn":"` + urn + `","type":"pulumi:pulumi:Stack","outputs":` + outputs + `}]}`)
+	}
+
+	withSecret := deployment(`{"token":` + secretOf("v1:abc") + `,"greeting":"hi"}`)
+	withoutSecret := deployment(`{"greeting":"hi"}`)
+
+	tests := []struct {
+		name     string
+		from, to []byte
+	}{
+		{name: "added", from: withoutSecret, to: withSecret},
+		{name: "removed", from: withSecret, to: withoutSecret},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			diff, err := stack.DiffStates(tt.from, tt.to, "", 100)
+			if err != nil {
+				t.Fatalf("diff states: %v", err)
+			}
+
+			if len(diff.Changed) != 1 {
+				t.Fatalf("changed = %d, want 1", len(diff.Changed))
+			}
+
+			got := diff.Changed[0]
+			if !slices.Equal(got.ChangedSecrets, []string{"/outputs/token"}) {
+				t.Errorf("changed secrets = %q, want [/outputs/token]", got.ChangedSecrets)
+			}
+
+			if len(got.ChangedPaths) != 0 {
+				t.Errorf("changed paths = %q, want none", got.ChangedPaths)
+			}
+		})
+	}
+}

@@ -36,6 +36,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       newTestNamespaces(t),
 		Backups:          nil,
+		Restores:         nil,
 		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
 		Metrics:          stubMetrics{},
 		Version:          "",
