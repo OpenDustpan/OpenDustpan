@@ -1376,8 +1376,7 @@ func plantParCopy(rng *rand.Rand, attrs map[string]any, pick []string, i int) {
 // disjointState builds one state with pairwise non-nested pointers from rng.
 func disjointState(rng *rand.Rand) (string, workspace.SensitiveMarks, error) {
 	attrs := disjointAttributes(rng)
-
-	var tokens [][]string
+	tokens := make([][]string, 0)
 
 	collectRandomTokens(attrs, nil, &tokens)
 
@@ -1726,7 +1725,7 @@ func pickStreamingOthers(rng *rand.Rand, physical, masked []string) []string {
 		inMasked[path] = true
 	}
 
-	var others []string
+	others := make([]string, 0, len(physical))
 
 	for _, path := range physical {
 		if !inMasked[path] {
