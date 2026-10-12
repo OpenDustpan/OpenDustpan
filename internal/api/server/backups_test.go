@@ -139,17 +139,16 @@ func newBackupFixture(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          service,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stores.registry,
-		KeyEncryptionKey: false,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       service,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stores.registry,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -554,17 +553,16 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           nil,
-		KeyEncryptionKey: false,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

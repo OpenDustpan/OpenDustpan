@@ -145,6 +145,8 @@ var embeddedMigrationNames = []string{
 	"0018_restores.sql",
 	"0019_audit_entries.sql",
 	"0020_sealed_state.sql",
+	"0021_sensitive_marks.sql",
+	"0022_audit_value_count.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

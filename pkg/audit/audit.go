@@ -102,7 +102,8 @@ var (
 // example "unit:decrypt". Object is a unit reference
 // ("<tool>:<namespace>/<name>") or a namespace. Version and ValuePath name
 // the state version and the value path of a state read and stay empty
-// otherwise. At is the time of the action in UTC. SourceIP is the remote
+// otherwise. ValueCount holds the count of secret values of a decrypt call
+// and stays nil for every other entry. At is the time of the action in UTC. SourceIP is the remote
 // address that the server sees. UserAgent is the client user agent, capped
 // at MaxUserAgentLen bytes. Channel is where the request came from.
 // RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
@@ -118,6 +119,7 @@ type Entry struct {
 	Object     string
 	Version    string
 	ValuePath  string
+	ValueCount *int64
 	SourceIP   string
 	UserAgent  string
 	Channel    Channel
@@ -211,7 +213,11 @@ const hashFieldSeparator = 0x1F
 // subject, identity provider subject, token ID, action, object, version,
 // value path, time (Unix milliseconds, decimal), source IP, user agent,
 // channel, kind, outcome, request ID, previous hash. Numeric fields use
-// decimal text. The separator never appears in a validated field except the
+// decimal text. When the value count of e is set, the encoding appends one
+// more field after the previous hash: the text "value_count=" followed by
+// the decimal count, with the same separator. When the value count is nil,
+// the encoding is unchanged, so an entry written before the count keeps its
+// hash. The separator never appears in a validated field except the
 // user agent and free-form names, where it is kept as is: the encoding is
 // fixed and documented, not ambiguous-free, and its only use is the chain
 // check of the same code.
@@ -240,6 +246,10 @@ func ComputeHash(e Entry, prevHash string) string {
 	write(string(e.Outcome))
 	write(e.RequestID)
 	write(prevHash)
+
+	if e.ValueCount != nil {
+		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+	}
 
 	sum := sha256.Sum256([]byte(sb.String()))
 

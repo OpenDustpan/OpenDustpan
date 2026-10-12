@@ -180,6 +180,41 @@ func (l *restoreServiceLive) counts() liveCounts {
 	return liveCounts{applied: l.applied, bumped: l.bumped}
 }
 
+// setStageBlock sets the stage gate under the lock: StageRestore reads it on
+// the restore goroutine.
+func (l *restoreServiceLive) setStageBlock(block chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.stageBlock = block
+}
+
+// setApplyGate sets the apply gate under the lock: StageRestore reads it on
+// the restore goroutine.
+func (l *restoreServiceLive) setApplyGate(gate chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.applyGate = gate
+}
+
+// stageCallCount answers how many StageRestore calls started, under the lock.
+func (l *restoreServiceLive) stageCallCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.stageCalls
+}
+
+// setResurrect sets the row that ApplyStaging stores after the drop, under
+// the lock: ApplyStaging reads it on the restore goroutine.
+func (l *restoreServiceLive) setResurrect(row *backup.RestoreRecord) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.resurrect = row
+}
+
 // restoreServiceRegistry is an in-memory backup.RestoreRegistry. finishBlock,
 // when non-nil, holds FinishRestore open, so tests prove the single-restore
 // slot stays held until the row reaches its end state.
@@ -334,6 +369,16 @@ func (r *restoreServiceRegistry) dropAll() {
 	r.rows = map[backup.RestoreID]backup.RestoreRecord{}
 }
 
+// setFinishBlock sets the FinishRestore gate under the lock: FinishRestore
+// reads it on the restore goroutine, which can still run when a test clears
+// the gate (issue 379).
+func (r *restoreServiceRegistry) setFinishBlock(block chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.finishBlock = block
+}
+
 func sortedRestoreIDs(rows map[backup.RestoreID]backup.RestoreRecord) []backup.RestoreID {
 	ids := make([]backup.RestoreID, 0, len(rows))
 
@@ -388,6 +433,15 @@ func (m *restoreServiceMaintenance) Leave(_ context.Context) error {
 	m.leaves++
 
 	return nil
+}
+
+// setEnterErr sets the injected enter error under the lock: Enter reads it on
+// the restore goroutine.
+func (m *restoreServiceMaintenance) setEnterErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.enterErr = err
 }
 
 // stubBackupExporter is a fake backup.Exporter for the pre-backup service.
@@ -458,6 +512,7 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -487,8 +542,17 @@ func waitRestoreEnd(t *testing.T, regs *restoreServiceRegistry, id backup.Restor
 
 	for time.Now().Before(deadline) {
 		row, err := regs.GetRestore(t.Context(), id)
-		if err != nil {
+
+		switch {
+		case errors.Is(err, backup.ErrRestoreNotFound):
+			// The swap in ApplyStaging drops every row until the service
+			// stores its row again. RestoreService.Get serves the held row
+			// in that window, but this poll reads the registry, so it waits
+			// for the row to come back (issue 379).
+			row.State = backup.RestoreChecking
+		case err != nil:
 			t.Fatalf("get restore %s: %v", id, err)
+		default:
 		}
 
 		if row.State != backup.RestoreChecking && row.State != backup.RestoreApplying {
@@ -524,11 +588,11 @@ func TestRestoreErrorTextHoldsNoDriverDetail(t *testing.T) {
 	t.Parallel()
 
 	setup := newRestoreServiceSetup(t)
-	setup.maint.enterErr = fmt.Errorf(
+	setup.maint.setEnterErr(fmt.Errorf(
 		`enter maintenance: export SQL data: driver boom at backups/bkp-restore/manifest.json`+
 			` with token tok-secret in scope acme/stk-test01: %w`,
 		maintenance.ErrActiveWork,
-	)
+	))
 
 	id := backup.RestoreID("rst-driver0000000001")
 
@@ -569,9 +633,8 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 
 	setup := newRestoreServiceSetup(t)
 
-	setup.live.mu.Lock()
-	setup.live.stageBlock = make(chan struct{})
-	setup.live.mu.Unlock()
+	stageBlock := make(chan struct{})
+	setup.live.setStageBlock(stageBlock)
 
 	first := backup.RestoreID("rst-first00000000001")
 
@@ -608,6 +671,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -626,10 +690,8 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		t.Fatalf("start on another service: err = %v, want ErrRestoreRunning", err)
 	}
 
-	setup.live.mu.Lock()
-	close(setup.live.stageBlock)
-	setup.live.stageBlock = nil
-	setup.live.mu.Unlock()
+	close(stageBlock)
+	setup.live.setStageBlock(nil)
 
 	row := waitRestoreEnd(t, setup.regs, first)
 
@@ -645,7 +707,8 @@ func TestRestoreSlotFreesOnlyAfterTheRowFinishes(t *testing.T) {
 	t.Parallel()
 
 	setup := newRestoreServiceSetup(t)
-	setup.regs.finishBlock = make(chan struct{})
+	finishBlock := make(chan struct{})
+	setup.regs.setFinishBlock(finishBlock)
 
 	first := backup.RestoreID("rst-first00000000002")
 
@@ -693,8 +756,8 @@ func TestRestoreSlotFreesOnlyAfterTheRowFinishes(t *testing.T) {
 		t.Fatal("no start arrived while the first restore ran")
 	}
 
-	close(setup.regs.finishBlock)
-	setup.regs.finishBlock = nil
+	close(finishBlock)
+	setup.regs.setFinishBlock(nil)
 
 	if row := waitRestoreEnd(t, setup.regs, first); row.State != backup.RestoreSucceeded {
 		t.Fatalf("first restore state = %q, want succeeded (%q)", row.State, row.Error)
@@ -797,6 +860,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Target:      proxy,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -866,7 +930,7 @@ func TestRestoreBacksUpAfterEnteringMaintenance(t *testing.T) {
 	}
 
 	refused := newRestoreServiceSetup(t)
-	refused.maint.enterErr = maintenance.ErrActiveWork
+	refused.maint.setEnterErr(maintenance.ErrActiveWork)
 
 	denied := backup.RestoreID("rst-order00000000002")
 
@@ -1012,6 +1076,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      slog.New(slog.NewTextHandler(buf, nil)),
 	})
@@ -1019,10 +1084,10 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		t.Fatalf("new restore service: %v", err)
 	}
 
-	setup.maint.enterErr = fmt.Errorf(
+	setup.maint.setEnterErr(fmt.Errorf(
 		`enter maintenance: list namespaces at "backups/bkp-restore00000001/db" with token tok-secret: %w`,
 		errFakeDriver,
-	)
+	))
 
 	id := backup.RestoreID("rst-logcause000000001")
 
@@ -1060,13 +1125,17 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 
 // waitLogLine polls buf until it holds the restore failure detail the
 // background work logs after recording the end state, failing on timeout.
+// logRestore writes two lines: first the restore line, whose error attribute
+// is the stored text "restore failed", then the error line with the message
+// "restore failed" and the sanitized cause. It waits for the second line:
+// the first one already holds the words "restore failed" (issue 379).
 func waitLogLine(t *testing.T, buf *syncBuffer) string {
 	t.Helper()
 
 	deadline := time.Now().Add(10 * time.Second)
 
 	for time.Now().Before(deadline) {
-		if line := buf.String(); strings.Contains(line, "restore failed") {
+		if line := buf.String(); strings.Contains(line, `msg="restore failed"`) {
 			return line
 		}
 
@@ -1102,7 +1171,7 @@ func TestRestoreSwapSupersedesResurrectedRows(t *testing.T) {
 		Error:       "",
 		State:       backup.RestoreChecking,
 	}
-	setup.live.resurrect = &stale
+	setup.live.setResurrect(&stale)
 
 	id := backup.RestoreID("rst-supersede00000001")
 
@@ -1206,6 +1275,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Target:      check.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1281,6 +1351,8 @@ func TestRestoreGetStaysVisibleAcrossSwapWindow(t *testing.T) {
 
 	held := waitServiceRestoreApplying(t, setup.service, id)
 
+	waitApplyStageParked(t, setup)
+
 	emulateRestoreSwapDrop(t, setup, id, held)
 
 	recreateDroppedRestore(t, setup, held)
@@ -1297,12 +1369,33 @@ func TestRestoreGetStaysVisibleAcrossSwapWindow(t *testing.T) {
 func holdRestoreApplyStage(setup *restoreServiceSetup) chan struct{} {
 	gate := make(chan struct{})
 
-	setup.live.mu.Lock()
-	defer setup.live.mu.Unlock()
-
-	setup.live.applyGate = gate
+	setup.live.setApplyGate(gate)
 
 	return gate
+}
+
+// waitApplyStageParked polls until the second StageRestore call (the apply
+// stage) started, so the restore waits at the apply gate. The registry row
+// reads applying a moment before the service holds the applying row: a drop
+// in that window would leave the service with the row of the start, which
+// the real swap never meets, because it runs after the apply stage (issue
+// 379).
+func waitApplyStageParked(t *testing.T, setup *restoreServiceSetup) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for setup.live.stageCallCount() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("restore never reached the apply stage")
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("wait for the apply stage: %v", t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // startSwapWindowRestore starts id for the setup backup and fails on error.
@@ -1423,5 +1516,107 @@ func waitServiceRestoreSucceeded(t *testing.T, service *backup.RestoreService, i
 			t.Fatalf("restore %s: %v", id, t.Context().Err())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// restoreServiceWithHook rebuilds the restore service of setup with an
+// after-apply step, sharing its fakes. The setup service stays idle.
+func restoreServiceWithHook(
+	t *testing.T, setup *restoreServiceSetup, hook func(ctx context.Context) error,
+) *backup.RestoreService {
+	t.Helper()
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        setup.live,
+		Registry:    setup.regs,
+		Backups:     setup.backups,
+		Maintenance: setup.maint,
+		Blobs:       setup.blobs,
+		Target:      setup.target,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  hook,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service with a hook: %v", err)
+	}
+
+	return service
+}
+
+// TestRestoreRunsAfterApplyAfterTheSwap proves the after-apply step runs
+// after a restore applies: the server seals rows the backup holds unsealed
+// through it.
+func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	ran := make(chan struct{}, 1)
+
+	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+		ran <- struct{}{}
+
+		return nil
+	})
+
+	id := backup.RestoreID("rst-afterapply00000001")
+
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore %s: %v", id, err)
+	}
+
+	row := pollRestoreSucceeded(t, setup.regs, id)
+
+	if row.State != backup.RestoreSucceeded {
+		t.Fatalf("restore state = %q, want succeeded", row.State)
+	}
+
+	select {
+	case <-ran:
+	default:
+		t.Fatal("after-apply step never ran")
+	}
+}
+
+// TestRestoreFailsWhenAfterApplyFails proves a failing after-apply step
+// fails the restore: unsealed rows never pass silently.
+func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+		return errFakeDriver
+	})
+
+	id := backup.RestoreID("rst-afterapplyfail001")
+
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore %s: %v", id, err)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
 	}
 }

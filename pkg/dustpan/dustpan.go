@@ -22,6 +22,10 @@
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
+// WithSecretWrapper is required: NewServer answers ErrMissingOption without
+// it, because the server seals OpenTofu state and Pulumi secret values with
+// data keys that the key-encryption key wraps (ADR 41).
+//
 // Custom stores should pass the store/storetest conformance suite. The SDK is
 // pre-1.0: ports may still change between minor versions.
 package dustpan
@@ -170,10 +174,11 @@ func WithSecretKeyStore(s secret.KeyStore) Option {
 	return func(o *settings) { o.secretKeys = s }
 }
 
-// WithSecretWrapper sets the key-encryption key holder. Optional: nil means
-// no key-encryption key is configured. Run runs secret.CheckWrapper at
-// start: the server starts without a key only while the database holds no
-// wrapped key (ADR 23).
+// WithSecretWrapper sets the key-encryption key holder. Required: the server
+// seals OpenTofu state and Pulumi secret values with data keys that this key
+// wraps (ADR 41 decisions 10 and 12). NewServer refuses to build without it.
+// Run runs secret.CheckWrapper at start, so a key that does not open the
+// wrapped keys in the database stops the start (ADR 23).
 func WithSecretWrapper(w secret.Wrapper) Option {
 	return func(o *settings) { o.secretWrapper = w }
 }
@@ -491,7 +496,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -554,8 +559,18 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. base reports the external base URL for absolute URLs.
-func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs. observed counts
+// failed audit appends: the reveal call, the state download and the single
+// output route fail closed with a 500 when the append fails, so the counter
+// is the alert for lost entries.
+func newTFEHandler(
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (*tfe.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -563,6 +578,10 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
+		Audit:         entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -600,6 +619,14 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 
 	if cfg.inventoryReader == nil {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
+	}
+
+	if cfg.secretWrapper == nil {
+		return baseurl.Resolver{}, fmt.Errorf(
+			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+
+				"Pulumi secrets (ADR 41)",
+			ErrMissingOption,
+		)
 	}
 
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
@@ -861,13 +888,18 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 // runStartUp runs the start-up steps of Run in order: the key check and the
 // running backups of startUp (ADR 23, ADR 30 decision 9), then the running
-// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// restores of failStoppedRestores (ADR 38 decision 9), then the seal of
+// unsealed OpenTofu state (ADR 41 decision 11). A done context during
 // the steps is a stop, not a failure, so it answers nil: the caller asked
 // the server to stop.
 func (s *Server) runStartUp(ctx context.Context) error {
 	startErr := s.startUp(ctx)
 	if startErr == nil {
 		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.sealUnsealedStates(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {
@@ -944,6 +976,18 @@ func (s *Server) startUp(ctx context.Context) error {
 		s.now().UTC(),
 		backupStoppedText,
 	)
+}
+
+// sealUnsealedStates seals the OpenTofu state versions that still hold plain
+// content (ADR 41 decision 11). It runs after the fencing recovery of
+// failStoppedRestores, so its writes carry current fences. NewServer refuses
+// to build without a key-encryption key (#367), so the server always seals.
+func (s *Server) sealUnsealedStates(ctx context.Context) error {
+	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
+		return fmt.Errorf("seal unsealed state: %w", err)
+	}
+
+	return nil
 }
 
 // isLoopbackListenAddr reports whether addr binds only the loopback
@@ -1056,7 +1100,7 @@ type installationDeps struct {
 func newInstallationAPI(
 	cfg settings, deps installationDeps,
 ) (http.Handler, *backup.RestoreService, error) {
-	restores, err := newRestoreService(cfg, deps.backups, deps.maint)
+	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1079,17 +1123,16 @@ func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:    cfg.authenticator,
-		Authorizer:       cfg.authorizer,
-		Logger:           cfg.logger,
-		Namespaces:       deps.services.namespaces,
-		Backups:          deps.backups,
-		Restores:         restores,
-		Maintenance:      deps.maint,
-		Metrics:          deps.observed,
-		Version:          cfg.version,
-		Schema:           schemaReporterOf(cfg.namespaceStore),
-		KeyEncryptionKey: cfg.secretWrapper != nil,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		Namespaces:    deps.services.namespaces,
+		Backups:       deps.backups,
+		Restores:      restores,
+		Maintenance:   deps.maint,
+		Metrics:       deps.observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1164,14 +1207,14 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 // backup of the live data before the apply. A nil target means no backup
 // target is configured.
 func newRestoreService(
-	cfg settings, backups *backup.Service, maint *maintenance.Service,
+	cfg settings, deps installationDeps, maint *maintenance.Service,
 ) (*backup.RestoreService, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
 	}
 
-	if backups == nil {
+	if deps.backups == nil {
 		return nil, errBackupNeedsRegistry
 	}
 
@@ -1188,12 +1231,13 @@ func newRestoreService(
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:        live,
 		Registry:    registry,
-		Backups:     backups,
+		Backups:     deps.backups,
 		Maintenance: maint,
 		Blobs:       cfg.blobStore,
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
+		AfterApply:  sealAfterRestore(deps),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -1202,6 +1246,21 @@ func newRestoreService(
 	}
 
 	return service, nil
+}
+
+// sealAfterRestore returns the after-apply step of a restore: it seals the
+// OpenTofu state versions that the restored backup holds unsealed (ADR 41
+// decision 11), with the same job the server runs at start-up. NewServer
+// refuses to build without a key-encryption key (#367), so the step is
+// always set.
+func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
+			return fmt.Errorf("seal unsealed state: %w", err)
+		}
+
+		return nil
+	}
 }
 
 // requestIDHeader carries the request ID in each response. The server mints

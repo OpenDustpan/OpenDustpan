@@ -158,12 +158,14 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -321,6 +323,7 @@ func (stubWorkspaces) BeginState(
 			Force:           in.Force,
 			Sealed:          false,
 			RestoredFrom:    "",
+			SensitiveMarks:  nil,
 		},
 	}, nil
 }
@@ -380,6 +383,7 @@ func stubStateVersion() workspace.StateVersion {
 		Force:           false,
 		Sealed:          false,
 		RestoredFrom:    "",
+		SensitiveMarks:  nil,
 	}
 }
 
@@ -387,11 +391,186 @@ func (stubWorkspaces) ReadState(
 	_ context.Context, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	switch id.String() {
-	case "sv-test123":
-		return stubStateVersion(), nil
+	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-skipped123", "sv-encrypted123":
+		sv := stubStateVersion()
+		sv.ID = id
+
+		return sv, nil
 	default:
 		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 	}
+}
+
+// stubResourceState is the tfstate document the masked resource routes read,
+// in the shape the CLI writes: a terraform_data resource with a sensitive
+// input whose derived output copies the secret without a mark of its own,
+// and a provider resource whose schema marks result sensitive without a
+// sensitive_attributes entry, so only the kept json-state marks mask it.
+func stubResourceState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"smoke-id",` +
+		`"input":{"value":"s3cr3t","type":"string"},` +
+		`"output":{"value":"s3cr3t","type":"string"},"triggers_replace":null},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]},` +
+		`{"mode":"managed","type":"random_password","name":"pw",` +
+		`"provider":"provider[\"registry.opentofu.org/hashicorp/random\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"pw-id","result":"pw-s3cr3t"},` +
+		`"sensitive_attributes":[] }]}]}`
+}
+
+// stubEncryptedState is a state file the client encrypted: the resources
+// hide inside the envelope, so the resource routes answer 409.
+func stubEncryptedState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
+		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
+}
+
+// stubResourceMarks are the kept json-state marks of the stub state: the
+// input of the data resource, and the result the provider schema marks
+// sensitive.
+func stubResourceMarks() workspace.SensitiveMarks {
+	return workspace.SensitiveMarks{
+		"terraform_data.smoke": {"/input"},
+		"random_password.pw":   {"/result"},
+	}
+}
+
+// stubSkippedState is a tfstate document with one valid resource and entries
+// the server skips: a non-object and an object without type and name, so the
+// list reads incomplete.
+func stubSkippedState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"smoke-id",` +
+		`"input":{"value":"s3cr3t","type":"string"},` +
+		`"output":{"value":"s3cr3t","type":"string"},"triggers_replace":null},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]},` +
+		`"junk",{"mode":"managed"}]}`
+}
+
+// stubResourceBytes returns the state bytes and the kept marks of the masked
+// resource routes for id, or ErrStateVersionNotFound. The version with no
+// marks reads the same state without them, so every attribute value is a
+// marker. The second version changes the sensitive input and adds one
+// resource, so the diff route has a change to answer. The version with
+// skipped entries reads one valid resource with the list marked incomplete.
+func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.SensitiveMarks, error) {
+	switch id.String() {
+	case "sv-test123":
+		return []byte(stubResourceState()), stubResourceMarks(), nil
+	case "sv-second123":
+		return []byte(stubSecondState()), stubResourceMarks(), nil
+	case "sv-nomarks123":
+		return []byte(stubResourceState()), nil, nil
+	case "sv-skipped123":
+		return []byte(stubSkippedState()), stubResourceMarks(), nil
+	case "sv-encrypted123":
+		return []byte(stubEncryptedState()), stubResourceMarks(), nil
+	default:
+		return nil, nil, workspace.ErrStateVersionNotFound
+	}
+}
+
+// stubSecondState is the state of the second stub version: the sensitive
+// input changed and one resource added, so the diff of the two stub versions
+// answers an added and a changed resource with no secret value.
+func stubSecondState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":4,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"smoke-id",` +
+		`"input":{"value":"other","type":"string"},` +
+		`"output":{"value":"other","type":"string"},"triggers_replace":null},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]},` +
+		`{"mode":"managed","type":"random_password","name":"pw",` +
+		`"provider":"provider[\"registry.opentofu.org/hashicorp/random\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"pw-id","result":"pw-s3cr3t"},` +
+		`"sensitive_attributes":[] }]},` +
+		`{"mode":"managed","type":"terraform_data","name":"added",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"added-id","input":"added"},` +
+		`"sensitive_attributes":[] }]}]}`
+}
+
+func (stubWorkspaces) ReadResources(
+	_ context.Context, id workspace.StateVersionID, cursor string, size int, filter string,
+) (workspace.StatePage, error) {
+	raw, _, err := stubResourceBytes(id)
+	if err != nil {
+		return workspace.StatePage{}, err
+	}
+
+	if encrypted, derr := workspace.IsClientEncrypted(raw); derr != nil {
+		return workspace.StatePage{}, derr
+	} else if encrypted {
+		return workspace.StatePage{}, fmt.Errorf("read resources of %s: %w", id, workspace.ErrClientEncrypted)
+	}
+
+	return workspace.ListStateResources(raw, nil, cursor, size, filter)
+}
+
+func (stubWorkspaces) ReadResource(
+	_ context.Context, id workspace.StateVersionID, address string,
+) (workspace.StateDetail, error) {
+	raw, marks, err := stubResourceBytes(id)
+	if err != nil {
+		return workspace.StateDetail{}, err
+	}
+
+	if encrypted, derr := workspace.IsClientEncrypted(raw); derr != nil {
+		return workspace.StateDetail{}, derr
+	} else if encrypted {
+		return workspace.StateDetail{}, fmt.Errorf("read resource of %s: %w", id, workspace.ErrClientEncrypted)
+	}
+
+	return workspace.ReadStateResource(raw, marks, address)
+}
+
+func (stubWorkspaces) DiffStates(
+	_ context.Context, to, from workspace.StateVersionID, cursor string, size int,
+) (workspace.StateDiff, error) {
+	if from.String() == "sv-other123" {
+		return workspace.StateDiff{}, fmt.Errorf("%w: state version %s", workspace.ErrStateVersionNotFound, from)
+	}
+
+	toRaw, toMarks, err := stubResourceBytes(to)
+	if err != nil {
+		return workspace.StateDiff{}, err
+	}
+
+	fromRaw, fromMarks, err := stubResourceBytes(from)
+	if err != nil {
+		return workspace.StateDiff{}, err
+	}
+
+	for _, raw := range [][]byte{toRaw, fromRaw} {
+		encrypted, derr := workspace.IsClientEncrypted(raw)
+		if derr != nil {
+			return workspace.StateDiff{}, derr
+		}
+
+		if encrypted {
+			return workspace.StateDiff{}, fmt.Errorf("diff states: %w", workspace.ErrClientEncrypted)
+		}
+	}
+
+	return workspace.DiffStates(
+		workspace.StateWithMarks{State: fromRaw, Marks: fromMarks},
+		workspace.StateWithMarks{State: toRaw, Marks: toMarks},
+		cursor, size,
+	)
 }
 
 func (stubWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.ReadCloser, error) {
@@ -489,12 +668,14 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  stubAuthenticator{},
+		Authorizer:     stubAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -507,12 +688,14 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -527,12 +710,14 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  stubAuthenticator{},
+		Authorizer:     stubAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -905,11 +1090,16 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		"{id}", "ws-test123",
 		"{state_version_id}", "sv-test123",
 		"{output_id}", "sv-test123.greeting",
+		"{address}", "terraform_data.smoke",
 		"{token}", "wrong-token",
 	).Replace(route.Path)
 
 	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions" {
 		path += "?filter[organization][name]=acme&filter[workspace][name]=web"
+	}
+
+	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions/{state_version_id}/diff" {
+		path += "?from=sv-test123"
 	}
 
 	body := ""
@@ -943,37 +1133,36 @@ func TestRoutesEnforceAuthentication(t *testing.T) {
 
 	t.Run("test routes", func(t *testing.T) {
 		t.Parallel()
-
-		handler := newTestHandler(t)
-
-		for _, route := range handler.Routes() {
-			if route.Scope != tfe.ScopeAuthorized {
-				continue
-			}
-
-			t.Run(route.Method+" "+route.Path, func(t *testing.T) {
-				t.Parallel()
-				checkRouteAuthentication(t, route)
-			})
-		}
+		checkAuthTable(t, newTestHandler(t))
 	})
 
 	t.Run("production table", func(t *testing.T) {
 		t.Parallel()
-
-		handler := newProductionHandler(t)
-
-		for _, route := range handler.Routes() {
-			if route.Scope != tfe.ScopeAuthorized {
-				continue
-			}
-
-			t.Run(route.Method+" "+route.Path, func(t *testing.T) {
-				t.Parallel()
-				checkRouteAuthentication(t, route)
-			})
-		}
+		checkAuthTable(t, newProductionHandler(t))
 	})
+}
+
+// checkAuthTable proves every authorized route of handler answers 401
+// without a token, 401 with a wrong token, 403 when denied, and 200 when
+// allowed. The reveal route is skipped: it needs a state with a masked
+// secret, so its dedicated test proves it instead.
+func checkAuthTable(t *testing.T, handler *tfe.Handler) {
+	t.Helper()
+
+	for _, route := range handler.Routes() {
+		if route.Scope != tfe.ScopeAuthorized {
+			continue
+		}
+
+		if route.Method+" "+route.Path == revealPattern() {
+			continue
+		}
+
+		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
+			t.Parallel()
+			checkRouteAuthentication(t, route)
+		})
+	}
 }
 
 // checkRouteAuthentication proves one authorized route answers 401 without a
@@ -1293,6 +1482,24 @@ func (errorWorkspaces) ReadState(
 	return workspace.StateVersion{}, errTestInternal
 }
 
+func (errorWorkspaces) ReadResources(
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
+) (workspace.StatePage, error) {
+	return workspace.StatePage{}, errTestInternal
+}
+
+func (errorWorkspaces) ReadResource(
+	_ context.Context, _ workspace.StateVersionID, _ string,
+) (workspace.StateDetail, error) {
+	return workspace.StateDetail{}, errTestInternal
+}
+
+func (errorWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, errTestInternal
+}
+
 func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, errTestInternal
 }
@@ -1318,12 +1525,14 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    errorWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     errorWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1397,6 +1606,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	handler := newProductionHandler(t)
 
 	for _, route := range handler.Routes() {
+		if route.Method+" "+route.Path == revealPattern() {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteObject(t, route)

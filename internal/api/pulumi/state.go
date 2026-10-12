@@ -99,12 +99,14 @@ type diffStateResponse struct {
 // 3 and 7): a paged resource list, one resource and the stack outputs of
 // one checkpoint version, and the diff of two versions. Each secret value
 // answers as a marker with its value path, never as plain or ciphertext;
-// the diff answers no value at all, only URNs and value paths. The URN in
-// the one-resource route is path-escaped, so that "/" becomes "%2F" and the
-// URN stays one segment. The diff path holds the literal "diff", so it does
-// not clash with the version routes, which always carry one more segment
-// (resources or outputs) after the version. Every route reads state, so
-// each needs unit:read.
+// the diff answers no value at all, only URNs and value paths. The reveal
+// call (decisions 4 and 5) answers the plain value at one masked path with
+// an audit entry of the kind reveal. The URN in the one-resource route is
+// path-escaped, so that "/" becomes "%2F" and the URN stays one segment.
+// The diff path holds the literal "diff", so it does not clash with the
+// version routes, which always carry one more segment (resources, outputs
+// or reveal) after the version. Every route reads state, so each needs
+// unit:read; the reveal call also needs unit:read-secrets.
 func (h *Handler) stateRoutes() []Route {
 	versioned := []Route{
 		{
@@ -145,7 +147,7 @@ func (h *Handler) stateRoutes() []Route {
 		Serve:   h.diffState,
 	}
 
-	return []Route{versioned[0], versioned[1], versioned[2], diff}
+	return []Route{versioned[0], versioned[1], versioned[2], diff, h.revealRoute()}
 }
 
 // stateTargetOf parses the stack reference and the version of a state

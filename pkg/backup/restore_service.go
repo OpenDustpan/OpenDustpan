@@ -73,8 +73,13 @@ type RestoreConfig struct {
 	// Region is the region of this installation for the region warning. A
 	// blank region disables the warning.
 	Region string
-	Now    func() time.Time
-	Logger *slog.Logger
+	// AfterApply runs after the swap with the rows preserved, while the
+	// server still holds maintenance mode, so a restore of data that
+	// predates a later change converges to it: the server seals rows that
+	// the backup holds unsealed. A failure fails the restore. Nil skips it.
+	AfterApply func(ctx context.Context) error
+	Now        func() time.Time
+	Logger     *slog.Logger
 }
 
 // RestoreService runs online restores of a whole installation (ADR 38): it
@@ -91,6 +96,7 @@ type RestoreService struct {
 	target      blob.Store
 	key         secret.Wrapper
 	region      string
+	afterApply  func(ctx context.Context) error
 	now         func() time.Time
 	logger      *slog.Logger
 	mu          sync.Mutex
@@ -143,6 +149,7 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		target:      cfg.Target,
 		key:         cfg.Key,
 		region:      cfg.Region,
+		afterApply:  cfg.AfterApply,
 		now:         now,
 		logger:      logger,
 		mu:          sync.Mutex{},
@@ -841,6 +848,15 @@ func (s *RestoreService) applyPinned(
 	// from the backups list (ADR 30 decision 9).
 	if err := s.backups.PreserveAfterRestore(ctx, pre); err != nil {
 		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
+	}
+
+	// A backup from before the seal change holds unsealed rows: run the
+	// after-apply step while maintenance mode still holds, so those rows
+	// end sealed. A failure fails the restore.
+	if s.afterApply != nil {
+		if err := s.afterApply(ctx); err != nil {
+			return fmt.Errorf("seal restored state: %w", err)
+		}
 	}
 
 	return nil

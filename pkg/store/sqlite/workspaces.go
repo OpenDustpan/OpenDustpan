@@ -262,6 +262,7 @@ func (s *Store) CreateStateVersion(
 			Outputs:           row.Outputs,
 			Force:             row.Force,
 			Sealed:            row.Sealed,
+			SensitiveMarks:    row.SensitiveMarks,
 			UploadDigest:      row.UploadDigest,
 			UploadExpiresAtMs: row.UploadExpiresAtMs,
 			Holder:            row.Holder,
@@ -467,6 +468,38 @@ func (s *Store) RecordUploadAttempt(
 	return superseded, nil
 }
 
+// SaveSensitiveMarks implements workspace.StateStore: it stores the secret
+// paths of the json-state rendering of id. It works on a pending and on a
+// finalized version: the rendering may land after the state upload
+// finalizes. A missing version reports ErrStateVersionNotFound.
+func (s *Store) SaveSensitiveMarks(
+	ctx context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	raw, err := codec.MarshalSensitiveMarks(marks)
+	if err != nil {
+		return fmt.Errorf("encode sensitive marks: %w", err)
+	}
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		n, err := q.SaveSensitiveMarks(ctx, db.SaveSensitiveMarksParams{
+			SensitiveMarks: raw,
+			ID:             id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("save sensitive marks: %w", err)
+		}
+
+		if n == 0 {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		return nil
+	})
+}
+
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the expired pending versions of the workspace in one fenced
 // transaction and returns them, oldest expiry first, with their attempted
@@ -535,6 +568,72 @@ func (s *Store) FinalizeStateVersion(
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		return finalizeInTx(ctx, q, sv, row)
+	})
+}
+
+// ListUnsealedStateVersions implements workspace.StateStore: the finalized
+// versions that still hold plain content, ordered by version ID.
+func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListUnsealedStateVersions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select unsealed state versions: %w", err)
+	}
+
+	out := make([]workspace.StateVersion, 0, len(rows))
+
+	for i := range rows {
+		sv, err := stateFromRow(rows[i])
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, sv)
+	}
+
+	return out, nil
+}
+
+// SealStateVersion implements workspace.StateStore: it moves one unsealed
+// version to its sealed blob with its sealed outputs and marks it sealed in
+// one fenced transaction. A version that is already sealed succeeds and
+// changes nothing.
+func (s *Store) SealStateVersion(
+	ctx context.Context,
+	id workspace.StateVersionID,
+	content blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		n, err := q.SealStateVersion(ctx, db.SealStateVersionParams{
+			ContentKey: content.String(),
+			Outputs:    outputs,
+			ID:         id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("seal state version: %w", err)
+		}
+
+		if n > 0 {
+			return nil
+		}
+
+		_, getErr := q.GetStateVersion(ctx, id.String())
+		if errors.Is(getErr, sql.ErrNoRows) {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		if getErr != nil {
+			return fmt.Errorf("read sealed state version: %w", getErr)
+		}
+
+		return nil
 	})
 }
 
@@ -719,6 +818,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Force:             row.Force,
 		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
+		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
 		UploadExpiresAtMs: row.UploadExpiresAtMs,

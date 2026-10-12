@@ -386,15 +386,15 @@ WHERE workspace_id = $1;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed
+    restored_from, sealed, sensitive_marks
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE id = $1;
 
@@ -403,7 +403,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -439,7 +439,7 @@ WHERE workspace_id = $1 AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -457,12 +457,40 @@ UPDATE state_versions
 SET content_key = $1
 WHERE id = $2 AND status = 'pending';
 
+-- name: ListUnsealedStateVersions :many
+-- Finalized versions that still hold plain content, ordered by ID, so the
+-- seal job seals them in a stable order. A version without content stays
+-- out: a pending row names no content yet.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC;
+
+-- name: SealStateVersion :execrows
+-- Moves one unsealed version to its sealed blob with its sealed outputs and
+-- marks it sealed. The write matches only an unsealed row, so a retry after
+-- a crash succeeds and changes nothing.
+UPDATE state_versions
+SET content_key = @content_key, outputs = @outputs, sealed = TRUE
+WHERE id = @id AND NOT sealed;
+
+-- name: SaveSensitiveMarks :execrows
+-- Stores the secret paths of the json-state rendering of one version. It
+-- works on a pending and on a finalized version: the rendering may land
+-- after the state upload finalizes. A missing version matches no row.
+UPDATE state_versions
+SET sensitive_marks = $1
+WHERE id = $2;
+
 -- name: GetCurrentStateVersion :one
 -- Follows the workspace pointer: a forced upload may carry a lower serial and
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
+       sv.sensitive_marks
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -593,7 +621,7 @@ ORDER BY content_key;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -602,14 +630,14 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -626,7 +654,7 @@ WHERE namespace = $1;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC

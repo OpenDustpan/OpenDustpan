@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -69,6 +70,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 			RequestID:  e.RequestID,
 			PrevHash:   e.PrevHash,
 			Hash:       e.Hash,
+			ValueCount: toInt8(e.ValueCount),
 		})
 		if insertErr != nil {
 			return fmt.Errorf("insert audit entry: %w", insertErr)
@@ -190,6 +192,7 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
 // without validation: it was validated on write and the foreign key holds.
+// A NULL value count reads as nil: only a decrypt call stores a count.
 func fromAuditRow(row db.AuditEntry) audit.Entry {
 	ns := namespace.Name(row.Namespace)
 
@@ -203,6 +206,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Object:     row.Object,
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
+		ValueCount: fromInt8(row.ValueCount),
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
 		Channel:    audit.Channel(row.Channel),
@@ -213,4 +217,24 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Hash:       row.Hash,
 		Sequence:   row.Sequence,
 	}
+}
+
+// toInt8 maps a nil count to NULL: only a decrypt call stores a count.
+func toInt8(count *int64) pgtype.Int8 {
+	if count == nil {
+		return pgtype.Int8{Int64: 0, Valid: false}
+	}
+
+	return pgtype.Int8{Int64: *count, Valid: true}
+}
+
+// fromInt8 maps a NULL count to nil.
+func fromInt8(count pgtype.Int8) *int64 {
+	if !count.Valid {
+		return nil
+	}
+
+	out := count.Int64
+
+	return &out
 }

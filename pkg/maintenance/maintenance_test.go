@@ -343,10 +343,28 @@ func (fakeStates) RecordUploadAttempt(
 	return "", nil
 }
 
+func (fakeStates) SaveSensitiveMarks(
+	context.Context, workspace.StateVersionID, workspace.SensitiveMarks, namespace.Fence,
+) error {
+	return nil
+}
+
 func (fakeStates) DeleteExpiredPendingStateVersions(
 	context.Context, workspace.ID, time.Time, namespace.Fence,
 ) ([]workspace.StateVersion, error) {
 	return nil, nil
+}
+
+func (fakeStates) ListUnsealedStateVersions(
+	context.Context,
+) ([]workspace.StateVersion, error) {
+	return nil, nil
+}
+
+func (fakeStates) SealStateVersion(
+	context.Context, workspace.StateVersionID, blob.Key, []byte, namespace.Fence,
+) error {
+	return nil
 }
 
 // fakeBlobs answers no content. The force-unlock path reads none.

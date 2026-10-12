@@ -213,6 +213,7 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 		Object:     "pulumi:" + ns.String() + "/web/prod",
 		Version:    "",
 		ValuePath:  "",
+		ValueCount: nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,

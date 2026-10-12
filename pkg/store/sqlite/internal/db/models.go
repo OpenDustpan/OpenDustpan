@@ -27,6 +27,7 @@ type AuditEntry struct {
 	RequestID  string
 	PrevHash   string
 	Hash       string
+	ValueCount sql.NullInt64
 }
 
 type Backup struct {
@@ -136,6 +137,7 @@ type StateVersion struct {
 	FinalizedAtMs     int64
 	RestoredFrom      string
 	Sealed            bool
+	SensitiveMarks    []byte
 }
 
 type Update struct {

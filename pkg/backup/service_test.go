@@ -636,6 +636,10 @@ func TestRunFailsOnBlobMismatch(t *testing.T) {
 
 			assertFailed(t, fix.registry, "bkp-bad")
 			assertNoManifest(t, fix.target, "bkp-bad")
+
+			if fix.target.has("blobs/tofu/ws1/sv1/a1") {
+				t.Fatal("target holds a copy of the mismatched blob, want none")
+			}
 		})
 	}
 }

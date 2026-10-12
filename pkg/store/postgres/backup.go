@@ -192,6 +192,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", "size",
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
+				"sensitive_marks",
 			},
 			orderBy: []string{"id"},
 		},
@@ -200,7 +201,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
-				"channel", "kind", "outcome", "request_id", "prev_hash", "hash",
+				"channel", "kind", "outcome", "request_id", "prev_hash", "hash", "value_count",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},

@@ -60,6 +60,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "check finds a changed field", test: testCheckChangedField},
 		{name: "check finds a deleted entry", test: testCheckDeletedEntry},
 		{name: "check pages a chain longer than one page", test: testCheckPagesLongChain},
+		{name: "a nil count and a set count round-trip with a valid chain", test: testValueCountRoundTrip},
 	}
 
 	for _, tc := range cases {
@@ -107,6 +108,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Object:     "pulumi:" + ns.String() + "/web/prod",
 		Version:    "",
 		ValuePath:  "",
+		ValueCount: nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,
@@ -504,6 +506,60 @@ func testCheckPagesLongChain(t *testing.T, ts TestStore) {
 
 	if listing.Total != total {
 		t.Fatalf("total = %d, want %d", listing.Total, total)
+	}
+}
+
+// testValueCountRoundTrip proves that an entry with a nil count and an
+// entry with a set count round-trip through Append and List, and that the
+// chain check passes on a chain that holds an old-format entry (nil count)
+// next to a new one (set count).
+func testValueCountRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	count := int64(2)
+	withCount := newEntry(ns.Name, "admin", "req-2", now())
+	withCount.Kind = audit.KindToolOperation
+	withCount.ValueCount = &count
+	stored := appendEntry(t, s, ns.Fence(), withCount)
+
+	if stored.ValueCount == nil || *stored.ValueCount != count {
+		t.Fatalf("stored value count = %+v, want %d", stored.ValueCount, count)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if listing.Total != 2 || len(listing.Entries) != 2 {
+		t.Fatalf("listing = %+v, want 2 entries", listing)
+	}
+
+	// The list answers newest first: the entry with the set count, then
+	// the old-format entry with a nil count.
+	if got := listing.Entries[0].ValueCount; got == nil || *got != count {
+		t.Fatalf("newest value count = %+v, want %d", got, count)
+	}
+
+	if got := listing.Entries[1].ValueCount; got != nil {
+		t.Fatalf("oldest value count = %+v, want nil", got)
+	}
+
+	ordered := []audit.Entry{listing.Entries[1], listing.Entries[0]}
+	checkValidChain(t, ordered)
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 2 {
+		t.Fatalf("check = %+v, want valid with 2 entries", check)
 	}
 }
 

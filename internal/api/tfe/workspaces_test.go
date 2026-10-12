@@ -94,12 +94,14 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -736,6 +738,24 @@ func (p pagingWorkspaces) ReadState(
 	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) ReadResources(
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
+) (workspace.StatePage, error) {
+	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) ReadResource(
+	_ context.Context, _ workspace.StateVersionID, _ string,
+) (workspace.StateDetail, error) {
+	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, workspace.ErrStateVersionNotFound
+}
+
 func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, workspace.ErrStateVersionNotFound
 }
@@ -757,12 +777,14 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    newPagingWorkspaces(t),
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     newPagingWorkspaces(t),
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

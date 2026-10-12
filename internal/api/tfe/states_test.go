@@ -171,12 +171,14 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       base,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        base,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -252,6 +254,26 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			target:  "/api/v2/state-version-outputs/sv-test123.greeting",
 			body:    "",
 			actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
+			name:    "masked resource list",
+			pattern: "GET /api/v2/state-versions/{state_version_id}/resources",
+			method:  http.MethodGet,
+			target:  "/api/v2/state-versions/sv-test123/resources",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
+			name:    "one masked resource",
+			pattern: "GET /api/v2/state-versions/{state_version_id}/resources/{address}",
+			method:  http.MethodGet,
+			target:  "/api/v2/state-versions/sv-test123/resources/terraform_data.smoke",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -758,16 +780,19 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Force:           tc.force,
 			Sealed:          false,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
+			SensitiveMarks:  nil,
 		})
 	}
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1049,12 +1074,14 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1158,12 +1185,14 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 	t.Parallel()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -87,12 +87,14 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -338,12 +340,14 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 	stores := &raceWorkspaces{stubWorkspaces: stubWorkspaces{}, mu: sync.Mutex{}, holder: ""}
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: concurrentAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stores,
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  concurrentAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stores,
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

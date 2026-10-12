@@ -71,6 +71,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Target:      target,
 		Key:         nil,
 		Region:      "test",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -84,17 +85,16 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          backups,
-		Restores:         restores,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		KeyEncryptionKey: false,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       backups,
+		Restores:      restores,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -522,15 +522,14 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerRestore: true,
 		}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       fix.namespaces,
-		Backups:          fix.backups,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		KeyEncryptionKey: false,
+		Logger:      slog.New(slog.DiscardHandler),
+		Namespaces:  fix.namespaces,
+		Backups:     fix.backups,
+		Restores:    nil,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal),
+		Metrics:     stubMetrics{},
+		Version:     "test",
+		Schema:      stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -709,17 +708,16 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           stubSchema{migrations: nil},
-		KeyEncryptionKey: false,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
