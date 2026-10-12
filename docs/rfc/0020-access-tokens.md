@@ -81,3 +81,11 @@ The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 ## Outcome
 
 None yet.
+
+### Notes
+
+We should also support arbitrary OIDC and JWT issuers and mTLS certificates (SPIFFE or otherwise) and discourage the use
+of static tokens for machines and workloads.
+
+The maximum token lifetime and which ones users can issue must be configurable by the admin (I guess the latter just
+becomes part of the FGA model)

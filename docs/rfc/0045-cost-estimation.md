@@ -25,6 +25,7 @@ OpenTaco, Terrakube).
 ## Open questions
 
 - Which estimator, and is it a recommended step or a built-in?
+  - Find out what competitors do, and do it better.
 
 ## Outcome
 

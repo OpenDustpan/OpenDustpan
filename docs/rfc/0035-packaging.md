@@ -35,3 +35,7 @@ OpenTofu refuses plain HTTP, and no decision says where TLS ends.
 
 The TLS, binary and container image part is accepted as ADR 27 on
 2026-10-11. The rest has no outcome yet.
+
+### Comments
+
+> Built-in TLS is fine but including ACME seems like a stretch.

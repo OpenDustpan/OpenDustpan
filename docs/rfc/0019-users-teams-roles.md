@@ -51,15 +51,22 @@ The project owner chose this export. It helps a reviewer check access.
 
 - Which built-in roles, and is "planner" one of them (env zero has Planner and
   Deployer)?
+  - Copy-pasta from the competitors here, rather too comprehensive than too narrow.
 - Can a role be granted on a label (RFC 4), as Spacelift grants on spaces and
   Pulumi on tags?
+  - Yes.
 - How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
+  - No idea yet. Research and/or spike.
 - Does the export list only current grants, or past grants as well?
+  - Cool idea. It would be cool to do both a historic audit export (between two timestamps), and a snapshot of the
+    current.
 - Does the export cover grants on every object, or only on namespaces and
   units?
+  - every grant. But the export can allow scoping when it's generated.
 - How does the export show a principal that never signed in or never used an
   access token?
+  - It shows the last accessed time as "Never"?
 
 ## Owner direction (2026-10-11)
 
@@ -75,3 +82,8 @@ The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 ## Outcome
 
 None yet.
+
+### Comments
+
+Teams are too narrow. In most businesses, "teams" are a mess. Users switch teams, they temporarily join projects on
+different teams, etc. So long as we assume that a user can be a member of more than one group we should be fine.

@@ -97,11 +97,11 @@ request. A broken link fails the build.
 `opendustpan.org` holds the landing page and the docs. One website
 repository builds both in one Astro build, and one deploy publishes both.
 
-| Path | Content | Made with |
-| --- | --- | --- |
-| `/` | The landing page: what OpenDustpan is, the tools it works with, the quickstart, links to the docs and to the code repository | A custom Astro page, `src/pages/index.astro` |
-| `/docs/...` | The docs, with the sections below | Starlight, from the Markdown pages of this repository |
-| `/opendustpan/...` | The `go-import` answers for the Go module path | Static pages that the build makes (see "The Go module path") |
+| Path               | Content                                                                                                                      | Made with                                                    |
+|--------------------|------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
+| `/`                | The landing page: what OpenDustpan is, the tools it works with, the quickstart, links to the docs and to the code repository | A custom Astro page, `src/pages/index.astro`                 |
+| `/docs/...`        | The docs, with the sections below                                                                                            | Starlight, from the Markdown pages of this repository        |
+| `/opendustpan/...` | The `go-import` answers for the Go module path                                                                               | Static pages that the build makes (see "The Go module path") |
 
 Starlight can make a landing page itself: a page with `template: splash`
 and a `hero` block has no sidebar and shows a title, a tagline, an image and
@@ -125,17 +125,17 @@ Sort the pages by Diataxis: each page has one type and one reader. A
 public file in the website repository records the sections, the type of
 each, and its reader, as Temporal does.
 
-| Section | Type | Content |
-| --- | --- | --- |
-| Get started | Tutorial | One quickstart per CLI: Pulumi CLI, OpenTofu. Each ends at a working `up` or `apply`. |
-| Migrate in | How-to | Import state from each other backend: Pulumi Cloud, Pulumi DIY backends, HCP Terraform and TFE, OpenTofu backends. |
-| Migrate out | How-to | Move each unit from OpenDustpan to each other backend, with its history. The same weight as Migrate in. |
-| How-to | How-to | Back up and restore, upgrade, S3 storage, TLS behind a proxy. |
-| Operate | How-to | Observe the server, probes, metrics, maintenance mode, size limits. |
-| Reference | Reference | Configuration, the installation API from its OpenAPI document, the tested CLI versions, error messages. |
-| Explanation | Explanation | Architecture, the glossary. The security model: sign-in, roles, encryption at rest, where keys live, no telemetry. |
-| Compliance | Reference | For operators: which features support controls of DORA, NIS2, PCI DSS and ISO 27001. Examples: the audit log, backup and restore tests, change records, MFA through the identity provider, export. Each item says "shipped" or "planned". The page says "This is not legal advice" and claims no compliance and no certification. |
-| Compare | Explanation | OpenDustpan next to other backends, with "When not to use OpenDustpan". |
+| Section     | Type        | Content                                                                                                                                                                                                                                                                                                                           |
+|-------------|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Get started | Tutorial    | One quickstart per CLI: Pulumi CLI, OpenTofu. Each ends at a working `up` or `apply`.                                                                                                                                                                                                                                             |
+| Migrate in  | How-to      | Import state from each other backend: Pulumi Cloud, Pulumi DIY backends, HCP Terraform and TFE, OpenTofu backends.                                                                                                                                                                                                                |
+| Migrate out | How-to      | Move each unit from OpenDustpan to each other backend, with its history. The same weight as Migrate in.                                                                                                                                                                                                                           |
+| How-to      | How-to      | Back up and restore, upgrade, S3 storage, TLS behind a proxy.                                                                                                                                                                                                                                                                     |
+| Operate     | How-to      | Observe the server, probes, metrics, maintenance mode, size limits.                                                                                                                                                                                                                                                               |
+| Reference   | Reference   | Configuration, the installation API from its OpenAPI document, the tested CLI versions, error messages.                                                                                                                                                                                                                           |
+| Explanation | Explanation | Architecture, the glossary. The security model: sign-in, roles, encryption at rest, where keys live, no telemetry.                                                                                                                                                                                                                |
+| Compliance  | Reference   | For operators: which features support controls of DORA, NIS2, PCI DSS and ISO 27001. Examples: the audit log, backup and restore tests, change records, MFA through the identity provider, export. Each item says "shipped" or "planned". The page says "This is not legal advice" and claims no compliance and no certification. |
+| Compare     | Explanation | OpenDustpan next to other backends, with "When not to use OpenDustpan".                                                                                                                                                                                                                                                           |
 
 Each page carries a label for the tool it covers: Pulumi CLI, OpenTofu, or
 both.
@@ -225,15 +225,15 @@ This comparison uses the official docs and price pages in the sources
 below, read on 2026-10-11. "Unconfirmed" marks what that reading could not
 check. The site is small: under 10 GB of traffic a month.
 
-| | Cloudflare Workers static assets | GitHub Pages | Netlify Free | S3 and CloudFront free tier |
-| --- | --- | --- | --- | --- |
-| Cost | $0 | $0 | $0, with a hard cap of 300 credits a month | $0 |
-| Private repository, free plan | Yes, deploy from GitHub Actions with `wrangler` | No. The free plan serves Pages from public repositories only | Organization repositories need Pro. Deploy from Actions: unconfirmed | Yes, deploy from GitHub Actions |
-| Apex domain with HTTPS | Yes. The DNS zone of `opendustpan.org` must move to Cloudflare | Yes, with A and AAAA records | Yes | Yes, with Route 53. Detail unconfirmed |
-| Deploy flow | Actions: `astro build`, then `wrangler deploy` | Actions: `astro build`, `upload-pages-artifact`, `deploy-pages` | Git integration or `netlify deploy` | Actions: `astro build`, `aws s3 sync`, cache invalidation |
-| Preview per pull request | Yes, with Workers Builds | None built in (unconfirmed) | Yes | None built in |
-| `go-import` on every path | One rule in `_redirects`: `/opendustpan/* /go-import.html 200` | No rewrites: a static page per package path, and the tag in `404.html` | One rewrite rule | An edge function or the error page (unconfirmed) |
-| Limits that matter | 100,000 Worker requests a day. Requests for static files are free | 1 GB site, 100 GB a month, no use for an online business | Each production deploy costs 15 credits, and at 0 credits all sites stop | 1 million requests and 100 GB a month |
+|                               | Cloudflare Workers static assets                                  | GitHub Pages                                                           | Netlify Free                                                             | S3 and CloudFront free tier                               |
+|-------------------------------|-------------------------------------------------------------------|------------------------------------------------------------------------|--------------------------------------------------------------------------|-----------------------------------------------------------|
+| Cost                          | $0                                                                | $0                                                                     | $0, with a hard cap of 300 credits a month                               | $0                                                        |
+| Private repository, free plan | Yes, deploy from GitHub Actions with `wrangler`                   | No. The free plan serves Pages from public repositories only           | Organization repositories need Pro. Deploy from Actions: unconfirmed     | Yes, deploy from GitHub Actions                           |
+| Apex domain with HTTPS        | Yes. The DNS zone of `opendustpan.org` must move to Cloudflare    | Yes, with A and AAAA records                                           | Yes                                                                      | Yes, with Route 53. Detail unconfirmed                    |
+| Deploy flow                   | Actions: `astro build`, then `wrangler deploy`                    | Actions: `astro build`, `upload-pages-artifact`, `deploy-pages`        | Git integration or `netlify deploy`                                      | Actions: `astro build`, `aws s3 sync`, cache invalidation |
+| Preview per pull request      | Yes, with Workers Builds                                          | None built in (unconfirmed)                                            | Yes                                                                      | None built in                                             |
+| `go-import` on every path     | One rule in `_redirects`: `/opendustpan/* /go-import.html 200`    | No rewrites: a static page per package path, and the tag in `404.html` | One rewrite rule                                                         | An edge function or the error page (unconfirmed)          |
+| Limits that matter            | 100,000 Worker requests a day. Requests for static files are free | 1 GB site, 100 GB a month, no use for an online business               | Each production deploy costs 15 credits, and at 0 credits all sites stop | 1 million requests and 100 GB a month                     |
 
 All four build in GitHub Actions. The GitHub Free plan includes 2,000
 Actions minutes a month for private repositories, on runners that GitHub
@@ -274,9 +274,11 @@ Rejected:
 Sources:
 
 - GitHub plans: <https://docs.github.com/en/get-started/learning-about-github/githubs-plans>
-- GitHub Pages limits and 404 pages: <https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits>,
+- GitHub Pages limits and 404
+  pages: <https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits>,
   <https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-custom-404-page-for-your-github-pages-site>
-- GitHub Pages custom domains: <https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site>
+- GitHub Pages custom
+  domains: <https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site>
 - Cloudflare Workers static assets: <https://developers.cloudflare.com/workers/static-assets/>,
   <https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/>,
   <https://developers.cloudflare.com/workers/platform/pricing/>
@@ -311,9 +313,12 @@ sections, the URL policy and the landing page rules.
 - Do the pages stay in `docs/` or move to `website/docs/`? `docs/` keeps all
   links working with no redirect. A move separates user docs from ADRs and
   RFCs.
+  - Yes.
 - Do ADRs and RFCs appear on the site, or stay on GitHub only?
+  - GitHub only for now.
 - Does the terminal recording on the landing page come from a committed VHS
   script that CI runs? VHS is a new dependency too.
+  - Sure.
 
 ## Outcome
 

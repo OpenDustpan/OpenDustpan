@@ -31,8 +31,11 @@ requests in RFC 16) but have no common log.
 
 - Is the audit log a port with adapters (database, file, syslog, object
   storage)?
+  - Yes.
 - Which events are always on, and which can an operator turn off?
+  - It's either fully on or off until someone decides otherwise.
 - How does the log stay tamper-evident, for example with a hash chain?
+  - Spike it if it's required. I don't know if it is, and how this would work.
 
 ## Outcome
 

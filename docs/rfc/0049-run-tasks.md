@@ -1,6 +1,7 @@
 ---
 rfc: 49
-title: Run tasks: external checks with callbacks
+title:
+  Run tasks: external checks with callbacks
 status: draft
 created: 2026-10-10
 ---
@@ -26,6 +27,8 @@ an external service.
 ## Open questions
 
 - Is this a kind of policy (RFC 13), or a kind of job step (RFC 6)?
+  - This is a policy steps. As a rule, jobs do not run anything except IaC code (and their dependencies) and die. We
+    should never shoehorn other tasks into job runners.
 
 ## Outcome
 
