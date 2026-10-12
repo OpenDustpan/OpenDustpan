@@ -607,6 +607,22 @@ func CoverageAllowlist() []AllowEntry {
 			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
 				"The harness step restores a version and checks it with state pull.",
 		},
+	}
+
+	return slices.Concat(
+		allowed,
+		backupAllowEntries(),
+		namespaceAllowEntries(),
+		maintenanceAllowEntries(),
+		operatorAllowEntries(),
+		stateAllowEntries(),
+	)
+}
+
+// operatorAllowEntries returns the operator routes and probes that no CLI
+// calls.
+func operatorAllowEntries() []AllowEntry {
+	return []AllowEntry{
 		{
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
@@ -623,8 +639,35 @@ func CoverageAllowlist() []AllowEntry {
 			Reason:       "Operator probe: no CLI calls it.",
 		},
 	}
+}
 
-	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries(), maintenanceAllowEntries())
+// stateCoveringTest names the test that proves the masked state routes
+// instead of a CLI: no CLI version in the matrix calls them.
+const stateCoveringTest = "TestCLIs (pulumiMaskedStateScenario)"
+
+// stateAllowEntries returns the console state routes that no CLI calls. The
+// harness steps of stateCoveringTest drive them directly after two ups.
+func stateAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/resources",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never lists masked resources. " +
+				"The harness step reads the list after two ups and checks masking and changed markers.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/resources/{urn}",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
+				"The harness step reads it after two ups and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/outputs",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never reads masked outputs. " +
+				"The harness step reads them after two ups and checks masking.",
+		},
+	}
 }
 
 // namespaceCoveringTest names the test that proves the namespace create route

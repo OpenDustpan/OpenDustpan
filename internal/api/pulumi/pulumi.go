@@ -1,6 +1,17 @@
 // Package pulumi serves the HTTP API that the Pulumi CLI speaks to its backend
 // (the "service" or "httpstate" backend). The web console uses the same API.
 //
+// Besides login, stack management and the update cycle, it serves the masked
+// state read of ADR 41: GET
+// /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources (a
+// paged resource list with a changed marker per resource, where {version} is
+// a stack version or "latest"), GET .../state/{version}/resources/{urn} (one
+// resource with masked inputs and outputs) and GET
+// .../state/{version}/outputs (the masked stack outputs). Each secret value
+// answers as a marker with its value path, never as plain or ciphertext.
+// Clients path-escape the URN in the one-resource route, so that "/" in a
+// type token or a resource name becomes "%2F" and the URN stays one segment.
+//
 // Only the endpoints needed to log in and manage stacks exist so far. The CLI's
 // API is not a published, versioned specification, so every endpoint here must
 // be covered by the end-to-end suite that drives real CLI versions.
@@ -757,7 +768,8 @@ func classify(err error) (int, string) {
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState):
+		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
+		errors.Is(err, stack.ErrResourceNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):
 		return http.StatusBadRequest, hasResourcesMessage
