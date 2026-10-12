@@ -74,6 +74,29 @@ The server keeps remote state and locks for local execution only.
 - A state that the client encrypted answers 409 with `encrypted-by-client`
   on the resource routes. The outputs list still works for it.
 
+## One token for each CI job
+
+Give each CI job or runner that writes OpenTofu state its own token. The
+server checks the lock holder by subject, and two clients that use one token
+are one subject. So a client that shares the token of the lock holder can
+write state under that lock, for example with `tofu apply -lock=false`, and
+the server cannot refuse it. With distinct tokens, the server answers 409
+with `is locked by User` and the holder. ADR 25 decided this rule. RFC 63
+holds the open question of a stronger check.
+
+Each token in `DUSTPAN_ADMIN_TOKEN` or in the token file signs in as its own
+subject: `admin`, `admin-2`, and so on. These limits apply today:
+
+- Each token is a full administrator.
+- The server reads the tokens only when it starts. A change to the list
+  needs a restart.
+
+Scoped access tokens are RFC 20. The
+[configuration reference](reference/configuration.md) lists the token
+settings. See [ADR 25](adr/0025-opentofu-through-the-tfe-compatible-api.md),
+[RFC 63](rfc/0063-workspace-lock-holder.md) and
+[RFC 20](rfc/0020-access-tokens.md).
+
 ## State at rest
 
 The server seals each new state blob and each new outputs document with the
