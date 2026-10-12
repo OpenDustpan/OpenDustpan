@@ -313,8 +313,8 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    restored_from, sealed, sensitive_marks, fenced_by
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateStateVersionParams struct {
@@ -337,6 +337,7 @@ type CreateStateVersionParams struct {
 	RestoredFrom      string
 	Sealed            bool
 	SensitiveMarks    []byte
+	FencedBy          string
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -360,6 +361,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.RestoredFrom,
 		arg.Sealed,
 		arg.SensitiveMarks,
+		arg.FencedBy,
 	)
 	return err
 }
@@ -773,7 +775,7 @@ const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks
+       sv.sensitive_marks, sv.fenced_by
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?
@@ -804,6 +806,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.RestoredFrom,
 		&i.Sealed,
 		&i.SensitiveMarks,
+		&i.FencedBy,
 	)
 	return i, err
 }
@@ -1047,7 +1050,7 @@ func (q *Queries) GetStackVersion(ctx context.Context, arg GetStackVersionParams
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by
 FROM state_versions
 WHERE id = ?
 `
@@ -1075,6 +1078,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.RestoredFrom,
 		&i.Sealed,
 		&i.SensitiveMarks,
+		&i.FencedBy,
 	)
 	return i, err
 }
@@ -1633,7 +1637,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -1675,6 +1679,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.RestoredFrom,
 			&i.Sealed,
 			&i.SensitiveMarks,
+			&i.FencedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -1998,7 +2003,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) 
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -2042,6 +2047,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.RestoredFrom,
 			&i.Sealed,
 			&i.SensitiveMarks,
+			&i.FencedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -2059,7 +2065,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by
 FROM state_versions
 WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
 ORDER BY id ASC
@@ -2097,6 +2103,7 @@ func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion
 			&i.RestoredFrom,
 			&i.Sealed,
 			&i.SensitiveMarks,
+			&i.FencedBy,
 		); err != nil {
 			return nil, err
 		}

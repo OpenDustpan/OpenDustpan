@@ -234,32 +234,7 @@ func (s *Store) CreateStateVersion(
 			)
 		}
 
-		err = q.CreateStateVersion(ctx, db.CreateStateVersionParams{
-			ID:                row.ID,
-			WorkspaceID:       row.WorkspaceID,
-			Status:            row.Status,
-			Serial:            row.Serial,
-			Lineage:           row.Lineage,
-			Md5:               row.MD5,
-			Size:              row.Size,
-			ContentKey:        row.ContentKey,
-			Outputs:           row.Outputs,
-			Force:             row.Force,
-			Sealed:            row.Sealed,
-			SensitiveMarks:    row.SensitiveMarks,
-			UploadDigest:      row.UploadDigest,
-			UploadExpiresAtMs: row.UploadExpiresAtMs,
-			Holder:            row.Holder,
-			LockID:            row.LockID,
-			CreatedAtMs:       row.CreatedAtMs,
-			FinalizedAtMs:     row.FinalizedAtMs,
-			RestoredFrom:      row.RestoredFrom,
-		})
-		if err != nil {
-			return fmt.Errorf("insert state version: %w", err)
-		}
-
-		return nil
+		return insertStateVersion(ctx, q, row)
 	})
 }
 
@@ -528,6 +503,84 @@ func (s *Store) FinalizeStateVersion(
 	})
 }
 
+// FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
+// inserts sv as the finalized current version and moves the workspace pointer
+// to it, in one fenced transaction. The inventory entry moves with the release.
+func (s *Store) FenceAndUnlock(
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv), expect)
+	})
+}
+
+// fenceAndUnlockInTx writes the release of w's lock and the fence version row
+// in the caller's transaction. The workspace row is locked first, so a
+// concurrent write waits for this one. The stored workspace must be locked, and
+// its stored revision must be w.Revision-1; a write that fails either check
+// changes nothing.
+func fenceAndUnlockInTx(
+	ctx context.Context, q *db.Queries, w workspace.Workspace, row codec.StateVersionRow,
+	expect workspace.StateVersionID,
+) error {
+	wrow, err := lockWorkspace(ctx, q, w.ID.String())
+	if err != nil {
+		return err
+	}
+
+	if wrow.LockHolder == "" {
+		return workspace.ErrNotLocked
+	}
+
+	if fenceErr := checkFenceCurrent(ctx, q, wrow.ID, expect, row.Serial); fenceErr != nil {
+		return fenceErr
+	}
+
+	released := codec.ToWorkspaceRow(w)
+
+	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
+		Revision:         released.Revision,
+		LockID:           released.LockID,
+		LockHolder:       released.LockHolder,
+		LockReason:       released.LockReason,
+		LockedAtMs:       released.LockedAtMs,
+		UpdatedAtMs:      released.UpdatedAtMs,
+		ID:               released.ID,
+		ExpectedRevision: released.Revision - 1,
+	})
+	if err != nil {
+		return fmt.Errorf("release workspace lock: %w", err)
+	}
+
+	if n == 0 {
+		return workspace.ErrConcurrentModification
+	}
+
+	if insertErr := insertStateVersion(ctx, q, row); insertErr != nil {
+		return insertErr
+	}
+
+	setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
+		CurrentStateVersionID: row.ID,
+		UpdatedAtMs:           row.FinalizedAtMs,
+		ID:                    row.WorkspaceID,
+	})
+	if setErr != nil {
+		return fmt.Errorf("set current state: %w", setErr)
+	}
+
+	if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, released.ID, released.UpdatedAtMs); pubErr != nil {
+		return pubErr
+	}
+
+	return writeInventoryLock(ctx, q, inventoryLockKey{
+		namespace: w.Ref.Namespace.String(),
+		tool:      inventoryToolOpenTofu,
+		name:      w.Ref.Name.String(),
+	}, workspaceLock(w.Lock))
+}
+
 // ListUnsealedStateVersions implements workspace.StateStore: the finalized
 // versions that still hold plain content, ordered by version ID.
 func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
@@ -768,6 +821,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Force:             row.Force,
 		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
+		FencedBy:          row.FencedBy,
 		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
@@ -808,4 +862,68 @@ func lockOperation(reason string) string {
 	}
 
 	return reason
+}
+
+// insertStateVersion writes one state version row in the caller's transaction.
+func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+	err := q.CreateStateVersion(ctx, db.CreateStateVersionParams{
+		ID:                row.ID,
+		WorkspaceID:       row.WorkspaceID,
+		Status:            row.Status,
+		Serial:            row.Serial,
+		Lineage:           row.Lineage,
+		Md5:               row.MD5,
+		Size:              row.Size,
+		ContentKey:        row.ContentKey,
+		Outputs:           row.Outputs,
+		Force:             row.Force,
+		Sealed:            row.Sealed,
+		SensitiveMarks:    row.SensitiveMarks,
+		UploadDigest:      row.UploadDigest,
+		UploadExpiresAtMs: row.UploadExpiresAtMs,
+		Holder:            row.Holder,
+		LockID:            row.LockID,
+		CreatedAtMs:       row.CreatedAtMs,
+		FinalizedAtMs:     row.FinalizedAtMs,
+		RestoredFrom:      row.RestoredFrom,
+		FencedBy:          row.FencedBy,
+	})
+	if err != nil {
+		return fmt.Errorf("insert state version: %w", err)
+	}
+
+	return nil
+}
+
+// checkFenceCurrent checks that a fence was made from the current version the
+// caller read: the current version is expect, and the fence serial is one more
+// than its serial. The read runs in the same transaction as the write, so a
+// finalize that landed after the caller read the current version fails here.
+// A workspace with no current state matches the empty expect, and accepts any
+// serial.
+func checkFenceCurrent(
+	ctx context.Context, q *db.Queries, workspaceID string, expect workspace.StateVersionID, serial int64,
+) error {
+	current, err := q.GetCurrentStateVersion(ctx, workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if expect != "" {
+			return workspace.ErrConcurrentModification
+		}
+
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read current state: %w", err)
+	}
+
+	if current.ID != expect.String() {
+		return workspace.ErrConcurrentModification
+	}
+
+	if serial != current.Serial+1 {
+		return fmt.Errorf("%w: fence serial %d, current %d", workspace.ErrStaleSerial, serial, current.Serial)
+	}
+
+	return nil
 }

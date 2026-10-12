@@ -515,6 +515,7 @@ func seedRemoteVersion(t *testing.T, f sealFixture) (workspace.StateVersionID, b
 		Sealed:          false,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
+		FenceBy:         "",
 	}
 
 	if err = f.store.CreateStateVersion(ctx, pending, remote.Fence(), 10); err != nil {

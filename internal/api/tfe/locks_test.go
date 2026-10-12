@@ -44,7 +44,7 @@ func (conflictWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrLockedByOther
 }
 
-func (conflictWorkspaces) ForceUnlock(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+func (conflictWorkspaces) ForceUnlock(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}

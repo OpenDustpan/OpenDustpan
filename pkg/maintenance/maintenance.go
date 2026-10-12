@@ -35,6 +35,10 @@ const (
 	StateMaintenance State = "maintenance"
 )
 
+// maintenanceSubject names the principal of a force-unlock that maintenance
+// mode makes, so the fence version of each released workspace says where it came from.
+const maintenanceSubject = "maintenance"
+
 // DefaultCacheLimit bounds how long a Watcher trusts its read of the
 // installation state. It is short on purpose: the restore apply step of a
 // later issue must wait until every instance can see maintenance mode, and
@@ -546,8 +550,11 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 		return u.reference, true, nil
 	}
 
-	if _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID); err != nil {
-		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) {
+	if _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject); err != nil {
+		// A client-encrypted state cannot be fenced, so its lock stays. The
+		// enter goes on and does not report the unit as released.
+		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) ||
+			errors.Is(err, workspace.ErrClientEncrypted) {
 			return "", false, nil
 		}
 

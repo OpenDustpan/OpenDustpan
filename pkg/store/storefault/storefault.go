@@ -469,6 +469,19 @@ func (s *Store) FinalizeStateVersion(
 	return s.inner.FinalizeStateVersion(ctx, sv, fence)
 }
 
+// FenceAndUnlock releases the lock and makes the fence version current,
+// unless a fault fires first.
+func (s *Store) FenceAndUnlock(
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "FenceAndUnlock"); err != nil {
+		return err
+	}
+
+	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence)
+}
+
 // CurrentStateVersion returns the workspace's current state, unless a fault
 // fires first.
 func (s *Store) CurrentStateVersion(
