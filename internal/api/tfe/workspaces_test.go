@@ -706,7 +706,7 @@ func (p pagingWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (p pagingWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+func (p pagingWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID, _ string) (workspace.Workspace, error) {
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 

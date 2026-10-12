@@ -372,7 +372,7 @@ func (coverageWorkspaces) Unlock(
 	return none, workspace.ErrNotFound
 }
 
-func (coverageWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+func (coverageWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID, _ string) (workspace.Workspace, error) {
 	var none workspace.Workspace
 
 	return none, workspace.ErrNotFound

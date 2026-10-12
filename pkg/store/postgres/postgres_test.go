@@ -2422,6 +2422,7 @@ func declareAddedVersion(
 		Sealed:          false,
 		RestoredFrom:    from,
 		SensitiveMarks:  nil,
+		FenceBy:         "",
 	}
 }
 

@@ -781,6 +781,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Sealed:          false,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
 			SensitiveMarks:  nil,
+			FenceBy:         "",
 		})
 	}
 

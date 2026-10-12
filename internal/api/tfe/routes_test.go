@@ -266,7 +266,7 @@ func (stubWorkspaces) Unlock(_ context.Context, id workspace.ID, _ string) (work
 	return ws, nil
 }
 
-func (stubWorkspaces) ForceUnlock(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+func (stubWorkspaces) ForceUnlock(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
 	ws, err := stubWorkspaceByID(id)
 	if err != nil {
 		return workspace.Workspace{}, err
@@ -324,6 +324,7 @@ func (stubWorkspaces) BeginState(
 			Sealed:          false,
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
+			FenceBy:         "",
 		},
 	}, nil
 }
@@ -384,6 +385,7 @@ func stubStateVersion() workspace.StateVersion {
 		Sealed:          false,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
+		FenceBy:         "",
 	}
 }
 
@@ -1450,7 +1452,7 @@ func (errorWorkspaces) Unlock(
 	return workspace.Workspace{}, errTestInternal
 }
 
-func (errorWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+func (errorWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID, _ string) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
 

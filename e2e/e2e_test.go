@@ -3862,6 +3862,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The list route serves the two versions with the go-tfe query shape.
 	tofuStateVersionListScenario(t, env)
 
+	// The stale job's declare after a force-unlock. It runs after the list, which
+	// counts the versions this scenario has written so far.
+	tofuForceUnlockFenceScenario(t, env)
+
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
 	tofuSealedStateScenario(t, env)
@@ -5645,9 +5649,9 @@ func stateVersionListBase() string {
 		"&filter[workspace][name]=" + e2e.Workspace
 }
 
-// checkStateVersionListTwo proves the list holds two versions, newest first,
-// with the holder, force and restored-from attributes on every entry.
-func checkStateVersionListTwo(body string) error {
+// checkStateVersionListThree checks the list after two applies and the fence
+// that the maintenance force enter wrote between them (ADR 44, decision 1).
+func checkStateVersionListThree(body string) error {
 	var raw struct {
 		Data []map[string]any `json:"data"`
 	}
@@ -5656,8 +5660,8 @@ func checkStateVersionListTwo(body string) error {
 		return fmt.Errorf("%w: decode state version list: %w", errUnexpected, err)
 	}
 
-	if len(raw.Data) != 2 {
-		return fmt.Errorf("%w: list holds %d versions, want 2: %s", errUnexpected, len(raw.Data), body)
+	if len(raw.Data) != 3 {
+		return fmt.Errorf("%w: list holds %d versions, want 3: %s", errUnexpected, len(raw.Data), body)
 	}
 
 	for _, item := range raw.Data {
@@ -5691,8 +5695,8 @@ func checkStateVersionListTwo(body string) error {
 		)
 	}
 
-	if doc.Meta.Pagination.TotalCount != 2 {
-		return fmt.Errorf("%w: total count is %d, want 2: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	if doc.Meta.Pagination.TotalCount != 3 {
+		return fmt.Errorf("%w: total count is %d, want 3: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
 	}
 
 	return nil
@@ -5712,9 +5716,9 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 		}
 
 		page := doc.Meta.Pagination
-		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 2 || page.TotalPages != 2 {
+		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 3 || page.TotalPages != 3 {
 			return fmt.Errorf(
-				"%w: pagination %+v, want page %d of size %d with 2 entries in 2 pages",
+				"%w: pagination %+v, want page %d of size %d with 3 entries in 3 pages",
 				errUnexpected,
 				page,
 				number,
@@ -5726,8 +5730,8 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 	}
 }
 
-// tofuStateVersionListScenario proves the list route after two applies: both
-// versions listed newest first with the added attributes, and page[size] and
+// tofuStateVersionListScenario proves the list route after two applies and the
+// fence between them: every version listed newest first with the added attributes, and page[size] and
 // page[number] respected. Every request uses the go-tfe query shape.
 func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -5739,7 +5743,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(body string) error {
-			if err := checkStateVersionListTwo(body); err != nil {
+			if err := checkStateVersionListThree(body); err != nil {
 				return err
 			}
 
@@ -5760,7 +5764,9 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(newest, 1, 1),
+		Check: func(body string) error {
+			return checkStateVersionListPage(newest, 1, 1)(body)
+		},
 		Name:   "list state versions first page",
 		Method: http.MethodGet,
 		Path:   base + "&page[size]=1&page[number]=1",
@@ -5769,7 +5775,9 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(oldest, 2, 1),
+		Check: func(body string) error {
+			return checkStateVersionListPage(oldest, 2, 1)(body)
+		},
 		Name:   "list state versions second page",
 		Method: http.MethodGet,
 		Path:   base + "&page[size]=1&page[number]=2",
@@ -6009,8 +6017,10 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 		t.Fatalf("decode state versions after restore: %v", err)
 	}
 
-	if len(doc.Data) != 4 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 4", len(doc.Data))
+	// The restore adds one version, and the apply after it adds one more: the
+	// restored version has the first greeting, so the apply changes the output.
+	if len(doc.Data) != 6 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 6", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
@@ -6048,11 +6058,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("decode state versions for restore: %v", err)
 	}
 
-	if len(doc.Data) != 2 {
-		t.Fatalf("list holds %d versions, want 2 before the restore", len(doc.Data))
+	if len(doc.Data) != 4 {
+		t.Fatalf("list holds %d versions, want 4 before the restore", len(doc.Data))
 	}
 
-	newest, oldest := doc.Data[0].ID, doc.Data[1].ID
+	// The first version is the oldest. The fence of the maintenance enter and
+	// the stale-job step sit between it and the newest, so it is not Data[1].
+	newest, oldest := doc.Data[0].ID, doc.Data[len(doc.Data)-1].ID
 	firstDownload := downloadStateVersion(ctx, t, env, oldest)
 	firstMD5 := md5Hex(firstDownload)
 

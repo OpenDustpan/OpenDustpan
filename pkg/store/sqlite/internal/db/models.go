@@ -138,6 +138,7 @@ type StateVersion struct {
 	RestoredFrom      string
 	Sealed            bool
 	SensitiveMarks    []byte
+	FencedBy          string
 }
 
 type Update struct {
