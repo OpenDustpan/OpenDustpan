@@ -1,13 +1,14 @@
 ---
 rfc: 63
 title: A workspace lock belongs to a principal, not to a client
-status: draft
+status: accepted
+adr: 44
 created: 2026-10-12
 ---
 
 # RFC 63. A workspace lock belongs to a principal, not to a client
 
-Status: draft.
+Status: accepted as ADR 44.
 
 ## Problem
 
@@ -199,4 +200,7 @@ Reasons:
 
 ## Outcome
 
-Empty until the RFC is accepted or dropped.
+Accepted on 2026-10-12 in a changed form ([ADR 44](../adr/0044-workspace-lock-fence-and-overrides.md)).
+The lock stays coordination between clients. A force-unlock fences the
+old holder with a new lineage. Forced writes and writes without the lock
+need an action and a switch that is off by default.
