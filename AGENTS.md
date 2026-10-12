@@ -178,15 +178,15 @@ skill (ADR 14):
 ## Rules for agent sessions
 
 - Read the coordination issue (#399) at the start of a session. If it does
-  not agree with GitHub, GitHub is correct.
-- Before you stop, update the "Handoff brief" comment of your workstream: what
-  is done, what is next, and the decisions that you made. Only the lead
-  session edits the body of #399.
-- Do one task in each session. Stop when the task is done or blocked. Do not
-  wait in a session for CI or for a review.
+  not agree with GitHub, use the state on GitHub.
+- Before you stop, update the "Handoff brief" comment of your workstream: the
+  work that you completed, the next step, and the decisions that you made.
+  Only the lead session edits the body of #399.
+- Do one task in each session. Stop when you complete the task or when it
+  cannot continue. Do not wait in a session for CI or for a review.
 - Do not merge a pull request. Only the owner, or the lead session that the
   owner names, merges.
-- Do not create, push, move or delete a Git tag. Do not create a GitHub
+- Do not create, push, move or remove a Git tag. Do not create a GitHub
   release. Only the owner does these.
 - Do not contact an upstream project. Do not open an issue, a pull request,
   a comment, a reaction or a star there, and do not post in its forums. You
