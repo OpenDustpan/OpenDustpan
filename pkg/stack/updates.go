@@ -538,7 +538,11 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 
 // Export returns the stack's latest checkpoint, or ErrNoState. A sequenced
 // save keeps the versioned bytes the CLI sent, so the export serves the
-// inner deployment they wrap.
+// inner deployment they wrap, while the digest still names the stored row.
+// A checkpoint whose blob cannot be read fails with ErrCheckpointUnavailable
+// and one whose bytes do not match its record with ErrCheckpointMismatch;
+// both still return the stored row identity (Update and Digest) with no
+// deployment, so the caller can name the checkpoint it could not read.
 func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 	cp, err := s.checkpoints.LatestCheckpoint(ctx, ref)
 	if err != nil {
@@ -547,7 +551,7 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 
 	resolved, err := s.resolveCheckpoint(ctx, cp)
 	if err != nil {
-		return Checkpoint{}, fmt.Errorf("export %s: %w", ref, err)
+		return cp, fmt.Errorf("export %s: %w", ref, err)
 	}
 
 	return innerDeployment(resolved), nil
@@ -585,18 +589,27 @@ type verbatimEnvelope struct {
 // them again: the inner bytes stay exactly as the CLI sent them. Anything
 // else, including a save that carries no envelope, serves as stored.
 func innerDeployment(cp Checkpoint) Checkpoint {
-	if cp.Sequence <= 0 || len(cp.Deployment) == 0 {
-		return cp
+	cp.Deployment = innerDeploymentBytes(cp.Deployment, cp.Sequence)
+
+	return cp
+}
+
+// innerDeploymentBytes returns the inner deployment of a sequenced save:
+// the deployment a versioned envelope wraps. Anything else, including a
+// save that carries no envelope, serves as stored. The delete guard counts
+// through this same path, so a sequenced save counts its resources, not
+// the envelope, which holds no resources array.
+func innerDeploymentBytes(deployment []byte, seq int64) []byte {
+	if seq <= 0 || len(deployment) == 0 {
+		return deployment
 	}
 
 	var env verbatimEnvelope
-	if err := json.Unmarshal(cp.Deployment, &env); err != nil || len(env.Deployment) == 0 {
-		return cp
+	if err := json.Unmarshal(deployment, &env); err != nil || len(env.Deployment) == 0 {
+		return deployment
 	}
 
-	cp.Deployment = []byte(env.Deployment)
-
-	return cp
+	return []byte(env.Deployment)
 }
 
 // MaxCheckpointBytes returns the largest checkpoint SaveCheckpoint accepts.

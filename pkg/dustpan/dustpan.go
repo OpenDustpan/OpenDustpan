@@ -607,17 +607,12 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("namespace service: %w", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now})
-	if err != nil {
-		return services{}, fmt.Errorf("stack service: %w", err)
-	}
-
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,
-		Stacks:             stacks,
+		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
 		Now:                cfg.now,
 		Logger:             cfg.logger,
@@ -625,6 +620,14 @@ func newServices(cfg settings) (services, error) {
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("update service: %w", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
+		State: updates,
+	})
+	if err != nil {
+		return services{}, fmt.Errorf("stack service: %w", err)
 	}
 
 	secrets, err := secret.NewService(secret.Config{

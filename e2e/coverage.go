@@ -155,7 +155,9 @@ func (coverageAuthorizer) Authorize(
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
-	stacks, err := stack.NewService(stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
 	}
@@ -218,7 +220,7 @@ func (coverageStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack,
 	return none, stack.ErrNotFound
 }
 
-func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return stack.ErrNotFound
 }
 
