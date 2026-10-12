@@ -102,6 +102,16 @@ type StateReader interface {
 	ReadResource(
 		ctx context.Context, id workspace.StateVersionID, address string,
 	) (workspace.StateDetail, error)
+	// DiffStates returns the diff of two finalized state versions: to is the
+	// newer side, from is the older one. Both versions must belong to the
+	// same workspace; a from version of another workspace fails with
+	// workspace.ErrStateVersionNotFound as if it did not exist. A state
+	// either side encrypted fails with workspace.ErrClientEncrypted.
+	// Cursor is "" or the NextCursor of an earlier page; size is the page
+	// size, or zero for the default page.
+	DiffStates(
+		ctx context.Context, to, from workspace.StateVersionID, cursor string, size int,
+	) (workspace.StateDiff, error)
 }
 
 // StateWriter is what the state write routes need: declare a version,

@@ -417,6 +417,12 @@ func (coverageWorkspaces) ReadResource(
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, workspace.ErrStateVersionNotFound
+}
+
 func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, workspace.ErrStateVersionNotFound
 }
@@ -794,6 +800,13 @@ func stateAllowEntries() []AllowEntry {
 			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
 			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
 				"The harness step reads it after two applies and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/diff",
+			CoveringTest: "TestCLIs (tofuDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two applies with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
 		},
 	}
 }
