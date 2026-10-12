@@ -445,8 +445,8 @@ const harnessKeyBytes = 32
 
 // newHarnessWrapper returns a key-encryption key wrapper over 32 random
 // bytes. Each instance starts on empty stores, so a new key per instance is
-// enough. The server seals OpenTofu state with it and cannot store state
-// without one.
+// enough. The server seals OpenTofu state with it (ADR 41 decision 10) and
+// cannot store state without one.
 func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 	key := make([]byte, harnessKeyBytes)
 	if _, err := rand.Read(key); err != nil {

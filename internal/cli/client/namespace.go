@@ -25,6 +25,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 // Sentinel errors of the namespace create subcommand. Each error text names
@@ -48,18 +50,8 @@ type namespaceFlags struct {
 }
 
 func (f *namespaceFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.server,
-		"server",
-		env(BackupServerEnvVar, ""),
-		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
-	)
-	fs.StringVar(
-		&f.caFile,
-		"ca-file",
-		"",
-		"PEM bundle of extra CA certificates to trust with the system store",
-	)
+	cli.ByFlag("server").String(fs, &f.server)
+	cli.ByFlag("ca-file").String(fs, &f.caFile)
 }
 
 // namespaceCreateRequest is the create body: the name of the namespace.

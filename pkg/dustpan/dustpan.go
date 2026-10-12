@@ -1229,9 +1229,9 @@ func newRestoreService(
 
 // sealAfterRestore returns the after-apply step of a restore: it seals the
 // OpenTofu state versions that the restored backup holds unsealed (ADR 41
-// decision 11), with the same job the server runs at start-up. Without a
-// key-encryption key it seals nothing. Nil means the server runs without a
-// workspace service, which NewServer never builds: every server wires one.
+// decision 11), with the same job the server runs at start-up. Nil means
+// no key-encryption key is configured: the restore seals nothing, and the
+// restored rows stay readable until a key is configured.
 func sealAfterRestore(
 	cfg settings, deps installationDeps,
 ) func(ctx context.Context) error {
