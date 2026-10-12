@@ -38,10 +38,10 @@ An S3-compatible target holds one object with a limit of 5 GiB. A SQL part above
 
 ## Check a backup
 
-Check a backup with the check command. It reads only the target. It needs no server, no database, and no key.
+Check a backup with the check command. It asks the server to check the backup in its configured target. The server reads its configured target. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
 ```sh
-opendustpan backup check --backup bkp-aaa --backup-target dir:/var/backups/dustpan
+opendustpan backup check --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
 ```
 
 A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key.
@@ -112,10 +112,10 @@ bootstrap admin token can restore into the empty installation.
 
 ## Upgrade the server
 
-Run the upgrade check before an upgrade. It reads the database and writes nothing. It needs no key and starts no server.
+Run the upgrade check before an upgrade. It asks the server for its version and the schema version of its database. It writes nothing. Only the server opens the database. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
 ```sh
-opendustpan upgrade check --database sqlite:/var/data/dustpan.db
+opendustpan upgrade check --server https://dustpan.example --ca-file ca.pem
 ```
 
 The command prints the binary version, the schema version of the database, the schema version that the binary needs, and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists.
