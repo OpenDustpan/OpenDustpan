@@ -75,14 +75,14 @@ licenses: ## Each module linked into the binary has a license file to ship, on e
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
 STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
-DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md)
+DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
 DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 
 # Words that claim quality instead of showing it, and emoji. The list and its
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
 
-docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference and ADRs from 14 on.
+docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
