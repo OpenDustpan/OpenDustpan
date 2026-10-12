@@ -783,33 +783,102 @@ func generateKeyFile(path string) ([]byte, error) {
 		}
 	}
 
+	contents := base64.StdEncoding.EncodeToString(key) + "\n"
+
+	if err := writeKeyFile(path, contents, writeKeyContents); err != nil {
+		return nil, err
+	}
+
+	return key, nil
+}
+
+// writeKeyContents writes contents to file. It is the write step of
+// writeKeyFile; tests give writeKeyFile a step that fails.
+func writeKeyContents(file *os.File, contents string) error {
+	if _, err := file.WriteString(contents); err != nil {
+		return fmt.Errorf("write key file: %w", err)
+	}
+
+	return nil
+}
+
+// writeKeyFile creates a new file at path with owner-only mode, writes
+// contents with write, and syncs the file and its directory before it
+// returns: a server must never wrap secrets with a key that a crash can
+// lose. It never overwrites a file that exists. On any error after the
+// create, it removes the file, so that no half-written key file stays for
+// the next start to read.
+func writeKeyFile(path, contents string, write func(*os.File, string) error) error {
 	//nolint:gosec // The operator chose the key file path; the mode stays owner-only.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyFileMode)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("key file %q already exists: refusing to overwrite: %w", path, err)
+			return fmt.Errorf("key file %q already exists: refusing to overwrite: %w", path, err)
 		}
 
-		return nil, fmt.Errorf("write key file: %w", err)
+		return fmt.Errorf("write key file: %w", err)
 	}
 
-	contents := base64.StdEncoding.EncodeToString(key) + "\n"
+	err = fillKeyFile(file, path, contents, write)
+	if err == nil {
+		err = syncDir(filepath.Dir(path))
+	}
 
-	if _, err := file.WriteString(contents); err != nil {
+	if err != nil {
+		_ = os.Remove(path) //nolint:errcheck // The first error is the one that matters.
+
+		return err
+	}
+
+	return nil
+}
+
+// fillKeyFile writes contents with write, then syncs, closes and protects
+// the new key file. It closes file on every path. It returns the error of
+// write as it is.
+func fillKeyFile(file *os.File, path, contents string, write func(*os.File, string) error) error {
+	if err := write(file, contents); err != nil {
 		_ = file.Close() //nolint:errcheck // The write error is the one that matters.
 
-		return nil, fmt.Errorf("write key file: %w", err)
+		return err
+	}
+
+	if err := file.Sync(); err != nil {
+		_ = file.Close() //nolint:errcheck // The sync error is the one that matters.
+
+		return fmt.Errorf("sync key file: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
-		return nil, fmt.Errorf("write key file: %w", err)
+		return fmt.Errorf("write key file: %w", err)
 	}
 
 	if err := os.Chmod(path, keyFileMode); err != nil {
-		return nil, fmt.Errorf("protect key file: %w", err)
+		return fmt.Errorf("protect key file: %w", err)
 	}
 
-	return key, nil
+	return nil
+}
+
+// syncDir syncs the directory dir, so that a new entry in it survives a
+// crash.
+func syncDir(dir string) error {
+	handle, err := os.Open(dir) //nolint:gosec // dir holds the key file that the operator chose.
+	if err != nil {
+		return fmt.Errorf("open key directory: %w", err)
+	}
+
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close() //nolint:errcheck // The sync error is the one that matters.
+
+		return fmt.Errorf("sync key directory: %w", err)
+	}
+
+	if err := handle.Close(); err != nil {
+		return fmt.Errorf("close key directory: %w", err)
+	}
+
+	return nil
 }
 
 // serveWithStores opens the blob stores, wires the server and serves until

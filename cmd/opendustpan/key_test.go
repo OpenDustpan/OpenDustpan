@@ -252,6 +252,68 @@ func TestMakeKeyFileLostRaceUsesExistingFile(t *testing.T) {
 	}
 }
 
+// errTestWrite is the error of the failing write step in
+// TestWriteKeyFileFailedWriteLeavesNoFile.
+var errTestWrite = errors.New("test write failure")
+
+// TestWriteKeyFileFailedWriteLeavesNoFile proves that a key file whose
+// write fails does not stay on disk: the next start must not read a
+// half-written key.
+func TestWriteKeyFileFailedWriteLeavesNoFile(t *testing.T) {
+	t.Parallel()
+
+	keyPath := filepath.Join(t.TempDir(), "dustpan.key")
+
+	failingWrite := func(file *os.File, contents string) error {
+		// Write half the contents, then fail, as a full disk might.
+		if _, err := file.WriteString(contents[:len(contents)/2]); err != nil {
+			t.Errorf("write half the key: %v", err)
+		}
+
+		return errTestWrite
+	}
+
+	err := writeKeyFile(keyPath, testKeyBase64()+"\n", failingWrite)
+	if !errors.Is(err, errTestWrite) {
+		t.Fatalf("write key file with a failing write: err = %v, want the write error", err)
+	}
+
+	if _, statErr := os.Stat(keyPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("key file after a failed write: stat err = %v, want no file", statErr)
+	}
+}
+
+// TestWriteKeyFileWritesContents proves that writeKeyFile with the real
+// write step leaves the full contents with owner-only mode.
+func TestWriteKeyFileWritesContents(t *testing.T) {
+	t.Parallel()
+
+	keyPath := filepath.Join(t.TempDir(), "dustpan.key")
+	contents := testKeyBase64() + "\n"
+
+	if err := writeKeyFile(keyPath, contents, writeKeyContents); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	got, readErr := os.ReadFile(keyPath) //nolint:gosec // The test reads the key file it wrote.
+	if readErr != nil {
+		t.Fatalf("read key file: %v", readErr)
+	}
+
+	if string(got) != contents {
+		t.Fatalf("key file = %q, want %q", got, contents)
+	}
+
+	info, statErr := os.Stat(keyPath)
+	if statErr != nil {
+		t.Fatalf("stat key file: %v", statErr)
+	}
+
+	if info.Mode().Perm() != keyFileMode {
+		t.Fatalf("key file mode = %o, want %o", info.Mode().Perm(), keyFileMode)
+	}
+}
+
 // TestPromptForKeyFileOverLongAnswerIsNo proves the prompt read is capped: an
 // answer longer than the limit counts as not yes.
 func TestPromptForKeyFileOverLongAnswerIsNo(t *testing.T) {
