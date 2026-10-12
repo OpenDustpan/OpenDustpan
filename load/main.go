@@ -449,6 +449,15 @@ func serveInstance(served instance) (string, func(context.Context), error) {
 		return "", noop, fmt.Errorf("authenticator: %w", err)
 	}
 
+	// The server seals OpenTofu state at rest, so the harness holds a
+	// key-encryption key like a server with a key set does. Without it
+	// every state upload fails when the workspace service seals the
+	// content.
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		return "", noop, fmt.Errorf("key wrapper: %w", err)
+	}
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(harnessRegion),
 		dustpan.WithNamespaceStore(served.ports.namespaces),
@@ -457,6 +466,7 @@ func serveInstance(served instance) (string, func(context.Context), error) {
 		dustpan.WithCheckpointStore(served.ports.checkpoints),
 		dustpan.WithEventStore(served.ports.events),
 		dustpan.WithSecretKeyStore(served.ports.keys),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithWorkspaceStore(served.ports.workspaces),
 		dustpan.WithStateStore(served.ports.states),
 		dustpan.WithBlobStore(served.blobs),

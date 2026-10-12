@@ -523,14 +523,15 @@ func (w *sizeHashWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// copyBufferSize moves one blob copy in chunks of this size, so the peak
-// memory of one blob in flight stays near it, never near the state size.
+// copyBufferSize sizes the counting pass buffer, so the passes that hash
+// without a target write hold one chunk at a time, never the state size.
+// The passes that write into the target stream through its Put instead.
 const copyBufferSize = 32 * 1024
 
 // copyBlob copies one blob the SQL data names from the live store to the
 // target and returns the manifest entry of the stored bytes. Every pass
-// streams the blob in chunks of copyBufferSize, so peak memory per blob
-// stays bounded by the chunk size, not by the state size. A plain blob
+// streams the blob without holding it whole, so peak memory per blob stays
+// bounded by the read chunk size, not by the state size. A plain blob
 // streams once, straight into the target, while MD5 and size accumulate; on
 // a mismatch the copy deletes the bad object and reports ErrCorrupt, so no
 // bad copy stays in the target as a good one. A sealed state blob opens
