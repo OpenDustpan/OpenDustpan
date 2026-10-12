@@ -57,12 +57,14 @@ func newWriteHandler(t *testing.T, ws tfe.WorkspaceService, base baseurl.Resolve
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    ws,
-		BaseURL:       base,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     ws,
+		BaseURL:        base,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

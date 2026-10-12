@@ -1155,7 +1155,26 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	env.Step(ctx, t, step("stack tag rm", nil, "stack", "tag", "rm", "team"))
 	env.Step(ctx, t, step("stack tag ls after rm", tagAbsent("team"), "stack", "tag", "ls"))
 
-	env.Step(ctx, t, step("up", checkCheckpointSaved(env, "up"), "up", "--yes", "--non-interactive"))
+	// Up decrypts the secret config value on the server, so it leaves
+	// tool-operation entries and no reveal entry (ADR 41 decision 9).
+	upUnit := "pulumi:" + org + "/" + e2e.Project + "/renamed"
+	upEntries := readAuditEntries(ctx, t, env, org)
+	upBefore := upAuditBaseline{
+		unit:    upUnit,
+		decrypt: countDecryptToolOperations(upEntries, upUnit),
+		reveal:  countReveals(upEntries),
+	}
+	env.Step(
+		ctx,
+		t,
+		step(
+			"up",
+			checkUpWritesToolOperationEntries(ctx, env, org, upBefore),
+			"up",
+			"--yes",
+			"--non-interactive",
+		),
+	)
 	exported := env.Step(ctx, t, step("stack export after up", exportHoldsReference, "stack", "export"))
 	env.Step(ctx, t, step("stack export hides secrets", exportHidesSecrets, "stack", "export"))
 	env.Step(ctx, t, step("stack history after up", historyShowsKinds("update"), "stack", "history", "--json"))
@@ -3110,6 +3129,8 @@ type auditListItem struct {
 	Subject   string `json:"subject"`
 	Action    string `json:"action"`
 	Object    string `json:"object"`
+	Version   string `json:"version"`
+	ValuePath string `json:"valuePath"`
 	SourceIP  string `json:"sourceIP"`
 	UserAgent string `json:"userAgent"`
 	Channel   string `json:"channel"`
@@ -3119,17 +3140,15 @@ type auditListItem struct {
 	Hash      string `json:"hash"`
 }
 
-// readAuditEntries lists the audit entries of org through the API.
-func readAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env, org string) []auditListItem {
-	t.Helper()
-
+// fetchAuditEntries lists the audit entries of org through the API.
+func fetchAuditEntries(ctx context.Context, env *e2e.Env, org string) ([]auditListItem, error) {
 	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization="+org, "")
 	if err != nil {
-		t.Fatalf("list audit entries: %v", err)
+		return nil, err
 	}
 
 	if status != http.StatusOK {
-		t.Fatalf("list audit entries answers %d, want %d (%s)", status, http.StatusOK, body)
+		return nil, fmt.Errorf("%w: list audit entries answers %d: %s", errUnexpected, status, body)
 	}
 
 	var got struct {
@@ -3138,14 +3157,26 @@ func readAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 	}
 
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
-		t.Fatalf("decode audit entries: %v (%s)", err, body)
+		return nil, fmt.Errorf("%w: decode audit entries: %w (%s)", errUnexpected, err, body)
 	}
 
 	if int64(len(got.Entries)) != got.Total {
-		t.Fatalf("entries = %d with total %d: %s", len(got.Entries), got.Total, body)
+		return nil, fmt.Errorf("%w: entries = %d with total %d: %s", errUnexpected, len(got.Entries), got.Total, body)
 	}
 
-	return got.Entries
+	return got.Entries, nil
+}
+
+// readAuditEntries lists the audit entries of org through the API.
+func readAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env, org string) []auditListItem {
+	t.Helper()
+
+	entries, err := fetchAuditEntries(ctx, env, org)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	return entries
 }
 
 // checkAuditLog proves that a CLI command that shows secrets called the
@@ -3258,6 +3289,139 @@ func checkAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, org string
 
 	if !check.Valid || check.EntriesChecked == 0 {
 		t.Fatalf("audit check = %s, want a valid non-empty chain", body)
+	}
+}
+
+// countDecryptToolOperations counts the tool-operation entries with the
+// action unit:decrypt for unit in the audit log of org.
+func countDecryptToolOperations(entries []auditListItem, unit string) int {
+	count := 0
+
+	for i := range entries {
+		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:decrypt" && e.Object == unit {
+			count++
+		}
+	}
+
+	return count
+}
+
+// decryptToolOperationOf returns the first tool-operation entry with the
+// action unit:decrypt for unit, or nil when the log holds none.
+func decryptToolOperationOf(entries []auditListItem, unit string) *auditListItem {
+	for i := range entries {
+		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:decrypt" && e.Object == unit {
+			return e
+		}
+	}
+
+	return nil
+}
+
+// countReveals counts the reveal entries in the audit log: a person asked
+// to see a secret value.
+func countReveals(entries []auditListItem) int {
+	count := 0
+
+	for i := range entries {
+		if entries[i].Kind == "reveal" {
+			count++
+		}
+	}
+
+	return count
+}
+
+// upAuditBaseline holds the audit counts before the up step: the
+// tool-operation decrypt entries for the stack and the reveal entries.
+type upAuditBaseline struct {
+	unit    string
+	decrypt int
+	reveal  int
+}
+
+// upAuditRouteCall returns the path of a decrypt audit route the up step
+// called, or "" when the step called none. A tool operation must never read
+// as a person who shows secrets.
+func upAuditRouteCall(env *e2e.Env) string {
+	requests := env.Recorder.Entries()
+
+	for i := range requests {
+		if entry := &requests[i]; entry.Step == "up" && entry.Method == http.MethodPost &&
+			(strings.HasSuffix(entry.Path, "/log-decryption") ||
+				strings.HasSuffix(entry.Path, "/log-batch-decryption")) {
+			return entry.Path
+		}
+	}
+
+	return ""
+}
+
+// checkDecryptToolOperationFields proves entry is the tool-operation decrypt
+// entry for unit: the count of values and no value path.
+func checkDecryptToolOperationFields(entry *auditListItem, unit string) error {
+	if entry == nil {
+		return fmt.Errorf("%w: no tool-operation decrypt entry for %q", errUnexpected, unit)
+	}
+
+	if entry.Version == "" {
+		return fmt.Errorf("%w: tool-operation decrypt entry holds no value count", errUnexpected)
+	}
+
+	if entry.ValuePath != "" {
+		return fmt.Errorf("%w: tool-operation decrypt entry holds value path %q", errUnexpected, entry.ValuePath)
+	}
+
+	return nil
+}
+
+// checkUpWritesToolOperationEntries proves that up decrypted its secret
+// config value on the server (ADR 41 decision 9): the audit log holds more
+// tool-operation entries with the action unit:decrypt for the stack than
+// before the step, and the step left no reveal entry and called no decrypt
+// audit route. Earlier steps in which a person showed secrets already hold
+// reveal entries; only the step itself must add none.
+func checkUpWritesToolOperationEntries(
+	ctx context.Context, env *e2e.Env, org string, before upAuditBaseline,
+) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if err := checkCheckpointSaved(env, "up")(r); err != nil {
+			return err
+		}
+
+		if path := upAuditRouteCall(env); path != "" {
+			return fmt.Errorf(
+				"%w: up called %s: a tool operation must not read as a person who shows secrets",
+				errUnexpected,
+				path,
+			)
+		}
+
+		entries, err := fetchAuditEntries(ctx, env, org)
+		if err != nil {
+			return err
+		}
+
+		if after := countReveals(entries); after != before.reveal {
+			return fmt.Errorf(
+				"%w: up left %d reveal entries, want the %d from before",
+				errUnexpected,
+				after,
+				before.reveal,
+			)
+		}
+
+		if after := countDecryptToolOperations(entries, before.unit); after <= before.decrypt {
+			return fmt.Errorf(
+				"%w: up left %d tool-operation decrypt entries for %q, want more than the %d before",
+				errUnexpected,
+				after,
+				before.unit,
+				before.decrypt,
+			)
+		}
+
+		return checkDecryptToolOperationFields(decryptToolOperationOf(entries, before.unit), before.unit)
 	}
 }
 
@@ -3517,6 +3681,225 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// organization and a move with a wrong token fail with a clear message
 	// and leave the source unchanged.
 	tofuImportErrors(ctx, t, env)
+
+	// The audit entries of the kind tool-operation for state the CLI reads.
+	tofuAuditScenario(ctx, t, env)
+}
+
+// tofuAuditSecretConfig is the configuration that stores a sensitive output:
+// the greeting and the secret. The apply below commits the secret output, so
+// the remote-state read in the next configuration can read it.
+func tofuAuditSecretConfig(host string) string {
+	return `terraform {
+  cloud {
+    hostname     = ` + strconv.Quote(host) + `
+    organization = ` + strconv.Quote(e2e.Namespace) + `
+    workspaces {
+      name = ` + strconv.Quote(e2e.Workspace) + `
+    }
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+
+output "secret" {
+  value     = "s3cr3t"
+  sensitive = true
+}
+`
+}
+
+// tofuAuditRemoteConfig adds a terraform_remote_state read of the same
+// workspace to the secret configuration, so the plan reads the committed
+// state with the sensitive output. The peer output stays sensitive, so the
+// plan never prints the secret value.
+func tofuAuditRemoteConfig(host string) string {
+	return tofuAuditSecretConfig(host) + `
+data "terraform_remote_state" "peer" {
+  backend = "remote"
+  config = {
+    hostname     = ` + strconv.Quote(host) + `
+    organization = ` + strconv.Quote(e2e.Namespace) + `
+    workspaces = {
+      name = ` + strconv.Quote(e2e.Workspace) + `
+    }
+  }
+}
+
+output "peer_secret" {
+  value     = data.terraform_remote_state.peer.outputs.secret
+  sensitive = true
+}
+`
+}
+
+// countDownloadEntries counts the tool-operation entries with the action
+// unit:read-secrets and an empty value path for unit: the state downloads.
+func countDownloadEntries(entries []auditListItem, unit string) int {
+	count := 0
+
+	for i := range entries {
+		if e := &entries[i]; e.Kind == "tool-operation" && e.Action == "unit:read-secrets" &&
+			e.Object == unit && e.ValuePath == "" {
+			count++
+		}
+	}
+
+	return count
+}
+
+// tofuAuditScenario proves the audit entries of the kind tool-operation for
+// state that the CLI reads (ADR 41 decision 9): the apply commits a
+// sensitive output, the plan with a terraform_remote_state read of that
+// output leaves more download entries, and reading the sensitive output
+// leaves an output entry, with a valid chain. The output step is redacted,
+// so the secret value never reaches the log or the report. It runs last, so
+// the changed configuration affects no other scenario.
+func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	unit := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
+
+	env.WriteTofuConfig(t, tofuAuditSecretConfig(env.Host()))
+	env.Step(ctx, t, step("audit apply secret", nil, "apply", "-input=false", "-auto-approve", "-no-color"))
+	env.WriteTofuConfig(t, tofuAuditRemoteConfig(env.Host()))
+
+	before := countDownloadEntries(readAuditEntries(ctx, t, env, e2e.Namespace), unit)
+	env.Step(
+		ctx,
+		t,
+		step("audit plan remote", checkAuditPlanRemote(ctx, env, before), "plan", "-input=false", "-no-color"),
+	)
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  checkAuditOutputSecret(ctx, env),
+		Name:   "audit output secret",
+		Args:   []string{"output", "-json", "-no-color"},
+		Env:    nil,
+		Stdin:  "",
+		Fail:   false,
+		Redact: true,
+	})
+	checkAuditChain(ctx, t, env, e2e.Namespace)
+}
+
+// remoteStateHits reports which tool-operation entries a plan with a
+// remote-state read left: a download entry and an output entry.
+type remoteStateHits struct {
+	download bool
+	output   bool
+}
+
+// remoteStateEntries scans entries for the tool-operation entries of unit
+// with the action unit:read-secrets: a download entry carries the state
+// version and an empty value path, and an output entry carries the value
+// path of the sensitive output. It reports which of the two it found.
+func remoteStateEntries(entries []auditListItem, unit string) remoteStateHits {
+	var hits remoteStateHits
+
+	for i := range entries {
+		e := &entries[i]
+		if e.Kind != "tool-operation" || e.Action != "unit:read-secrets" || e.Object != unit {
+			continue
+		}
+
+		if e.Version == "" {
+			continue
+		}
+
+		if e.ValuePath == "" {
+			hits.download = true
+		}
+
+		if e.ValuePath == "/outputs/secret" {
+			hits.output = true
+		}
+	}
+
+	return hits
+}
+
+// checkAuditPlanRemote proves the plan with the remote-state read left more
+// download entries of the kind tool-operation (ADR 41 decision 9): the CLI
+// reads remote state through the download route, which carries the sensitive
+// values. It also proves the read worked and the plan hid the secret value.
+func checkAuditPlanRemote(ctx context.Context, env *e2e.Env, before int) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if !strings.Contains(r.Stdout, "peer_secret") {
+			return fmt.Errorf("%w: plan lacks the remote output: %s", errUnexpected, r.Stdout)
+		}
+
+		if strings.Contains(r.Stdout, "s3cr3t") {
+			return fmt.Errorf("%w: plan printed the secret value", errUnexpected)
+		}
+
+		entries, err := fetchAuditEntries(ctx, env, e2e.Namespace)
+		if err != nil {
+			return err
+		}
+
+		unit := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
+
+		if after := countDownloadEntries(entries, unit); after <= before {
+			return fmt.Errorf(
+				"%w: plan left %d download entries for %q, want more than the %d before",
+				errUnexpected,
+				after,
+				unit,
+				before,
+			)
+		}
+
+		if hits := remoteStateEntries(entries, unit); !hits.download {
+			return fmt.Errorf("%w: plan left no download entry with a state version", errUnexpected)
+		}
+
+		return nil
+	}
+}
+
+// checkAuditOutputSecret proves that reading the sensitive output left an
+// output entry of the kind tool-operation with the value path of the output
+// (ADR 41 decision 9). It also proves the CLI read the single output through
+// the single-output route.
+func checkAuditOutputSecret(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if !strings.Contains(r.Stdout, "s3cr3t") {
+			return fmt.Errorf("%w: output lacks the secret value", errUnexpected)
+		}
+
+		if !singleOutputRead(env, "audit output secret") {
+			return fmt.Errorf("%w: output never read a single state version output", errUnexpected)
+		}
+
+		entries, err := fetchAuditEntries(ctx, env, e2e.Namespace)
+		if err != nil {
+			return err
+		}
+
+		if hits := remoteStateEntries(entries, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace); !hits.output {
+			return fmt.Errorf("%w: output left no output entry for /outputs/secret", errUnexpected)
+		}
+
+		return nil
+	}
+}
+
+// singleOutputRead reports whether step read one output through the
+// single-output route with a 200 answer.
+func singleOutputRead(env *e2e.Env, stepName string) bool {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		if entry := &entries[i]; entry.Step == stepName && entry.Method == http.MethodGet &&
+			strings.HasPrefix(entry.Path, "/api/v2/state-version-outputs/") &&
+			entry.Status == http.StatusOK {
+			return true
+		}
+	}
+
+	return false
 }
 
 // checkApplyReadsStateVersion proves apply fetched the state version it

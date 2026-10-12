@@ -3,6 +3,8 @@ package pulumi_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -260,6 +262,223 @@ func TestLogDecryptionRejectsLargeBody(t *testing.T) {
 	})
 	if status != http.StatusNoContent {
 		t.Fatalf("small body after a large one answers %d, want %d (%s)", status, http.StatusNoContent, body)
+	}
+}
+
+// TestDecryptWritesToolOperationEntry proves a decrypt call writes one entry
+// with the action unit:decrypt and the kind tool-operation, carrying the unit
+// and the count of values, and still answers the plaintext.
+func TestDecryptWritesToolOperationEntry(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	ciphertext := f.encryptOne(t, "s3cr3t")
+
+	status, plain := f.decryptOne(t, "/api/stacks/acme/web/prod/decrypt", ciphertext)
+	if status != http.StatusOK || plain != "s3cr3t" {
+		t.Fatalf("decrypt answers %d %q, want 200 with the plaintext", status, plain)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries.entries))
+	}
+
+	checkToolOperationEntry(t, entries.entries[0], "1")
+}
+
+// TestBatchDecryptWritesToolOperationEntry proves a batch decrypt call writes
+// one entry with the count of values, and still answers every plaintext.
+func TestBatchDecryptWritesToolOperationEntry(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	first := f.encryptOne(t, "first")
+	second := f.encryptOne(t, "second")
+
+	raw, encodeErr := json.Marshal(map[string][]string{"ciphertexts": {first, second}})
+	if encodeErr != nil {
+		t.Fatalf("encode batch decrypt body: %v", encodeErr)
+	}
+
+	status, body := f.plain(t, http.MethodPost, "/api/stacks/acme/web/prod/batch-decrypt", string(raw))
+	if status != http.StatusOK {
+		t.Fatalf("batch decrypt answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var decrypted struct {
+		Plaintexts map[string]string `json:"plaintexts"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(body), &decrypted); decodeErr != nil {
+		t.Fatalf("decode batch decrypt: %v (%s)", decodeErr, body)
+	}
+
+	for _, want := range []string{"first", "second"} {
+		found := false
+
+		for _, got := range decrypted.Plaintexts {
+			plain, plainErr := base64.StdEncoding.DecodeString(got)
+			if plainErr == nil && string(plain) == want {
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			t.Fatalf("batch decrypt lacks the plaintext of %q (%s)", want, body)
+		}
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries.entries))
+	}
+
+	checkToolOperationEntry(t, entries.entries[0], "2")
+}
+
+// checkToolOperationEntry fails the test unless e is the tool-operation entry
+// of a server-side decrypt: the action unit:decrypt with the kind
+// tool-operation, carrying the unit, the count of values and no value path.
+func checkToolOperationEntry(t *testing.T, e audit.Entry, count string) {
+	t.Helper()
+
+	if e.Action != string(identity.ActionUnitDecrypt) {
+		t.Fatalf("action = %q, want unit:decrypt", e.Action)
+	}
+
+	if e.Kind != audit.KindToolOperation {
+		t.Fatalf("kind = %q, want tool-operation", e.Kind)
+	}
+
+	if e.Subject != "tester" {
+		t.Fatalf("subject = %q, want tester", e.Subject)
+	}
+
+	if e.Object != "pulumi:acme/web/prod" {
+		t.Fatalf("object = %q, want the unit reference", e.Object)
+	}
+
+	if e.Version != count {
+		t.Fatalf("version = %q, want the count of values %q", e.Version, count)
+	}
+
+	if e.ValuePath != "" {
+		t.Fatalf("value path = %q, want empty", e.ValuePath)
+	}
+
+	if e.Outcome != audit.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success", e.Outcome)
+	}
+
+	if e.Hash == "" {
+		t.Fatal("hash is empty")
+	}
+}
+
+// TestDecryptFailureAnswers500WithoutSecret proves a failed audit append on a
+// decrypt route answers 500 with no secret value, while it writes a log line
+// with no secret and counts the failure on the metric callback.
+func TestDecryptFailureAnswers500WithoutSecret(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		call func(t *testing.T, f secretFixture, ciphertext string) (int, string)
+	}{
+		{
+			name: "decrypt",
+			call: func(t *testing.T, f secretFixture, ciphertext string) (int, string) {
+				t.Helper()
+
+				return f.decryptOne(t, "/api/stacks/acme/web/prod/decrypt", ciphertext)
+			},
+		},
+		{
+			name: "batch decrypt",
+			call: func(t *testing.T, f secretFixture, ciphertext string) (int, string) {
+				t.Helper()
+
+				return f.decryptBatch(t, "/api/stacks/acme/web/prod/batch-decrypt", ciphertext)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkDecryptFailure(t, tc.call)
+		})
+	}
+}
+
+// checkDecryptFailure proves one decrypt route with a failing audit store
+// answers 500 with no secret value, while it writes a log line with no
+// secret and counts the failure on the metric callback.
+func checkDecryptFailure(t *testing.T, call func(t *testing.T, f secretFixture, ciphertext string) (int, string)) {
+	t.Helper()
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	var failures int
+
+	entries := &memAuditStore{entries: nil, err: errAuditBoom, mu: sync.Mutex{}}
+
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: func() { failures++ }, logger: logger},
+	)
+
+	// Encrypt writes no audit entry, so it works with a failing
+	// store and mints the ciphertext the decrypt call needs.
+	ciphertext := f.encryptOne(t, "s3cr3t")
+
+	status, body := call(t, f, ciphertext)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("decrypt answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
+	}
+
+	if strings.Contains(body, "s3cr3t") {
+		t.Fatalf("decrypt answers the secret value: %s", body)
+	}
+
+	if failures != 1 {
+		t.Fatalf("failures = %d, want 1", failures)
+	}
+
+	line := logs.String()
+	if !strings.Contains(line, "audit append failed") {
+		t.Fatalf("log misses the failure line: %q", line)
+	}
+
+	for _, secret := range []string{"s3cr3t", "boom"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("log holds %q, want no secret and no value: %q", secret, line)
+		}
 	}
 }
 
