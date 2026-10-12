@@ -106,6 +106,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
+		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},

@@ -619,3 +619,8 @@ INSERT INTO update_journal (
 -- name: InsertJournalSequence :exec
 INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
 VALUES (?, ?, ?, ?, ?);
+
+-- name: ListJournalOperations :many
+SELECT operation_ids FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;

@@ -27,9 +27,20 @@ var ErrJournalKey = errors.New("journal blob key does not belong to the update")
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
 var ErrJournalBatch = errors.New("journal batch is malformed")
 
+// BatchVerifier checks one journal batch before the server stores it (ADR 43,
+// decision 6.4). The types are standard library types, so an implementation
+// needs no import of this package. version is the journal version that the server
+// negotiated for the update. known holds the operation IDs that the update already
+// holds. A reference to an entry must name one of them, or an earlier entry of the
+// same batch. It returns an error when the batch cannot replay.
+type BatchVerifier interface {
+	VerifyBatch(body []byte, version int, known []int64) error
+}
+
 // JournalBatch is one batch that a journaled update sends (ADR 43, decision 6.1).
 // Content is the body as received. The store keeps it in a blob under a key that
-// holds the lowest sequence ID of the batch.
+// holds the lowest sequence ID of the batch. Version is the journal version that
+// the server negotiated for the update.
 type JournalBatch struct {
 	Ref     Ref
 	StackID ID
@@ -37,6 +48,7 @@ type JournalBatch struct {
 	// Lease is the digest of the lease that authorized the write.
 	Lease   token.Digest
 	Content []byte
+	Version int
 }
 
 // JournalRow is the row of one stored batch: the blob that holds it, and the
@@ -50,6 +62,11 @@ type JournalRow struct {
 	Size         int64
 	SequenceIDs  []int64
 	OperationIDs []int64
+	// Verify checks the batch against the operation IDs that the update holds. The
+	// store calls it in the fenced transaction, after the retry check and before
+	// the write, with the operation IDs of the stored rows. A nil Verify skips the
+	// check. A non-nil error refuses the batch with ErrJournalBatch.
+	Verify func(known []int64) error
 }
 
 // JournalStore persists the rows of journal batches.
@@ -61,8 +78,26 @@ type JournalStore interface {
 	// sequence ID of the row is stored with the same SHA-256, the batch is a retry:
 	// it returns retried true and writes nothing. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
-	// ErrJournalConflict. The blob must already be in the blob store.
+	// ErrJournalConflict. The blob must already be in the blob store. A row with a
+	// Verify function that returns an error is refused with ErrJournalBatch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
+}
+
+// KnownOperationIDs returns the operation IDs that the stored rows of an update
+// hold. Each element is the JSON array that a row keeps (see JournalRow.OperationIDs).
+// It returns an error for a value that is not such an array.
+func KnownOperationIDs(stored []string) ([]int64, error) {
+	var known []int64
+	for _, raw := range stored {
+		var ops []int64
+		if err := json.Unmarshal([]byte(raw), &ops); err != nil {
+			return nil, fmt.Errorf("decode stored operation IDs: %w", err)
+		}
+
+		known = append(known, ops...)
+	}
+
+	return known, nil
 }
 
 // journalBody is the part of a journal batch body that the blob key and the
@@ -81,13 +116,15 @@ type journalEntryIDs struct {
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
 // transaction (ADR 43, decision 6.1). It holds no state of its own.
 type JournalEntries struct {
-	blobs blob.Store
-	rows  JournalStore
+	blobs    blob.Store
+	rows     JournalStore
+	verifier BatchVerifier
 }
 
-// NewJournalEntries returns a writer over the blob store and the row store.
-func NewJournalEntries(blobs blob.Store, rows JournalStore) *JournalEntries {
-	return &JournalEntries{blobs: blobs, rows: rows}
+// NewJournalEntries returns a writer over the blob store, the row store and the
+// batch verifier.
+func NewJournalEntries(blobs blob.Store, rows JournalStore, verifier BatchVerifier) *JournalEntries {
+	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier}
 }
 
 // Append stores one batch. It returns nil when the batch is stored, or when it is
@@ -125,6 +162,9 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Size:         int64(len(batch.Content)),
 		SequenceIDs:  ids.sequences,
 		OperationIDs: ids.operations,
+		Verify: func(known []int64) error {
+			return j.verifier.VerifyBatch(batch.Content, batch.Version, known)
+		},
 	}
 
 	if _, err := j.rows.PutJournalRow(ctx, row, fence); err != nil {
@@ -146,7 +186,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 // out of the journal, so its blob has no row to name it.
 func refused(err error) bool {
 	return errors.Is(err, ErrWrongUpdateState) || errors.Is(err, ErrJournalConflict) ||
-		errors.Is(err, namespace.ErrFenced)
+		errors.Is(err, ErrJournalBatch) || errors.Is(err, namespace.ErrFenced)
 }
 
 // putBlob writes the content under key. It reports whether this call wrote it.

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -44,6 +45,7 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 		Size:         1,
 		SequenceIDs:  seqs,
 		OperationIDs: ops,
+		Verify:       nil,
 	}
 }
 
@@ -218,5 +220,57 @@ func testJournalConcurrentRetry(t *testing.T, f fixture) {
 
 	if stored != 1 || retries != 1 {
 		t.Fatalf("two copies at once: %d stored and %d retried, want one of each", stored, retries)
+	}
+}
+
+// withOperations sets the operation IDs of a batch row.
+func withOperations(row stack.JournalRow, ops ...int64) stack.JournalRow {
+	row.OperationIDs = ops
+
+	return row
+}
+
+// testJournalVerify shows that the store calls the row's check with the operation IDs
+// that the stored rows hold (ADR 43, decision 6.4), and that a refused batch stores
+// nothing.
+func testJournalVerify(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+
+	first := withOperations(journalRow(t, f.s, u, 1, 1), 10, 11)
+	if _, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil {
+		t.Fatalf("first batch: %v", err)
+	}
+
+	var seen []int64
+
+	refused := withOperations(journalRow(t, f.s, u, 2, 2), 12)
+	refused.Verify = func(known []int64) error {
+		seen = append([]int64(nil), known...)
+
+		return stack.ErrJournalBatch
+	}
+
+	if _, err := f.s.PutJournalRow(t.Context(), refused, f.fence); !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("refused batch: err = %v, want ErrJournalBatch", err)
+	}
+
+	slices.Sort(seen)
+	if !slices.Equal(seen, []int64{10, 11}) {
+		t.Fatalf("the check saw operations %v, want the stored [10 11]", seen)
+	}
+
+	// The refused batch stored nothing, so sequence 2 is still free.
+	free := withOperations(journalRow(t, f.s, u, 3, 2), 13)
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequence 2 after a refusal: retried %t, err %v; want stored", retried, err)
+	}
+
+	accepted := withOperations(journalRow(t, f.s, u, 4, 3), 14)
+	accepted.Verify = func([]int64) error { return nil }
+
+	if retried, err := f.s.PutJournalRow(t.Context(), accepted, f.fence); err != nil || retried {
+		t.Fatalf("accepted batch: retried %t, err %v; want stored", retried, err)
 	}
 }
