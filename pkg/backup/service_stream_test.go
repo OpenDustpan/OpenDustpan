@@ -184,6 +184,7 @@ func restoreStreamedBackup(
 		Target:      target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
