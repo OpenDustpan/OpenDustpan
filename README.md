@@ -153,7 +153,9 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is plain text. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
-The server keeps no copy of the key-encryption key.
+The database and the backups hold no copy of the key-encryption key. It
+lives in `DUSTPAN_KEY_ENCRYPTION_KEY` or in a key file that only its owner
+can read.
 
 The server sends no telemetry. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
@@ -164,9 +166,11 @@ server.
 
 ### What to back up
 
-1. **The key-encryption key.** A lost key means lost secrets. With secrets in
-   the database, the server refuses to start without the key. Keep the key in
-   a different place from the backups.
+1. **The key-encryption key.** A lost key means lost secrets. The server
+   refuses to start without a key, and with a key that does not open the
+   wrapped keys in the database. Keep a copy of the key in a different place
+   from the backups. The default key file sits next to the SQLite database,
+   so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
    and the blobs to a backup target. A backup holds OpenTofu state in plain
    text, so protect the target.

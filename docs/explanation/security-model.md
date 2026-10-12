@@ -65,8 +65,31 @@ because the Pulumi CLI writes only the ciphertext there.
 
 ## The key-encryption key
 
-<!-- Placeholder: written from the merged code of #344, which makes the key
-required and adds a key file and a prompt. -->
+`serve` needs a key-encryption key before it opens the database. It takes
+the first of these:
+
+1. `DUSTPAN_KEY_ENCRYPTION_KEY`: the base64 text of 32 random bytes. The
+   server deletes the variable from its environment after it reads it.
+2. The key file in `--key-encryption-key-file`
+   (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`). The default is `dustpan.key` next to
+   the SQLite database, or in the working directory for PostgreSQL. The
+   server refuses a key file that the group or others can read.
+3. No key and no key file: on a terminal, the server asks for an explicit
+   yes and then makes the key file. With
+   `--generate-key-encryption-key`, it makes the file with no prompt. Else
+   it stops with an error that names each setting.
+
+A key file that the server makes holds 32 random bytes in base64, with mode
+0600. The server never writes over a key file that exists. Each start logs
+the path of the key file, never the key. No flag takes the key itself.
+
+The database and the backups hold no copy of the key. A lost key means lost
+secrets: nobody can decrypt them. A copy of the data directory that holds
+the default key file also holds the key, so keep the backups and the key
+apart.
+
+Planned: a command that rotates the key-encryption key (ADR 23), and keys
+that a key management service holds (RFC 33).
 
 ## What the server stores in plain text
 
