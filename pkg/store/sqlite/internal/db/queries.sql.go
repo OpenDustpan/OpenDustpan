@@ -1331,6 +1331,82 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 	return err
 }
 
+const insertJournal = `-- name: InsertJournal :exec
+INSERT INTO update_journal (
+    stack_id, update_id, arrival, blob_key, sha256, size,
+    lowest_sequence, sequence_ids, operation_ids
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertJournalParams struct {
+	StackID        string
+	UpdateID       string
+	Arrival        int64
+	BlobKey        string
+	Sha256         []byte
+	Size           int64
+	LowestSequence int64
+	SequenceIds    string
+	OperationIds   string
+}
+
+func (q *Queries) InsertJournal(ctx context.Context, arg InsertJournalParams) error {
+	_, err := q.db.ExecContext(ctx, insertJournal,
+		arg.StackID,
+		arg.UpdateID,
+		arg.Arrival,
+		arg.BlobKey,
+		arg.Sha256,
+		arg.Size,
+		arg.LowestSequence,
+		arg.SequenceIds,
+		arg.OperationIds,
+	)
+	return err
+}
+
+const insertJournalSequence = `-- name: InsertJournalSequence :exec
+INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
+VALUES (?, ?, ?, ?, ?)
+`
+
+type InsertJournalSequenceParams struct {
+	StackID  string
+	UpdateID string
+	Sequence int64
+	Arrival  int64
+	Sha256   []byte
+}
+
+func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSequenceParams) error {
+	_, err := q.db.ExecContext(ctx, insertJournalSequence,
+		arg.StackID,
+		arg.UpdateID,
+		arg.Sequence,
+		arg.Arrival,
+		arg.Sha256,
+	)
+	return err
+}
+
+const journalSequenceSHA = `-- name: JournalSequenceSHA :one
+SELECT sha256 FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ? AND sequence = ?
+`
+
+type JournalSequenceSHAParams struct {
+	StackID  string
+	UpdateID string
+	Sequence int64
+}
+
+func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHAParams) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, journalSequenceSHA, arg.StackID, arg.UpdateID, arg.Sequence)
+	var sha256 []byte
+	err := row.Scan(&sha256)
+	return sha256, err
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
@@ -2280,6 +2356,24 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const nextJournalArrival = `-- name: NextJournalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+`
+
+type NextJournalArrivalParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrivalParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextJournalArrival, arg.StackID, arg.UpdateID)
+	var arrival int64
+	err := row.Scan(&arrival)
+	return arrival, err
 }
 
 const putCheckpoint = `-- name: PutCheckpoint :exec

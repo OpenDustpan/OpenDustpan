@@ -34,6 +34,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	stack.JournalStore
 	secret.KeyStore
 	inventory.Reader
 	workspace.Store
@@ -972,39 +973,45 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 	}
 
 	got := map[string]int64{
-		"namespaces":     int64(len(mustListNamespaces(t, s))),
-		"stacks":         int64(len(stacks)),
-		"stack_tags":     int64(tags),
-		"updates":        2,
-		"checkpoints":    1,
-		"update_events":  int64(len(seed.events)),
-		"secret_keys":    int64(len(seed.scopes)),
-		"inventory":      int64(len(acmeUnits) + len(otherUnits)),
-		"workspaces":     int64(len(acmeWorkspaces) + len(otherWorkspaces)),
-		"state_versions": 2,
-		"backups":        int64(len(mustListBackups(t, s))),
-		"restores":       int64(len(mustListRestores(t, s))),
-		"audit_entries":  auditEntries.Total,
+		"namespaces":    int64(len(mustListNamespaces(t, s))),
+		"stacks":        int64(len(stacks)),
+		"stack_tags":    int64(tags),
+		"updates":       2,
+		"checkpoints":   1,
+		"update_events": int64(len(seed.events)),
+		// The seed writes no journal batch: the journal has no read port yet,
+		// and item 8b adds the blobs that a backup must copy with its rows.
+		"update_journal":           0,
+		"update_journal_sequences": 0,
+		"secret_keys":              int64(len(seed.scopes)),
+		"inventory":                int64(len(acmeUnits) + len(otherUnits)),
+		"workspaces":               int64(len(acmeWorkspaces) + len(otherWorkspaces)),
+		"state_versions":           2,
+		"backups":                  int64(len(mustListBackups(t, s))),
+		"restores":                 int64(len(mustListRestores(t, s))),
+		"audit_entries":            auditEntries.Total,
 		// The installation table holds its one seeded row in every store:
 		// no port lists it, so the count is the schema constant.
 		"installation": 1,
 	}
 
 	want := map[string]int64{
-		"namespaces":     2,
-		"stacks":         3,
-		"stack_tags":     3,
-		"updates":        2,
-		"checkpoints":    1,
-		"update_events":  int64(len(seed.events)),
-		"secret_keys":    2,
-		"inventory":      5,
-		"workspaces":     2,
-		"state_versions": 2,
-		"backups":        1,
-		"restores":       0,
-		"audit_entries":  int64(len(seed.audit)),
-		"installation":   1,
+		"namespaces":               2,
+		"stacks":                   3,
+		"stack_tags":               3,
+		"updates":                  2,
+		"checkpoints":              1,
+		"update_events":            int64(len(seed.events)),
+		"update_journal":           0,
+		"update_journal_sequences": 0,
+		"secret_keys":              2,
+		"inventory":                5,
+		"workspaces":               2,
+		"state_versions":           2,
+		"backups":                  1,
+		"restores":                 0,
+		"audit_entries":            int64(len(seed.audit)),
+		"installation":             1,
 	}
 
 	if !maps.Equal(got, want) {

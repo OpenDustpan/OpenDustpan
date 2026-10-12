@@ -170,6 +170,26 @@ type UpdateEvent struct {
 	Payload     []byte
 }
 
+type UpdateJournal struct {
+	StackID        string
+	UpdateID       string
+	Arrival        int64
+	BlobKey        string
+	Sha256         []byte
+	Size           int64
+	LowestSequence int64
+	SequenceIds    string
+	OperationIds   string
+}
+
+type UpdateJournalSequence struct {
+	StackID  string
+	UpdateID string
+	Sequence int64
+	Arrival  int64
+	Sha256   []byte
+}
+
 type Workspace struct {
 	ID                    string
 	Namespace             string

@@ -149,7 +149,8 @@ var embeddedMigrationNames = []string{
 	"0022_audit_value_count.sql",
 	"0023_update_journal_version.sql",
 	"0024_state_fence.sql",
-	"0025_override_switches.sql",
+	"0025_update_journal.sql",
+	"0026_override_switches.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
