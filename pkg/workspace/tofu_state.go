@@ -76,6 +76,32 @@ type StateDetail struct {
 	Masked    []string
 }
 
+// StateDiffChanged is one resource present in both versions with a change:
+// the address as stored, the resource-relative value paths that changed
+// (for example "/attributes/input/value"), and the paths of secrets that
+// changed. A secret value is never in the diff: a changed secret is one path
+// in ChangedSecrets. The server compares plain values in memory only to
+// compute the paths and never answers a value. A path is sensitive when the
+// masked read would mask it on either side.
+type StateDiffChanged struct {
+	Address        string
+	ChangedPaths   []string
+	ChangedSecrets []string
+}
+
+// StateDiff is the diff of two states: the sorted addresses added and
+// removed, and the sorted changed resources with their paths. NextCursor
+// names the cursor of the next page, or is empty when the page is the last
+// one. Incomplete says the server cut the list: entries the server skips, or
+// a page cut short of the full diff.
+type StateDiff struct {
+	Added      []string
+	Removed    []string
+	Changed    []StateDiffChanged
+	NextCursor string
+	Incomplete bool
+}
+
 // escapeTofuPointerToken escapes one JSON Pointer token (RFC 6901): `~`
 // first, then `/`.
 func escapeTofuPointerToken(s string) string {
@@ -1047,4 +1073,644 @@ func ExtractSensitiveMarks(rendering []byte) (SensitiveMarks, error) {
 	}
 
 	return marks, nil
+}
+
+// isTofuMarker reports whether v is a secret marker of a masked copy: an
+// object with the secret flag set. The diff compares plain values with their
+// masked copies side by side, so a marker on either side marks the path
+// sensitive.
+func isTofuMarker(v any) bool {
+	marker, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+
+	secret, ok := marker[markerSecretKey].(bool)
+
+	return ok && secret
+}
+
+// tofuMaskedChild returns the child of masked under key, or nil when masked
+// is no object or holds no such key.
+func tofuMaskedChild(masked any, key string) any {
+	obj, ok := masked.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return obj[key]
+}
+
+// tofuMaskedAt returns the element of masked at index, or nil when masked is
+// no array or holds no such element.
+func tofuMaskedAt(masked any, index int) any {
+	list, ok := masked.([]any)
+	if !ok || index < 0 || index >= len(list) {
+		return nil
+	}
+
+	return list[index]
+}
+
+// tofuDiffer compares plain state values with their masked copies side by
+// side. It appends the resource-relative paths that differ: plain changes to
+// paths, and changes with a marker on either masked side to secrets.
+type tofuDiffer struct {
+	paths   *[]string
+	secrets *[]string
+}
+
+// secret handles a value pair where either masked side is a marker: equal
+// plain values are no change, different ones are one entry in secrets. It
+// reports whether it handled the pair.
+func (d *tofuDiffer) secret(from, to, fromMasked, toMasked any, base string) bool {
+	if !isTofuMarker(fromMasked) && !isTofuMarker(toMasked) {
+		return false
+	}
+
+	if reflect.DeepEqual(from, to) {
+		return true
+	}
+
+	*d.secrets = append(*d.secrets, base)
+
+	return true
+}
+
+// single handles a value pair where a key lives on one side only: one entry
+// for the key, in secrets when the present masked side marks it, else in
+// paths. It never recurses into the added or removed value, so no nested
+// value of it ever answers.
+func (d *tofuDiffer) single(fromMasked, toMasked any, child string) {
+	if isTofuMarker(fromMasked) || isTofuMarker(toMasked) {
+		*d.secrets = append(*d.secrets, child)
+	} else {
+		*d.paths = append(*d.paths, child)
+	}
+}
+
+// maps appends the child paths under base that differ between two objects.
+func (d *tofuDiffer) maps(from, to map[string]any, fromMasked, toMasked any, base string) {
+	for _, key := range tofuSortedKeys(from, to) {
+		child := base + "/" + escapeTofuPointerToken(key)
+		valFrom, inFrom := from[key]
+		valTo, inTo := to[key]
+
+		if !inFrom || !inTo {
+			d.single(tofuMaskedChild(fromMasked, key), tofuMaskedChild(toMasked, key), child)
+
+			continue
+		}
+
+		d.values(valFrom, valTo, tofuMaskedChild(fromMasked, key), tofuMaskedChild(toMasked, key), child)
+	}
+}
+
+// tofuSortedKeys returns the sorted union of the keys of two objects.
+func tofuSortedKeys(from, to map[string]any) []string {
+	seen := map[string]bool{}
+	for key := range from {
+		seen[key] = true
+	}
+
+	for key := range to {
+		seen[key] = true
+	}
+
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+
+	slices.Sort(keys)
+
+	return keys
+}
+
+// lists appends the child paths under base that differ between two arrays: a
+// length change is one entry for the array itself, in secrets when either
+// masked side marks the array.
+func (d *tofuDiffer) lists(from, to []any, fromMasked, toMasked any, base string) {
+	if len(from) != len(to) {
+		d.single(fromMasked, toMasked, base)
+
+		return
+	}
+
+	for i := range from {
+		child := base + "/" + strconv.Itoa(i)
+		d.values(from[i], to[i], tofuMaskedAt(fromMasked, i), tofuMaskedAt(toMasked, i), child)
+	}
+}
+
+// unwrapped handles two dynamic values the CLI stores wrapped with their
+// type: they compare transparently on their value, so a mark below such an
+// object names the unwrapped path. It reports whether both sides wrapped.
+func (d *tofuDiffer) unwrapped(from, to, fromMasked, toMasked any, base string) bool {
+	fromWrapped, ok := from.(map[string]any)
+	if !ok || !isDynamicWrapper(fromWrapped) {
+		return false
+	}
+
+	toWrapped, ok := to.(map[string]any)
+	if !ok || !isDynamicWrapper(toWrapped) {
+		return false
+	}
+
+	d.values(fromWrapped["value"], toWrapped["value"], tofuValueMask(fromMasked), tofuValueMask(toMasked), base)
+
+	return true
+}
+
+// tofuValueMask returns the mask of the value inside a wrapped dynamic mask,
+// or nil when the mask is no wrapper.
+func tofuValueMask(masked any) any {
+	wrapped, ok := masked.(map[string]any)
+	if !ok || isTofuMarker(masked) {
+		return nil
+	}
+
+	return wrapped["value"]
+}
+
+// shaped compares two values of the same container shape: two objects or two
+// arrays. It reports whether both sides shared a shape.
+func (d *tofuDiffer) shaped(from, to, fromMasked, toMasked any, base string) bool {
+	if fromMap, ok := from.(map[string]any); ok {
+		if toMap, ok := to.(map[string]any); ok {
+			d.maps(fromMap, toMap, fromMasked, toMasked, base)
+
+			return true
+		}
+	}
+
+	if fromList, ok := from.([]any); ok {
+		if toList, ok := to.([]any); ok {
+			d.lists(fromList, toList, fromMasked, toMasked, base)
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// values appends the resource-relative paths under base that differ between
+// from and to. A marker on either masked side compares the plain values:
+// equal values are no change, different ones are one entry in secrets, never
+// in paths and never a value.
+func (d *tofuDiffer) values(from, to, fromMasked, toMasked any, base string) {
+	if d.secret(from, to, fromMasked, toMasked, base) {
+		return
+	}
+
+	if d.unwrapped(from, to, fromMasked, toMasked, base) {
+		return
+	}
+
+	if d.shaped(from, to, fromMasked, toMasked, base) {
+		return
+	}
+
+	if !reflect.DeepEqual(from, to) {
+		*d.paths = append(*d.paths, base)
+	}
+}
+
+// tofuDiffResource holds the changed paths and secret paths of one resource
+// present in both versions.
+type tofuDiffResource struct {
+	paths   []string
+	secrets []string
+}
+
+// maskedInstanceCopy returns the masked attributes of one instance without
+// touching the decoded state: it masks a copy, so the diff still compares
+// the plain values. Position and resource name the value paths of the
+// markers. With no kept marks for the version every attribute value answers
+// as a marker.
+func maskedInstanceCopy(
+	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
+) any {
+	copied, err := json.Marshal(instance)
+	if err != nil {
+		return instance["attributes"]
+	}
+
+	var fresh map[string]any
+
+	dec := json.NewDecoder(bytes.NewReader(copied))
+	dec.UseNumber()
+
+	if err := dec.Decode(&fresh); err != nil {
+		return instance["attributes"]
+	}
+
+	masked, _ := maskTofuInstance(fresh, resource, position, address, marks)
+
+	return masked
+}
+
+// tofuDiffSide is one side of an instance diff: the sorted instances with
+// their addresses and their masked attribute copies.
+type tofuDiffSide struct {
+	instances []map[string]any
+	addrs     []string
+	masked    []any
+}
+
+// tofuInstanceAttrs returns the attributes of an instance, or an empty object
+// when the instance holds none. Attributes are always objects in the state
+// file; anything else reads as empty, so the diff still answers.
+func tofuInstanceAttrs(instance map[string]any) any {
+	attrs, ok := instance["attributes"].(map[string]any)
+	if !ok || attrs == nil {
+		return map[string]any{}
+	}
+
+	return attrs
+}
+
+// diffSingleInstance returns the changed paths of one instance on each side:
+// the attributes compare under "/attributes".
+func diffSingleInstance(from, to tofuDiffSide) tofuDiffResource {
+	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
+	differ := tofuDiffer{paths: &out.paths, secrets: &out.secrets}
+
+	var fromMasked, toMasked any
+
+	if len(from.masked) == 1 {
+		fromMasked = from.masked[0]
+	}
+
+	if len(to.masked) == 1 {
+		toMasked = to.masked[0]
+	}
+
+	differ.values(
+		tofuInstanceAttrs(from.instances[0]), tofuInstanceAttrs(to.instances[0]),
+		fromMasked, toMasked, "/attributes",
+	)
+
+	slices.Sort(out.paths)
+	slices.Sort(out.secrets)
+
+	return out
+}
+
+// diffMultiInstance returns the changed paths of several instances on each
+// side: each pair compares under "/instances/<position>/attributes" in
+// address order. A differing address set is one entry for "/instances".
+func diffMultiInstance(from, to tofuDiffSide) tofuDiffResource {
+	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
+
+	for i := range from.instances {
+		if from.addrs[i] != to.addrs[i] {
+			out.paths = append(out.paths, "/instances")
+
+			return out
+		}
+	}
+
+	differ := tofuDiffer{paths: &out.paths, secrets: &out.secrets}
+
+	for i := range from.instances {
+		var fromMasked, toMasked any
+
+		if i < len(from.masked) {
+			fromMasked = from.masked[i]
+		}
+
+		if i < len(to.masked) {
+			toMasked = to.masked[i]
+		}
+
+		base := "/instances/" + strconv.Itoa(i) + "/attributes"
+		fromAttrs := tofuInstanceAttrs(from.instances[i])
+		toAttrs := tofuInstanceAttrs(to.instances[i])
+		differ.values(fromAttrs, toAttrs, fromMasked, toMasked, base)
+	}
+
+	slices.Sort(out.paths)
+	slices.Sort(out.secrets)
+
+	return out
+}
+
+// diffTofuInstances returns the changed paths of the instances of one
+// resource present in both versions. Instances match by address: with one
+// instance on each side the attributes compare under "/attributes". With
+// several, each pair compares under "/instances/<position>/attributes" in
+// address order. A differing instance set is one entry for "/instances".
+func diffTofuInstances(from, to tofuDiffSide) tofuDiffResource {
+	if len(from.instances) != len(to.instances) {
+		return tofuDiffResource{paths: []string{"/instances"}, secrets: []string{}}
+	}
+
+	if len(from.instances) == 1 {
+		return diffSingleInstance(from, to)
+	}
+
+	return diffMultiInstance(from, to)
+}
+
+// sortTofuInstances orders instances by address, returning the instances with
+// their addresses in that order.
+func sortTofuInstances(obj map[string]any, instances []map[string]any) ([]map[string]any, []string) {
+	type addressed struct {
+		address  string
+		instance map[string]any
+	}
+
+	ordered := make([]addressed, 0, len(instances))
+
+	for _, instance := range instances {
+		ordered = append(ordered, addressed{address: tofuInstanceAddress(obj, instance), instance: instance})
+	}
+
+	slices.SortFunc(ordered, func(a, b addressed) int {
+		return strings.Compare(a.address, b.address)
+	})
+
+	sorted := make([]map[string]any, 0, len(ordered))
+	addrs := make([]string, 0, len(ordered))
+
+	for _, entry := range ordered {
+		sorted = append(sorted, entry.instance)
+		addrs = append(addrs, entry.address)
+	}
+
+	return sorted, addrs
+}
+
+// tofuResourceSide is one side of a resource diff: the resource object with
+// its kept marks and its position in its own state.
+type tofuResourceSide struct {
+	obj   map[string]any
+	marks SensitiveMarks
+	index int
+}
+
+// tofuResourcePair is one resource present in both versions.
+type tofuResourcePair struct {
+	from tofuResourceSide
+	to   tofuResourceSide
+}
+
+// maskSide returns the sorted instances of side with their addresses and
+// their masked attribute copies.
+func maskSide(side tofuResourceSide) tofuDiffSide {
+	instances := tofuInstances(side.obj)
+	sorted, addrs := sortTofuInstances(side.obj, instances)
+
+	masked := make([]any, 0, len(sorted))
+
+	for i, instance := range sorted {
+		masked = append(masked, maskedInstanceCopy(instance, side.index, i, addrs[i], side.marks))
+	}
+
+	return tofuDiffSide{instances: sorted, addrs: addrs, masked: masked}
+}
+
+// diffTofuResource returns the changed paths and secret paths of one
+// resource present in both versions. The identity fields (type, provider,
+// module, mode) compare as plain paths; the instances compare with their
+// masked copies side by side, so a sensitive change lands in secrets. The
+// result holds empty slices, never nil, when nothing changed.
+func diffTofuResource(pair tofuResourcePair) tofuDiffResource {
+	out := tofuDiffResource{paths: []string{}, secrets: []string{}}
+
+	for _, field := range []string{"type", "provider", "module", "mode"} {
+		if tofuField(pair.from.obj, field) != tofuField(pair.to.obj, field) {
+			out.paths = append(out.paths, "/"+field)
+		}
+	}
+
+	entry := diffTofuInstances(maskSide(pair.from), maskSide(pair.to))
+	out.paths = append(out.paths, entry.paths...)
+	out.secrets = append(out.secrets, entry.secrets...)
+
+	slices.Sort(out.paths)
+	slices.Sort(out.secrets)
+
+	return out
+}
+
+// tofuResourcesByBase maps each resource base of entries to its object. Later
+// entries with the same base win, as each base names one resource.
+func tofuResourcesByBase(entries []tofuResourceEntry) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(entries))
+	for _, entry := range entries {
+		out[tofuResourceBase(entry.obj)] = entry.obj
+	}
+
+	return out
+}
+
+// tofuResourceIndex maps each resource base of entries to its position in the
+// state, so masked copies name the value paths of their own version.
+func tofuResourceIndex(entries []tofuResourceEntry) map[string]int {
+	out := make(map[string]int, len(entries))
+	for _, entry := range entries {
+		out[tofuResourceBase(entry.obj)] = entry.index
+	}
+
+	return out
+}
+
+// tofuDiffMismatch holds the sorted diff entries of two states before paging,
+// with the count of skipped entries the server could not read.
+type tofuDiffMismatch struct {
+	added     []string
+	removed   []string
+	changed   []StateDiffChanged
+	differing []string
+	skipped   int
+}
+
+// tofuVersionSide is one state of a diff: its resources by base address with
+// their positions, and its kept marks.
+type tofuVersionSide struct {
+	byBase map[string]map[string]any
+	index  map[string]int
+	marks  SensitiveMarks
+}
+
+// collectTofuDiff compares the resources by base address: added holds the
+// addresses only in to, removed those only in from, and changed those in
+// both with a change. Differing holds the sorted addresses that differ in
+// any way.
+func collectTofuDiff(from, to tofuVersionSide) tofuDiffMismatch {
+	var out tofuDiffMismatch
+
+	for address := range to.byBase {
+		if _, ok := from.byBase[address]; !ok {
+			out.added = append(out.added, address)
+			out.differing = append(out.differing, address)
+		}
+	}
+
+	for address := range from.byBase {
+		if _, ok := to.byBase[address]; !ok {
+			out.removed = append(out.removed, address)
+			out.differing = append(out.differing, address)
+		}
+	}
+
+	for address, fromObj := range from.byBase {
+		toObj, ok := to.byBase[address]
+		if !ok {
+			continue
+		}
+
+		pair := tofuResourcePair{
+			from: tofuResourceSide{obj: fromObj, marks: from.marks, index: from.index[address]},
+			to:   tofuResourceSide{obj: toObj, marks: to.marks, index: to.index[address]},
+		}
+
+		entry := diffTofuResource(pair)
+		if len(entry.paths) == 0 && len(entry.secrets) == 0 {
+			continue
+		}
+
+		out.changed = append(
+			out.changed,
+			StateDiffChanged{Address: address, ChangedPaths: entry.paths, ChangedSecrets: entry.secrets},
+		)
+		out.differing = append(out.differing, address)
+	}
+
+	slices.Sort(out.added)
+	slices.Sort(out.removed)
+	slices.SortFunc(out.changed, func(a, b StateDiffChanged) int {
+		return strings.Compare(a.Address, b.Address)
+	})
+	slices.Sort(out.differing)
+
+	return out
+}
+
+// pageTofuDiff returns the page of mismatch at offset with at most limit
+// differing addresses.
+func pageTofuDiff(mismatch tofuDiffMismatch, offset, limit int) StateDiff {
+	page := StateDiff{
+		Added:      []string{},
+		Removed:    []string{},
+		Changed:    []StateDiffChanged{},
+		NextCursor: "",
+		Incomplete: mismatch.skipped > 0,
+	}
+
+	if offset >= len(mismatch.differing) {
+		return page
+	}
+
+	end := min(offset+limit, len(mismatch.differing))
+	window := map[string]bool{}
+
+	for _, address := range mismatch.differing[offset:end] {
+		window[address] = true
+	}
+
+	for _, address := range mismatch.added {
+		if window[address] {
+			page.Added = append(page.Added, address)
+		}
+	}
+
+	for _, address := range mismatch.removed {
+		if window[address] {
+			page.Removed = append(page.Removed, address)
+		}
+	}
+
+	for _, entry := range mismatch.changed {
+		if window[entry.Address] {
+			page.Changed = append(page.Changed, entry)
+		}
+	}
+
+	if end < len(mismatch.differing) {
+		page.NextCursor = strconv.Itoa(end)
+		page.Incomplete = true
+	}
+
+	return page
+}
+
+// StateWithMarks is one side of a diff: the plain state with the kept
+// sensitive marks of its version. A version with no kept marks masks every
+// attribute value, so any change then lands in changed secrets.
+type StateWithMarks struct {
+	State []byte
+	Marks SensitiveMarks
+}
+
+// emptyTofuDiff returns an empty diff that still reads cut short.
+func emptyTofuDiff() StateDiff {
+	return StateDiff{
+		Added:      []string{},
+		Removed:    []string{},
+		Changed:    []StateDiffChanged{},
+		NextCursor: "",
+		Incomplete: true,
+	}
+}
+
+// tofuVersionSideOf reads one side of a diff: its resources by base address
+// with their positions, and its kept marks.
+func tofuVersionSideOf(entries []tofuResourceEntry, marks SensitiveMarks) tofuVersionSide {
+	return tofuVersionSide{
+		byBase: tofuResourcesByBase(entries),
+		index:  tofuResourceIndex(entries),
+		marks:  marks,
+	}
+}
+
+// DiffStates returns the diff of two states: from is the older side, to is
+// the newer one. Added holds the sorted addresses only in to, Removed the
+// sorted addresses only in from, and Changed the sorted resources in both
+// with a change. No value leaves the diff: a changed, added or removed
+// sensitive value is one path in ChangedSecrets. Cursor is "" or the
+// NextCursor of an earlier page; size is the page size, or zero for the
+// default page, and counts differing addresses. Resources match by base
+// address across versions.
+func DiffStates(from, to StateWithMarks, cursor string, size int) (StateDiff, error) {
+	offset, err := tofuOffset(cursor)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	limit, err := tofuLimit(size)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	fromDoc, err := decodeState(from.State)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	toDoc, err := decodeState(to.State)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	fromEntries, fromSkipped := tofuStateResources(fromDoc)
+	toEntries, toSkipped := tofuStateResources(toDoc)
+
+	if (fromEntries == nil && fromSkipped) || (toEntries == nil && toSkipped) {
+		return emptyTofuDiff(), nil
+	}
+
+	mismatch := collectTofuDiff(
+		tofuVersionSideOf(fromEntries, from.Marks),
+		tofuVersionSideOf(toEntries, to.Marks),
+	)
+
+	if fromSkipped || toSkipped {
+		mismatch.skipped = 1
+	}
+
+	return pageTofuDiff(mismatch, offset, limit), nil
 }
