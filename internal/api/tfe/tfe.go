@@ -3,11 +3,12 @@
 //
 // Service discovery, ping, the entitlement set, the workspace read, create
 // and list routes, the state read routes (current state, one state
-// version, its download, its outputs and the state version list) and the
-// state write routes (create a state version and upload its content through
-// a capability) exist so far. Every further endpoint lands with its e2e step
-// first, so no other route is served until its issue adds it with the CLI
-// coverage.
+// version, its download, its outputs, the masked resource list with one
+// masked resource, and the reveal of one masked value with its audit entry)
+// and the state write routes (create a state version and upload its content
+// through a capability) exist so far. Every further endpoint lands with its
+// e2e step first, so no other route is served until its issue adds it with
+// the CLI coverage.
 package tfe
 
 import (
@@ -169,13 +170,13 @@ type Config struct {
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
-	// Audit is the audit store that the state download and the single
-	// output route append tool-operation entries to. Nil means no audit
-	// store is configured: the routes answer without an entry.
+	// Audit is the audit store that the reveal call, the state download and
+	// the single output route append to. Nil means no audit store is
+	// configured: the routes answer without an entry.
 	Audit audit.Store
 	// OnAuditFailure runs when an audit append fails. The server wires it
 	// to the dustpan_audit_append_failures_total counter. Nil means no
-	// counter: the routes still fail closed with a 500.
+	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
 }
 

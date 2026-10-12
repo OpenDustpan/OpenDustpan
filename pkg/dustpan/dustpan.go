@@ -560,9 +560,9 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
 // to. base reports the external base URL for absolute URLs. observed counts
-// failed audit appends: the state download and the single output route fail
-// closed with a 500 when the append fails, so the counter is the alert for
-// lost entries.
+// failed audit appends: the reveal call, the state download and the single
+// output route fail closed with a 500 when the append fails, so the counter
+// is the alert for lost entries.
 func newTFEHandler(
 	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
 ) (*tfe.Handler, error) {
