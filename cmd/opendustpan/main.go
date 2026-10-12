@@ -54,10 +54,6 @@ import (
 )
 
 var (
-	errUsage = errors.New(
-		"usage: opendustpan --version | opendustpan serve | opendustpan health | opendustpan namespace create <name> | " +
-			"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore",
-	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
 	// errTLSCertMissing reports --tls-key without --tls-cert.
@@ -101,9 +97,6 @@ var (
 	errS3Endpoint = errors.New(
 		"s3 endpoint must be an http(s) URL with a host: set --s3-endpoint (DUSTPAN_S3_ENDPOINT)",
 	)
-	// errBackupID reports a backup check without a backup ID. It names the
-	// flag, so the operator knows what to set.
-	errBackupID = errors.New("backup id is missing: set --backup <id>")
 	// errKeyGenerateRequired reports serve with no key, no key file, no
 	// terminal and no opt-in. It names each setting that helps, so the
 	// operator knows what to set. Serve returns it before it opens the
@@ -1203,7 +1196,7 @@ func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (b
 // openBackupTarget opens the backup target in raw as a blob store. Empty
 // means no backup target is configured: it returns nil without an error. A
 // dir:/path target opens the local directory, creating it owner-only, as a
-// backup holds OpenTofu state in plain text. An s3://<bucket>[/<prefix>]
+// backup holds sealed OpenTofu state. An s3://<bucket>[/<prefix>]
 // target opens S3-compatible storage with the same constructor as the live
 // blob store. Anything else is an error that shows the allowed forms.
 //
@@ -1364,8 +1357,13 @@ type postgresStore struct{ *postgres.Store }
 
 func (s postgresStore) close() { s.Close() }
 
-//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
-func openStore(ctx context.Context, database string) (store, error) {
+// openStore opens the persistence adapter that --database names. Only serve
+// calls it: every other command is a client of the REST API (ADR 39 decision
+// 1). The gate test swaps it for a function that fails the test, so a future
+// client command that opens a store fails the test.
+//
+//nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
+var openStore = func(ctx context.Context, database string) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
 		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"))

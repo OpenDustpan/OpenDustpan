@@ -68,6 +68,7 @@ internal/              code that is not part of the SDK
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   metrics/, token/...  helpers shared across packages
+load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)

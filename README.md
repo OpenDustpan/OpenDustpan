@@ -29,7 +29,7 @@ export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
 
 The administrator signs in with the admin token. The key-encryption key
-protects secret values. Keep both values outside the server's data directory.
+protects secret values and OpenTofu state. Keep both values outside the server's data directory.
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
 `:8080`.
 
@@ -39,7 +39,7 @@ explicit yes before it makes the file. Without a terminal, set
 `--generate-key-encryption-key`
 (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`) to make the file with no prompt.
 The server never makes a key silently. An operator who loses the key file
-loses every secret that the key encrypts, and nobody can recover them. The
+loses every secret and every OpenTofu state that the key encrypts, and nobody can recover them. The
 default key file is in the data directory, so for production set
 `--key-encryption-key-file` to a path outside it, or set
 `DUSTPAN_KEY_ENCRYPTION_KEY`.
@@ -150,7 +150,7 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Data | Where | Protection |
 | --- | --- | --- |
 | Namespaces, stacks, workspaces, locks, history | The SQL database: a SQLite file, or PostgreSQL | None of its own. Protect the database. |
-| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is plain text. |
+| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is sealed with the key-encryption key. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
 The database and the backups hold no copy of the key-encryption key. It
@@ -166,14 +166,13 @@ address of the local server.
 
 ### What to back up
 
-1. **The key-encryption key.** A lost key means lost secrets. The server
-   refuses to start without a key, and with a key that does not open the
-   wrapped keys in the database. Keep a copy of the key in a different place
-   from the backups. The default key file sits next to the SQLite database,
-   so a copy of that directory also copies the key.
+1. **The key-encryption key.** A lost key means lost secrets and lost
+   OpenTofu state. The server refuses to start without a key, and with a key
+   that does not open the wrapped keys in the database. Keep a copy of the
+   key in a different place from the backups. The default key file sits next
+   to the SQLite database, so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
-   and the blobs to a backup target. A backup holds OpenTofu state in plain
-   text, so protect the target.
+   and the blobs to a backup target. A backup holds sealed OpenTofu state, so protect the target.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
 

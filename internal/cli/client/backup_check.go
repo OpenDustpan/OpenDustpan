@@ -1,4 +1,4 @@
-package main
+package client
 
 // Backup check subcommand: a client of GET /api/server/backups/{id}/check
 // (ADR 39 decision 3).
@@ -13,11 +13,12 @@ package main
 //
 // This file is client code: it must not import a store adapter, a blob
 // adapter, backup-target code or key-encryption key code (ADR 39 decision 4).
-// client_gate_test.go and the depguard client rule fail the build when it
-// does.
+// The depguard rule for internal/cli/client and the gate test in
+// cmd/opendustpan fail the build when it does.
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,6 +28,10 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
+
+// ErrBackupID reports a backup check without a backup ID. It names the
+// flag, so the operator knows what to set.
+var ErrBackupID = errors.New("backup id is missing: set --backup <id>")
 
 // backupCheckFlags holds the settings of the backup check subcommand: the
 // server to ask and the backup ID to check. The token comes from
@@ -42,7 +47,7 @@ func (f *backupCheckFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(
 		&f.server,
 		"server",
-		env(backupServerEnvVar, ""),
+		env(BackupServerEnvVar, ""),
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 	)
 	fs.StringVar(
@@ -54,21 +59,21 @@ func (f *backupCheckFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
 }
 
-// checkBackupAnswer is the server answer the backup check reads: whether the
+// CheckBackupAnswer is the server answer the backup check reads: whether the
 // configured target holds every object the manifest names with the recorded
 // size, with the first missing or short object in Error.
-type checkBackupAnswer struct {
+type CheckBackupAnswer struct {
 	ID       string `json:"id"`
 	Complete bool   `json:"complete"`
 	Error    string `json:"error"`
 }
 
-// backupCheck runs `opendustpan backup check --server <url> --backup <id>`:
+// BackupCheck runs `opendustpan backup check --server <url> --backup <id>`:
 // it asks the server to check the backup in its configured target and prints
 // one verdict. It opens no database and reads no target or key. It exits 0
 // when the backup is complete, else it returns the first missing or short
 // object by key with exit 1.
-func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var f backupCheckFlags
 
 	fs := flag.NewFlagSet("backup check", flag.ContinueOnError)
@@ -80,28 +85,28 @@ func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	if fs.NArg() != 0 {
-		return errUsage
+		return ErrUsage
 	}
 
 	id := strings.TrimSpace(f.id)
 	if id == "" {
-		return errBackupID
+		return ErrBackupID
 	}
 
 	if _, err := backup.ParseID(id); err != nil {
-		return fmt.Errorf("%w: set --backup to a backup ID like bkp-aaa: %w", errBackupID, err)
+		return fmt.Errorf("%w: set --backup to a backup ID like bkp-aaa: %w", ErrBackupID, err)
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan backup check again",
-			errBackupNeedsServer,
-			backupServerEnvVar,
+			ErrBackupNeedsServer,
+			BackupServerEnvVar,
 		)
 	}
 
-	token, err := backupToken()
+	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
@@ -133,8 +138,8 @@ func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 // broken server cannot grow the client without bound.
 func readBackupCheck(
 	ctx context.Context, client *http.Client, server, token, id string,
-) (checkBackupAnswer, error) {
-	var none checkBackupAnswer
+) (CheckBackupAnswer, error) {
+	var none CheckBackupAnswer
 
 	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id)+"/check")
 
@@ -142,7 +147,7 @@ func readBackupCheck(
 	if err != nil {
 		return none, fmt.Errorf(
 			"%w %s: %w: check --server and run opendustpan backup check again",
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 		)
@@ -154,7 +159,7 @@ func readBackupCheck(
 	if err != nil {
 		return none, fmt.Errorf(
 			"%w %s: %w: check --server and run opendustpan backup check again",
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 		)
@@ -167,18 +172,18 @@ func readBackupCheck(
 	if resp.StatusCode != http.StatusOK {
 		return none, fmt.Errorf(
 			"%w %s: %s: check the server log and run opendustpan backup check again",
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			decodeBackupError(resp),
 		)
 	}
 
-	var answer checkBackupAnswer
+	var answer CheckBackupAnswer
 
 	if err := decodeCappedJSON(resp.Body, &answer); err != nil {
 		return none, fmt.Errorf(
 			"%w %s: %w: check the server log and run opendustpan backup check again",
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 		)

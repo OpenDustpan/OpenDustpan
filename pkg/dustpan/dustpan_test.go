@@ -69,6 +69,13 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	// The fixture server seals OpenTofu state, so it holds a
+	// key-encryption key like a server with a key set does.
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -77,6 +84,7 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),

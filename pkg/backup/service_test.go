@@ -327,6 +327,7 @@ func newFixture(t *testing.T, exporter backup.Exporter, maxSQL int64) *fixture {
 		Exporter:    exporter,
 		Registry:    registry,
 		Blobs:       source,
+		StateOpener: nil,
 		Target:      target,
 		TargetName:  "mem:target",
 		Now:         func() time.Time { return now },
@@ -343,7 +344,7 @@ func newFixture(t *testing.T, exporter backup.Exporter, maxSQL int64) *fixture {
 func blobRef(key string, data []byte) backup.BlobRef {
 	sum := md5.Sum(data) //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
 
-	return backup.BlobRef{Key: key, Size: int64(len(data)), MD5: sum}
+	return backup.BlobRef{Key: key, Size: int64(len(data)), MD5: sum, Sealed: false}
 }
 
 func testSummary(refs ...backup.BlobRef) backup.Summary {
@@ -467,8 +468,8 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		HomeRegions: []string{"eu-west"},
 		WrapperIDs:  []string{"kek-1"},
 		Blobs: []backup.ManifestBlob{
-			{Key: "tofu/ws1/sv1/a1", Size: int64(len(first)), MD5: hex.EncodeToString(firstMD5[:])},
-			{Key: "tofu/ws1/sv2/a1", Size: int64(len(second)), MD5: hex.EncodeToString(secondMD5[:])},
+			{Key: "tofu/ws1/sv1/a1", Size: int64(len(first)), MD5: hex.EncodeToString(firstMD5[:]), Sealed: false},
+			{Key: "tofu/ws1/sv2/a1", Size: int64(len(second)), MD5: hex.EncodeToString(secondMD5[:]), Sealed: false},
 		},
 		Version:       "test-1.0",
 		SQLSHA256:     hex.EncodeToString(sha[:]),
@@ -907,6 +908,7 @@ func TestNewServiceRefusesMissingDependencies(t *testing.T) {
 				Exporter:    exporter,
 				Registry:    registry,
 				Blobs:       source,
+				StateOpener: nil,
 				Target:      target,
 				TargetName:  "",
 				Now:         nil,

@@ -1,4 +1,4 @@
-package main
+package client
 
 // Backup subcommand of the installation API (ADR 30 decision 10): a client
 // of POST /api/server/backups and GET /api/server/backups/{id} (ADR 17).
@@ -31,44 +31,44 @@ import (
 )
 
 const (
-	// adminTokenEnvVar holds the access token the backup command sends.
+	// AdminTokenEnvVar holds the access token the backup command sends.
 	// It is read from the environment only, never from a flag. The value
 	// is the name of the setting, not a credential.
-	adminTokenEnvVar = "DUSTPAN_ADMIN_TOKEN" //nolint:gosec // The value names the setting; it holds no credential.
-	// backupServerEnvVar sets the default --server value.
-	backupServerEnvVar = "DUSTPAN_SERVER"
+	AdminTokenEnvVar = "DUSTPAN_ADMIN_TOKEN" //nolint:gosec // The value names the setting; it holds no credential.
+	// BackupServerEnvVar sets the default --server value.
+	BackupServerEnvVar = "DUSTPAN_SERVER"
 	// backupPollInterval sets how often the command reads the backup row
 	// while it runs.
 	backupPollInterval = 200 * time.Millisecond
 	// backupRequestTimeout bounds one backup API request.
 	backupRequestTimeout = 30 * time.Second
-	// maxClientBodyBytes caps one installation API answer a client command
+	// MaxClientBodyBytes caps one installation API answer a client command
 	// reads: 1 MiB, far above the small JSON documents the routes answer. A
 	// hostile or broken server cannot grow the client without bound.
-	maxClientBodyBytes = 1 << 20
+	MaxClientBodyBytes = 1 << 20
 )
 
 // Sentinel errors of the backup subcommand. Each error text names what
 // failed and the one command that helps.
 var (
-	// errBackupNeedsServer reports a backup run without --server.
-	errBackupNeedsServer = errors.New("backup needs --server")
-	// errBackupFailed reports a backup that left running without success.
-	errBackupFailed = errors.New("backup failed")
-	// errBackupNoToken reports a backup run without an admin token.
-	errBackupNoToken = errors.New("no admin token is set")
-	// errBackupNoCA reports a CA bundle with no certificate.
-	errBackupNoCA = errors.New("no certificate found")
-	// errBackupTransport reports a backup HTTP transport of another type.
-	errBackupTransport = errors.New("backup HTTP transport is not an *http.Transport")
-	// errBackupStart reports a backup that never started.
-	errBackupStart = errors.New("start backup failed")
-	// errBackupRead reports a backup row that never arrived.
-	errBackupRead = errors.New("read backup failed")
-	// errResponseTooLarge reports a server answer above maxClientBodyBytes.
+	// ErrBackupNeedsServer reports a backup run without --server.
+	ErrBackupNeedsServer = errors.New("backup needs --server")
+	// ErrBackupFailed reports a backup that left running without success.
+	ErrBackupFailed = errors.New("backup failed")
+	// ErrBackupNoToken reports a backup run without an admin token.
+	ErrBackupNoToken = errors.New("no admin token is set")
+	// ErrBackupNoCA reports a CA bundle with no certificate.
+	ErrBackupNoCA = errors.New("no certificate found")
+	// ErrBackupTransport reports a backup HTTP transport of another type.
+	ErrBackupTransport = errors.New("backup HTTP transport is not an *http.Transport")
+	// ErrBackupStart reports a backup that never started.
+	ErrBackupStart = errors.New("start backup failed")
+	// ErrBackupRead reports a backup row that never arrived.
+	ErrBackupRead = errors.New("read backup failed")
+	// ErrResponseTooLarge reports a server answer above MaxClientBodyBytes.
 	// The body may come from a hostile or broken server, so the client
 	// refuses it instead of growing without bound.
-	errResponseTooLarge = errors.New("server answered more data than the client reads")
+	ErrResponseTooLarge = errors.New("server answered more data than the client reads")
 )
 
 // rerunHelp names the one command that helps after a backup error: the
@@ -85,7 +85,7 @@ func (f *backupFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(
 		&f.server,
 		"server",
-		env(backupServerEnvVar, ""),
+		env(BackupServerEnvVar, ""),
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 	)
 	fs.StringVar(
@@ -101,19 +101,19 @@ type backupStartResponse struct {
 	ID string `json:"id"`
 }
 
-// backupManifest holds the manifest fields the command prints: the SQL
+// BackupManifest holds the manifest fields the command prints: the SQL
 // size of the backup.
-type backupManifest struct {
+type BackupManifest struct {
 	SQLSize int64 `json:"sqlSize"`
 }
 
-// backupStatusResponse answers one backup: its state and, when the backup
+// BackupStatusResponse answers one backup: its state and, when the backup
 // succeeded, the manifest.
-type backupStatusResponse struct {
+type BackupStatusResponse struct {
 	ID       string          `json:"id"`
 	State    string          `json:"state"`
 	Error    string          `json:"error"`
-	Manifest *backupManifest `json:"manifest"`
+	Manifest *BackupManifest `json:"manifest"`
 }
 
 // backupErrorResponse is the error body the installation API answers. Only
@@ -122,11 +122,11 @@ type backupErrorResponse struct {
 	Message string `json:"message"`
 }
 
-// backupCommand runs `opendustpan backup`: it starts a backup, waits until
+// BackupCommand runs `opendustpan backup`: it starts a backup, waits until
 // it leaves running, and prints the ID, the state and the size with the
 // key and plain-text warnings. A failed backup prints the same lines and
 // returns an error, so the exit code is 1.
-func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func BackupCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var f backupFlags
 
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
@@ -138,19 +138,19 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 
 	if fs.NArg() != 0 {
-		return errUsage
+		return ErrUsage
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan backup again",
-			errBackupNeedsServer,
-			backupServerEnvVar,
+			ErrBackupNeedsServer,
+			BackupServerEnvVar,
 		)
 	}
 
-	token, err := backupToken()
+	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if doc.State != "succeeded" {
 		return fmt.Errorf(
 			"%w %s: %s: "+rerunHelp,
-			errBackupFailed,
+			ErrBackupFailed,
 			id,
 			backupFailureText(doc),
 			server,
@@ -187,13 +187,13 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	return nil
 }
 
-// backupToken returns the access token from DUSTPAN_ADMIN_TOKEN, or from the
+// BackupToken returns the access token from DUSTPAN_ADMIN_TOKEN, or from the
 // file in DUSTPAN_ADMIN_TOKEN_FILE when the variable is empty: the first
 // token, as the server signs each token in as a distinct administrator. No
 // token is an error that names both settings and the one command that helps.
-func backupToken() (string, error) {
-	tokens, err := loadAdminTokensFrom(os.LookupEnv)
-	if err != nil && !errors.Is(err, errAdminTokenMissing) {
+func BackupToken() (string, error) {
+	tokens, err := LoadAdminTokensFrom(os.LookupEnv)
+	if err != nil && !errors.Is(err, ErrAdminTokenMissing) {
 		return "", err
 	}
 
@@ -205,9 +205,9 @@ func backupToken() (string, error) {
 
 	return "", fmt.Errorf(
 		"%w: set %s or %s and run opendustpan backup again",
-		errBackupNoToken,
-		adminTokenEnvVar,
-		adminTokenFileEnvVar,
+		ErrBackupNoToken,
+		AdminTokenEnvVar,
+		AdminTokenFileEnvVar,
 	)
 }
 
@@ -239,7 +239,7 @@ func newBackupHTTPClient(caFile, rerun string) (*http.Client, error) {
 		return nil, fmt.Errorf(
 			"read CA file %q: %w: check --ca-file and %s",
 			caFile,
-			errBackupNoCA,
+			ErrBackupNoCA,
 			rerun,
 		)
 	}
@@ -248,7 +248,7 @@ func newBackupHTTPClient(caFile, rerun string) (*http.Client, error) {
 	if !ok {
 		return nil, fmt.Errorf(
 			"%w: check --ca-file and %s",
-			errBackupTransport,
+			ErrBackupTransport,
 			rerun,
 		)
 	}
@@ -271,19 +271,19 @@ func backupAuth(req *http.Request, token string) {
 }
 
 // decodeCappedJSON decodes one installation API answer from r, reading at
-// most maxClientBodyBytes. A larger body is an error wrapping
-// errResponseTooLarge, never a silent truncation.
+// most MaxClientBodyBytes. A larger body is an error wrapping
+// ErrResponseTooLarge, never a silent truncation.
 func decodeCappedJSON(r io.Reader, doc any) error {
-	raw, err := io.ReadAll(io.LimitReader(r, maxClientBodyBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(r, MaxClientBodyBytes+1))
 	if err != nil {
 		return fmt.Errorf("read server answer: %w", err)
 	}
 
-	if len(raw) > maxClientBodyBytes {
+	if len(raw) > MaxClientBodyBytes {
 		return fmt.Errorf(
 			"%w: over %d bytes: check the server log",
-			errResponseTooLarge,
-			maxClientBodyBytes,
+			ErrResponseTooLarge,
+			MaxClientBodyBytes,
 		)
 	}
 
@@ -296,15 +296,15 @@ func decodeCappedJSON(r io.Reader, doc any) error {
 
 // decodeBackupError reads an error body of the installation API: the
 // message with its code, or the status alone when the body has no JSON
-// error. The body is capped at maxClientBodyBytes: an oversized body answers
+// error. The body is capped at MaxClientBodyBytes: an oversized body answers
 // the status alone.
 func decodeBackupError(resp *http.Response) string {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxClientBodyBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxClientBodyBytes+1))
 	if err != nil {
 		return resp.Status
 	}
 
-	if len(raw) > maxClientBodyBytes {
+	if len(raw) > MaxClientBodyBytes {
 		return resp.Status
 	}
 
@@ -353,7 +353,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 	if resp.StatusCode != http.StatusAccepted {
 		return "", fmt.Errorf(
 			"%w: %s: check the server log and "+rerunHelp,
-			errBackupStart,
+			ErrBackupStart,
 			decodeBackupError(resp),
 			server,
 		)
@@ -364,7 +364,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 	if err := decodeCappedJSON(resp.Body, &doc); err != nil || strings.TrimSpace(doc.ID) == "" {
 		return "", fmt.Errorf(
 			"%w: the server answered no backup ID: check the server log and "+rerunHelp,
-			errBackupStart,
+			ErrBackupStart,
 			server,
 		)
 	}
@@ -375,14 +375,14 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 // readBackup reads one backup row.
 func readBackup(
 	ctx context.Context, client *http.Client, server, token, id string,
-) (backupStatusResponse, error) {
+) (BackupStatusResponse, error) {
 	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
-		return backupStatusResponse{}, fmt.Errorf(
+		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 			server,
@@ -393,9 +393,9 @@ func readBackup(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return backupStatusResponse{}, fmt.Errorf(
+		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 			server,
@@ -407,21 +407,21 @@ func readBackup(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return backupStatusResponse{}, fmt.Errorf(
+		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %s: "+rerunHelp,
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			decodeBackupError(resp),
 			server,
 		)
 	}
 
-	var doc backupStatusResponse
+	var doc BackupStatusResponse
 
 	if err := decodeCappedJSON(resp.Body, &doc); err != nil {
-		return backupStatusResponse{}, fmt.Errorf(
+		return BackupStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+rerunHelp,
-			errBackupRead,
+			ErrBackupRead,
 			id,
 			err,
 			server,
@@ -435,14 +435,14 @@ func readBackup(
 // last row. A canceled context stops the wait with the context error.
 func waitBackup(
 	ctx context.Context, client *http.Client, server, token, id string,
-) (backupStatusResponse, error) {
+) (BackupStatusResponse, error) {
 	timer := time.NewTimer(backupPollInterval)
 	defer timer.Stop()
 
 	for {
 		doc, err := readBackup(ctx, client, server, token, id)
 		if err != nil {
-			return backupStatusResponse{}, err
+			return BackupStatusResponse{}, err
 		}
 
 		if doc.State != "running" {
@@ -451,7 +451,7 @@ func waitBackup(
 
 		select {
 		case <-ctx.Done():
-			return backupStatusResponse{}, fmt.Errorf(
+			return BackupStatusResponse{}, fmt.Errorf(
 				"wait for backup %s: %w: "+rerunHelp,
 				id,
 				ctx.Err(),
@@ -465,7 +465,7 @@ func waitBackup(
 
 // backupFailureText answers the error text of a failed backup row, or a
 // fallback when the row holds none.
-func backupFailureText(doc backupStatusResponse) string {
+func backupFailureText(doc BackupStatusResponse) string {
 	if strings.TrimSpace(doc.Error) != "" {
 		return strings.TrimSpace(doc.Error)
 	}
@@ -475,7 +475,7 @@ func backupFailureText(doc backupStatusResponse) string {
 
 // backupSizeText answers the SQL size of a succeeded backup row, or an
 // empty string when the manifest is missing.
-func backupSizeText(doc backupStatusResponse) string {
+func backupSizeText(doc BackupStatusResponse) string {
 	if doc.Manifest == nil {
 		return ""
 	}
@@ -486,16 +486,16 @@ func backupSizeText(doc backupStatusResponse) string {
 // writeBackupReport prints the ID, the state and, when the manifest is
 // present, the size of the backup. It then prints that a backup cannot
 // decrypt secrets without the key-encryption key and that a backup holds
-// OpenTofu state in plain text, so the operator protects the target
-// (ADR 30 decision 7).
-func writeBackupReport(stdout io.Writer, doc backupStatusResponse) error {
+// sealed OpenTofu state, so the operator protects the target and keeps the
+// key apart from it (ADR 41 decision 10).
+func writeBackupReport(stdout io.Writer, doc BackupStatusResponse) error {
 	if _, err := fmt.Fprintf(stdout, "backup %s %s%s\n", doc.ID, doc.State, backupSizeText(doc)); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 
 	warnings := []string{
-		"A backup cannot decrypt secrets without " + keyEnvVar + ".",
-		"A backup holds OpenTofu state in plain text: protect the target.",
+		"A backup cannot decrypt secrets without " + KeyEnvVar + ".",
+		"A backup holds sealed OpenTofu state: protect the target.",
 	}
 
 	for _, line := range warnings {
