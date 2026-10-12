@@ -54,10 +54,12 @@ func (s *Service) SealUnsealedStates(ctx context.Context) (SealResult, error) {
 
 		if skip {
 			out.Skipped++
-		} else if sealed {
-			out.Sealed++
-
+		} else {
 			affected[sv.Workspace] = struct{}{}
+
+			if sealed {
+				out.Sealed++
+			}
 		}
 	}
 
@@ -75,8 +77,8 @@ func (s *Service) SealUnsealedStates(ctx context.Context) (SealResult, error) {
 	return out, nil
 }
 
-// sealOne seals one unsealed version. It reports whether the version ends
-// sealed and whether it was skipped for a foreign home region, in that
+// sealOne seals one unsealed version. It reports whether this run sealed
+// the version and whether it was skipped for a foreign home region, in that
 // order. A version whose workspace is gone is skipped the same way: its blob
 // stays for the existing sweep.
 //
@@ -104,7 +106,6 @@ func (s *Service) sealOne(ctx context.Context, sv StateVersion) (bool, bool, err
 				ctx,
 				"skip seal outside the home region",
 				slog.String("state_version", sv.ID.String()),
-				slog.String("namespace", w.Ref.Namespace.String()),
 			)
 
 			return false, true, nil
@@ -139,9 +140,10 @@ func (s *Service) sealOne(ctx context.Context, sv StateVersion) (bool, bool, err
 	}
 
 	// Another run sealed the row first: the blob this run wrote is the
-	// orphan. The committed row keeps the first seal.
+	// orphan. The committed row keeps the first seal, so this run reports
+	// nothing sealed: the count names sealed rows, not seal attempts.
 	if stored.Content != key {
-		return true, false, s.blobs.Delete(ctx, key)
+		return false, false, s.blobs.Delete(ctx, key)
 	}
 
 	if err = s.deleteBlobRetried(ctx, oldKey); err != nil {

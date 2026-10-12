@@ -51,7 +51,7 @@ A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A
 Restore loads a backup from the configured backup target into the running
 installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
-backup. Use the same key, the same dialect, and the same schema version as
+backup. Use the same key-encryption key, the same dialect, and the same schema version as
 the backup source. A backup from before the seal change still restores.
 After the apply, the server seals the rows that the backup holds unsealed.
 
