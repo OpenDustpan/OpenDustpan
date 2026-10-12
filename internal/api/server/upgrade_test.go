@@ -20,6 +20,7 @@ type upgradeCheckDoc struct {
 	Version           string   `json:"version"`
 	SchemaVersion     int64    `json:"schemaVersion"`
 	AppliedMigrations []string `json:"appliedMigrations"`
+	KeyEncryptionKey  bool     `json:"keyEncryptionKey"`
 }
 
 // readUpgradeCheck reads the upgrade check and returns its status and
@@ -160,6 +161,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
+		KeyEncryptionKey: false,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -185,15 +187,16 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           nil,
+		KeyEncryptionKey: false,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -234,5 +237,41 @@ func TestUpgradeCheckNeedsToken(t *testing.T) {
 
 	if doc := decodeError(t, rec.Body.String()); doc.Code != http.StatusUnauthorized || doc.Message == "" {
 		t.Fatalf("upgrade check error = %+v, want code 401 with a message", doc)
+	}
+}
+
+// TestUpgradeCheckAnswersKeyEncryptionKey proves the upgrade check answers
+// whether the server runs with a key-encryption key, so the command can warn
+// about a server that runs without one (ADR 41 decision 12).
+func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	for _, keyed := range []bool{false, true} {
+		handler, err := apiserver.NewHandler(apiserver.Config{
+			Authenticator: tokenAuthenticator{},
+			Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+			Logger:        slog.New(slog.DiscardHandler),
+			Namespaces:    newTestNamespaces(t),
+			Backups:       nil,
+			Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+			Metrics:       stubMetrics{},
+			Version:       "test",
+			Schema: stubSchema{migrations: []schemaMigration{
+				{Version: 1, Name: "0001_init.sql"},
+			}},
+			KeyEncryptionKey: keyed,
+		})
+		if err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+
+		status, doc := readUpgradeCheck(t, handler)
+		if status != http.StatusOK {
+			t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+		}
+
+		if doc.KeyEncryptionKey != keyed {
+			t.Fatalf("keyEncryptionKey = %t, want %t", doc.KeyEncryptionKey, keyed)
+		}
 	}
 }

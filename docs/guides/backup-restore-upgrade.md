@@ -80,7 +80,7 @@ Run the upgrade check before an upgrade. It reads the database and writes nothin
 opendustpan upgrade check --database sqlite:/var/data/dustpan.db
 ```
 
-The command prints the binary version, the schema version of the database, the schema version that the binary needs, and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists.
+The command prints the binary version, the schema version of the database, the schema version that the binary needs, and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists. When the server runs without a key-encryption key, or is older than ADR 41, the command also prints a warning. The warning names `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`), `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and `DUSTPAN_KEY_ENCRYPTION_KEY`. Set one of them before the upgrade.
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
 

@@ -92,6 +92,7 @@ func upgradeCheckBody(t *testing.T, applied []string) string {
 		ServerVersion:     checkServerVersion,
 		SchemaVersion:     schema.DatabaseVersion(versions),
 		AppliedMigrations: applied,
+		KeyEncryptionKey:  nil,
 	})
 	if err != nil {
 		t.Fatalf("encode upgrade check answer: %v", err)
@@ -289,6 +290,7 @@ func TestUpgradeCheckVersionMismatch(t *testing.T) {
 		ServerVersion:     checkServerVersion,
 		SchemaVersion:     99,
 		AppliedMigrations: nil,
+		KeyEncryptionKey:  nil,
 	})
 	if err != nil {
 		t.Fatalf("encode mismatched answer: %v", err)
@@ -587,5 +589,60 @@ func TestClientCommandsOpenNoStore(t *testing.T) {
 
 			return true
 		})
+	}
+}
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestUpgradeCheckKeyWarning(t *testing.T) {
+	names, _ := embeddedNames(t)
+
+	keyed := true
+	unkeyed := false
+
+	for _, tc := range []struct {
+		name string
+		key  *bool
+		want bool
+	}{
+		{name: "server older than ADR 41", key: nil, want: true},
+		{name: "server without a key", key: &unkeyed, want: true},
+		{name: "server with a key", key: &keyed, want: false},
+	} {
+		body, err := json.Marshal(upgradeCheckAnswer{
+			ServerVersion:     checkServerVersion,
+			SchemaVersion:     int64(len(names)),
+			AppliedMigrations: names,
+			KeyEncryptionKey:  tc.key,
+		})
+		if err != nil {
+			t.Fatalf("%s: encode upgrade check answer: %v", tc.name, err)
+		}
+
+		fake := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, string(body))
+
+		out, runErr := runUpgradeCheckCommand(t, fake.server.URL)
+		if runErr != nil {
+			t.Fatalf("%s: upgrade check: %v", tc.name, runErr)
+		}
+
+		if got := strings.Contains(out, keyWarning); got != tc.want {
+			t.Fatalf("%s: output holds the key warning = %t, want %t:\n%s", tc.name, got, tc.want, out)
+		}
+
+		if !tc.want {
+			continue
+		}
+
+		for _, name := range []string{
+			"--generate-key-encryption-key",
+			"DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
+			"--key-encryption-key-file",
+			keyFileEnvVar,
+			keyEnvVar,
+		} {
+			if !strings.Contains(out, name) {
+				t.Fatalf("%s: key warning lacks %q:\n%s", tc.name, name, out)
+			}
+		}
 	}
 }
