@@ -1406,8 +1406,6 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 		Fail:   false,
 		Redact: false,
 	})
-	checkAuditLogCalls(t, env, org)
-	checkAuditLog(ctx, t, env, org)
 	env.Step(ctx, t, e2e.StepSpec{
 		Check:  upHasNoChanges,
 		Name:   "up after passphrase change",
@@ -1417,6 +1415,23 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 		Fail:   false,
 		Redact: false,
 	})
+	// The tool operations below decrypt the secrets too. None of them may
+	// call a decrypt audit route: an IaC action that needs secrets must
+	// never read as a person who shows them. checkAuditLogCalls proves it.
+	for _, op := range [][]string{
+		{"preview after passphrase change", "preview", "--non-interactive", "--stack", qualified},
+		{"refresh after passphrase change", "refresh", "--yes", "--non-interactive", "--stack", qualified},
+	} {
+		env.Step(ctx, t, e2e.StepSpec{
+			Check:  nil,
+			Name:   op[0],
+			Args:   op[1:],
+			Env:    passEnv,
+			Stdin:  "",
+			Fail:   false,
+			Redact: false,
+		})
+	}
 	// Changing back needs the passphrase too: the CLI decrypts with the
 	// old provider before it encrypts with the service provider.
 	env.Step(ctx, t, e2e.StepSpec{
@@ -1447,6 +1462,16 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 		t,
 		step("up after default change", upHasNoChanges, "up", "--yes", "--non-interactive", "--stack", qualified),
 	)
+	env.Step(ctx, t, step("preview after default change", nil, "preview", "--non-interactive", "--stack", qualified))
+	env.Step(
+		ctx,
+		t,
+		step("refresh after default change", nil, "refresh", "--yes", "--non-interactive", "--stack", qualified),
+	)
+	env.Step(ctx, t, step("destroy secrets", nil, "destroy", "--yes", "--non-interactive", "--stack", qualified))
+
+	calls := checkAuditLogCalls(t, env, org)
+	checkAuditLog(ctx, t, env, org, calls)
 	env.Step(ctx, t, step("stack rm secrets", nil, "stack", "rm", "--yes", "--stack", qualified))
 }
 
@@ -2907,13 +2932,30 @@ func readAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 // call the routes: `config get` calls log-decryption, while `stack output
 // key --show-secrets` and `stack export --show-secrets` call
 // log-batch-decryption.
-func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, calls int) {
 	t.Helper()
 
 	entries := readAuditEntries(ctx, t, env, org)
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
 	checkRevealFields(t, findRevealEntry(t, entries))
+
+	// Each decrypt audit call writes exactly one reveal entry, and nothing
+	// else writes one for the secrets stack.
+	unit := "/" + e2e.Project + "/secrets"
+	reveals := 0
+
+	for i := range entries {
+		if e := &entries[i]; e.Kind == "reveal" && strings.HasSuffix(e.Object, unit) {
+			reveals++
+		}
+	}
+
+	if reveals != calls {
+		t.Fatalf("reveal entries of the secrets stack = %d, want one for each of the %d decrypt audit calls",
+			reveals, calls)
+	}
+
 	checkAuditChain(ctx, t, env, org)
 }
 
@@ -2992,27 +3034,49 @@ func checkAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, org string
 	}
 }
 
-// checkAuditLogCalls records which CLI commands call the decrypt audit
-// routes: `config get` calls log-decryption, while `stack output key
-// --show-secrets` and `stack export --show-secrets` call
-// log-batch-decryption.
-func checkAuditLogCalls(t *testing.T, env *e2e.Env, org string) {
+// showSecretSteps names the steps of pulumiChangeSecretsProviderScenario in
+// which a person shows secret values. Only these steps may call a decrypt
+// audit route.
+//
+//nolint:gochecknoglobals // A fixed lookup table of step names; Go has no constant maps.
+var showSecretSteps = map[string]bool{
+	"stack output before provider change":               true,
+	"config get after passphrase change":                true,
+	"stack output after passphrase change":              true,
+	"stack export with secrets after passphrase change": true,
+	"config get after default change":                   true,
+	"stack output after default change":                 true,
+}
+
+// checkAuditLogCalls proves that the CLI calls the decrypt audit routes only
+// when a person shows secrets: `config get` calls log-decryption, while
+// `stack output key --show-secrets` and `stack export --show-secrets` call
+// log-batch-decryption, each one time. No tool operation (up, preview,
+// refresh, destroy, change-secrets-provider) calls them, with the service
+// provider or the passphrase provider. It returns the number of calls.
+func checkAuditLogCalls(t *testing.T, env *e2e.Env, org string) int {
 	t.Helper()
 
 	base := "/api/stacks/" + org + "/" + e2e.Project + "/secrets/decrypt"
-
-	var calls []string
+	perStep := map[string]int{}
+	calls := 0
 
 	recorded := env.Recorder.Entries()
 	for i := range recorded {
 		entry := &recorded[i]
-		if entry.Method == http.MethodPost && strings.HasPrefix(entry.Path, base+"/log-") {
-			calls = append(calls, entry.Step+" -> "+strings.TrimPrefix(entry.Path, base+"/"))
+		if entry.Method != http.MethodPost || !strings.HasPrefix(entry.Path, base+"/log-") {
+			continue
 		}
-	}
 
-	for _, call := range calls {
-		t.Logf("decrypt audit call: %s", call)
+		t.Logf("decrypt audit call: %s -> %s", entry.Step, strings.TrimPrefix(entry.Path, base+"/"))
+
+		if !showSecretSteps[entry.Step] {
+			t.Fatalf("step %q called %s: a tool operation must not read as a person who shows secrets",
+				entry.Step, entry.Path)
+		}
+
+		perStep[entry.Step]++
+		calls++
 	}
 
 	// A read of one secret value calls log-decryption; a read of several
@@ -3030,6 +3094,14 @@ func checkAuditLogCalls(t *testing.T, env *e2e.Env, org string) {
 	) {
 		t.Fatal("stack export --show-secrets called no log-batch-decryption")
 	}
+
+	for _, show := range []string{"stack output after passphrase change", "stack output after default change"} {
+		if perStep[show] != 1 {
+			t.Fatalf("step %q made %d decrypt audit calls, want exactly 1", show, perStep[show])
+		}
+	}
+
+	return calls
 }
 
 // checkForeignDecrypt proves that a ciphertext is bound to its stack: it
