@@ -567,12 +567,16 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
 	}
 
+	if sv.Sealed && s.sealer == nil {
+		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
+	}
+
 	r, err := s.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
 
-	if !sv.Sealed || s.sealer == nil {
+	if !sv.Sealed {
 		return r, nil
 	}
 
@@ -612,12 +616,16 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
 	}
 
+	if sv.Sealed && s.sealer == nil {
+		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
+	}
+
 	r, err := s.blobs.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
 
-	if !sv.Sealed || s.sealer == nil {
+	if !sv.Sealed {
 		return r, nil
 	}
 
@@ -871,13 +879,19 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 
 // openRestoreOutputs opens the stored outputs of src, so the new version
 // seals the plain document again, never the ciphertext. Rows without the
-// sealed flag, or a service without a sealer, pass through unchanged. A
-// failure reports the version ID only, never a key, a scope or content.
+// sealed flag pass through unchanged. Sealed outputs on a service without a
+// sealer fail with ErrSealerNotConfigured: ciphertext never reads as
+// outputs. A failure reports the version ID only, never a key, a scope or
+// content.
 func (s *Service) openRestoreOutputs(
 	ctx context.Context, w Workspace, src StateVersion,
 ) ([]byte, error) {
-	if !src.Sealed || s.sealer == nil || len(src.Outputs) == 0 {
+	if !src.Sealed || len(src.Outputs) == 0 {
 		return src.Outputs, nil
+	}
+
+	if s.sealer == nil {
+		return nil, fmt.Errorf("restore %s: %w", src.ID, ErrSealerNotConfigured)
 	}
 
 	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), src.Outputs)
@@ -896,12 +910,16 @@ func (s *Service) openRestoreOutputs(
 func (s *Service) copyBlob(
 	ctx context.Context, w Workspace, key blob.Key, src StateVersion, sealed bool,
 ) (int64, error) {
+	if src.Sealed && s.sealer == nil {
+		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, ErrSealerNotConfigured)
+	}
+
 	r, err := s.blobs.Get(ctx, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
 
-	if src.Sealed && s.sealer != nil {
+	if src.Sealed {
 		opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
 		if oerr != nil {
 			return 0, errors.Join(
@@ -1276,12 +1294,17 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain
-// outputs. Rows without the sealed flag, or a service without a sealer, read
-// as before. A failure reports the version ID only, never a key, a scope or
-// content.
+// outputs. Rows without the sealed flag read as before. Sealed outputs on a
+// service without a sealer fail with ErrSealerNotConfigured: ciphertext
+// never reads as outputs. A failure reports the version ID only, never a
+// key, a scope or content.
 func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
-	if !sv.Sealed || s.sealer == nil || len(sv.Outputs) == 0 {
+	if !sv.Sealed || len(sv.Outputs) == 0 {
 		return nil
+	}
+
+	if s.sealer == nil {
+		return fmt.Errorf("open outputs of %s: %w", sv.ID, ErrSealerNotConfigured)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)

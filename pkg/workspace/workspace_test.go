@@ -3411,6 +3411,52 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	assertCurrentOutputsPlain(t, f, outputValue)
 }
 
+// TestSealedReadWithoutSealerFails proves that a service without a sealer
+// never serves sealed bytes as state or outputs: an SDK user who wires the
+// stores without a sealer gets ErrSealerNotConfigured, not ciphertext.
+func TestSealedReadWithoutSealerFails(t *testing.T) {
+	t.Parallel()
+
+	f := newSealedFixture(t)
+	sv := uploadSealedState(t, f, `{"version":4}`, "s3cr3t-output-value")
+	ctx := t.Context()
+
+	plain, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("service without a sealer: %v", err)
+	}
+
+	if r, openErr := plain.Open(ctx, sv); !errors.Is(openErr, workspace.ErrSealerNotConfigured) {
+		if r != nil {
+			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
+		}
+
+		t.Fatalf("open sealed state without a sealer: err = %v, want ErrSealerNotConfigured", openErr)
+	}
+
+	if r, blobErr := plain.OpenStateBlob(ctx, sv.Content); !errors.Is(blobErr, workspace.ErrSealerNotConfigured) {
+		if r != nil {
+			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
+		}
+
+		t.Fatalf("open sealed blob without a sealer: err = %v, want ErrSealerNotConfigured", blobErr)
+	}
+
+	if _, currentErr := plain.Current(ctx, f.ws.ID); !errors.Is(currentErr, workspace.ErrSealerNotConfigured) {
+		t.Fatalf("read sealed outputs without a sealer: err = %v, want ErrSealerNotConfigured", currentErr)
+	}
+}
+
 // uploadSealedState locks the fixture workspace and uploads content with one
 // sensitive output, returning the sealed version.
 func uploadSealedState(t *testing.T, f fixture, content, outputValue string) workspace.StateVersion {
