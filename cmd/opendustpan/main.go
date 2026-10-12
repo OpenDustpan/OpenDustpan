@@ -33,11 +33,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
-	"opendustpan.org/opendustpan/internal/api/pulumi"
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -165,54 +164,6 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return errUsage
-	}
-
-	switch args[0] {
-	case "--version":
-		_, err := fmt.Fprintln(stdout, version)
-		if err != nil {
-			return fmt.Errorf("write version: %w", err)
-		}
-
-		return nil
-	case "serve":
-		return serve(ctx, args[1:], stderr)
-	case "health":
-		return runHealth(ctx, args[1:], stdout, stderr)
-	case "namespace":
-		return runNamespaceCommand(ctx, args[1:], stdout, stderr)
-	case "upgrade":
-		return runUpgradeCommand(ctx, args[1:], stdout, stderr)
-	case "backup":
-		return runBackup(ctx, args[1:], stdout, stderr)
-	case "restore":
-		return restoreCommand(ctx, args[1:], stdout, stderr)
-	default:
-		return errUsage
-	}
-}
-
-// runNamespaceCommand runs the namespace subcommands: create only.
-func runNamespaceCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "create" {
-		return createNamespace(ctx, args[1:], stdout, stderr)
-	}
-
-	return errUsage
-}
-
-// runUpgradeCommand runs the upgrade subcommands: check only.
-func runUpgradeCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "check" {
-		return upgradeCheck(ctx, args[1:], stdout, stderr)
-	}
-
-	return errUsage
-}
-
 // common holds the flags shared by every subcommand.
 type common struct {
 	database string
@@ -220,10 +171,8 @@ type common struct {
 }
 
 func (c *common) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.database, "database", env("DUSTPAN_DATABASE", "sqlite:dustpan.db"),
-		"sqlite:<path> or postgres://... (DUSTPAN_DATABASE)")
-	fs.StringVar(&c.region, "region", env("DUSTPAN_REGION", "local"),
-		"region this server is authoritative for (DUSTPAN_REGION)")
+	cli.ByFlag("database").String(fs, &c.database)
+	cli.ByFlag("region").String(fs, &c.region)
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
@@ -310,138 +259,40 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 // never appears here: it comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the
 // file, so it does not show in process listings.
 func (f *serveFlags) registerKey(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.keyFile,
-		"key-encryption-key-file",
-		env(keyFileEnvVar, ""),
-		"file holding the base64 key-encryption key, default "+defaultKeyFileName+
-			" next to the database ("+keyFileEnvVar+"). An operator who loses the key file "+
-			"loses every secret that the key encrypts, and nobody can recover them",
-	)
-	fs.BoolVar(
-		&f.generateKey,
-		"generate-key-encryption-key",
-		envBool(generateKeyEnvVar),
-		"make the key file with no prompt when no key exists, never overwriting a file that "+
-			"exists ("+generateKeyEnvVar+"=true). A lost key file means lost secrets",
-	)
+	cli.ByFlag("key-encryption-key-file").String(fs, &f.keyFile)
+	cli.ByFlag("generate-key-encryption-key").Bool(fs, &f.generateKey)
 }
 
 // registerStorage registers the blob store, S3 and backup target flags.
 // Credentials never appear here: they come from AWS_ACCESS_KEY_ID,
 // AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
 func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.blobStore,
-		"blob-store",
-		env("DUSTPAN_BLOB_STORE", "fs"),
-		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
-	)
-	fs.StringVar(
-		&f.s3Endpoint,
-		"s3-endpoint",
-		env("DUSTPAN_S3_ENDPOINT", ""),
-		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
-	)
-	fs.StringVar(
-		&f.s3Region,
-		"s3-region",
-		env("DUSTPAN_S3_REGION", ""),
-		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
-	)
-	fs.StringVar(
-		&f.backupTarget,
-		"backup-target",
-		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
-	)
+	cli.ByFlag("blob-store").String(fs, &f.blobStore)
+	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
+	cli.ByFlag("s3-region").String(fs, &f.s3Region)
+	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
 }
 
 // registerNet registers the network and console flags.
 func (f *serveFlags) registerNet(fs *flag.FlagSet) {
-	fs.StringVar(&f.listen, "listen", env("DUSTPAN_LISTEN", ":8080"), "listen address (DUSTPAN_LISTEN)")
-	fs.StringVar(
-		&f.consoleDir,
-		"console-dir",
-		env("DUSTPAN_CONSOLE_DIR", ""),
-		"serve a built web console from this directory (DUSTPAN_CONSOLE_DIR)",
-	)
-	fs.StringVar(
-		&f.origins,
-		"allowed-origins",
-		env("DUSTPAN_ALLOWED_ORIGINS", ""),
-		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
-	)
-	fs.StringVar(
-		&f.tlsCert,
-		"tls-cert",
-		env("DUSTPAN_TLS_CERT", ""),
-		"certificate file for HTTPS, with --tls-key (DUSTPAN_TLS_CERT)",
-	)
-	fs.StringVar(
-		&f.tlsKey,
-		"tls-key",
-		env("DUSTPAN_TLS_KEY", ""),
-		"key file for HTTPS, with --tls-cert (DUSTPAN_TLS_KEY)",
-	)
-	fs.StringVar(
-		&f.publicURL,
-		"public-url",
-		env("DUSTPAN_PUBLIC_URL", ""),
-		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
-	)
-	fs.StringVar(
-		&f.blobDir,
-		"blob-dir",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
-	)
-	fs.StringVar(
-		&f.logLevel,
-		"log-level",
-		env("DUSTPAN_LOG_LEVEL", "info"),
-		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
-	)
-	fs.StringVar(
-		&f.logFormat,
-		"log-format",
-		env("DUSTPAN_LOG_FORMAT", "json"),
-		"log format: json or text (DUSTPAN_LOG_FORMAT)",
-	)
+	cli.ByFlag("listen").String(fs, &f.listen)
+	cli.ByFlag("console-dir").String(fs, &f.consoleDir)
+	cli.ByFlag("allowed-origins").String(fs, &f.origins)
+	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
+	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
+	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
+	cli.ByFlag("log-level").String(fs, &f.logLevel)
+	cli.ByFlag("log-format").String(fs, &f.logFormat)
 }
 
 // registerLimits registers the large-body size flags.
 func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
-	fs.Int64Var(
-		&f.maxCheckpointBytes,
-		"max-checkpoint-bytes",
-		envBytes("DUSTPAN_MAX_CHECKPOINT_BYTES"),
-		"largest checkpoint in bytes, 0 means the default (DUSTPAN_MAX_CHECKPOINT_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxSecretBatchBytes,
-		"max-secret-batch-bytes",
-		envBytes("DUSTPAN_MAX_SECRET_BATCH_BYTES"),
-		"largest secrets batch in bytes, 0 means the default (DUSTPAN_MAX_SECRET_BATCH_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxStateBytes,
-		"max-state-bytes",
-		envBytes("DUSTPAN_MAX_STATE_BYTES"),
-		"largest OpenTofu state in bytes, 0 means the default (DUSTPAN_MAX_STATE_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxBodyBytesInFlight,
-		"max-body-bytes-in-flight",
-		envBytes("DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT"),
-		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
-	)
-	fs.Int64Var(
-		&f.checkpointDeltaCutoff,
-		"checkpoint-delta-cutoff",
-		envDeltaCutoff("DUSTPAN_CHECKPOINT_DELTA_CUTOFF"),
-		"checkpoint size in bytes from which the CLI sends delta uploads, 0 turns delta uploads off (DUSTPAN_CHECKPOINT_DELTA_CUTOFF)",
-	)
+	cli.ByFlag("max-checkpoint-bytes").Int64(fs, &f.maxCheckpointBytes)
+	cli.ByFlag("max-secret-batch-bytes").Int64(fs, &f.maxSecretBatchBytes)
+	cli.ByFlag("max-state-bytes").Int64(fs, &f.maxStateBytes)
+	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
+	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -486,22 +337,6 @@ func checkDatabaseFlag(database string) error {
 		return nil
 	default:
 		return errUnknownBackend
-	}
-}
-
-// envBool reads a boolean environment variable: true when the trimmed value
-// is true or 1, else false.
-func envBool(key string) bool {
-	raw, ok := os.LookupEnv(key)
-	if !ok {
-		return false
-	}
-
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "true", "1":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -1318,17 +1153,6 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
 }
 
-// runBackup runs the backup subcommands. It shares one backup entry, so the
-// backup command of a later change and backup check never clash: check runs
-// when the first argument is check, anything else is usage for now.
-func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "check" {
-		return backupCheck(ctx, args[1:], stdout, stderr)
-	}
-
-	return backupCommand(ctx, args, stdout, stderr)
-}
-
 // store is the persistence adapter chosen by --database.
 //
 //nolint:interfacebloat // The binary needs every persistence port in one adapter.
@@ -1395,47 +1219,6 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
-}
-
-func env(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-
-	return fallback
-}
-
-// envBytes returns the byte size in key, or 0 when unset. An invalid value
-// returns -1, so checkSizeFlags rejects it with the flag names.
-func envBytes(key string) int64 {
-	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return 0
-	}
-
-	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || n < 0 {
-		return -1
-	}
-
-	return n
-}
-
-// envDeltaCutoff returns the checkpoint delta cutoff in key, or the
-// default cutoff when unset. An invalid value returns -1, so the serve
-// check rejects it with the flag name.
-func envDeltaCutoff(key string) int64 {
-	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return int64(pulumi.DefaultCheckpointDeltaCutoff)
-	}
-
-	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || n < 0 {
-		return -1
-	}
-
-	return n
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,

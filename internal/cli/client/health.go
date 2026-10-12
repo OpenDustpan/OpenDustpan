@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 const (
@@ -59,18 +61,8 @@ type HealthFlags struct {
 
 // Register registers the health flags on fs.
 func (f *HealthFlags) Register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.Listen,
-		"listen",
-		env("DUSTPAN_LISTEN", ":8080"),
-		"listen address of the server (DUSTPAN_LISTEN)",
-	)
-	fs.StringVar(
-		&f.TLSCert,
-		"tls-cert",
-		env("DUSTPAN_TLS_CERT", ""),
-		"same certificate file serve uses: when set, probe over HTTPS (DUSTPAN_TLS_CERT)",
-	)
+	cli.ByFlag("listen").String(fs, &f.Listen)
+	cli.ByFlag("tls-cert").String(fs, &f.TLSCert)
 }
 
 // RunHealth runs `opendustpan health`: it sends GET /health/ready to the

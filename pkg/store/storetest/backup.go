@@ -255,14 +255,22 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 }
 
-// seedBackupAudit appends two reveal entries to acme, so the round trip
-// compares the audit table row by row and proves the chain survives it.
+// seedBackupAudit appends a reveal entry and a decrypt entry with a value
+// count to acme, so the round trip compares the audit table row by row,
+// carries the nullable value count both ways, and proves the chain survives
+// it.
 func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
 	t.Helper()
 
 	out := make([]audit.Entry, 0, 2)
 
 	for i := 1; i <= 2; i++ {
+		kind, count := audit.KindReveal, (*int64)(nil)
+		if i == 2 {
+			n := int64(3)
+			kind, count = audit.KindToolOperation, &n
+		}
+
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
 			At:         now(),
 			Namespace:  acme.Name,
@@ -273,11 +281,11 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Object:     "pulumi:" + acme.Name.String() + "/web/prod",
 			Version:    "",
 			ValuePath:  "",
-			ValueCount: nil,
+			ValueCount: count,
 			SourceIP:   "192.0.2.1",
 			UserAgent:  "test",
 			Channel:    audit.ChannelAPI,
-			Kind:       audit.KindReveal,
+			Kind:       kind,
 			Outcome:    audit.OutcomeSuccess,
 			RequestID:  fmt.Sprintf("req-%d", i),
 			PrevHash:   "",
@@ -1074,13 +1082,24 @@ func sameAuditWho(a, b audit.Entry) bool {
 		a.TokenID == b.TokenID
 }
 
-// sameAuditWhat compares the action, object, version and value path of two
-// entries.
+// sameAuditWhat compares the action, object, version, value path and value
+// count of two entries.
 func sameAuditWhat(a, b audit.Entry) bool {
 	return a.Action == b.Action &&
 		a.Object == b.Object &&
 		a.Version == b.Version &&
-		a.ValuePath == b.ValuePath
+		a.ValuePath == b.ValuePath &&
+		sameValueCount(a.ValueCount, b.ValueCount)
+}
+
+// sameValueCount compares two nullable value counts: both nil, or both set
+// to the same number.
+func sameValueCount(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return *a == *b
 }
 
 // sameAuditWhere compares the source, channel, kind, outcome and request of

@@ -3700,6 +3700,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// -force.
 	tofuStatePushScenario(t, env)
 
+	// The masked state read with a sensitive output, a sensitive variable in
+	// a terraform_data input, a provider attribute the provider schema marks
+	// sensitive, and a client-encrypted state.
+	tofuMaskedStateScenario(t, env)
+
 	// A crashed apply leaves the lock behind, and force-unlock recovers.
 	tofuCrashScenario(t, env)
 
@@ -6492,6 +6497,663 @@ const (
 // creates with a stale serial and another lineage answer 422, a force push
 // of the same file succeeds and a later pull shows it, and a push of another
 // lineage fails without -force.
+// maskedSecretV1 and maskedSecretV2 are the sensitive variable values of the
+// two masked applies. They are test values only; no masked route may ever
+// return them.
+const (
+	maskedSecretV1 = "s3cr3t-masked-v1"
+	maskedSecretV2 = "s3cr3t-masked-v2"
+)
+
+// maskedCloudConfig returns the masked scenario project with a cloud block
+// on host and the workspace name: a sensitive output, a sensitive variable
+// in a terraform_data input, and a provider attribute the provider schema
+// marks sensitive (the result of random_password).
+func maskedCloudConfig(host, workspace string) string {
+	return fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+  required_providers {
+    random = {
+      source = "hashicorp/random"
+    }
+  }
+}
+
+variable "secret_input" {
+  type      = string
+  sensitive = true
+}
+
+resource "terraform_data" "smoke" {
+  input = var.secret_input
+}
+
+resource "random_password" "pw" {
+  length  = 16
+  keepers = {
+    version = "v1"
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+
+output "secret_out" {
+  value     = var.secret_input
+  sensitive = true
+}
+`, host, e2e.Namespace, workspace)
+}
+
+// maskedApplyEnv returns the step environment that sets the sensitive
+// variable of the masked scenario to secret.
+func maskedApplyEnv(secret string) []string {
+	return []string{"TF_VAR_secret_input=" + secret}
+}
+
+// tofuMaskedStateScenario proves the masked state read (ADR 41 decisions 1
+// to 3, 8 and 9) in a workspace of its own: a configuration with a
+// sensitive output, a sensitive variable in a terraform_data input, and a
+// provider attribute the provider schema marks sensitive. Apply runs twice
+// with one change (the sensitive value), then the resource routes prove that
+// no sensitive value appears in any body, that each secret path is masked,
+// and that changed is true only on the changed resource. A state with
+// client-side encryption then proves both resource routes answer 409.
+func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	writeImportConfig(t, dir, maskedCloudConfig(env.Host(), "masked"))
+
+	env.StepIn(ctx, t, dir, step("masked init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  nil,
+		Name:   "masked apply 1",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    maskedApplyEnv(maskedSecretV1),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  nil,
+		Name:   "masked apply 2",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    maskedApplyEnv(maskedSecretV2),
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	versionID := maskedCurrentVersion(ctx, t, env, "masked")
+	maskedResourceChecks(ctx, t, env, "masked", versionID)
+	maskedOutputsCheck(ctx, t, env, "masked")
+	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
+
+	tofuMaskedEncryptedScenario(ctx, t, env)
+}
+
+// maskedCurrentVersion reads the current state version of workspace through
+// the API and returns its ID.
+func maskedCurrentVersion(ctx context.Context, t *testing.T, env *e2e.Env, workspace string) string {
+	t.Helper()
+
+	wsID := env.WorkspaceIDByName(ctx, t, workspace)
+
+	var versionID string
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			id, err := importStateVersionID(body)
+			if err != nil {
+				return err
+			}
+
+			versionID = id
+
+			return nil
+		},
+		Name:   "masked current state version",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	if versionID == "" {
+		t.Fatal("current state version holds no ID")
+	}
+
+	return versionID
+}
+
+// maskedResourceDoc decodes the data items of a masked resource list in e2e
+// checks.
+type maskedResourceDoc struct {
+	Data []maskedResourceItem `json:"data"`
+}
+
+// maskedResourceAttributes decodes the attributes of one masked resource in
+// e2e checks.
+type maskedResourceAttributes struct {
+	Address  string `json:"address"`
+	Type     string `json:"type"`
+	Provider string `json:"provider"`
+	Module   string `json:"module"`
+	Changed  bool   `json:"changed"`
+}
+
+// maskedResourceItem decodes one masked resource in e2e checks.
+type maskedResourceItem struct {
+	ID         string                   `json:"id"`
+	Type       string                   `json:"type"`
+	Attributes maskedResourceAttributes `json:"attributes"`
+}
+
+// maskedDetailInstance decodes one masked instance in e2e checks.
+type maskedDetailInstance struct {
+	Attributes map[string]any `json:"attributes"`
+}
+
+// maskedDetailAttributes decodes the attributes of one masked resource in
+// e2e checks.
+type maskedDetailAttributes struct {
+	Address   string                 `json:"address"`
+	Instances []maskedDetailInstance `json:"instances"`
+	Masked    []string               `json:"masked"`
+}
+
+// maskedDetailData decodes the data of one masked resource in e2e checks.
+type maskedDetailData struct {
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"`
+	Attributes maskedDetailAttributes `json:"attributes"`
+}
+
+// maskedDetailDoc decodes one masked resource in e2e checks.
+type maskedDetailDoc struct {
+	Data maskedDetailData `json:"data"`
+}
+
+// maskedOutputAttributes decodes the attributes of one output in e2e checks.
+type maskedOutputAttributes struct {
+	Name      string `json:"name"`
+	Sensitive bool   `json:"sensitive"`
+	Value     any    `json:"value"`
+}
+
+// maskedOutputItem decodes one output in e2e checks.
+type maskedOutputItem struct {
+	Attributes maskedOutputAttributes `json:"attributes"`
+}
+
+// maskedOutputsDoc decodes the outputs list in e2e checks.
+type maskedOutputsDoc struct {
+	Data []maskedOutputItem `json:"data"`
+}
+
+// maskedStateInstance decodes one instance of a downloaded state in e2e
+// checks.
+type maskedStateInstance struct {
+	//nolint:tagliatelle // The state file wire name; it must not change.
+	SensitiveAttributes []any `json:"sensitive_attributes"`
+}
+
+// maskedStateResource decodes one resource of a downloaded state in e2e
+// checks.
+type maskedStateResource struct {
+	Type      string                `json:"type"`
+	Name      string                `json:"name"`
+	Instances []maskedStateInstance `json:"instances"`
+}
+
+// maskedStateDoc decodes a downloaded state in e2e checks.
+type maskedStateDoc struct {
+	Resources []maskedStateResource `json:"resources"`
+}
+
+// maskedResourceChecks proves the resource routes of workspace: the list
+// holds the data and provider resources with changed only on the data
+// resource, each detail answers its secrets masked with every marker path in
+// masked, and no body holds a secret value.
+func maskedResourceChecks(ctx context.Context, t *testing.T, env *e2e.Env, _, versionID string) {
+	t.Helper()
+
+	base := "/api/v2/state-versions/" + versionID
+
+	var listBody string
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			listBody = body
+
+			return checkMaskedResourceList(body)
+		},
+		Name:   "masked resource list",
+		Method: http.MethodGet,
+		Path:   base + "/resources",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	addresses := maskedResourceAddresses(t, listBody)
+
+	for _, address := range addresses {
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			Check:  checkMaskedResourceDetail(address),
+			Name:   "masked resource " + address,
+			Method: http.MethodGet,
+			Path:   base + "/resources/" + url.PathEscape(address),
+			Body:   "",
+			Want:   http.StatusOK,
+		})
+	}
+}
+
+// checkMaskedResourceList proves the masked resource list holds the data and
+// provider resources with changed only on the data resource, and no secret
+// value in the body.
+func checkMaskedResourceList(body string) error {
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			return fmt.Errorf("%w: resource list holds a secret value", errUnexpected)
+		}
+	}
+
+	var doc maskedResourceDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode resource list: %w", errUnexpected, err)
+	}
+
+	if len(doc.Data) != 2 {
+		return fmt.Errorf("%w: resource list holds %d resources, want 2: %s", errUnexpected, len(doc.Data), body)
+	}
+
+	for _, item := range doc.Data {
+		if item.Type != "state-version-resources" {
+			return fmt.Errorf("%w: resource %q has type %q", errUnexpected, item.ID, item.Type)
+		}
+
+		wantChanged := item.Attributes.Address == "terraform_data.smoke"
+		if item.Attributes.Changed != wantChanged {
+			return fmt.Errorf(
+				"%w: resource %q changed = %t, want %t",
+				errUnexpected,
+				item.Attributes.Address,
+				item.Attributes.Changed,
+				wantChanged,
+			)
+		}
+	}
+
+	return nil
+}
+
+// maskedResourceAddresses returns the addresses of the masked resource list.
+func maskedResourceAddresses(t *testing.T, listBody string) []string {
+	t.Helper()
+
+	var doc maskedResourceDoc
+
+	if err := json.Unmarshal([]byte(listBody), &doc); err != nil {
+		t.Fatalf("decode resource list: %v", err)
+	}
+
+	addresses := make([]string, 0, len(doc.Data))
+	for _, item := range doc.Data {
+		addresses = append(addresses, item.Attributes.Address)
+	}
+
+	return addresses
+}
+
+// checkMaskedResourceDetail proves one masked resource answers its secrets
+// masked: every marker names a path in masked, the expected secret paths are
+// masked, and the body holds no secret value.
+func checkMaskedResourceDetail(address string) func(string) error {
+	return func(body string) error {
+		if err := checkBodyHoldsNoSecret(body, address); err != nil {
+			return err
+		}
+
+		doc, err := decodeMaskedDetail(body, address)
+		if err != nil {
+			return err
+		}
+
+		masked := maskedPathSet(doc.Data.Attributes.Masked)
+		if len(masked) == 0 {
+			return fmt.Errorf("%w: resource %q masks nothing", errUnexpected, address)
+		}
+
+		for _, instance := range doc.Data.Attributes.Instances {
+			if err := checkMaskedMarkers(instance.Attributes, masked); err != nil {
+				return fmt.Errorf("%w: resource %q: %w", errUnexpected, address, err)
+			}
+		}
+
+		return checkMaskedExpectedPaths(address, masked)
+	}
+}
+
+// checkBodyHoldsNoSecret fails when body holds a masked secret value.
+func checkBodyHoldsNoSecret(body, address string) error {
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			return fmt.Errorf("%w: resource %q holds a secret value", errUnexpected, address)
+		}
+	}
+
+	return nil
+}
+
+// decodeMaskedDetail decodes one masked resource body with at least one
+// instance.
+func decodeMaskedDetail(body, address string) (maskedDetailDoc, error) {
+	var doc maskedDetailDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return maskedDetailDoc{}, fmt.Errorf("%w: decode resource %q: %w", errUnexpected, address, err)
+	}
+
+	if doc.Data.Type != "state-version-resources" || len(doc.Data.Attributes.Instances) == 0 {
+		return maskedDetailDoc{}, fmt.Errorf("%w: resource %q holds no instances: %s", errUnexpected, address, body)
+	}
+
+	return doc, nil
+}
+
+// maskedPathSet holds the masked value paths of one resource.
+func maskedPathSet(paths []string) map[string]bool {
+	masked := map[string]bool{}
+
+	for _, path := range paths {
+		masked[path] = true
+	}
+
+	return masked
+}
+
+// checkMaskedMarkers proves each secret marker in attributes names a path in
+// masked: masked is authoritative.
+func checkMaskedMarkers(attributes map[string]any, masked map[string]bool) error {
+	for _, value := range attributes {
+		if err := checkMaskedValue(value, masked); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedValue proves one attribute value masks its secrets.
+func checkMaskedValue(value any, masked map[string]bool) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		return checkMaskedObject(typed, masked)
+	case []any:
+		return checkMaskedList(typed, masked)
+	default:
+		return nil
+	}
+}
+
+// checkMaskedObject proves one object masks its secrets: a secret marker
+// names a path in masked, any other object recurses.
+func checkMaskedObject(obj map[string]any, masked map[string]bool) error {
+	if secret, ok := obj["secret"].(bool); ok && secret {
+		return checkSecretMarker(obj, masked)
+	}
+
+	return checkMaskedMarkers(obj, masked)
+}
+
+// checkSecretMarker proves one secret marker names a path in masked.
+func checkSecretMarker(marker map[string]any, masked map[string]bool) error {
+	path, ok := marker["path"].(string)
+	if !ok || path == "" {
+		return fmt.Errorf("%w: marker holds no value path", errUnexpected)
+	}
+
+	if !masked[path] {
+		return fmt.Errorf("%w: marker for %q is not in masked", errUnexpected, path)
+	}
+
+	return nil
+}
+
+// checkMaskedList proves one array masks its secrets.
+func checkMaskedList(list []any, masked map[string]bool) error {
+	for _, elem := range list {
+		if err := checkMaskedValue(elem, masked); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedExpectedPaths proves the secrets the scenario plants are
+// masked: the sensitive input of the data resource, and the result the
+// provider schema marks sensitive.
+func checkMaskedExpectedPaths(address string, masked map[string]bool) error {
+	var suffix string
+
+	switch address {
+	case "terraform_data.smoke":
+		suffix = "/attributes/input"
+	case "random_password.pw":
+		suffix = "/attributes/result"
+	default:
+		return fmt.Errorf("%w: unexpected resource %q", errUnexpected, address)
+	}
+
+	for path := range masked {
+		if strings.HasSuffix(path, suffix) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: resource %q masks no path ending in %q", errUnexpected, address, suffix)
+}
+
+// maskedOutputsCheck proves the outputs list of workspace answers the
+// sensitive output as null with its sensitivity kept, and no secret value.
+func maskedOutputsCheck(ctx context.Context, t *testing.T, env *e2e.Env, workspace string) {
+	t.Helper()
+
+	wsID := env.WorkspaceIDByName(ctx, t, workspace)
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedOutputs,
+		Name:   "masked outputs list",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+}
+
+// checkMaskedOutputs proves the outputs list answers the sensitive output as
+// null with its sensitivity kept, and no secret value.
+func checkMaskedOutputs(body string) error {
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			return fmt.Errorf("%w: outputs list holds a secret value", errUnexpected)
+		}
+	}
+
+	var doc maskedOutputsDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode outputs list: %w", errUnexpected, err)
+	}
+
+	for _, output := range doc.Data {
+		if output.Attributes.Name != "secret_out" {
+			continue
+		}
+
+		return checkSecretOutput(output.Attributes)
+	}
+
+	return fmt.Errorf("%w: outputs list holds no secret output", errUnexpected)
+}
+
+// checkSecretOutput proves the sensitive output answers null with its
+// sensitivity kept.
+func checkSecretOutput(attributes maskedOutputAttributes) error {
+	if !attributes.Sensitive {
+		return fmt.Errorf("%w: secret output reads not sensitive", errUnexpected)
+	}
+
+	if attributes.Value != nil {
+		return fmt.Errorf("%w: secret output answers its value in the list", errUnexpected)
+	}
+
+	return nil
+}
+
+// maskedSensitiveAttributesFinding proves what the state file keeps in
+// sensitive_attributes of each resource instance, and records it for the
+// report: the provider schema mark may or may not be there, while the kept
+// json-state marks mask the result either way.
+func maskedSensitiveAttributesFinding(ctx context.Context, t *testing.T, env *e2e.Env, _, versionID string) {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, "/api/v2/state-versions/"+versionID+"/download", "")
+	if err != nil {
+		t.Fatalf("download masked state: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("download masked state answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc maskedStateDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode masked state: %v", err)
+	}
+
+	finding := renderSensitiveAttributesFinding(t, doc)
+
+	schemaMark := "absent"
+	if strings.Contains(finding, "result") {
+		schemaMark = "present"
+	}
+
+	env.NoteStep(t, "masked sensitive_attributes", finding+"; provider schema mark for result: "+schemaMark)
+	t.Logf("masked sensitive_attributes: %s; provider schema mark for result: %s", finding, schemaMark)
+}
+
+// renderSensitiveAttributesFinding renders the sensitive_attributes of each
+// resource instance for the report.
+func renderSensitiveAttributesFinding(t *testing.T, doc maskedStateDoc) string {
+	t.Helper()
+
+	var finding strings.Builder
+
+	finding.WriteString("sensitive_attributes by resource: ")
+
+	for i, resource := range doc.Resources {
+		if i > 0 {
+			finding.WriteString("; ")
+		}
+
+		raw, err := json.Marshal(resource.Instances)
+		if err != nil {
+			t.Fatalf("encode instances: %v", err)
+		}
+
+		finding.WriteString(resource.Type + "." + resource.Name + "=" + string(raw))
+	}
+
+	return finding.String()
+}
+
+// tofuMaskedEncryptedScenario proves a state with client-side encryption
+// answers 409 with encrypted-by-client on both resource routes, while the
+// outputs list still works. It moves a locally encrypted state into a
+// workspace of its own, as the encrypted import move does.
+func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeImportConfig(t, dir, importEncryptedSourceConfig())
+
+	env.StepIn(ctx, t, dir, step("masked encrypted init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(
+		ctx,
+		t,
+		dir,
+		step("masked encrypted apply", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	)
+
+	writeImportConfig(t, dir, importEncryptedCloudConfig(env.Host(), "masked-encrypted"))
+	env.StepIn(ctx, t, dir, importMigrateStep("masked encrypted migrate"))
+
+	versionID := maskedCurrentVersion(ctx, t, env, "masked-encrypted")
+	base := "/api/v2/state-versions/" + versionID
+
+	for _, spec := range []e2e.APIStepSpec{
+		{
+			Check:  checkEncryptedByClient,
+			Name:   "masked encrypted resource list",
+			Method: http.MethodGet,
+			Path:   base + "/resources",
+			Body:   "",
+			Want:   http.StatusConflict,
+		},
+		{
+			Check:  checkEncryptedByClient,
+			Name:   "masked encrypted resource",
+			Method: http.MethodGet,
+			Path:   base + "/resources/" + url.PathEscape("terraform_data.smoke"),
+			Body:   "",
+			Want:   http.StatusConflict,
+		},
+	} {
+		env.APIStepA(ctx, t, spec)
+	}
+
+	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "masked encrypted outputs list",
+		Method: http.MethodGet,
+		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+}
+
+// checkEncryptedByClient proves a 409 body names encrypted-by-client without
+// ciphertext or sealed bytes.
+func checkEncryptedByClient(body string) error {
+	if !strings.Contains(body, "encrypted-by-client") {
+		return fmt.Errorf("%w: conflict body lacks encrypted-by-client: %s", errUnexpected, body)
+	}
+
+	for _, leaked := range []string{"ciphertext", "sealed"} {
+		if strings.Contains(body, leaked) {
+			return fmt.Errorf("%w: conflict body holds %q: %s", errUnexpected, leaked, body)
+		}
+	}
+
+	return nil
+}
+
 func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
 

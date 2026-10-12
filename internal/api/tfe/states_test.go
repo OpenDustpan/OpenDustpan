@@ -257,6 +257,26 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
+		{
+			name:    "masked resource list",
+			pattern: "GET /api/v2/state-versions/{state_version_id}/resources",
+			method:  http.MethodGet,
+			target:  "/api/v2/state-versions/sv-test123/resources",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
+		{
+			name:    "one masked resource",
+			pattern: "GET /api/v2/state-versions/{state_version_id}/resources/{address}",
+			method:  http.MethodGet,
+			target:  "/api/v2/state-versions/sv-test123/resources/terraform_data.smoke",
+			body:    "",
+			actions: []identity.Action{identity.ActionUnitRead},
+			object:  "opentofu:acme/web",
+			isUnit:  true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -760,6 +780,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Force:           tc.force,
 			Sealed:          false,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
+			SensitiveMarks:  nil,
 		})
 	}
 

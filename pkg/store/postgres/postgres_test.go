@@ -2420,6 +2420,7 @@ func declareAddedVersion(
 		Force:           force,
 		Sealed:          false,
 		RestoredFrom:    from,
+		SensitiveMarks:  nil,
 	}
 }
 
