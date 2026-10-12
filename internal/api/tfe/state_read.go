@@ -112,8 +112,11 @@ func (h *Handler) stateResourcePaging(w http.ResponseWriter, r *http.Request) (s
 
 // listStateResources serves GET
 // /api/v2/state-versions/{state_version_id}/resources: one page of the
-// masked resource list of a finalized state version. An unknown version
-// answers 404; a state the client encrypted answers 409.
+// masked resource list of a finalized state version. The filter[q] query
+// value is a substring of the address or of the resource type, or absent for
+// no filter: it never matches attribute values, sensitive values or outputs.
+// Paging applies after the filter, so a page holds only matching resources.
+// An unknown version answers 404; a state the client encrypted answers 409.
 func (h *Handler) listStateResources(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
@@ -124,9 +127,11 @@ func (h *Handler) listStateResources(
 		return
 	}
 
+	filter := r.URL.Query().Get("filter[q]")
+
 	id := workspace.StateVersionID(r.PathValue("state_version_id"))
 
-	page, err := h.workspaces.ReadResources(ctx, id, cursor, size)
+	page, err := h.workspaces.ReadResources(ctx, id, cursor, size, filter)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

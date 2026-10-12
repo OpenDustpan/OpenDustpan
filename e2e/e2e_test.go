@@ -6599,6 +6599,7 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 
 	versionID := maskedCurrentVersion(ctx, t, env, "masked")
 	maskedResourceChecks(ctx, t, env, "masked", versionID)
+	maskedResourceFilterChecks(ctx, t, env, versionID)
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
 
@@ -6818,6 +6819,248 @@ func maskedResourceAddresses(t *testing.T, listBody string) []string {
 	}
 
 	return addresses
+}
+
+// maskedResourceFilterMeta decodes the meta of a filtered masked resource
+// list in e2e checks.
+type maskedResourceFilterMeta struct {
+	//nolint:tagliatelle // The TFE wire name; it must not change.
+	NextCursor string `json:"next-cursor"`
+	Incomplete bool   `json:"incomplete"`
+}
+
+// maskedResourceFilterDoc decodes a filtered masked resource list with its
+// meta in e2e checks.
+type maskedResourceFilterDoc struct {
+	Data []maskedResourceItem     `json:"data"`
+	Meta maskedResourceFilterMeta `json:"meta"`
+}
+
+// maskedResourceFilterChecks proves the resource search of a state version:
+// filter[q] matches by type and by address, never by an attribute value, a
+// sensitive value or an output, paging applies after the filter with
+// page[size]=1, and no body holds a sensitive value.
+func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env, versionID string) {
+	t.Helper()
+
+	base := "/api/v2/state-versions/" + versionID + "/resources"
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterByType,
+		Name:   "masked resource filter by type",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("terraform_data"),
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterByAddress,
+		Name:   "masked resource filter by address",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	for _, q := range []string{maskedSecretV2, "hello"} {
+		// The sensitive input value and the plain greeting output value
+		// never match: the filter reads only the address and the type.
+		query := url.QueryEscape(q)
+
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			Check:  checkMaskedResourceFilterEmpty,
+			Name:   "masked resource filter no match " + q,
+			Method: http.MethodGet,
+			Path:   base + "?filter[q]=" + query,
+			Body:   "",
+			Want:   http.StatusOK,
+		})
+	}
+
+	var firstPage maskedResourceFilterPage
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			page, err := checkMaskedResourceFilterFirstPage(body)
+			if err != nil {
+				return err
+			}
+
+			firstPage = page
+
+			return nil
+		},
+		Name:   "masked resource filter first page",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	if firstPage.cursor == "" {
+		t.Fatal("first filtered page holds no next cursor")
+	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterSecondPage(firstPage.address),
+		Name:   "masked resource filter second page",
+		Method: http.MethodGet,
+		Path: base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1&page[cursor]=" +
+			url.QueryEscape(firstPage.cursor),
+		Body: "",
+		Want: http.StatusOK,
+	})
+}
+
+// decodeMaskedResourceFilterDoc decodes a filtered masked resource list body.
+func decodeMaskedResourceFilterDoc(body string) (maskedResourceFilterDoc, error) {
+	var doc maskedResourceFilterDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return maskedResourceFilterDoc{}, fmt.Errorf("%w: decode filtered resource list: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// checkMaskedResourceFilterBodySecrets fails when body holds a masked secret value.
+func checkMaskedResourceFilterBodySecrets(body string) error {
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			return fmt.Errorf("%w: filtered resource list holds a secret value", errUnexpected)
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterByType proves filter[q] with a type substring answers only
+// the data resource.
+func checkMaskedResourceFilterByType(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 1 || doc.Data[0].Attributes.Address != "terraform_data.smoke" {
+		return fmt.Errorf("%w: filter by type answers %+v, want only the data resource", errUnexpected, doc.Data)
+	}
+
+	if doc.Meta.NextCursor != "" || doc.Meta.Incomplete {
+		return fmt.Errorf("%w: filter by type meta = %+v, want one complete page", errUnexpected, doc.Meta)
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterByAddress proves filter[q] with an address substring
+// answers only the provider resource.
+func checkMaskedResourceFilterByAddress(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 1 || doc.Data[0].Attributes.Address != "random_password.pw" {
+		return fmt.Errorf(
+			"%w: filter by address answers %+v, want only the provider resource",
+			errUnexpected,
+			doc.Data,
+		)
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterEmpty proves a filter on a value answers no resources and
+// no secret value.
+func checkMaskedResourceFilterEmpty(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 0 {
+		return fmt.Errorf("%w: filter on a value matched %+v, want none", errUnexpected, doc.Data)
+	}
+
+	if doc.Meta.NextCursor != "" {
+		return fmt.Errorf("%w: empty filtered list holds a next cursor", errUnexpected)
+	}
+
+	return nil
+}
+
+// maskedResourceFilterPage holds the next cursor and the address of the
+// single resource of a filtered first page in e2e checks.
+type maskedResourceFilterPage struct {
+	cursor  string
+	address string
+}
+
+// checkMaskedResourceFilterFirstPage proves the first filtered page holds one
+// of the two matching resources with a next cursor, and returns both.
+func checkMaskedResourceFilterFirstPage(body string) (maskedResourceFilterPage, error) {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return maskedResourceFilterPage{}, err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return maskedResourceFilterPage{}, err
+	}
+
+	if len(doc.Data) != 1 || doc.Meta.NextCursor == "" {
+		return maskedResourceFilterPage{}, fmt.Errorf(
+			"%w: first filtered page = %s, want 1 match with a cursor",
+			errUnexpected,
+			body,
+		)
+	}
+
+	return maskedResourceFilterPage{cursor: doc.Meta.NextCursor, address: doc.Data[0].Attributes.Address}, nil
+}
+
+// checkMaskedResourceFilterSecondPage proves the second filtered page holds the other
+// matching resource with no next cursor.
+func checkMaskedResourceFilterSecondPage(firstAddress string) func(string) error {
+	return func(body string) error {
+		if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+			return err
+		}
+
+		doc, err := decodeMaskedResourceFilterDoc(body)
+		if err != nil {
+			return err
+		}
+
+		if len(doc.Data) != 1 || doc.Meta.NextCursor != "" {
+			return fmt.Errorf(
+				"%w: second filtered page = %s, want 1 match with no cursor",
+				errUnexpected,
+				body,
+			)
+		}
+
+		if doc.Data[0].Attributes.Address == firstAddress {
+			return fmt.Errorf("%w: filtered pages overlap on %q", errUnexpected, firstAddress)
+		}
+
+		return nil
+	}
 }
 
 // checkMaskedResourceDetail proves one masked resource answers its secrets

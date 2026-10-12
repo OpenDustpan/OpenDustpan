@@ -406,7 +406,7 @@ func (coverageWorkspaces) ReadState(
 }
 
 func (coverageWorkspaces) ReadResources(
-	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
 ) (workspace.StatePage, error) {
 	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
 }

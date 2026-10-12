@@ -92,8 +92,11 @@ type StateReader interface {
 	// finalized state version id. A state the client encrypted fails with
 	// workspace.ErrClientEncrypted. Size is the page size, or zero for the
 	// default page; cursor is "" or the NextCursor of an earlier page.
+	// Filter is a substring of the address or of the resource type, or ""
+	// for no filter: it never matches attribute values. Paging applies after
+	// the filter, so a page holds only matching resources.
 	ReadResources(
-		ctx context.Context, id workspace.StateVersionID, cursor string, size int,
+		ctx context.Context, id workspace.StateVersionID, cursor string, size int, filter string,
 	) (workspace.StatePage, error)
 	// ReadResource returns one resource of the finalized state version id
 	// with its instances masked. The address matches verbatim. A state the

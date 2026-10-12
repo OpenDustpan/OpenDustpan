@@ -391,7 +391,7 @@ func (stubWorkspaces) ReadState(
 	_ context.Context, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	switch id.String() {
-	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-encrypted123":
+	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-skipped123", "sv-encrypted123":
 		sv := stubStateVersion()
 		sv.ID = id
 
@@ -440,11 +440,28 @@ func stubResourceMarks() workspace.SensitiveMarks {
 	}
 }
 
+// stubSkippedState is a tfstate document with one valid resource and entries
+// the server skips: a non-object and an object without type and name, so the
+// list reads incomplete.
+func stubSkippedState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"smoke-id",` +
+		`"input":{"value":"s3cr3t","type":"string"},` +
+		`"output":{"value":"s3cr3t","type":"string"},"triggers_replace":null},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]},` +
+		`"junk",{"mode":"managed"}]}`
+}
+
 // stubResourceBytes returns the state bytes and the kept marks of the masked
 // resource routes for id, or ErrStateVersionNotFound. The version with no
 // marks reads the same state without them, so every attribute value is a
 // marker. The second version changes the sensitive input and adds one
-// resource, so the diff route has a change to answer.
+// resource, so the diff route has a change to answer. The version with
+// skipped entries reads one valid resource with the list marked incomplete.
 func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.SensitiveMarks, error) {
 	switch id.String() {
 	case "sv-test123":
@@ -453,6 +470,8 @@ func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.Sensitive
 		return []byte(stubSecondState()), stubResourceMarks(), nil
 	case "sv-nomarks123":
 		return []byte(stubResourceState()), nil, nil
+	case "sv-skipped123":
+		return []byte(stubSkippedState()), stubResourceMarks(), nil
 	case "sv-encrypted123":
 		return []byte(stubEncryptedState()), stubResourceMarks(), nil
 	default:
@@ -486,7 +505,7 @@ func stubSecondState() string {
 }
 
 func (stubWorkspaces) ReadResources(
-	_ context.Context, id workspace.StateVersionID, cursor string, size int,
+	_ context.Context, id workspace.StateVersionID, cursor string, size int, filter string,
 ) (workspace.StatePage, error) {
 	raw, _, err := stubResourceBytes(id)
 	if err != nil {
@@ -499,7 +518,7 @@ func (stubWorkspaces) ReadResources(
 		return workspace.StatePage{}, fmt.Errorf("read resources of %s: %w", id, workspace.ErrClientEncrypted)
 	}
 
-	return workspace.ListStateResources(raw, nil, cursor, size)
+	return workspace.ListStateResources(raw, nil, cursor, size, filter)
 }
 
 func (stubWorkspaces) ReadResource(
@@ -1465,7 +1484,7 @@ func (errorWorkspaces) ReadState(
 }
 
 func (errorWorkspaces) ReadResources(
-	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
 ) (workspace.StatePage, error) {
 	return workspace.StatePage{}, errTestInternal
 }
