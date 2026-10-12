@@ -7,6 +7,9 @@ Retention, export to a SIEM and the full catalog of events are RFC 22.
 ## What the log records
 
 Each response that gives a secret value in plain text writes one audit entry.
+The reveal call writes one entry with the action `unit:read-secrets`, the
+kind `reveal`, the state version in `version` and the value path, before it
+answers.
 The two Pulumi routes `decrypt/log-decryption` and
 `decrypt/log-batch-decryption` (ADR 23 decision 6) write one entry each with
 the action `unit:decrypt` and the kind `reveal`.

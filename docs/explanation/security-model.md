@@ -76,9 +76,12 @@ The server seals each new OpenTofu state version before it stores it:
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
 
-State versions that an older server wrote stay plain text after the
-upgrade. Planned: a change that seals the existing versions (ADR 41,
-decision 11).
+The server also seals the state versions that an older server wrote
+(ADR 41, decision 11). At each start, and after each restore, it seals
+each version that still holds plain content. It writes the sealed content
+to a new blob key, moves the version to that key in a fenced transaction,
+and then deletes the plain blob. It seals only the versions of namespaces
+whose home region is this region.
 
 ## The key-encryption key
 
@@ -116,7 +119,7 @@ disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes, for each version that this server wrote. Versions from an older server stay plain text |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. The server seals the versions of an older server at start and after a restore |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
@@ -186,16 +189,20 @@ Each namespace has an append-only audit log. No route changes or deletes an
 entry. The [audit log guide](../guides/audit-log.md) shows the fields of an
 entry and how to read them.
 
-- **What writes an entry.** The Pulumi CLI calls `decrypt/log-decryption`
-  or `decrypt/log-batch-decryption` when a person shows secrets, for example
-  with `pulumi config get`, `pulumi stack output --show-secrets` or
-  `pulumi stack export --show-secrets`. The server writes one entry of the
-  kind `reveal` for each call. `up`, `preview`, `refresh` and `destroy`
-  decrypt secrets too, but they do not call these routes, so they write no
-  entry. The end-to-end suite checks both.
-- **The CLI reports a reveal.** The server records a reveal only when the
-  client calls an audit route. A client that does not call the route
-  leaves no entry.
+- **What writes an entry.** Each response that gives a secret value in
+  plain text writes one entry. The kind of access tells two cases apart:
+  - `reveal`: a person asked to see a secret value. The reveal call
+    answers the plain value at one masked value path of one version. It
+    needs `unit:read` and `unit:read-secrets`, and it writes its entry
+    before it answers. The Pulumi CLI also reports a reveal through
+    `decrypt/log-decryption` and `decrypt/log-batch-decryption`.
+  - `tool-operation`: a tool needed secrets for its own work. The Pulumi
+    `decrypt` and `batch-decrypt` routes, the OpenTofu state download and
+    the OpenTofu route for one sensitive output write this kind.
+- **The server cannot see who runs a CLI command.** A person who runs
+  `tofu state pull` makes a `tool-operation` entry. The server records a
+  reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
+  route.
 - **Who can read the log.** `GET /api/audit/entries` lists the entries and
   `GET /api/audit/check` checks the chain. Both need the action
   `namespace:read-audit` on the namespace.
@@ -203,17 +210,17 @@ entry and how to read them.
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:
   that person can write the entries and all the hashes again.
-- **A failed append does not fail the command.** The route still answers
-  204. The server writes a log line with no secret and adds 1 to
+- **A failed append.** A route that answers a secret value answers 500
+  with no value, so no value reaches a client without its entry. The two
+  `log-decryption` routes answer no secret value, so they still answer 204.
+  In each case the server writes a log line with no secret and adds 1 to
   `dustpan_audit_append_failures_total`. Alert when that counter is above
   zero.
 - **Backups.** A backup holds the audit log, and a restore keeps a valid
   chain.
 
-Planned: entries of the kind `tool-operation` for each read of plain
-secrets that a tool needs for its own work, for example an OpenTofu state
-download (ADR 41, decision 9). RFC 22 holds retention, export and an anchor
-for the chain outside the database.
+RFC 22 holds retention, export and an anchor for the chain outside the
+database.
 
 ## Report a vulnerability
 
