@@ -3723,6 +3723,11 @@ func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.
 	return nil
 }
 
+// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
+func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return s.SaveWorkspace(ctx, w, fence)
+}
+
 // latestResourceCount returns the managed resource count of the latest
 // checkpoint of the stack with stackID, or 0 when it has none. Callers hold
 // the write lock, so the check runs in the same step as the delete.
@@ -4092,9 +4097,4 @@ func (s *fakeBackupStore) rebuildIndexes() {
 	for id := range s.data.workspaces {
 		s.data.workspaceIDs[s.data.workspaces[id].Ref.String()] = id
 	}
-}
-
-// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
-func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
-	return s.SaveWorkspace(ctx, w, fence)
 }

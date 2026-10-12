@@ -718,38 +718,6 @@ func (m *memStore) ListStateVersions(
 	return all[offset:end], total, nil
 }
 
-// checkFence rejects a write to an unknown namespace or a stale failover
-// version. The caller holds mu.
-func (m *memStore) checkFence(fence namespace.Fence) error {
-	ns, ok := m.namespaces[fence.Namespace]
-	if !ok {
-		return namespace.ErrNotFound
-	}
-
-	if ns.FailoverVersion != fence.FailoverVersion {
-		return namespace.ErrFenced
-	}
-
-	return nil
-}
-
-// publish writes the inventory entry for w. The caller holds mu.
-func (m *memStore) publish(w workspace.Workspace) {
-	name := w.Ref.Name.String()
-
-	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
-		LastChanged:   w.UpdatedAt,
-		Namespace:     w.Ref.Namespace,
-		Tool:          memInventoryTool,
-		Name:          name,
-		UnitID:        w.ID.String(),
-		DisplayName:   name,
-		Status:        "",
-		ResourceCount: nil,
-		Lock:          memLock(w.Lock),
-	}
-}
-
 // memLock returns the inventory lock a workspace holds, or nil when it is
 // unlocked, as the store adapters publish it.
 func memLock(lock workspace.Lock) *inventory.Lock {
@@ -4214,21 +4182,6 @@ func readSealedBlobBytes(t *testing.T, f fixture, sv workspace.StateVersion) ([]
 	return data, nil
 }
 
-// checkUnlockedSwitches refuses an unlocked write when the namespace or the unit
-// switch is off. The caller holds mu.
-func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
-	ns, ok := m.namespaces[w.Ref.Namespace]
-	if !ok {
-		return namespace.ErrNotFound
-	}
-
-	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
-		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
-	}
-
-	return nil
-}
-
 // ReleaseUnfenced refuses the save unless the forced-write switches of the
 // namespace and of the unit are on (ADR 44, decisions 4 and 6).
 func (m *memStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
@@ -4247,4 +4200,51 @@ func (m *memStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, f
 	}
 
 	return m.SaveWorkspace(ctx, w, fence)
+}
+
+// checkFence rejects a write to an unknown namespace or a stale failover
+// version. The caller holds mu.
+func (m *memStore) checkFence(fence namespace.Fence) error {
+	ns, ok := m.namespaces[fence.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if ns.FailoverVersion != fence.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// publish writes the inventory entry for w. The caller holds mu.
+func (m *memStore) publish(w workspace.Workspace) {
+	name := w.Ref.Name.String()
+
+	m.entries[memInventoryKey{namespace: w.Ref.Namespace, tool: memInventoryTool, name: name}] = inventory.Entry{
+		LastChanged:   w.UpdatedAt,
+		Namespace:     w.Ref.Namespace,
+		Tool:          memInventoryTool,
+		Name:          name,
+		UnitID:        w.ID.String(),
+		DisplayName:   name,
+		Status:        "",
+		ResourceCount: nil,
+		Lock:          memLock(w.Lock),
+	}
+}
+
+// checkUnlockedSwitches refuses an unlocked write when the namespace or the unit
+// switch is off. The caller holds mu.
+func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
+	ns, ok := m.namespaces[w.Ref.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
+		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
+	}
+
+	return nil
 }
