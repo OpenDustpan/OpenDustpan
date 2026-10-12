@@ -22,11 +22,13 @@ An entry holds these fields:
 - When: `atMs` (UTC, Unix milliseconds).
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
-  declares it in the `Dustpan-Channel` header; unknown values are `api`).
+  declares it in the `Dustpan-Channel` header). Unknown values are `api`.
 - Kind: `tool-operation` or `reveal`, never anything else, so a reader never
   confuses a tool that needed secrets with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
-- `requestID`: the `X-Request-Id` of the request (ADR 32).
+- `requestID`: the request ID the server mints. The server returns it in
+  the `X-Request-Id` response header and ignores an ID the client sends
+  (ADR 32).
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   The first entry of a namespace has an empty `prevHash`.
@@ -40,7 +42,7 @@ allows only the two kinds.
 entries of the namespace, newest first, with the total count.
 It needs the action `namespace:read-audit` on the namespace.
 `page[number]` selects the page (from 1) and `page[size]` selects its size
-(up to 200); both default when missing.
+(up to 200). Both default when missing.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
@@ -50,6 +52,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 `GET /api/audit/check?organization=<namespace>` walks the chain of the
 namespace oldest first and answers whether it is valid.
 It needs the same action.
+The check reads the chain in pages of 100 entries, so a large log never
+grows the check without a bound.
 A valid chain answers `{"valid":true,"entriesChecked":N}`.
 A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N}`,
 where `S` is the first entry that does not match.

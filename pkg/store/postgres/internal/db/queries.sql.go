@@ -1365,17 +1365,27 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgty
 	return resource_count, err
 }
 
-const listAuditChain = `-- name: ListAuditChain :many
+const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
 FROM audit_entries
-WHERE namespace = $1
+WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
+LIMIT $3
 `
 
-// Every entry of a namespace oldest first, for the chain check.
-func (q *Queries) ListAuditChain(ctx context.Context, namespace string) ([]AuditEntry, error) {
-	rows, err := q.db.Query(ctx, listAuditChain, namespace)
+type ListAuditChainPageParams struct {
+	Namespace string
+	Sequence  int64
+	Limit     int32
+}
+
+// One bounded page of the chain of a namespace oldest first, for the chain
+// check. The check reads the chain with this query in pages of
+// audit.CheckPageSize entries after the last sequence it saw, so a namespace
+// with a large log never grows the check without a bound.
+func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPageParams) ([]AuditEntry, error) {
+	rows, err := q.db.Query(ctx, listAuditChainPage, arg.Namespace, arg.Sequence, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

@@ -495,10 +495,14 @@ SELECT COUNT(*)
 FROM audit_entries
 WHERE namespace = ?;
 
--- name: ListAuditChain :many
--- Every entry of a namespace oldest first, for the chain check.
+-- name: ListAuditChainPage :many
+-- One bounded page of the chain of a namespace oldest first, for the chain
+-- check. The check reads the chain with this query in pages of
+-- audit.CheckPageSize entries after the last sequence it saw, so a namespace
+-- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
 FROM audit_entries
-WHERE namespace = ?
-ORDER BY sequence ASC;
+WHERE namespace = ? AND sequence > ?
+ORDER BY sequence ASC
+LIMIT ?;

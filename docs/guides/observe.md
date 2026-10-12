@@ -89,7 +89,7 @@ The duration family also writes `_bucket`, `_sum` and `_count` series.
 `dustpan_process_start_time_seconds` holds the start time in seconds.
 `dustpan_audit_append_failures_total` counts audit entries lost because the
 append failed.
-Alert when it is above zero; the audit guide shows the rule.
+Alert when it is above zero. The audit guide shows the rule.
 This is the alert for failed logging (PCI DSS 10.7).
 
 ## Request log

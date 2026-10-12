@@ -111,36 +111,52 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	return audit.Listing{Entries: entries, Total: total}, nil
 }
 
-// Check implements audit.Store: it walks the chain of ns oldest first and
-// reports the first entry that does not match: a changed field, a broken
-// link or a gap after a deleted entry. A namespace with no entries checks as
+// Check implements audit.Store: it walks the chain of ns oldest first in
+// bounded pages and reports the first entry that does not match: a changed
+// field, a broken link or a gap after a deleted entry. Each round trip reads
+// at most audit.CheckPageSize entries, so a namespace with a large log never
+// grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	rows, err := s.queries.ListAuditChain(ctx, ns.String())
-	if err != nil {
-		return audit.CheckResult{}, fmt.Errorf("select audit chain: %w", err)
-	}
-
 	var prevHash string
 
 	var wantSeq int64 = 1
 
-	for i := range rows {
-		e := fromAuditRow(rows[i])
+	var checked int64
 
-		if e.Sequence != wantSeq || e.PrevHash != prevHash {
-			return audit.CheckResult{Checked: int64(len(rows)), BadSequence: e.Sequence, Valid: false}, nil
+	for {
+		rows, err := s.queries.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
+			Namespace: ns.String(),
+			Sequence:  wantSeq - 1,
+			Limit:     audit.CheckPageSize,
+		})
+		if err != nil {
+			return audit.CheckResult{}, fmt.Errorf("select audit chain: %w", err)
 		}
 
-		if got := audit.ComputeHash(e, e.PrevHash); got != e.Hash {
-			return audit.CheckResult{Checked: int64(len(rows)), BadSequence: e.Sequence, Valid: false}, nil
+		read := checked + int64(len(rows))
+
+		for i := range rows {
+			e := fromAuditRow(rows[i])
+
+			if e.Sequence != wantSeq || e.PrevHash != prevHash {
+				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
+			}
+
+			if got := audit.ComputeHash(e, e.PrevHash); got != e.Hash {
+				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
+			}
+
+			prevHash = e.Hash
+			wantSeq++
 		}
 
-		prevHash = e.Hash
-		wantSeq++
+		checked += int64(len(rows))
+
+		if len(rows) < audit.CheckPageSize {
+			return audit.CheckResult{Checked: checked, BadSequence: 0, Valid: true}, nil
+		}
 	}
-
-	return audit.CheckResult{Checked: int64(len(rows)), BadSequence: 0, Valid: true}, nil
 }
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back

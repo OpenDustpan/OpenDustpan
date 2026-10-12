@@ -79,6 +79,12 @@ const DefaultPageSize = 50
 // MaxPageSize caps the page size of a list.
 const MaxPageSize = 200
 
+// CheckPageSize bounds the memory of a chain check: Check reads the chain
+// oldest first in pages of this many entries, so a namespace with a large
+// log never grows the check without a bound. The walk still visits every
+// entry, one page at a time.
+const CheckPageSize = 100
+
 // Sentinel errors returned by this package and by Store implementations.
 var (
 	// ErrInvalidEntry reports an entry that fails validation.
@@ -299,13 +305,15 @@ type CheckResult struct {
 type Store interface {
 	// Append writes e in the namespace of fence and returns the stored
 	// entry with its sequence, previous hash and hash. It returns
-	// ErrInvalidEntry if e fails validation or names another namespace, and
+	// ErrInvalidEntry if e fails validation or names another namespace,
+	// namespace.ErrNotFound if the fence names a missing namespace, and
 	// namespace.ErrFenced if the fence carries a stale failover version.
 	Append(ctx context.Context, fence namespace.Fence, e Entry) (Entry, error)
 	// List answers one page of the entries of ns, newest first, with the
 	// total count. A namespace with no entries reads as an empty list.
 	List(ctx context.Context, ns namespace.Name, page Page) (Listing, error)
-	// Check walks the chain of ns oldest first and reports the first entry
-	// that does not match. A namespace with no entries checks as valid.
+	// Check walks the chain of ns oldest first in pages of CheckPageSize
+	// entries and reports the first entry that does not match. A namespace
+	// with no entries checks as valid.
 	Check(ctx context.Context, ns namespace.Name) (CheckResult, error)
 }

@@ -10,6 +10,7 @@ package audittest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -53,10 +54,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "append then list returns the entry with its chain", test: testAppendList},
 		{name: "list is newest first with paging", test: testListPaging},
 		{name: "append with a stale fence fails", test: testStaleFence},
+		{name: "append to a missing namespace fails", test: testMissingNamespace},
 		{name: "entries of another namespace are not listed", test: testIsolation},
 		{name: "concurrent appends form one valid chain", test: testConcurrentAppends},
 		{name: "check finds a changed field", test: testCheckChangedField},
 		{name: "check finds a deleted entry", test: testCheckDeletedEntry},
+		{name: "check pages a chain longer than one page", test: testCheckPagesLongChain},
 	}
 
 	for _, tc := range cases {
@@ -292,7 +295,8 @@ func checkPagingRest(t *testing.T, s Store, ns namespace.Name) {
 }
 
 // testStaleFence proves that an append with an old failover version fails
-// and stores nothing.
+// with namespace.ErrFenced and stores nothing. A driver error or a generic
+// error must not pass: callers fence on the sentinel.
 func testStaleFence(t *testing.T, ts TestStore) {
 	t.Helper()
 
@@ -301,8 +305,37 @@ func testStaleFence(t *testing.T, ts TestStore) {
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion - 1}
 
-	if _, err := s.Append(t.Context(), stale, newEntry(ns.Name, "admin", "req-1", now())); err == nil {
-		t.Fatal("append with a stale fence succeeded, want a fence error")
+	_, err := s.Append(t.Context(), stale, newEntry(ns.Name, "admin", "req-1", now()))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("append with a stale fence: err = %v, want %v", err, namespace.ErrFenced)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if listing.Total != 0 {
+		t.Fatalf("total = %d, want 0", listing.Total)
+	}
+}
+
+// testMissingNamespace proves that an append to a missing namespace fails
+// with namespace.ErrNotFound and stores nothing.
+func testMissingNamespace(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	missing := namespace.Name("ghost")
+	fence := namespace.Fence{Namespace: missing, FailoverVersion: 1}
+
+	entry := newEntry(missing, "admin", "req-1", now())
+
+	_, err := s.Append(t.Context(), fence, entry)
+	if !errors.Is(err, namespace.ErrNotFound) {
+		t.Fatalf("append to a missing namespace: err = %v, want %v", err, namespace.ErrNotFound)
 	}
 
 	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
@@ -435,6 +468,43 @@ func checkStoredChain(t *testing.T, listing audit.Listing) {
 	}
 
 	checkValidChain(t, ordered)
+}
+
+// testCheckPagesLongChain proves that Check walks a chain longer than one
+// check page in bounded pages: it appends past audit.CheckPageSize entries
+// and the check still answers valid with every entry checked. A walk that
+// reads the whole chain in one query holds every row at once, so this case
+// pins the paged path: a page boundary that drops or repeats an entry fails
+// it.
+func testCheckPagesLongChain(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	const total = 2*audit.CheckPageSize + 5
+
+	for i := 1; i <= total; i++ {
+		appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", fmt.Sprintf("req-%d", i), now()))
+	}
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != total {
+		t.Fatalf("check = %+v, want valid with %d entries", check, total)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if listing.Total != total {
+		t.Fatalf("total = %d, want %d", listing.Total, total)
+	}
 }
 
 // testCheckChangedField proves that Check reports the sequence of an entry
