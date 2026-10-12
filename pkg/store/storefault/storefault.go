@@ -95,6 +95,7 @@ type Inner interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	stack.JournalStore
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -367,6 +368,15 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 	}
 
 	return s.inner.AppendEvents(ctx, batch, fence)
+}
+
+// PutJournalRow stores the row of one batch, unless a fault fires first.
+func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence namespace.Fence) (bool, error) {
+	if err := s.before(ctx, "PutJournalRow"); err != nil {
+		return false, err
+	}
+
+	return s.inner.PutJournalRow(ctx, row, fence)
 }
 
 // ListEvents returns the events of the update, unless a fault fires first.

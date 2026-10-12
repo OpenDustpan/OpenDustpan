@@ -54,21 +54,25 @@ func fakeTime() time.Time {
 
 // fakeData holds every table of the fake.
 type fakeData struct {
-	namespaces   map[string]namespace.Namespace
-	stacks       map[string]stack.Stack
-	stackIDs     map[string]string
-	updates      map[string]map[string]stack.Update
-	checkpoints  map[string]map[string]stack.Checkpoint
-	events       map[string]map[string][]stack.Event
-	keys         map[string]secret.WrappedKey
-	entries      map[string]inventory.Entry
-	audit        map[string][]audit.Entry
-	workspaces   map[string]workspace.Workspace
-	workspaceIDs map[string]string
-	states       map[string]workspace.StateVersion
-	current      map[string]string
-	backups      map[string]backup.Record
-	restores     map[string]backup.RestoreRecord
+	// journal and journalSequences hold the journal tables. The fake keeps no
+	// journal rows, so both stay empty; they exist so the tables round trip.
+	journal          []int
+	journalSequences []int
+	namespaces       map[string]namespace.Namespace
+	stacks           map[string]stack.Stack
+	stackIDs         map[string]string
+	updates          map[string]map[string]stack.Update
+	checkpoints      map[string]map[string]stack.Checkpoint
+	events           map[string]map[string][]stack.Event
+	keys             map[string]secret.WrappedKey
+	entries          map[string]inventory.Entry
+	audit            map[string][]audit.Entry
+	workspaces       map[string]workspace.Workspace
+	workspaceIDs     map[string]string
+	states           map[string]workspace.StateVersion
+	current          map[string]string
+	backups          map[string]backup.Record
+	restores         map[string]backup.RestoreRecord
 	// installation is the installation state. It starts normal, as the
 	// seeded row of the SQL adapters does.
 	installation maintenance.State
@@ -77,22 +81,24 @@ type fakeData struct {
 // newFakeData returns empty tables.
 func newFakeData() *fakeData {
 	return &fakeData{
-		namespaces:   map[string]namespace.Namespace{},
-		stacks:       map[string]stack.Stack{},
-		stackIDs:     map[string]string{},
-		updates:      map[string]map[string]stack.Update{},
-		checkpoints:  map[string]map[string]stack.Checkpoint{},
-		events:       map[string]map[string][]stack.Event{},
-		keys:         map[string]secret.WrappedKey{},
-		entries:      map[string]inventory.Entry{},
-		audit:        map[string][]audit.Entry{},
-		workspaces:   map[string]workspace.Workspace{},
-		workspaceIDs: map[string]string{},
-		states:       map[string]workspace.StateVersion{},
-		current:      map[string]string{},
-		backups:      map[string]backup.Record{},
-		restores:     map[string]backup.RestoreRecord{},
-		installation: maintenance.StateNormal,
+		journal:          nil,
+		journalSequences: nil,
+		namespaces:       map[string]namespace.Namespace{},
+		stacks:           map[string]stack.Stack{},
+		stackIDs:         map[string]string{},
+		updates:          map[string]map[string]stack.Update{},
+		checkpoints:      map[string]map[string]stack.Checkpoint{},
+		events:           map[string]map[string][]stack.Event{},
+		keys:             map[string]secret.WrappedKey{},
+		entries:          map[string]inventory.Entry{},
+		audit:            map[string][]audit.Entry{},
+		workspaces:       map[string]workspace.Workspace{},
+		workspaceIDs:     map[string]string{},
+		states:           map[string]workspace.StateVersion{},
+		current:          map[string]string{},
+		backups:          map[string]backup.Record{},
+		restores:         map[string]backup.RestoreRecord{},
+		installation:     maintenance.StateNormal,
 	}
 }
 
@@ -885,6 +891,12 @@ func (s *fakeBackupStore) ReferencedCheckpointKeys(
 	slices.Sort(out)
 
 	return out, nil
+}
+
+// PutJournalRow implements stack.JournalStore. The backup fake keeps no journal
+// rows, so a write through it is an error, not a silent drop.
+func (s *fakeBackupStore) PutJournalRow(context.Context, stack.JournalRow, namespace.Fence) (bool, error) {
+	return false, errors.ErrUnsupported
 }
 
 // AppendEvents implements stack.EventStore, skipping stored sequences.
@@ -2348,19 +2360,21 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 	}
 
 	return map[string]int64{
-		"namespaces":     int64(len(data.namespaces)),
-		"stacks":         int64(len(data.stacks)),
-		"stack_tags":     int64(tags),
-		"updates":        int64(updates),
-		"checkpoints":    int64(checkpoints),
-		"update_events":  int64(events),
-		"secret_keys":    int64(len(data.keys)),
-		"inventory":      int64(len(data.entries)),
-		"audit_entries":  int64(auditRowCount(data)),
-		"workspaces":     int64(len(data.workspaces)),
-		"state_versions": int64(len(data.states)),
-		"backups":        int64(len(data.backups)),
-		"restores":       int64(len(data.restores)),
+		"namespaces":               int64(len(data.namespaces)),
+		"stacks":                   int64(len(data.stacks)),
+		"stack_tags":               int64(tags),
+		"updates":                  int64(updates),
+		"checkpoints":              int64(checkpoints),
+		"update_events":            int64(events),
+		"update_journal":           int64(len(data.journal)),
+		"update_journal_sequences": int64(len(data.journalSequences)),
+		"secret_keys":              int64(len(data.keys)),
+		"inventory":                int64(len(data.entries)),
+		"audit_entries":            int64(auditRowCount(data)),
+		"workspaces":               int64(len(data.workspaces)),
+		"state_versions":           int64(len(data.states)),
+		"backups":                  int64(len(data.backups)),
+		"restores":                 int64(len(data.restores)),
 		// The installation table holds its one seeded row in every store,
 		// as in the SQL adapters.
 		"installation": 1,
@@ -3070,20 +3084,22 @@ func (s *fakeBackupStore) tableRows(table string) ([]byte, int64, error) {
 // the store lock.
 func (s *fakeBackupStore) snapshotTables() map[string]any {
 	return map[string]any{
-		"namespaces":     s.data.namespaces,
-		"stacks":         s.data.stacks,
-		"stack_tags":     s.stackTags(),
-		"updates":        s.data.updates,
-		"checkpoints":    s.data.checkpoints,
-		"update_events":  s.data.events,
-		"secret_keys":    s.data.keys,
-		"inventory":      s.data.entries,
-		"audit_entries":  s.data.audit,
-		"workspaces":     fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
-		"state_versions": s.data.states,
-		"backups":        s.data.backups,
-		"restores":       s.data.restores,
-		"installation":   s.data.installation,
+		"namespaces":               s.data.namespaces,
+		"stacks":                   s.data.stacks,
+		"stack_tags":               s.stackTags(),
+		"updates":                  s.data.updates,
+		"checkpoints":              s.data.checkpoints,
+		"update_events":            s.data.events,
+		"update_journal":           s.data.journal,
+		"update_journal_sequences": s.data.journalSequences,
+		"secret_keys":              s.data.keys,
+		"inventory":                s.data.entries,
+		"audit_entries":            s.data.audit,
+		"workspaces":               fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
+		"state_versions":           s.data.states,
+		"backups":                  s.data.backups,
+		"restores":                 s.data.restores,
+		"installation":             s.data.installation,
 	}
 }
 
@@ -3351,18 +3367,20 @@ func decodeTable(loaded *fakeData, frame fakeTableFrame) error {
 // frames need post-processing, so decodeTable handles them separately.
 func backupDecodeTargets(loaded *fakeData) map[string]any {
 	return map[string]any{
-		"namespaces":     &loaded.namespaces,
-		"stacks":         &loaded.stacks,
-		"updates":        &loaded.updates,
-		"checkpoints":    &loaded.checkpoints,
-		"update_events":  &loaded.events,
-		"secret_keys":    &loaded.keys,
-		"inventory":      &loaded.entries,
-		"audit_entries":  &loaded.audit,
-		"state_versions": &loaded.states,
-		"backups":        &loaded.backups,
-		"restores":       &loaded.restores,
-		"installation":   &loaded.installation,
+		"namespaces":               &loaded.namespaces,
+		"stacks":                   &loaded.stacks,
+		"updates":                  &loaded.updates,
+		"checkpoints":              &loaded.checkpoints,
+		"update_events":            &loaded.events,
+		"update_journal":           &loaded.journal,
+		"update_journal_sequences": &loaded.journalSequences,
+		"secret_keys":              &loaded.keys,
+		"inventory":                &loaded.entries,
+		"audit_entries":            &loaded.audit,
+		"state_versions":           &loaded.states,
+		"backups":                  &loaded.backups,
+		"restores":                 &loaded.restores,
+		"installation":             &loaded.installation,
 	}
 }
 

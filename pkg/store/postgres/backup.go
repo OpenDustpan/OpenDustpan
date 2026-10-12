@@ -44,11 +44,13 @@ const pgMD5Len = 16
 
 // COPY column names shared by several backup tables.
 const (
+	pgColArrival     = "arrival"
 	pgColCreatedAtMs = "created_at_ms"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
 	pgColSequence    = "sequence"
+	pgColSize        = "size"
 	pgColStackID     = "stack_id"
 	pgColStartedAtMs = "started_at_ms"
 	pgColState       = "state"
@@ -138,13 +140,26 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
 				"digest", "invalid", "features", "deployment", "saved_at_ms",
-				"resource_count", "blob_key", "size", "blob_size", "blob_md5",
+				"resource_count", "blob_key", pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
 		{
 			table:   "update_events",
 			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, "timestamp_ms", "payload"},
+			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
+		},
+		{
+			table: "update_journal",
+			columns: []string{
+				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", "sha256", pgColSize,
+				"lowest_sequence", "sequence_ids", "operation_ids",
+			},
+			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
+		},
+		{
+			table:   "update_journal_sequences",
+			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
 	}
@@ -189,7 +204,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "state_versions",
 			columns: []string{
-				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", "size",
+				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
 				"sensitive_marks", "fenced_by",
