@@ -15,17 +15,16 @@
 // This file is derived from the following code of pulumi/pulumi at commit
 // 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0):
 //
-//   - pkg/resource/deploy/snapshot.go: (*Snapshot).NormalizeURNReferences
-//     (lines 567 to 655, the alias map, fixUrn, fixProvider, fixResource and the
-//     snippet rewrite) and withUpdatedResources (line 864).
-//   - pkg/resource/deploy/state_builder.go: stateBuilder, withUpdatedURN,
-//     withAllUpdatedDependencies, withUpdatedAliases, build, setString and
-//     setURN.
-//   - pkg/resource/state.go: State.GetAllDependencies (line 366).
+//   - sdk/go/common/apitype/core.go: (*DeploymentV3).NormalizeURNReferences,
+//     lines 196 to 279: the alias map, fixURN, fixProvider, the rewrite of the
+//     links of each resource and the snippet references. pkg/backend/journal.go
+//     calls it at line 507, on the DeploymentV3 that the journal builds.
 //
 // OpenDustpan changed the input and the output: the functions work on the link
-// index (linkFields) of the update, not on a Snapshot. Upstream asserts on a
+// index (linkFields) of the update, not on a DeploymentV3. Upstream asserts on a
 // malformed URN or provider reference, and the port returns an error instead.
+// Upstream's Snapshot path (pkg/resource/deploy/snapshot.go, state_builder.go) is
+// not ported: the journal does not use it.
 
 package pulumijournal
 
@@ -153,96 +152,37 @@ func aliasChild(aliased map[string]string, state *linkFields) error {
 }
 
 // links returns the links of one resource with its URN references normalized and
-// its aliases removed. The input is not changed in place (upstream builds a new
-// state, and its state builder copies the original).
+// its aliases removed. The input is not changed: its slices and maps are copied
+// before they are rewritten (linkFields.clone).
+//
+// The steps and their order follow upstream DeploymentV3.NormalizeURNReferences
+// (sdk/go/common/apitype/core.go, lines 196 to 279, commit 128d3f2). Upstream
+// calls fixURN on the empty URN of a parent, a deletedWith or a viewOf too, and it
+// keeps the empty entries of the dependencies. replaceWith is not rewritten, because
+// upstream does not have that member in its normalization.
 func (n normalizer) links(in linkFields) (linkFields, error) {
-	out := in
-	out.URN = n.urn(in.URN)
-	if err := n.dependencies(&out); err != nil {
-		return linkFields{}, err
+	out := in.clone()
+	out.URN = n.urn(out.URN)
+	out.Parent = n.urn(out.Parent)
+	out.DeletedWith = n.urn(out.DeletedWith)
+	out.ViewOf = n.urn(out.ViewOf)
+	if out.Provider != "" {
+		provider, err := n.provider(out.Provider)
+		if err != nil {
+			return linkFields{}, err
+		}
+		out.Provider = provider
+	}
+	for i, dep := range out.Dependencies {
+		out.Dependencies[i] = n.urn(dep)
+	}
+	for _, deps := range out.PropertyDependencies {
+		for i, dep := range deps {
+			deps[i] = n.urn(dep)
+		}
 	}
 	out.Aliases = nil
 	return out, nil
-}
-
-// dependencies normalizes the provider and the dependencies of one resource, as
-// upstream withAllUpdatedDependencies does. The replaceWith entries are rewritten
-// once for each non-empty entry, because upstream loops over the dependency list
-// that way. Each rewrite maps the same entries, so the repeats only matter when an
-// alias maps to another alias.
-func (n normalizer) dependencies(links *linkFields) error {
-	if links.Provider != "" {
-		provider, err := n.provider(links.Provider)
-		if err != nil {
-			return err
-		}
-		links.Provider = provider
-	}
-	if links.Parent != "" {
-		links.Parent = n.urn(links.Parent)
-	}
-	if links.DeletedWith != "" {
-		links.DeletedWith = n.urn(links.DeletedWith)
-	}
-	for range countNonEmpty(links.ReplaceWith) {
-		for i, replaceWith := range links.ReplaceWith {
-			links.ReplaceWith[i] = n.urn(replaceWith)
-		}
-	}
-	// Upstream keeps the dependencies and the property dependencies as they are
-	// when nothing changed. Only a change replaces them, and then the empty URNs
-	// are dropped.
-	if fixed, edited := n.fixURNs(links.Dependencies); edited {
-		links.Dependencies = fixed
-	}
-	n.propertyDependencies(links)
-	return nil
-}
-
-// propertyDependencies normalizes the property dependencies of one resource. A
-// key with no URN left is dropped, as upstream does when it changed the map.
-func (n normalizer) propertyDependencies(links *linkFields) {
-	fixed := make(map[string][]string)
-	edited := false
-	for key, deps := range links.PropertyDependencies {
-		urns, changed := n.fixURNs(deps)
-		if len(urns) > 0 {
-			fixed[key] = urns
-		}
-		edited = edited || changed
-	}
-	if edited {
-		links.PropertyDependencies = fixed
-	}
-}
-
-// fixURNs returns the normalized URNs without the empty ones, and whether a URN
-// changed.
-func (n normalizer) fixURNs(urns []string) ([]string, bool) {
-	var fixed []string
-	edited := false
-	for _, u := range urns {
-		if u == "" {
-			continue
-		}
-		newURN := n.urn(u)
-		fixed = append(fixed, newURN)
-		if newURN != u {
-			edited = true
-		}
-	}
-	return fixed, edited
-}
-
-// countNonEmpty returns the number of entries that are not empty.
-func countNonEmpty(urns []string) int {
-	count := 0
-	for _, u := range urns {
-		if u != "" {
-			count++
-		}
-	}
-	return count
 }
 
 // snippetRefs holds the references of one snippet. Upstream rewrites them with

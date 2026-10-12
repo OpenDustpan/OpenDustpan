@@ -112,9 +112,10 @@ func TestReplayGivesProviderEmptyIDTheUnknownID(t *testing.T) {
 		`{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"`+urnProvider+`::`+unknownID+`"}`)
 }
 
-// TestReplayNormalizesPropertyDependenciesAndLinks checks the rewrite of the
-// property dependencies, deletedWith and replaceWith.
-func TestReplayNormalizesPropertyDependenciesAndLinks(t *testing.T) {
+// TestReplayNormalizesPropertyDependenciesAndDeletedWith checks the rewrite of the
+// property dependencies and deletedWith. replaceWith is not rewritten, because
+// upstream DeploymentV3.NormalizeURNReferences has no rule for it.
+func TestReplayNormalizesPropertyDependenciesAndDeletedWith(t *testing.T) {
 	t.Parallel()
 	target := aliased(urnNewA, urnOldA)
 	user := `{"urn":"urn:b","custom":true,"type":"t:mod:T",` +
@@ -128,7 +129,66 @@ func TestReplayNormalizesPropertyDependenciesAndLinks(t *testing.T) {
 		`{"urn":"`+urnNewA+`","custom":true,"type":"t:mod:T","id":"x"},`+
 			`{"urn":"urn:b","custom":true,"type":"t:mod:T",`+
 			`"propertyDependencies":{"k":["`+urnNewA+`"]},`+
-			`"deletedWith":"`+urnNewA+`","replaceWith":["`+urnNewA+`"]}`)
+			`"deletedWith":"`+urnNewA+`","replaceWith":["`+urnOldA+`"]}`)
+}
+
+// TestReplayKeepsEmptyLinkEntries checks that the empty entries of the dependencies
+// and of the property dependencies stay, and that an empty key stays too. Upstream
+// rewrites each entry in place, so an empty URN stays empty unless an alias is "".
+func TestReplayKeepsEmptyLinkEntries(t *testing.T) {
+	t.Parallel()
+	target := aliased(urnNewA, urnOldA)
+	user := `{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["",  "` + urnOldA + `"],` +
+		`"propertyDependencies":{"empty":[""],"k":["","` + urnOldA + `"]}}`
+	got, err := replay(baseJSON(target, user), batch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectDeployment(t, got,
+		`{"urn":"`+urnNewA+`","custom":true,"type":"t:mod:T","id":"x"},`+
+			`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["","`+urnNewA+`"],`+
+			`"propertyDependencies":{"empty":[""],"k":["","`+urnNewA+`"]}}`)
+}
+
+// TestReplayNormalizesViewOf checks that a view whose owner gets a new URN through an
+// alias points at the new URN. The viewOf member sets the views feature.
+func TestReplayNormalizesViewOf(t *testing.T) {
+	t.Parallel()
+	view := `{"urn":"urn:v","custom":true,"type":"t:mod:T","viewOf":"` + urnOldA + `"}`
+	got, err := replay(baseJSON(aliased(urnNewA, urnOldA), view), batch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"version":4,"features":["views"],"deployment":{"manifest":{"time":"` + replayTime +
+		`","magic":"` + magic() + `","version":"` + cliVersion + `"},"resources":[` +
+		`{"urn":"` + urnNewA + `","custom":true,"type":"t:mod:T","id":"x"},` +
+		`{"urn":"urn:v","custom":true,"type":"t:mod:T","viewOf":"` + urnNewA + `"}]}}`
+	if !reflect.DeepEqual(decodeAny(t, got), decodeAny(t, want)) {
+		t.Fatalf("output is\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestReplayNormalizesNewAndBaseRecords checks that a new resource and a base resource
+// both get the same rewrite. The index keeps its own copy of each slice, so the second
+// pass sees the rewrite as a change.
+func TestReplayNormalizesNewAndBaseRecords(t *testing.T) {
+	t.Parallel()
+	base := baseJSON(aliased(urnNewA, urnOldA),
+		`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["`+urnOldA+`"]}`)
+	newState := `{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","dependencies":["` + urnOldA + `"]}`
+	entries := batch(
+		`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"state":`+newState+`,"deleteOld":null}`,
+	)
+	got, err := replay(base, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectDeployment(t, got,
+		`{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","dependencies":["`+urnNewA+`"]},`+
+			`{"urn":"`+urnNewA+`","custom":true,"type":"t:mod:T","id":"x"},`+
+			`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["`+urnNewA+`"]}`)
 }
 
 // expectReplaceWithDeployment checks the output of a state with replaceWith, which

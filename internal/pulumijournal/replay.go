@@ -477,7 +477,7 @@ func (s *replayState) scanNewResources(scan *baseScan) {
 		}
 		s.addFeatures(scan.features, s.newRecords[i].view)
 		scan.final[s.newRecords[i].links.URN] = true
-		scan.index = append(scan.index, s.newRecords[i].links)
+		scan.index = append(scan.index, s.newRecords[i].links.clone())
 	}
 }
 
@@ -497,7 +497,7 @@ func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value
 	}
 	s.addFeatures(scan.features, rec.view)
 	scan.final[rec.links.URN] = true
-	scan.index = append(scan.index, rec.links)
+	scan.index = append(scan.index, rec.links.clone())
 	return nil
 }
 
@@ -774,6 +774,23 @@ func (s *replayState) writeResources(
 		return fmt.Errorf("pulumijournal: write deployment: %w", err)
 	}
 	w := &resourceWriter{enc: enc, index: scan.index, next: 0}
+	if err := s.writeNewRecords(w); err != nil {
+		return err
+	}
+	if err := s.writeBaseRecords(ctx, openBase, w); err != nil {
+		return err
+	}
+	if w.next != len(w.index) {
+		return errLinkIndex
+	}
+	if err := enc.WriteToken(jsontext.EndArray); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	return nil
+}
+
+// writeNewRecords writes the new resources that the update keeps.
+func (s *replayState) writeNewRecords(w *resourceWriter) error {
 	removed := s.removedIndices()
 	for i := range s.newRecords {
 		if _, gone := removed[int64(i)]; gone {
@@ -784,7 +801,12 @@ func (s *replayState) writeResources(
 			return err
 		}
 	}
-	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+	return nil
+}
+
+// writeBaseRecords writes the base resources that the update keeps, in the order of the base.
+func (s *replayState) writeBaseRecords(ctx context.Context, openBase OpenBase, w *resourceWriter) error {
+	return walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
 		idx := int64(i)
 		if _, gone := s.toDeleteInSnapshot[idx]; gone {
 			return nil
@@ -800,13 +822,6 @@ func (s *replayState) writeResources(
 		_, pending := s.markAsPending[idx]
 		return w.emit(&rec, resourceFlags{deleted: deleted, pending: pending})
 	}, func(string, jsontext.Value) error { return nil })
-	if err != nil {
-		return err
-	}
-	if err := enc.WriteToken(jsontext.EndArray); err != nil {
-		return fmt.Errorf("pulumijournal: write deployment: %w", err)
-	}
-	return nil
 }
 
 // secretsOut returns the secrets provider of the output: the entry value when an
@@ -912,6 +927,9 @@ func addLinkPatch(patch map[string]any, old, next linkFields) {
 	}
 	if old.Provider != next.Provider {
 		patch["provider"] = nilIfEmptyString(next.Provider)
+	}
+	if old.ViewOf != next.ViewOf {
+		patch["viewOf"] = nilIfEmptyString(next.ViewOf)
 	}
 	if !slices.Equal(old.Dependencies, next.Dependencies) {
 		patch["dependencies"] = nilIfEmpty(next.Dependencies)

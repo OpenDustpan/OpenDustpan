@@ -19,6 +19,8 @@
 
 package pulumijournal
 
+import "slices"
+
 // linkFields are the members of a resource state that the rebuild of the
 // dependencies reads and writes. The JSON names are the ones of the upstream
 // apitype.ResourceV3 (sdk/go/common/apitype/core.go, commit 128d3f2). The line
@@ -35,7 +37,7 @@ package pulumijournal
 //
 //   - urn and aliases: NormalizeURNReferences and withUpdatedAliases (state
 //     builder, withUpdatedAliases).
-//   - provider: withAllUpdatedDependencies, which calls updateProviderRef.
+//   - provider and viewOf: upstream DeploymentV3.NormalizeURNReferences (core.go).
 //
 // The features read the other members (resourceView). Upstream reads the same
 // members of a state in GenerateDeployment through ApplyFeatures.
@@ -48,6 +50,24 @@ type linkFields struct {
 	DeletedWith          string              `json:"deletedWith,omitempty"`
 	Aliases              []string            `json:"aliases,omitempty"`
 	Provider             string              `json:"provider,omitempty"`
+	ViewOf               string              `json:"viewOf,omitempty"`
+}
+
+// clone returns a copy of the links that shares no slice or map with l. The index
+// keeps its own copy, so that a rewrite of the index does not change the links that
+// the second pass compares with (see addLinkPatch).
+func (l linkFields) clone() linkFields {
+	out := l
+	out.Dependencies = slices.Clone(l.Dependencies)
+	out.ReplaceWith = slices.Clone(l.ReplaceWith)
+	out.Aliases = slices.Clone(l.Aliases)
+	if l.PropertyDependencies != nil {
+		out.PropertyDependencies = make(map[string][]string, len(l.PropertyDependencies))
+		for key, urns := range l.PropertyDependencies {
+			out.PropertyDependencies[key] = slices.Clone(urns)
+		}
+	}
+	return out
 }
 
 // rebuildLinks rebuilds the dependencies of one resource, the way the upstream
