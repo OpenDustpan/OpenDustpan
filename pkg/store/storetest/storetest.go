@@ -437,7 +437,7 @@ func testStackIDAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -470,7 +470,7 @@ func testDeleteMissingStack(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	ghost := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "ghost"}
 
-	if err := s.DeleteStack(t.Context(), ghost, ns.Fence()); !errors.Is(err, stack.ErrNotFound) {
+	if err := s.DeleteStack(t.Context(), ghost, ns.Fence(), stack.EmptyGuard()); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
 	}
 }
@@ -486,7 +486,7 @@ func testDeleteStaleFence(t *testing.T, s Store) {
 	}
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
-	if err := s.DeleteStack(t.Context(), st.Ref, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := s.DeleteStack(t.Context(), st.Ref, stale, stack.EmptyGuard()); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -793,7 +793,7 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -894,7 +894,7 @@ func testInventoryAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

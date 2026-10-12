@@ -331,8 +331,17 @@ func (s *fakeBackupStore) ListStacks(_ context.Context, filter stack.Filter) ([]
 
 // DeleteStack implements stack.Store with its children, key and entry.
 // When the latest checkpoint manages resources, it returns
-// ErrHasResources and removes nothing.
-func (s *fakeBackupStore) DeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
+// ErrHasResources and removes nothing. It ignores the delete guard and
+// counts the stored deployment instead: the backup suite only writes inline
+// checkpoints, so the guard path for blob rows never applies here. A nil
+// deployment of a blob row would count as resourced, unlike the real
+// adapters, which answer the guard on that path.
+func (s *fakeBackupStore) DeleteStack(
+	_ context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	_ stack.DeleteGuard,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

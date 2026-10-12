@@ -430,7 +430,9 @@ func newUpdateFixtureWithCutoff(
 
 	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
-	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -2616,7 +2618,9 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 
 	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
-	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(stack.Config{
+		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
+	})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}

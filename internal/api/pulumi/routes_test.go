@@ -104,7 +104,7 @@ func (stubStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, err
 	return zero, stack.ErrNotFound
 }
 
-func (stubStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (stubStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return stack.ErrNotFound
 }
 
@@ -185,7 +185,7 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 }
 
 func (s *recordingStackStore) DeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard,
 ) error {
 	s.deleted = append(s.deleted, ref)
 
@@ -307,7 +307,9 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -346,7 +348,9 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 
 	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
-	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1402,7 +1406,9 @@ func newDeleteHandler(
 		deleteErr: deleteErr,
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}

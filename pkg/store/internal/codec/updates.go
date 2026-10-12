@@ -40,15 +40,16 @@ type UpdateRow struct {
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
 // JSON array of strings. The stack is its stable ID; the caller supplies the
-// current reference. ResourceCount holds the number of managed resources
-// beyond the automatic stack resource, so the final delete checks it without
-// loading the deployment. Rows written before the count hold NULL, which
-// means not counted; new checkpoints always store the count. BlobKey names
-// the gzip content in the blob store; rows with a key keep no content.
-// Size is the uncompressed size for history; rows from before blobs hold
-// NULL, which reads as the length of the stored content. BlobSize with
-// BlobMD5 describe the stored bytes for backups; rows without a key hold no
-// stored bytes.
+// current reference. The row carries no resource count: saves store NULL, so
+// the save path never scans the deployment. The one reader of the stored
+// count, the delete guard refuseResourcedStack in each store adapter, counts
+// the one latest deployment when the count is NULL; the inventory projection
+// publishes Pulumi stacks with an unknown count, and the Pulumi list-stacks
+// route answers 0. BlobKey names the gzip content in the blob store; rows
+// with a key keep no content. Size is the uncompressed size for history;
+// rows from before blobs hold NULL, which reads as the length of the stored
+// content. BlobSize with BlobMD5 describe the stored bytes for backups; rows
+// without a key hold no stored bytes.
 type CheckpointRow struct {
 	StackID       string
 	UpdateID      string
@@ -60,7 +61,6 @@ type CheckpointRow struct {
 	Sequence      int64
 	SavedAtMs     int64
 	Invalid       bool
-	ResourceCount int64
 	BlobKey       string
 	Size          int64
 	BlobSize      int64
@@ -159,20 +159,11 @@ func FromUpdateRows(rows []UpdateRow, ref stack.Ref) ([]stack.Update, error) {
 	return out, nil
 }
 
-// ToCheckpointRow converts a domain checkpoint into a row for the stack with stackID.
-// It counts the managed resources of the deployment inline; a caller that
-// holds a write lock uses ToCheckpointRowCounted with a count computed before
-// the lock instead, so the transaction holds only SQL statements.
+// ToCheckpointRow converts a domain checkpoint into a row for the stack with
+// stackID. It never scans the deployment: the row stores a NULL resource
+// count, and the delete guard counts the latest deployment when it needs the
+// count (see CheckpointRow).
 func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, error) {
-	return ToCheckpointRowCounted(cp, stackID, stack.CountManagedResources(cp.Deployment))
-}
-
-// ToCheckpointRowCounted converts a domain checkpoint into a row for the stack
-// with stackID, with resourceCount computed by the caller before any lock. The
-// count scans the deployment bytes, which costs about one second for a large
-// checkpoint under the race detector, so PutCheckpoint computes it before its
-// fenced transaction and passes the result here.
-func ToCheckpointRowCounted(cp stack.Checkpoint, stackID stack.ID, resourceCount int64) (CheckpointRow, error) {
 	features := cp.Features
 	if features == nil {
 		features = []string{}
@@ -207,7 +198,6 @@ func ToCheckpointRowCounted(cp stack.Checkpoint, stackID stack.ID, resourceCount
 		Sequence:      cp.Sequence,
 		SavedAtMs:     Millis(cp.SavedAt),
 		Invalid:       cp.Invalid,
-		ResourceCount: resourceCount,
 		BlobKey:       cp.BlobKey.String(),
 		Size:          int64(len(cp.Deployment)),
 		BlobSize:      cp.BlobSize,
