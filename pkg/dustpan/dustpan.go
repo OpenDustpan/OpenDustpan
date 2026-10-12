@@ -22,6 +22,10 @@
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
+// WithSecretWrapper is required: NewServer answers ErrMissingOption without
+// it, because the server seals OpenTofu state and Pulumi secret values with
+// data keys that the key-encryption key wraps (ADR 41).
+//
 // Custom stores should pass the store/storetest conformance suite. The SDK is
 // pre-1.0: ports may still change between minor versions.
 package dustpan
@@ -170,10 +174,11 @@ func WithSecretKeyStore(s secret.KeyStore) Option {
 	return func(o *settings) { o.secretKeys = s }
 }
 
-// WithSecretWrapper sets the key-encryption key holder. Optional: nil means
-// no key-encryption key is configured. Run runs secret.CheckWrapper at
-// start: the server starts without a key only while the database holds no
-// wrapped key (ADR 23).
+// WithSecretWrapper sets the key-encryption key holder. Required: the server
+// seals OpenTofu state and Pulumi secret values with data keys that this key
+// wraps (ADR 41 decisions 10 and 12). NewServer refuses to build without it.
+// Run runs secret.CheckWrapper at start, so a key that does not open the
+// wrapped keys in the database stops the start (ADR 23).
 func WithSecretWrapper(w secret.Wrapper) Option {
 	return func(o *settings) { o.secretWrapper = w }
 }
@@ -600,6 +605,14 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 
 	if cfg.inventoryReader == nil {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
+	}
+
+	if cfg.secretWrapper == nil {
+		return baseurl.Resolver{}, fmt.Errorf(
+			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+
+				"Pulumi secrets (ADR 41)",
+			ErrMissingOption,
+		)
 	}
 
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {

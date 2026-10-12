@@ -389,7 +389,7 @@ func (stubWorkspaces) ReadState(
 	_ context.Context, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
 	switch id.String() {
-	case "sv-test123", "sv-nomarks123", "sv-encrypted123":
+	case "sv-test123", "sv-second123", "sv-nomarks123", "sv-encrypted123":
 		sv := stubStateVersion()
 		sv.ID = id
 
@@ -441,11 +441,14 @@ func stubResourceMarks() workspace.SensitiveMarks {
 // stubResourceBytes returns the state bytes and the kept marks of the masked
 // resource routes for id, or ErrStateVersionNotFound. The version with no
 // marks reads the same state without them, so every attribute value is a
-// marker.
+// marker. The second version changes the sensitive input and adds one
+// resource, so the diff route has a change to answer.
 func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.SensitiveMarks, error) {
 	switch id.String() {
 	case "sv-test123":
 		return []byte(stubResourceState()), stubResourceMarks(), nil
+	case "sv-second123":
+		return []byte(stubSecondState()), stubResourceMarks(), nil
 	case "sv-nomarks123":
 		return []byte(stubResourceState()), nil, nil
 	case "sv-encrypted123":
@@ -453,6 +456,31 @@ func stubResourceBytes(id workspace.StateVersionID) ([]byte, workspace.Sensitive
 	default:
 		return nil, nil, workspace.ErrStateVersionNotFound
 	}
+}
+
+// stubSecondState is the state of the second stub version: the sensitive
+// input changed and one resource added, so the diff of the two stub versions
+// answers an added and a changed resource with no secret value.
+func stubSecondState() string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":4,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"smoke",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"smoke-id",` +
+		`"input":{"value":"other","type":"string"},` +
+		`"output":{"value":"other","type":"string"},"triggers_replace":null},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]},` +
+		`{"mode":"managed","type":"random_password","name":"pw",` +
+		`"provider":"provider[\"registry.opentofu.org/hashicorp/random\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"pw-id","result":"pw-s3cr3t"},` +
+		`"sensitive_attributes":[] }]},` +
+		`{"mode":"managed","type":"terraform_data","name":"added",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"added-id","input":"added"},` +
+		`"sensitive_attributes":[] }]}]}`
 }
 
 func (stubWorkspaces) ReadResources(
@@ -487,6 +515,41 @@ func (stubWorkspaces) ReadResource(
 	}
 
 	return workspace.ReadStateResource(raw, marks, address)
+}
+
+func (stubWorkspaces) DiffStates(
+	_ context.Context, to, from workspace.StateVersionID, cursor string, size int,
+) (workspace.StateDiff, error) {
+	if from.String() == "sv-other123" {
+		return workspace.StateDiff{}, fmt.Errorf("%w: state version %s", workspace.ErrStateVersionNotFound, from)
+	}
+
+	toRaw, toMarks, err := stubResourceBytes(to)
+	if err != nil {
+		return workspace.StateDiff{}, err
+	}
+
+	fromRaw, fromMarks, err := stubResourceBytes(from)
+	if err != nil {
+		return workspace.StateDiff{}, err
+	}
+
+	for _, raw := range [][]byte{toRaw, fromRaw} {
+		encrypted, derr := workspace.IsClientEncrypted(raw)
+		if derr != nil {
+			return workspace.StateDiff{}, derr
+		}
+
+		if encrypted {
+			return workspace.StateDiff{}, fmt.Errorf("diff states: %w", workspace.ErrClientEncrypted)
+		}
+	}
+
+	return workspace.DiffStates(
+		workspace.StateWithMarks{State: fromRaw, Marks: fromMarks},
+		workspace.StateWithMarks{State: toRaw, Marks: toMarks},
+		cursor, size,
+	)
 }
 
 func (stubWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io.ReadCloser, error) {
@@ -1008,6 +1071,10 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 		path += "?filter[organization][name]=acme&filter[workspace][name]=web"
 	}
 
+	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions/{state_version_id}/diff" {
+		path += "?from=sv-test123"
+	}
+
 	body := ""
 	if route.Method == http.MethodPost {
 		body = `{"data":{}}`
@@ -1399,6 +1466,12 @@ func (errorWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, errTestInternal
+}
+
+func (errorWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, errTestInternal
 }
 
 func (errorWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
