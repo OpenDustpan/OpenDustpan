@@ -4,7 +4,7 @@ package e2e_test
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"testing"
@@ -15,14 +15,20 @@ import (
 // emptyMD5 is the hex MD5 of empty content. The stale job's declare names it.
 const emptyMD5 = "d41d8cd98f00b204e9800998ecf8427e"
 
+// stateAttributes holds the lineage and the serial of a state version.
+type stateAttributes struct {
+	Lineage string `json:"lineage"`
+	Serial  int64  `json:"serial"`
+}
+
+// stateData holds the data object of a state version document.
+type stateData struct {
+	Attributes stateAttributes `json:"attributes"`
+}
+
 // stateDocument reads the lineage and the serial of a state version document.
 type stateDocument struct {
-	Data struct {
-		Attributes struct {
-			Lineage string `json:"lineage"`
-			Serial  int64  `json:"serial"`
-		} `json:"attributes"`
-	} `json:"data"`
+	Data stateData `json:"data"`
 }
 
 // tofuForceUnlockFenceScenario proves ADR 44 with the real OpenTofu CLI. The
@@ -49,7 +55,11 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Body:   "",
 		Want:   http.StatusOK,
 		Check: func(body string) error {
-			return json.Unmarshal([]byte(body), &before)
+			if err := json.Unmarshal([]byte(body), &before); err != nil {
+				return fmt.Errorf("decode the current state: %w", err)
+			}
+
+			return nil
 		},
 	})
 
@@ -83,15 +93,15 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Check: func(body string) error {
 			var after stateDocument
 			if err := json.Unmarshal([]byte(body), &after); err != nil {
-				return err
+				return fmt.Errorf("decode the fenced state: %w", err)
 			}
 
 			if after.Data.Attributes.Lineage == before.Data.Attributes.Lineage {
-				return errors.New("lineage did not change at the fence")
+				return fmt.Errorf("%w: lineage did not change at the fence", errUnexpected)
 			}
 
 			if after.Data.Attributes.Serial != before.Data.Attributes.Serial+1 {
-				return errors.New("serial is not one more than before the fence")
+				return fmt.Errorf("%w: serial is not one more than before the fence", errUnexpected)
 			}
 
 			return nil
