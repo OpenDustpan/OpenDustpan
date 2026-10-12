@@ -23,6 +23,8 @@ same list.
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
 | `--s3-region` | `DUSTPAN_S3_REGION` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
+| `--key-encryption-key-file` | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | `dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL |
+| `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
 | `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `0`: 32 MiB, the largest Pulumi checkpoint |
 | `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `0`: 32 MiB, the largest batch of Pulumi secrets |
@@ -40,12 +42,27 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_ADMIN_TOKEN_FILE` | A file that holds the tokens, one per line or comma-separated. Only its owner can read it. When you set both, `DUSTPAN_ADMIN_TOKEN` wins. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
+| `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | Set `true` to make the key file with no prompt when no key exists. The server never overwrites a file that exists. |
 
 Make a key-encryption key with this command:
 
 ```sh
 openssl rand -base64 32
 ```
+
+Without the variable, the server uses the key file in
+`--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`), by default
+`dustpan.key` next to the SQLite database file, or `./dustpan.key` with
+PostgreSQL. On a terminal, `serve` asks for an explicit yes before it makes
+the file. Without a terminal, it makes the file only with
+`--generate-key-encryption-key`
+(`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`). Without the prompt or the
+opt-in, `serve` stops before it opens the database and names each setting
+that helps. The server never makes a key silently. A made file holds 32
+random bytes in base64 with owner-only mode. Each start logs the path of the
+key file in use, never the key. An operator who loses the key file loses
+every secret that the key encrypts, and nobody can recover them. A key file
+next to the data does not protect a backup of that data.
 
 ## Client commands
 

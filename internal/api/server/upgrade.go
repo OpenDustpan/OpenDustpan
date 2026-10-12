@@ -16,11 +16,14 @@ var errNoSchemaStore = errors.New("no schema store is configured")
 // upgradeCheckResponse answers the upgrade check: the server version, the
 // schema version of its database and the names of the applied migrations
 // ordered by version. The command compares them with the migrations in its
-// own binary and prints the verdicts of ADR 33. It writes nothing.
+// own binary and prints the verdicts of ADR 33. KeyEncryptionKey tells
+// whether the server runs with a key-encryption key (ADR 41 decision 12). A
+// server from before ADR 41 does not answer the field. It writes nothing.
 type upgradeCheckResponse struct {
 	Version           string   `json:"version"`
 	SchemaVersion     int64    `json:"schemaVersion"`
 	AppliedMigrations []string `json:"appliedMigrations"`
+	KeyEncryptionKey  bool     `json:"keyEncryptionKey"`
 }
 
 // serveUpgradeCheck answers the server version, the schema version of its
@@ -54,6 +57,7 @@ func (h *Handler) serveUpgradeCheck(
 		Version:           version,
 		SchemaVersion:     schema.DatabaseVersion(appliedVersions(applied)),
 		AppliedMigrations: appliedNames(applied),
+		KeyEncryptionKey:  h.keyed,
 	})
 }
 

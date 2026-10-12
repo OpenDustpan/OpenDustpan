@@ -808,15 +808,16 @@ func newServerHandler(
 	observed *metrics.ServerMetrics,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		Namespaces:    svc.namespaces,
-		Backups:       backups,
-		Maintenance:   maint,
-		Metrics:       observed,
-		Version:       cfg.version,
-		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Authenticator:    cfg.authenticator,
+		Authorizer:       cfg.authorizer,
+		Logger:           cfg.logger,
+		Namespaces:       svc.namespaces,
+		Backups:          backups,
+		Maintenance:      maint,
+		Metrics:          observed,
+		Version:          cfg.version,
+		Schema:           schemaReporterOf(cfg.namespaceStore),
+		KeyEncryptionKey: cfg.secretWrapper != nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
