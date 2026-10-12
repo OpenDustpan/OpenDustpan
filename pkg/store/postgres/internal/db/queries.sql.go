@@ -14,7 +14,7 @@ import (
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -37,6 +37,7 @@ type ActiveUpdateRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -58,6 +59,7 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 		&i.EndedAtMs,
 		&i.CreatedBy,
 		&i.RestoredFrom,
+		&i.JournalVersion,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -1223,7 +1225,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -1250,6 +1252,7 @@ type GetUpdateRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -1271,6 +1274,7 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.EndedAtMs,
 		&i.CreatedBy,
 		&i.RestoredFrom,
+		&i.JournalVersion,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -2205,7 +2209,7 @@ func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2236,6 +2240,7 @@ type ListUpdatesRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -2263,6 +2268,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.EndedAtMs,
 			&i.CreatedBy,
 			&i.RestoredFrom,
+			&i.JournalVersion,
 			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
@@ -2546,9 +2552,10 @@ const saveUpdate = `-- name: SaveUpdate :execrows
 UPDATE updates
 SET status = $1, version = $2, revision = $3,
     lease_digest = $4, lease_expires_at_ms = $5,
-    started_at_ms = $6, ended_at_ms = $7
-WHERE stack_id = $8 AND id = $9
-  AND revision = $10
+    started_at_ms = $6, ended_at_ms = $7,
+    journal_version = $8
+WHERE stack_id = $9 AND id = $10
+  AND revision = $11
 `
 
 type SaveUpdateParams struct {
@@ -2559,6 +2566,7 @@ type SaveUpdateParams struct {
 	LeaseExpiresAtMs int64
 	StartedAtMs      int64
 	EndedAtMs        int64
+	JournalVersion   int64
 	StackID          string
 	ID               string
 	ExpectedRevision int64
@@ -2575,6 +2583,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.LeaseExpiresAtMs,
 		arg.StartedAtMs,
 		arg.EndedAtMs,
+		arg.JournalVersion,
 		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,

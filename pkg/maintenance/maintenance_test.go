@@ -518,6 +518,7 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 	})
 
 	f.updates.updates[id] = stack.Update{
+		JournalVersion:  0,
 		CreatedAt:       time.Now(),
 		StartedAt:       time.Now(),
 		EndedAt:         time.Now(),

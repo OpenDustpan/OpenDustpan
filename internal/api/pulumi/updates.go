@@ -47,13 +47,14 @@ type updateProgramResponse struct {
 	UpdateID string `json:"updateID"`
 }
 
-// startUpdateResponse answers a start: the stack version the update produces
-// and the lease token its client must present on every later write. The
-// journal version is left at zero, so journaling stays off.
+// startUpdateResponse answers a start: the stack version the update produces,
+// the lease token its client must present on every later write, and the
+// journal version the update saves its state with. Zero means checkpoints.
 type startUpdateResponse struct {
 	TokenExpiration int64  `json:"tokenExpiration,omitempty"`
 	Token           string `json:"token,omitempty"`
 	Version         int    `json:"version"`
+	JournalVersion  int    `json:"journalVersion"`
 }
 
 // renewLeaseRequest asks to extend an update's lease by Duration seconds.
@@ -447,6 +448,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		TokenExpiration: started.Update.Lease.ExpiresAt.Unix(),
 		Token:           started.Token.Reveal(),
 		Version:         int(started.Update.Version),
+		JournalVersion:  int(started.Update.JournalVersion),
 	})
 }
 

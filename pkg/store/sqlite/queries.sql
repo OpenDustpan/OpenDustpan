@@ -88,7 +88,7 @@ INSERT INTO updates (
 -- finds at most one row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -100,7 +100,8 @@ WHERE u.stack_id = ? AND u.id = ?;
 UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
-    started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms
+    started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
+    journal_version = @journal_version
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -129,7 +130,7 @@ WHERE namespace = ? AND project = ? AND name = ?;
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -139,7 +140,7 @@ WHERE u.stack_id = ?
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id

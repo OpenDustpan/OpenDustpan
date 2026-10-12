@@ -316,18 +316,19 @@ func buildSecretFixture(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            authz,
-		Logger:                cfg.logger,
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 cfg.store,
-		OnAuditFailure:        cfg.onFail,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  cfg.logger,
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   cfg.store,
+		OnAuditFailure:          cfg.onFail,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1079,18 +1080,19 @@ func TestSecretsMissingKey(t *testing.T) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1466,18 +1468,19 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1664,18 +1667,19 @@ func newLoggedSecretsHandler(
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                logger,
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  logger,
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1831,18 +1835,19 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                slog.New(slog.NewJSONHandler(logged, nil)),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  slog.New(slog.NewJSONHandler(logged, nil)),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1876,18 +1881,19 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	}
 
 	handler, handlerErr := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

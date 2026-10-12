@@ -592,6 +592,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		LeaseExpiresAtMs: row.LeaseExpiresAtMs,
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
+		JournalVersion:   row.JournalVersion,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,
@@ -699,6 +700,7 @@ func fromGetUpdateRow(row db.GetUpdateRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}
 }
@@ -721,6 +723,7 @@ func fromActiveUpdateRow(row db.ActiveUpdateRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}
 }
@@ -743,6 +746,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}
 }

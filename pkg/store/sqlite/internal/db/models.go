@@ -155,6 +155,7 @@ type Update struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 }
 
 type UpdateEvent struct {

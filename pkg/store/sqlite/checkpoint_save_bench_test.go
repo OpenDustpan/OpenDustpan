@@ -152,6 +152,7 @@ func (f *benchSaveFixture) startBenchUpdate(b *testing.B, id string) stack.Updat
 	ctx := b.Context()
 
 	u := stack.Update{
+		JournalVersion:  0,
 		CreatedAt:       time.Now().UTC(),
 		StartedAt:       time.Time{},
 		EndedAt:         time.Time{},
