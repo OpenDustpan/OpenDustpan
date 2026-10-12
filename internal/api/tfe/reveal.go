@@ -112,18 +112,13 @@ func (h *Handler) revealStateValue(
 		return
 	}
 
-	state, err := io.ReadAll(content)
+	// The sealed state opens as a stream: decode from it directly, so no
+	// reveal ever reads the whole state into memory.
+	value, _, err := workspace.RevealValueFromReader(content, sv.SensitiveMarks, path)
 	if closeErr := content.Close(); closeErr != nil {
 		h.logger.WarnContext(ctx, "close state content failed", slog.String("error", closeErr.Error()))
 	}
 
-	if err != nil {
-		h.writeNoStore(ctx, w, err)
-
-		return
-	}
-
-	value, _, err := workspace.RevealValue(state, sv.SensitiveMarks, path)
 	if err != nil {
 		// A path outside the masked set answers 404 with no audit entry
 		// and no value, so a caller cannot probe paths. A client-encrypted

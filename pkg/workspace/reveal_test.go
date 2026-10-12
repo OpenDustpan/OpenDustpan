@@ -2,6 +2,11 @@ package workspace_test
 
 import (
 	"errors"
+	"io"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -84,5 +89,211 @@ func TestRevealValueRejectsClientEncrypted(t *testing.T) {
 		t.Fatal("encrypted state succeeded, want a client-encrypted error")
 	} else if !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Fatalf("encrypted error = %v, want a client-encrypted error", err)
+	}
+}
+
+// TestRevealValueEscapedKeys proves the streaming lookup unescapes value
+// paths the same way as the masked read: a key with a slash resolves through
+// its escaped token.
+func TestRevealValueEscapedKeys(t *testing.T) {
+	t.Parallel()
+
+	state := []byte(`{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"esc",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"esc-id","a/b":"slash-secret"},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"a/b"}]] }]}]}`)
+
+	marks := workspace.SensitiveMarks{"terraform_data.esc": {"/id"}}
+
+	masked, err := workspace.MaskedPaths(state, marks)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	path := "/resources/0/instances/0/attributes/a~1b"
+	if !slices.Contains(masked, path) {
+		t.Fatalf("masked = %q, want the escaped slash path", masked)
+	}
+
+	value, _, err := workspace.RevealValue(state, marks, path)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if value != "slash-secret" {
+		t.Fatalf("value = %#v, want slash-secret", value)
+	}
+}
+
+// largeStateStream generates a state much larger than the decoder buffer
+// without ever holding it: one filler template repeated, then the target
+// resource with the secret, then the closing brackets. It counts the bytes
+// it serves.
+type largeStateStream struct {
+	prefix  []byte
+	filler  []byte
+	target  []byte
+	suffix  []byte
+	fillers int
+	stage   int
+	comma   bool
+	pending []byte
+	total   int
+}
+
+// Read serves the next piece of the generated state.
+func (s *largeStateStream) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	for len(s.pending) == 0 {
+		if !s.advance() {
+			return 0, io.EOF
+		}
+	}
+
+	n := copy(p, s.pending)
+	s.pending = s.pending[n:]
+	s.total += n
+
+	return n, nil
+}
+
+// advance queues the next piece of the generated state. It reports whether a
+// piece is queued.
+func (s *largeStateStream) advance() bool {
+	switch s.stage {
+	case 0:
+		s.pending = s.prefix
+		s.stage = 1
+
+		return true
+	case 1:
+		if s.fillers == 0 {
+			s.stage = 2
+
+			return s.advance()
+		}
+
+		if s.comma {
+			s.pending = []byte(",")
+			s.comma = false
+
+			return true
+		}
+
+		s.pending = s.filler
+		s.fillers--
+		s.comma = true
+
+		return true
+	case 2:
+		if s.comma {
+			s.pending = []byte(",")
+			s.comma = false
+
+			return true
+		}
+
+		s.pending = s.target
+		s.stage = 3
+
+		return true
+	case 3:
+		s.pending = s.suffix
+		s.stage = 4
+
+		return true
+	default:
+		return false
+	}
+}
+
+// TestRevealValueStreamsLargeState proves a reveal near the end of a state
+// much larger than the decoder buffer finds the value while the heap
+// allocated by the lookup stays far below the state size. The state is read
+// from a stream that generates it, never from a byte slice.
+//nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
+func TestRevealValueStreamsLargeState(t *testing.T) {
+	// No t.Parallel: the heap measurement needs a quiet runtime.
+	const fillers = 2600
+
+	filler := []byte(`{"mode":"managed","type":"terraform_data","name":"filler",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"filler-id","blob":"` + strings.Repeat("x", 8000) + `"},` +
+		`"sensitive_attributes":[] }]}`)
+
+	target := []byte(`{"mode":"managed","type":"terraform_data","name":"target",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"target-id","input":"s3cr3t-large"},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]}`)
+
+	newStream := func() *largeStateStream {
+		return &largeStateStream{
+			prefix: []byte(`{"version":4,"terraform_version":"1.11.0","serial":1,` +
+				`"lineage":"seed-lineage","outputs":{},"resources":[`),
+			filler:  filler,
+			target:  target,
+			suffix:  []byte(`]}`),
+			fillers: fillers,
+			stage:   0,
+			comma:   false,
+			pending: nil,
+			total:   0,
+		}
+	}
+
+	marks := workspace.SensitiveMarks{"terraform_data.target": {"/input"}}
+	path := "/resources/" + strconv.Itoa(fillers) + "/instances/0/attributes/input"
+
+	// Warm the path once, so one-time allocations stay out of the
+	// measurement.
+	if _, _, err := workspace.RevealValueFromReader(newStream(), marks, path); err != nil {
+		t.Fatalf("warm reveal: %v", err)
+	}
+
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the test collects first.
+
+	var before runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	stream := newStream()
+
+	value, masked, err := workspace.RevealValueFromReader(stream, marks, path)
+
+	var after runtime.MemStats
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if value != "s3cr3t-large" {
+		t.Fatalf("value = %#v, want s3cr3t-large", value)
+	}
+
+	if len(masked) != 1 || masked[0] != path {
+		t.Fatalf("masked = %q, want [%q]", masked, path)
+	}
+
+	if stream.total < 20<<20 {
+		t.Fatalf("stream served %d bytes, want at least 20 MiB", stream.total)
+	}
+
+	if growth := after.TotalAlloc - before.TotalAlloc; growth > 4<<20 {
+		t.Fatalf(
+			"heap allocated = %d bytes, want below 4 MiB for a %d-byte state",
+			growth,
+			stream.total,
+		)
 	}
 }
