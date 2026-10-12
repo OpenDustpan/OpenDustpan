@@ -207,7 +207,7 @@ A JSON Pointer to one value in the state document of one version, as the tool st
 _Avoid_: Attribute path (except for OpenTofu), key
 
 **Reveal**:
-A request from a person to see the plain text of a secret value, through the console, a CLI or the API. Each reveal writes an audit entry of the kind `reveal`. Today the Pulumi CLI reports a reveal through `decrypt/log-decryption` and `decrypt/log-batch-decryption`. Planned: a reveal call that answers one value path and needs `unit:read-secrets` (ADR 41, decision 4).
+A request from a person to see the plain text of a secret value. The reveal call answers the plain value at one masked value path of one version (ADR 41, decision 4). It needs `unit:read` and `unit:read-secrets`. Its routes are `POST /api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal` in the Pulumi Cloud-compatible API and `POST /api/v2/state-versions/{state_version_id}/actions/reveal` in the TFE-compatible API. The call writes an audit entry of the kind `reveal` before it answers.
 _Avoid_: Decrypt (that is the Pulumi CLI's protocol), unmask, show secrets
 
 **Audit entry**:
@@ -215,8 +215,8 @@ An append-only record of one action in a namespace. It holds who acted, the acti
 _Avoid_: Audit log line, event, audit event
 
 **Kind of access**:
-The field of an audit entry that tells two kinds of access apart. It has exactly one of two values. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The server cannot see who runs a CLI command, so `tofu state pull` writes a `tool-operation` entry.
-_Avoid_: Audit type, `log-decryption` as a kind (it is a route that writes the kind `reveal`)
+The field of an audit entry that tells two kinds of access apart. It has exactly one of two values. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The server cannot see who runs a CLI command, so `tofu state pull` writes a `tool-operation` entry. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets.
+_Avoid_: Audit type, `log-decryption` as a kind
 
 **Value count**:
 The count of secret values that one Pulumi `decrypt` or `batch-decrypt` call gave the tool. Only the `tool-operation` entries of these two routes hold it.
