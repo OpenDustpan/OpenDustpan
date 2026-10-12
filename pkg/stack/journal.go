@@ -15,5 +15,10 @@ type JournalReplayer interface {
 	// two times (ADR 43, decision 7.3), so it closes each reader it opens. The
 	// output goes to out and is never held in full. Replay returns an error
 	// when an entry does not apply to the checkpoint built so far.
-	Replay(ctx context.Context, openBase func(context.Context) (io.ReadCloser, error), entries io.Reader, out io.Writer) error
+	Replay(
+		ctx context.Context,
+		openBase func(context.Context) (io.ReadCloser, error),
+		entries io.Reader,
+		out io.Writer,
+	) error
 }
