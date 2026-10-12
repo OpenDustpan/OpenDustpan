@@ -1,13 +1,14 @@
 ---
 rfc: 62
 title: Pulumi journaling
-status: draft
+status: accepted
+adr: 43
 created: 2026-10-11
 ---
 
 # RFC 62. Pulumi journaling
 
-Status: draft.
+Status: accepted as ADR 43.
 
 ## Problem
 
@@ -297,4 +298,7 @@ should be mistaken for production support.
 
 ## Outcome
 
-None yet.
+Accepted in direction on 2026-10-12: OpenDustpan supports Pulumi journaling,
+on by default, with one configuration option to turn it off. It is not a
+feature flag. The architecture is [RFC 64](0064-pulumi-journaling-architecture.md),
+and the decisions are [ADR 43](../adr/0043-pulumi-journaling-support.md).
