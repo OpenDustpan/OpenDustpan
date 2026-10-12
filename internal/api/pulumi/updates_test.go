@@ -464,6 +464,8 @@ func newUpdateFixtureWithCutoff(
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: cutoff,
 	})
 	if err != nil {
@@ -2653,6 +2655,8 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
 		CheckpointDeltaCutoff: -1,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 	})
 	if !errors.Is(err, pulumi.ErrInvalidCutoff) {
 		t.Fatalf("negative cutoff: err = %v, want %v", err, pulumi.ErrInvalidCutoff)

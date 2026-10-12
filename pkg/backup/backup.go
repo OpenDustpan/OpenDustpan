@@ -65,6 +65,7 @@ var Tables = []string{
 	"inventory",
 	"workspaces",
 	"state_versions",
+	"audit_entries",
 	"backups",
 	"restores",
 	"installation",

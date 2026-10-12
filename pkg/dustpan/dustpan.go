@@ -28,9 +28,7 @@ package dustpan
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,12 +37,15 @@ import (
 	"strings"
 	"time"
 
+	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -448,6 +449,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 type adapters struct {
 	pulumi      http.Handler
 	inventory   http.Handler
+	audit       http.Handler
 	tfe         http.Handler
 	server      http.Handler
 	ready       http.Handler
@@ -465,33 +467,22 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
-	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
-	if !ok {
-		return adapters{}, errMaintenanceNeedsStore
-	}
-
-	maint, err := maintenance.NewService(maintenance.Config{
-		Store:      maintenanceStore,
-		Namespaces: svc.namespaces,
-		Stacks:     svc.stacks,
-		Updates:    svc.updates,
-		Workspaces: svc.workspaces,
-	})
+	maint, watcher, err := newMaintenance(svc, cfg)
 	if err != nil {
-		return adapters{}, fmt.Errorf("maintenance service: %w", err)
+		return adapters{}, err
 	}
 
-	// The watcher measures its cache limit in wall-clock time, not the
-	// injected domain clock: tests freeze the domain clock, and the limit
-	// must still expire.
-	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
-
-	api, err := newPulumiHandler(svc, cfg, base)
+	api, err := newPulumiHandler(svc, cfg, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
 
 	units, err := newInventoryHandler(svc, cfg)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	entries, err := newAuditHandler(svc, cfg)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -522,12 +513,40 @@ func newAdapters(
 	return adapters{
 		pulumi:      api,
 		inventory:   units,
+		audit:       entries,
 		tfe:         tfeAPI,
 		server:      serverAPI,
 		ready:       ready,
 		maintenance: watcher,
 		restores:    restores,
 	}, nil
+}
+
+// newMaintenance builds the maintenance service and the watcher that reads
+// the maintenance state for every request.
+func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintenance.Watcher, error) {
+	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
+	if !ok {
+		return nil, nil, errMaintenanceNeedsStore
+	}
+
+	maint, err := maintenance.NewService(maintenance.Config{
+		Store:      maintenanceStore,
+		Namespaces: svc.namespaces,
+		Stacks:     svc.stacks,
+		Updates:    svc.updates,
+		Workspaces: svc.workspaces,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("maintenance service: %w", err)
+	}
+
+	// The watcher measures its cache limit in wall-clock time, not the
+	// injected domain clock: tests freeze the domain clock, and the limit
+	// must still expire.
+	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
+
+	return maint, watcher, nil
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
@@ -944,21 +963,59 @@ func isLoopbackListenAddr(addr string) bool {
 }
 
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
-func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
+// observed counts failed audit appends: the decrypt audit routes still
+// answer 204 when the append fails, so the counter is the alert for lost
+// entries.
+func newPulumiHandler(
+	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (http.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                svc.stacks,
-		Updates:               svc.updates,
-		Secrets:               svc.secrets,
-		Namespaces:            svc.namespaces,
-		Authenticator:         cfg.authenticator,
-		Authorizer:            cfg.authorizer,
-		Logger:                cfg.logger,
-		BaseURL:               base,
-		MaxBodyBytesInFlight:  cfg.maxBodyBytesInFlight,
+		Stacks:               svc.stacks,
+		Updates:              svc.updates,
+		Secrets:              svc.secrets,
+		Namespaces:           svc.namespaces,
+		Authenticator:        cfg.authenticator,
+		Authorizer:           cfg.authorizer,
+		Logger:               cfg.logger,
+		BaseURL:              base,
+		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Audit:                entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 		CheckpointDeltaCutoff: cfg.checkpointDeltaCutoff,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newAuditHandler builds the tool-neutral audit API from the namespace
+// service and the audit store. The store comes from the namespace store:
+// every SQL adapter serves all ports from one database connection. A custom
+// store that keeps no audit entries fails here with a clear error.
+func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	handler, err := auditapi.NewHandler(auditapi.Config{
+		Namespaces:    svc.namespaces,
+		Entries:       entries,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("audit api: %w", err)
 	}
 
 	return handler, nil
@@ -1143,39 +1200,26 @@ func newRestoreService(
 
 // requestIDHeader carries the request ID in each response. The server mints
 // a new ID for each request and ignores any ID the client sends.
-const requestIDHeader = "X-Request-Id"
+const requestIDHeader = requestid.Header
 
 // unmatchedRoute is the route label for a request that matches no pattern.
 // It holds no path, so it cannot leak a capability token.
 const unmatchedRoute = "unmatched"
 
-// requestIDBytes is the entropy of one request ID in bytes, as hex.
-const requestIDBytes = 16
-
-// requestIDKey holds the request ID in the request context.
-type requestIDKey struct{}
+// adapterServer is the adapter label for the installation and audit APIs.
+const adapterServer = "server"
 
 // RequestID returns the request ID in ctx, or "" when ctx holds none. The
 // middleware sets it for each request, so handlers and later issues can log
 // it without reading headers.
 func RequestID(ctx context.Context) string {
-	id, ok := ctx.Value(requestIDKey{}).(string)
-	if !ok {
-		return ""
-	}
-
-	return id
+	return requestid.FromContext(ctx)
 }
 
 // newRequestID mints one request ID: 128 bits from crypto/rand as hex. It
 // falls back to the time when the reader fails, so it never returns "".
 func newRequestID() string {
-	buf := make([]byte, requestIDBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
-	}
-
-	return hex.EncodeToString(buf)
+	return requestid.New()
 }
 
 // statusWriter records the status and the body size of one response.
@@ -1215,14 +1259,16 @@ func adapterForRequest(pattern, path string) string {
 	switch {
 	case strings.HasPrefix(name, "/api/inventory/"):
 		return "inventory"
+	case strings.HasPrefix(name, "/api/audit/"):
+		return adapterServer
 	case strings.HasPrefix(name, "/api/server/"):
-		return "server"
+		return adapterServer
 	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"):
 		return "opentofu"
 	case strings.HasPrefix(name, "/api/"):
 		return "pulumi"
 	default:
-		return "server"
+		return adapterServer
 	}
 }
 
@@ -1297,7 +1343,7 @@ func withRequestLog(
 		// in canonical form, so http.Header reads it with Get.
 		w.Header()[requestIDHeader] = []string{id}
 
-		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
+		ctx := requestid.WithContext(r.Context(), id)
 
 		r = r.WithContext(ctx)
 
@@ -1371,6 +1417,10 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		"/api/inventory/",
 		withCORS(withMaintenance(a.inventory, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
 	)
+	// The audit API is read-only, so it stays available in maintenance mode
+	// like the installation API: an operator reads the log while the
+	// installation is down for a restore.
+	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

@@ -68,6 +68,8 @@ func newUpdateFixtureWithGate(
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  inFlight,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
@@ -138,6 +140,8 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  inFlight,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {

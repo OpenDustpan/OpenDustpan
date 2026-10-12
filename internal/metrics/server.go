@@ -42,7 +42,8 @@ const (
 
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
-// runtime gauges and the readiness failure counter (ADR 32 decision 5). All
+// runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
+// audit append failure counter (ADR 41 decision 5). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -55,6 +56,7 @@ type ServerMetrics struct {
 	duration *Histogram
 	inFlight *Gauge
 	ready    *Counter
+	audit    *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -93,6 +95,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		ready: reg.NewCounter(
 			"dustpan_readiness_failures_total",
 			"Readiness check failures.",
+			nil,
+			1,
+		),
+		audit: reg.NewCounter(
+			"dustpan_audit_append_failures_total",
+			"Audit entries lost because the append failed.",
 			nil,
 			1,
 		),
@@ -161,6 +169,14 @@ func (m *ServerMetrics) IncReadinessFailure() {
 // probe can count on the same registry as the request families.
 func (m *ServerMetrics) ReadinessFailures() *Counter {
 	return m.ready
+}
+
+// IncAuditAppendFailure adds one to the audit append failure counter. The
+// Pulumi decrypt audit routes call it when the audit append fails: the
+// request still answers 204, so the counter is the only record of the lost
+// entry besides the log line. Operators alert when it is above zero.
+func (m *ServerMetrics) IncAuditAppendFailure() {
+	m.audit.Inc()
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

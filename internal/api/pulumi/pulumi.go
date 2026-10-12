@@ -32,6 +32,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -82,6 +83,13 @@ type Config struct {
 	// MaxBodyBytesInFlight bounds concurrent large bodies by bytes held at
 	// once. Zero means DefaultMaxBodyBytesInFlight.
 	MaxBodyBytesInFlight int64
+	// Audit is the audit store that the decrypt audit routes append to. Nil
+	// means no audit store is configured: the routes still answer 204.
+	Audit audit.Store
+	// OnAuditFailure runs when an audit append fails. The server wires it
+	// to the dustpan_audit_append_failures_total counter. Nil means no
+	// counter: the routes still answer 204.
+	OnAuditFailure func()
 	// CheckpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero turns the delta capability off.
 	CheckpointDeltaCutoff int
@@ -89,17 +97,19 @@ type Config struct {
 
 // Handler serves the Pulumi CLI API under /api/.
 type Handler struct {
-	stacks     *stack.Service
-	updates    *stack.Updates
-	secrets    *secret.Service
-	namespaces *namespace.Service
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	logger     *slog.Logger
-	baseURL    baseurl.Resolver
-	gate       *bodyGate
-	mux        *patternMux
-	routes     []Route
+	stacks         *stack.Service
+	updates        *stack.Updates
+	secrets        *secret.Service
+	namespaces     *namespace.Service
+	authn          identity.Authenticator
+	authz          identity.Authorizer
+	logger         *slog.Logger
+	baseURL        baseurl.Resolver
+	gate           *bodyGate
+	audit          audit.Store
+	onAuditFailure func()
+	mux            *patternMux
+	routes         []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
 	// means the server hides the delta capability.
 	deltaCutoff int
@@ -127,18 +137,20 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		stacks:      cfg.Stacks,
-		updates:     cfg.Updates,
-		secrets:     cfg.Secrets,
-		namespaces:  cfg.Namespaces,
-		authn:       cfg.Authenticator,
-		authz:       cfg.Authorizer,
-		logger:      cfg.Logger,
-		baseURL:     cfg.BaseURL,
-		gate:        newBodyGate(cfg.MaxBodyBytesInFlight),
-		mux:         newPatternMux(),
-		routes:      nil,
-		deltaCutoff: cfg.CheckpointDeltaCutoff,
+		stacks:         cfg.Stacks,
+		updates:        cfg.Updates,
+		secrets:        cfg.Secrets,
+		namespaces:     cfg.Namespaces,
+		authn:          cfg.Authenticator,
+		authz:          cfg.Authorizer,
+		logger:         cfg.Logger,
+		baseURL:        cfg.BaseURL,
+		gate:           newBodyGate(cfg.MaxBodyBytesInFlight),
+		audit:          cfg.Audit,
+		onAuditFailure: cfg.OnAuditFailure,
+		mux:            newPatternMux(),
+		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 	}
 
 	h.routes = h.buildRoutes()

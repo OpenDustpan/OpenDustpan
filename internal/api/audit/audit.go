@@ -1,0 +1,312 @@
+// Package audit serves the tool-neutral audit API that the web console
+// reads for the audit entries of one namespace. It exposes the entries of
+// the audit.Store of the namespace and the result of its chain check.
+//
+// It is an HTTP adapter with its own route table. It never imports another
+// API adapter: tools share concepts through the core alone (ADR 12).
+package audit
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// ErrMissingDependency reports a Config without a required dependency.
+var ErrMissingDependency = errors.New("missing dependency")
+
+// errMissingOrganization reports a request without the organization query
+// value. classify maps it to the 400 response the console expects.
+var errMissingOrganization = errors.New("missing organization query parameter")
+
+const tokenScheme = "token "
+
+// Config holds the dependencies of a Handler.
+type Config struct {
+	Namespaces    *namespace.Service
+	Entries       audit.Store
+	Authenticator identity.Authenticator
+	Authorizer    identity.Authorizer
+	Logger        *slog.Logger
+}
+
+// Handler serves the audit API under /api/audit/.
+type Handler struct {
+	namespaces *namespace.Service
+	entries    audit.Store
+	authn      identity.Authenticator
+	authz      identity.Authorizer
+	logger     *slog.Logger
+	mux        *patternMux
+	routes     []Route
+}
+
+// NewHandler returns a Handler. Every Config field is required.
+func NewHandler(cfg Config) (*Handler, error) {
+	switch {
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Entries == nil:
+		return nil, fmt.Errorf("%w: audit store", ErrMissingDependency)
+	case cfg.Authenticator == nil:
+		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	}
+
+	h := &Handler{
+		namespaces: cfg.Namespaces,
+		entries:    cfg.Entries,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		logger:     cfg.Logger,
+		mux:        newPatternMux(),
+		routes:     nil,
+	}
+
+	h.routes = h.buildRoutes()
+	for _, route := range h.routes {
+		h.mux.HandleFunc(route.Method+" "+route.Path, h.enforce(route))
+	}
+
+	return h, nil
+}
+
+// ServeHTTP implements http.Handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
+}
+
+// auditEntry is one audit entry as the console reads it, in camelCase. AtMs
+// is the time of the action in Unix milliseconds. Sequence numbers the entry
+// in its namespace from 1. PrevHash is empty for the first entry of a
+// namespace.
+//
+// Contract: never remove or rename these fields. The console reads only this
+// API, and it ships on its own schedule, so a released console keeps working
+// only while every field stays.
+type auditEntry struct {
+	AtMs       int64  `json:"atMs"`
+	Sequence   int64  `json:"sequence"`
+	Subject    string `json:"subject"`
+	IDPSubject string `json:"idpSubject"`
+	TokenID    string `json:"tokenID"`
+	Action     string `json:"action"`
+	Object     string `json:"object"`
+	Version    string `json:"version"`
+	ValuePath  string `json:"valuePath"`
+	SourceIP   string `json:"sourceIP"`
+	UserAgent  string `json:"userAgent"`
+	Channel    string `json:"channel"`
+	Kind       string `json:"kind"`
+	Outcome    string `json:"outcome"`
+	RequestID  string `json:"requestID"`
+	PrevHash   string `json:"prevHash"`
+	Hash       string `json:"hash"`
+}
+
+// toAuditEntry maps one domain entry to its wire shape.
+func toAuditEntry(e audit.Entry) auditEntry {
+	return auditEntry{
+		AtMs:       e.AtMs(),
+		Sequence:   e.Sequence,
+		Subject:    e.Subject,
+		IDPSubject: e.IDPSubject,
+		TokenID:    e.TokenID,
+		Action:     e.Action,
+		Object:     e.Object,
+		Version:    e.Version,
+		ValuePath:  e.ValuePath,
+		SourceIP:   e.SourceIP,
+		UserAgent:  e.UserAgent,
+		Channel:    string(e.Channel),
+		Kind:       string(e.Kind),
+		Outcome:    string(e.Outcome),
+		RequestID:  e.RequestID,
+		PrevHash:   e.PrevHash,
+		Hash:       e.Hash,
+	}
+}
+
+// listEntriesResponse is the answered document of the entry list.
+//
+// Contract: never remove or rename these fields.
+type listEntriesResponse struct {
+	Entries []auditEntry `json:"entries"`
+	Total   int64        `json:"total"`
+}
+
+// checkResponse is the answered document of the chain check.
+//
+// Contract: never remove or rename these fields. BadSequence is omitted
+// when the chain is valid.
+type checkResponse struct {
+	EntriesChecked int64 `json:"entriesChecked"`
+	BadSequence    int64 `json:"badSequence,omitempty"`
+	Valid          bool  `json:"valid"`
+}
+
+// listEntries answers GET /api/audit/entries with one page of the entries
+// of the namespace, newest first. The route wrapper already allowed
+// namespace:read-audit on the namespace. An unknown namespace answers 404.
+func (h *Handler) listEntries(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	page, err := parsePage(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	listing, err := h.entries.List(ctx, ns, page)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	entries := make([]auditEntry, 0, len(listing.Entries))
+	for i := range listing.Entries {
+		entries = append(entries, toAuditEntry(listing.Entries[i]))
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
+}
+
+// checkChain answers GET /api/audit/check with the chain check of the
+// namespace. The route wrapper already allowed namespace:read-audit on the
+// namespace. An unknown namespace answers 404.
+func (h *Handler) checkChain(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	result, err := h.entries.Check(ctx, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, checkResponse{
+		EntriesChecked: result.Checked,
+		BadSequence:    result.BadSequence,
+		Valid:          result.Valid,
+	})
+}
+
+// errInvalidPage reports a page[number] or page[size] value that is not a
+// positive number. classify maps it to the 400 the console expects.
+var errInvalidPage = errors.New("invalid page[number] or page[size]: send positive numbers")
+
+// parsePage reads page[number] and page[size] from the request. Missing
+// values read the defaults of the audit port; values above the maximum read
+// the maximum.
+func parsePage(r *http.Request) (audit.Page, error) {
+	query := r.URL.Query()
+
+	page := audit.Page{Number: 1, Size: audit.DefaultPageSize}
+
+	if raw := query.Get("page[number]"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return audit.Page{}, errInvalidPage
+		}
+
+		page.Number = n
+	}
+
+	if raw := query.Get("page[size]"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			return audit.Page{}, errInvalidPage
+		}
+
+		page.Size = n
+	}
+
+	return page.Normalized(), nil
+}
+
+// authenticate resolves the "Authorization: token <t>" header to a principal.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	return h.authn.AuthenticateToken(r.Context(), raw)
+}
+
+// errorResponse is the error body the console expects, as in the API the
+// console reads today.
+type errorResponse struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
+}
+
+func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
+	status, message := classify(err)
+	if status == http.StatusInternalServerError {
+		// The log names the status only, never the error text: the text
+		// may hold driver detail, a token, or state (ADR 32 decision 7).
+		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
+}
+
+// classify maps domain errors to an HTTP status and a message safe to show callers.
+func classify(err error) (int, string) {
+	switch {
+	case errors.Is(err, identity.ErrUnauthenticated):
+		return http.StatusUnauthorized, "unauthenticated"
+	case errors.Is(err, identity.ErrDenied):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, namespace.ErrNotFound):
+		return http.StatusNotFound, err.Error()
+	default:
+		return http.StatusInternalServerError, "internal error"
+	}
+}
+
+func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		h.logger.WarnContext(ctx, "write response failed", slog.String("error", err.Error()))
+	}
+}

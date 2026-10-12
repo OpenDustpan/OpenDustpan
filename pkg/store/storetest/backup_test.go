@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -61,6 +62,7 @@ type fakeData struct {
 	events       map[string]map[string][]stack.Event
 	keys         map[string]secret.WrappedKey
 	entries      map[string]inventory.Entry
+	audit        map[string][]audit.Entry
 	workspaces   map[string]workspace.Workspace
 	workspaceIDs map[string]string
 	states       map[string]workspace.StateVersion
@@ -83,6 +85,7 @@ func newFakeData() *fakeData {
 		events:       map[string]map[string][]stack.Event{},
 		keys:         map[string]secret.WrappedKey{},
 		entries:      map[string]inventory.Entry{},
+		audit:        map[string][]audit.Entry{},
 		workspaces:   map[string]workspace.Workspace{},
 		workspaceIDs: map[string]string{},
 		states:       map[string]workspace.StateVersion{},
@@ -1038,6 +1041,95 @@ func (s *fakeBackupStore) ListWrapperIDs(_ context.Context) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// Append implements audit.Store: it chains the entry after the last one of
+// the namespace.
+func (s *fakeBackupStore) Append(
+	_ context.Context, fence namespace.Fence, e audit.Entry,
+) (audit.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return audit.Entry{}, errFakeClosed
+	}
+
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, err
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return audit.Entry{}, err
+	}
+
+	chain := s.data.audit[fence.Namespace.String()]
+
+	var prevHash string
+
+	if len(chain) > 0 {
+		prevHash = chain[len(chain)-1].Hash
+	}
+
+	e.Sequence = int64(len(chain)) + 1
+	e.PrevHash = prevHash
+	e.Hash = audit.ComputeHash(e, prevHash)
+	s.data.audit[fence.Namespace.String()] = append(chain, e)
+
+	return e, nil
+}
+
+// List implements audit.Store: one page newest first with the total count.
+func (s *fakeBackupStore) List(
+	_ context.Context, ns namespace.Name, page audit.Page,
+) (audit.Listing, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return audit.Listing{}, errFakeClosed
+	}
+
+	p := page.Normalized()
+	chain := s.data.audit[ns.String()]
+
+	entries := make([]audit.Entry, 0, min(int64(len(chain)), int64(p.Size)))
+
+	for i := len(chain) - 1; i >= 0 && len(entries) < p.Size; i-- {
+		if int64(len(chain)-1-i) >= p.Offset() {
+			entries = append(entries, chain[i])
+		}
+	}
+
+	return audit.Listing{Entries: entries, Total: int64(len(chain))}, nil
+}
+
+// Check implements audit.Store: it walks the chain oldest first.
+func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.CheckResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return audit.CheckResult{}, errFakeClosed
+	}
+
+	chain := s.data.audit[ns.String()]
+
+	var prevHash string
+
+	var wantSeq int64 = 1
+
+	for i := range chain {
+		e := &chain[i]
+		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
+			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+		}
+
+		prevHash = e.Hash
+		wantSeq++
+	}
+
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
 }
 
 // ListUnits implements inventory.Reader, ordered by tool then name.
@@ -2102,6 +2194,7 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 		"update_events":  int64(events),
 		"secret_keys":    int64(len(data.keys)),
 		"inventory":      int64(len(data.entries)),
+		"audit_entries":  int64(auditRowCount(data)),
 		"workspaces":     int64(len(data.workspaces)),
 		"state_versions": int64(len(data.states)),
 		"backups":        int64(len(data.backups)),
@@ -2110,6 +2203,17 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 		// as in the SQL adapters.
 		"installation": 1,
 	}
+}
+
+// auditRowCount counts every audit entry of every namespace.
+func auditRowCount(data *fakeData) int {
+	n := 0
+
+	for _, chain := range data.audit {
+		n += len(chain)
+	}
+
+	return n
 }
 
 // Export implements backup.Exporter. Without the tear knob it encodes every
@@ -2597,15 +2701,24 @@ func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
 // decodePeekKeys decodes the export stream frame by frame and returns the
 // secret_keys rows, or an empty map when the stream holds no secret_keys
 // frame. A corrupt stream reports ErrCorrupt.
+// decodePeekKeys reads the secret keys of the stream. It decodes every
+// frame, not only the secret keys: a truncated stream must fail even when
+// the cut lands after the secret keys frame.
 func decodePeekKeys(r io.Reader) (map[string]secret.WrappedKey, error) {
 	dec := gob.NewDecoder(r)
+
+	var keys map[string]secret.WrappedKey
 
 	for {
 		var frame fakeTableFrame
 
 		if err := dec.Decode(&frame); err != nil {
 			if errors.Is(err, io.EOF) {
-				return map[string]secret.WrappedKey{}, nil
+				if keys == nil {
+					keys = map[string]secret.WrappedKey{}
+				}
+
+				return keys, nil
 			}
 
 			return nil, fmt.Errorf("decode backup stream: %w", backup.ErrCorrupt)
@@ -2615,13 +2728,13 @@ func decodePeekKeys(r io.Reader) (map[string]secret.WrappedKey, error) {
 			continue
 		}
 
-		var keys map[string]secret.WrappedKey
+		var decoded map[string]secret.WrappedKey
 
-		if err := gob.NewDecoder(bytes.NewReader(frame.Rows)).Decode(&keys); err != nil {
+		if err := gob.NewDecoder(bytes.NewReader(frame.Rows)).Decode(&decoded); err != nil {
 			return nil, fmt.Errorf("decode backup table %q: %w", frame.Table, backup.ErrCorrupt)
 		}
 
-		return keys, nil
+		keys = decoded
 	}
 }
 
@@ -2803,6 +2916,7 @@ func (s *fakeBackupStore) snapshotTables() map[string]any {
 		"update_events":  s.data.events,
 		"secret_keys":    s.data.keys,
 		"inventory":      s.data.entries,
+		"audit_entries":  s.data.audit,
 		"workspaces":     fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
 		"state_versions": s.data.states,
 		"backups":        s.data.backups,
@@ -3082,6 +3196,7 @@ func backupDecodeTargets(loaded *fakeData) map[string]any {
 		"update_events":  &loaded.events,
 		"secret_keys":    &loaded.keys,
 		"inventory":      &loaded.entries,
+		"audit_entries":  &loaded.audit,
 		"state_versions": &loaded.states,
 		"backups":        &loaded.backups,
 		"restores":       &loaded.restores,

@@ -54,6 +54,7 @@ const (
 	pgColState       = "state"
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
+	pgColVersion     = "version"
 )
 
 // pgTableDump is one table of the export stream: the raw COPY text of its
@@ -114,7 +115,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", "version", pgColCreatedAtMs, "updated_at_ms",
+				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
@@ -126,7 +127,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", "kind", "dry_run", pgColStatus, "version", "revision",
+				pgColStackID, "id", "kind", "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				"created_by", "restored_from",
 			},
@@ -193,6 +194,15 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from",
 			},
 			orderBy: []string{"id"},
+		},
+		{
+			table: "audit_entries",
+			columns: []string{
+				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
+				"channel", "kind", "outcome", "request_id", "prev_hash", "hash",
+			},
+			orderBy: []string{pgColNamespace, pgColSequence},
 		},
 		{
 			table:   "backups",
