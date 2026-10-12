@@ -1,7 +1,6 @@
 package sqlite_test
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,7 +15,7 @@ import (
 func inspectSnapshot(t *testing.T, path string) ([]int64, []string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -147,7 +146,7 @@ func checkAppliedMissingTable(t *testing.T) {
 		}
 	})
 
-	conn, connErr := sql.Open("sqlite", "file:"+path)
+	conn, connErr := openRawDB(path)
 	if connErr != nil {
 		t.Fatalf("open raw database: %v", connErr)
 	}

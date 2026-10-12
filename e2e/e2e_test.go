@@ -793,9 +793,10 @@ func checkReady(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 // checkReadyWithoutDatabase proves a stopped database turns /health/ready to
 // 503 with the check name only while /health/live stays 204, and that
-// reopening the database turns /health/ready to 200 again. The binary server
-// and the in-process server both reach PostgreSQL through a TCP proxy, so
-// closing the proxy stops the database for that server only. On SQLite the
+// starting the database again turns /health/ready to 200 again. The binary
+// server and the in-process server both reach PostgreSQL through a TCP proxy,
+// so pausing the proxy stops the database for that server only. The proxy
+// keeps its port while paused (issue 391). On SQLite the
 // step is skipped with a report entry that says why.
 func checkReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -837,7 +838,7 @@ func checkReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) 
 }
 
 // doReadyWithoutDatabase runs the stopped-database sequence and returns an
-// error for the first check that fails. It reopens the proxy before
+// error for the first check that fails. It resumes the proxy before
 // returning an error after the stop, so the environment stays usable.
 func doReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) error {
 	t.Helper()
@@ -850,12 +851,12 @@ func doReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) err
 
 	stoppedErr := checkStoppedDatabase(ctx, env)
 	if stoppedErr != nil {
-		env.StartDatabase(ctx, t)
+		env.StartDatabase(t)
 
 		return stoppedErr
 	}
 
-	env.StartDatabase(ctx, t)
+	env.StartDatabase(t)
 
 	return checkRecoveredDatabase(ctx, env)
 }
@@ -1569,6 +1570,11 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
+	env.Step(ctx, t, step(
+		"masked reveal",
+		checkMaskedReveal(ctx, env, org, maskedStateSecret),
+		"stack", "--show-name", "--stack", qualified,
+	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
 }
 
@@ -1915,6 +1921,175 @@ func checkMaskedState(
 
 		return assertMaskedBodies(ctx, env, base, bodies, secret)
 	}
+}
+
+// maskedStackOutputsDoc decodes the stack outputs with their masked value
+// paths in e2e checks.
+type maskedStackOutputsDoc struct {
+	Outputs map[string]any `json:"outputs"`
+	Masked  []string       `json:"masked"`
+}
+
+// revealedDoc decodes a Pulumi reveal answer in e2e checks.
+type revealedDoc struct {
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+// checkMaskedReveal proves the reveal call (ADR 41 decisions 4 and 5) on
+// the masked stack: reveal of one masked output path answers the secret
+// value the program set, with Cache-Control: no-store, and the audit list
+// holds the entry of the kind reveal with the path. A path outside the
+// masked set answers 404 with no value.
+func checkMaskedReveal(
+	ctx context.Context, env *e2e.Env, org, secret string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
+
+		path, err := maskedOutputPath(ctx, env, base)
+		if err != nil {
+			return err
+		}
+
+		if err := checkPulumiReveal(ctx, env, org, path, secret); err != nil {
+			return err
+		}
+
+		return checkPulumiRevealProbe(ctx, env, base, secret)
+	}
+}
+
+// maskedOutputPath returns the first masked value path of the latest stack
+// outputs.
+func maskedOutputPath(ctx context.Context, env *e2e.Env, base string) (string, error) {
+	outputs, err := maskedStateGet(ctx, env, base+"/state/latest/outputs")
+	if err != nil {
+		return "", err
+	}
+
+	var doc maskedStackOutputsDoc
+
+	if decodeErr := json.Unmarshal([]byte(outputs), &doc); decodeErr != nil {
+		return "", fmt.Errorf("%w: decode masked outputs: %w", errUnexpected, decodeErr)
+	}
+
+	if len(doc.Masked) == 0 {
+		return "", fmt.Errorf("%w: outputs mask nothing", errUnexpected)
+	}
+
+	return doc.Masked[0], nil
+}
+
+// checkPulumiReveal proves the reveal call answers the secret value with
+// no-store, and the audit list holds the reveal entry with the path.
+func checkPulumiReveal(ctx context.Context, env *e2e.Env, org, path, secret string) error {
+	base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
+
+	resp, err := env.APIStatusHeaders(
+		ctx, http.MethodPost, base+"/state/latest/reveal", `{"path":`+strconv.Quote(path)+`}`,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: POST reveal: %w", errUnexpected, err)
+	}
+
+	if resp.Status != http.StatusOK {
+		return fmt.Errorf(
+			"%w: POST reveal answers %d, want %d (%s)",
+			errUnexpected,
+			resp.Status,
+			http.StatusOK,
+			resp.Body,
+		)
+	}
+
+	var revealed revealedDoc
+
+	if decodeErr := json.Unmarshal([]byte(resp.Body), &revealed); decodeErr != nil {
+		return fmt.Errorf("%w: decode reveal body: %w", errUnexpected, decodeErr)
+	}
+
+	if revealed.Path != path || revealed.Value != secret {
+		return fmt.Errorf("%w: reveal = %s, want the path with the secret value", errUnexpected, resp.Body)
+	}
+
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		return fmt.Errorf("%w: reveal Cache-Control = %q, want no-store", errUnexpected, got)
+	}
+
+	object := "pulumi:" + org + "/" + e2e.Project + "/masked"
+
+	return checkRevealAuditEntry(ctx, env, org, object, path)
+}
+
+// checkPulumiRevealProbe proves a path outside the masked set answers 404
+// with no value.
+func checkPulumiRevealProbe(ctx context.Context, env *e2e.Env, base, secret string) error {
+	status, body, err := env.APIStatus(
+		ctx, http.MethodPost, base+"/state/latest/reveal", `{"path":"/resources/0/outputs/no-such-secret"}`,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: POST reveal probe: %w", errUnexpected, err)
+	}
+
+	if status != http.StatusNotFound {
+		return fmt.Errorf(
+			"%w: reveal of a path outside the masked set answers %d, want %d (%s)",
+			errUnexpected,
+			status,
+			http.StatusNotFound,
+			body,
+		)
+	}
+
+	if strings.Contains(body, secret) {
+		return fmt.Errorf("%w: 404 body holds the secret value", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkRevealAuditEntry proves the audit list of org holds one entry of the
+// kind reveal with the action unit:read-secrets for object and path.
+func checkRevealAuditEntry(ctx context.Context, env *e2e.Env, org, object, path string) error {
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization="+org, "")
+	if err != nil {
+		return fmt.Errorf("%w: list audit entries: %w", errUnexpected, err)
+	}
+
+	if status != http.StatusOK {
+		return fmt.Errorf(
+			"%w: list audit entries answers %d, want %d (%s)",
+			errUnexpected,
+			status,
+			http.StatusOK,
+			body,
+		)
+	}
+
+	var got struct {
+		Entries []auditListItem `json:"entries"`
+		Total   int64           `json:"total"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		return fmt.Errorf("%w: decode audit entries: %w (%s)", errUnexpected, err, body)
+	}
+
+	for i := range got.Entries {
+		if e := &got.Entries[i]; e.Kind == "reveal" && e.Action == "unit:read-secrets" &&
+			e.Object == object && e.ValuePath == path {
+			return nil
+		}
+	}
+
+	return fmt.Errorf(
+		"%w: no reveal entry for %q with path %q in %d entries",
+		errUnexpected,
+		object,
+		path,
+		len(got.Entries),
+	)
 }
 
 // checkMaskedStateFilter proves the resource search of the masked stack:
@@ -6602,6 +6777,7 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	maskedResourceFilterChecks(ctx, t, env, versionID)
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
+	maskedRevealCheck(ctx, t, env, versionID)
 
 	tofuMaskedEncryptedScenario(ctx, t, env)
 }
@@ -7301,6 +7477,161 @@ func maskedSensitiveAttributesFinding(ctx context.Context, t *testing.T, env *e2
 
 	env.NoteStep(t, "masked sensitive_attributes", finding+"; provider schema mark for result: "+schemaMark)
 	t.Logf("masked sensitive_attributes: %s; provider schema mark for result: %s", finding, schemaMark)
+}
+
+// revealedTFEAttributes decodes the attributes of a TFE reveal answer in
+// e2e checks.
+type revealedTFEAttributes struct {
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+// revealedTFEData decodes the data of a TFE reveal answer in e2e checks.
+type revealedTFEData struct {
+	Type       string                `json:"type"`
+	Attributes revealedTFEAttributes `json:"attributes"`
+}
+
+// revealedTFEDoc decodes a TFE reveal answer in e2e checks.
+type revealedTFEDoc struct {
+	Data revealedTFEData `json:"data"`
+}
+
+// maskedRevealCheck proves the reveal call (ADR 41 decisions 4 and 5) on
+// the masked workspace: reveal of the sensitive input path answers the
+// value the second apply set, with Cache-Control: no-store, and the audit
+// list holds the entry of the kind reveal with the path. A path outside the
+// masked set answers 404 with no value.
+func maskedRevealCheck(ctx context.Context, t *testing.T, env *e2e.Env, versionID string) {
+	t.Helper()
+
+	base := "/api/v2/state-versions/" + versionID
+	path := maskedInputPath(ctx, t, env, base)
+
+	checkTFEReveal(ctx, t, env, base, path)
+	checkTFERevealProbe(ctx, t, env, base)
+}
+
+// maskedInputPath returns the masked value path of the sensitive input of
+// the smoke resource.
+func maskedInputPath(ctx context.Context, t *testing.T, env *e2e.Env, base string) string {
+	t.Helper()
+
+	status, detail, detailErr := env.TFEStatusA(
+		ctx, http.MethodGet, base+"/resources/"+url.PathEscape("terraform_data.smoke"), "",
+	)
+	if detailErr != nil {
+		t.Fatalf("read masked resource for reveal: %v", detailErr)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("read masked resource for reveal answers %d, want %d (%s)", status, http.StatusOK, detail)
+	}
+
+	doc, decodeErr := decodeMaskedDetail(detail, "terraform_data.smoke")
+	if decodeErr != nil {
+		t.Fatalf("decode masked resource for reveal: %v", decodeErr)
+	}
+
+	for _, candidate := range doc.Data.Attributes.Masked {
+		if strings.HasSuffix(candidate, "/attributes/input") {
+			return candidate
+		}
+	}
+
+	t.Fatalf("masked %q holds no input path", doc.Data.Attributes.Masked)
+
+	return ""
+}
+
+// revealRequestBody encodes one TFE reveal request body for path.
+func revealRequestBody(t *testing.T, path string) string {
+	t.Helper()
+
+	raw, err := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"type":       "state-version-reveals",
+			"attributes": map[string]any{"path": path},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encode reveal body: %v", err)
+	}
+
+	return string(raw)
+}
+
+// checkTFEReveal proves the reveal call answers the secret of the second
+// apply with no-store, and the audit list holds the reveal entry.
+func checkTFEReveal(ctx context.Context, t *testing.T, env *e2e.Env, base, path string) {
+	t.Helper()
+
+	resp, err := env.TFEStatusHeaders(
+		ctx, env.TokenA(), http.MethodPost, base+"/actions/reveal", revealRequestBody(t, path),
+	)
+	if err != nil {
+		t.Fatalf("reveal the masked input: %v", err)
+	}
+
+	if resp.Status != http.StatusOK {
+		t.Fatalf("reveal answers %d, want %d (%s)", resp.Status, http.StatusOK, resp.Body)
+	}
+
+	var answer revealedTFEDoc
+
+	if decodeErr := json.Unmarshal([]byte(resp.Body), &answer); decodeErr != nil {
+		t.Fatalf("decode reveal body: %v (%s)", decodeErr, resp.Body)
+	}
+
+	if answer.Data.Type != "state-version-reveals" || answer.Data.Attributes.Path != path {
+		t.Fatalf("reveal = %s, want the path in a reveals document", resp.Body)
+	}
+
+	raw, encodeErr := json.Marshal(answer.Data.Attributes.Value)
+	if encodeErr != nil {
+		t.Fatalf("encode revealed value: %v", encodeErr)
+	}
+
+	if !strings.Contains(string(raw), maskedSecretV2) {
+		t.Fatalf("reveal value = %s, want the secret of the second apply", raw)
+	}
+
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("reveal Cache-Control = %q, want no-store", got)
+	}
+
+	object := "opentofu:" + e2e.Namespace + "/masked"
+	if auditErr := checkRevealAuditEntry(ctx, env, e2e.Namespace, object, path); auditErr != nil {
+		t.Fatalf("reveal audit entry: %v", auditErr)
+	}
+}
+
+// checkTFERevealProbe proves a path outside the masked set answers 404 with
+// no value.
+func checkTFERevealProbe(ctx context.Context, t *testing.T, env *e2e.Env, base string) {
+	t.Helper()
+
+	probe := "/resources/0/instances/0/attributes/no-such-attr"
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodPost, base+"/actions/reveal", revealRequestBody(t, probe))
+	if err != nil {
+		t.Fatalf("reveal a path outside the masked set: %v", err)
+	}
+
+	if status != http.StatusNotFound {
+		t.Fatalf(
+			"reveal of a path outside the masked set answers %d, want %d (%s)",
+			status,
+			http.StatusNotFound,
+			body,
+		)
+	}
+
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			t.Fatal("404 body holds a secret value")
+		}
+	}
 }
 
 // renderSensitiveAttributesFinding renders the sensitive_attributes of each
