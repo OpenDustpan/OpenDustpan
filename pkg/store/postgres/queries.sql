@@ -679,3 +679,11 @@ INSERT INTO update_journal (
 -- name: InsertJournalSequence :exec
 INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
 VALUES ($1, $2, $3, $4, $5);
+
+-- name: LockUpdateForJournal :one
+-- Locks the update FOR UPDATE so two batches of one update cannot read the same
+-- last arrival or both store the same batch: the second waits for the first.
+SELECT id
+FROM updates
+WHERE stack_id = $1 AND id = $2
+FOR UPDATE;

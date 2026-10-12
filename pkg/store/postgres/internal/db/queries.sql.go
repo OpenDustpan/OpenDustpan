@@ -2431,6 +2431,27 @@ func (q *Queries) LockStackForUpdates(ctx context.Context, arg LockStackForUpdat
 	return i, err
 }
 
+const lockUpdateForJournal = `-- name: LockUpdateForJournal :one
+SELECT id
+FROM updates
+WHERE stack_id = $1 AND id = $2
+FOR UPDATE
+`
+
+type LockUpdateForJournalParams struct {
+	StackID string
+	ID      string
+}
+
+// Locks the update FOR UPDATE so two batches of one update cannot read the same
+// last arrival or both store the same batch: the second waits for the first.
+func (q *Queries) LockUpdateForJournal(ctx context.Context, arg LockUpdateForJournalParams) (string, error) {
+	row := q.db.QueryRow(ctx, lockUpdateForJournal, arg.StackID, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const lockWorkspaceForDeclare = `-- name: LockWorkspaceForDeclare :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -138,5 +139,84 @@ func testJournalAfterCancel(t *testing.T, f fixture) {
 
 	if _, err := f.s.PutJournalRow(t.Context(), late, f.fence); !errors.Is(err, stack.ErrWrongUpdateState) {
 		t.Fatalf("batch after cancel: err = %v, want ErrWrongUpdateState", err)
+	}
+}
+
+// putAtOnce sends each row to the store from its own goroutine, all at once, and
+// returns the retried flag and the error of each call, in the order of rows.
+func putAtOnce(t *testing.T, f fixture, rows []stack.JournalRow) ([]bool, []error) {
+	t.Helper()
+
+	retried := make([]bool, len(rows))
+	errs := make([]error, len(rows))
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	for i := range rows {
+		wg.Go(func() {
+			<-start
+			retried[i], errs[i] = f.s.PutJournalRow(t.Context(), rows[i], f.fence)
+		})
+	}
+
+	close(start)
+	wg.Wait()
+
+	return retried, errs
+}
+
+// testJournalConcurrentRows shows that two batches of one update that arrive at
+// once both store. The arrival numbers come from one read each, so a collision on
+// the arrival would fail one of the calls.
+func testJournalConcurrentRows(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	rows := []stack.JournalRow{journalRow(t, f.s, u, 1, 1), journalRow(t, f.s, u, 2, 2)}
+
+	retried, errs := putAtOnce(t, f, rows)
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent batch %d: %v, want stored", i, err)
+		}
+
+		if retried[i] {
+			t.Fatalf("concurrent batch %d reported a retry, want stored", i)
+		}
+	}
+
+	for i := range rows {
+		if again, err := f.s.PutJournalRow(t.Context(), rows[i], f.fence); err != nil || !again {
+			t.Fatalf("batch %v after the race: retried %t, err %v; want a retry", rows[i].SequenceIDs, again, err)
+		}
+	}
+}
+
+// testJournalConcurrentRetry sends one batch twice at once. One call stores the
+// batch and the other reports a retry. Neither fails on the sequence key.
+func testJournalConcurrentRetry(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	row := journalRow(t, f.s, u, 1, 1, 2)
+
+	retried, errs := putAtOnce(t, f, []stack.JournalRow{row, row})
+
+	stored, retries := 0, 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent copy %d: %v, want no error", i, err)
+		}
+
+		if retried[i] {
+			retries++
+		} else {
+			stored++
+		}
+	}
+
+	if stored != 1 || retries != 1 {
+		t.Fatalf("two copies at once: %d stored and %d retried, want one of each", stored, retries)
 	}
 }

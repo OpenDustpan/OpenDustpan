@@ -32,6 +32,20 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 			return err
 		}
 
+		// The update row is locked before any check, so two batches of one
+		// update run one after the other: the second sees the first's row.
+		_, lockErr := q.LockUpdateForJournal(ctx, db.LockUpdateForJournalParams{
+			StackID: stackID,
+			ID:      row.Update.String(),
+		})
+		if lockErr != nil {
+			if errors.Is(lockErr, pgx.ErrNoRows) {
+				return stack.ErrWrongUpdateState
+			}
+
+			return fmt.Errorf("lock update for journal: %w", lockErr)
+		}
+
 		if guardErr := checkJournalRow(ctx, q, stackID, row); guardErr != nil {
 			return guardErr
 		}
