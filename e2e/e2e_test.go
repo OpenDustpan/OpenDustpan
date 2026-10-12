@@ -6017,10 +6017,10 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 		t.Fatalf("decode state versions after restore: %v", err)
 	}
 
-	// The restore adds one version. The apply after it changes nothing, so it
-	// adds none.
-	if len(doc.Data) != 5 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 5", len(doc.Data))
+	// The restore adds one version, and the apply after it adds one more: the
+	// restored version has the first greeting, so the apply changes the output.
+	if len(doc.Data) != 6 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 6", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
