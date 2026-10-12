@@ -315,7 +315,7 @@ func TestListChangedOnlyOnChangedResource(t *testing.T) {
 		`{"urn":"` + urnRef + `","type":"pulumi:pulumi:StackReference",` +
 		`"inputs":{"name":"acme/web/other"},"outputs":{}}]}`
 
-	page, err := stack.ListStateResources([]byte(current), []byte(previous), "", 100)
+	page, err := stack.ListStateResources([]byte(current), []byte(previous), "", 100, "")
 	if err != nil {
 		t.Fatalf("list resources: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestListNewResourcesCountAsChanged(t *testing.T) {
 		`"urn":"urn:pulumi:dev::web::custom:resource:Type::res1",` +
 		`"type":"custom:resource:Type","inputs":{},"outputs":{}}]}`
 
-	page, err := stack.ListStateResources([]byte(current), nil, "", 100)
+	page, err := stack.ListStateResources([]byte(current), nil, "", 100, "")
 	if err != nil {
 		t.Fatalf("list resources: %v", err)
 	}
@@ -369,7 +369,7 @@ func collectPagedResources(t *testing.T, deployment string, limit int) map[strin
 	cursor := ""
 
 	for {
-		page, err := stack.ListStateResources([]byte(deployment), nil, cursor, limit)
+		page, err := stack.ListStateResources([]byte(deployment), nil, cursor, limit, "")
 		if err != nil {
 			t.Fatalf("list resources at %q: %v", cursor, err)
 		}
@@ -430,7 +430,7 @@ func TestListRejectsBadPaging(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := stack.ListStateResources([]byte(deployment), nil, tc.cursor, tc.limit); err == nil {
+			if _, err := stack.ListStateResources([]byte(deployment), nil, tc.cursor, tc.limit, ""); err == nil {
 				t.Fatalf("list with cursor %q limit %d succeeded, want an error", tc.cursor, tc.limit)
 			} else if !errors.Is(err, stack.ErrInvalidUpdate) {
 				t.Fatalf("error = %v, want ErrInvalidUpdate", err)
@@ -556,6 +556,183 @@ func TestSecretNestedInArchiveMasked(t *testing.T) {
 	}
 
 	checkMaskedAuthoritative(t, string(raw), detail.Masked)
+}
+
+// filterDeployment is a deployment of three resources for the filter
+// tests: a stack resource with a secret output and a plain greeting, a
+// stack reference, and a custom resource.
+func filterDeployment() string {
+	return `{"resources":[{` +
+		`"urn":"urn:pulumi:dev::web::pulumi:pulumi:Stack::web-dev",` +
+		`"type":"pulumi:pulumi:Stack",` +
+		`"inputs":{},"outputs":{"password":` + secretOf("v1:filtercipher") + `,"greeting":"hello-again"}},` +
+		`{"urn":"urn:pulumi:dev::web::pulumi:pulumi:StackReference::web-dev-ref",` +
+		`"type":"pulumi:pulumi:StackReference",` +
+		`"inputs":{"name":"acme/web/other"},"outputs":{}},` +
+		`{"urn":"urn:pulumi:dev::web::custom:resource:Type::res1",` +
+		`"type":"custom:resource:Type","inputs":{"note":"plain"},"outputs":{}}]}`
+}
+
+// filterURNs returns the URNs of a page.
+func filterURNs(t *testing.T, page stack.StatePage) []string {
+	t.Helper()
+
+	urns := make([]string, 0, len(page.Resources))
+	for _, res := range page.Resources {
+		urns = append(urns, res.URN)
+	}
+
+	return urns
+}
+
+func TestListFilterMatchesType(t *testing.T) {
+	t.Parallel()
+
+	page, err := stack.ListStateResources([]byte(filterDeployment()), nil, "", 100, "StackReference")
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+
+	if page.Incomplete {
+		t.Fatalf("page is incomplete: %q", page.Reason)
+	}
+
+	urns := filterURNs(t, page)
+	if len(urns) != 1 || !strings.Contains(urns[0], "StackReference") {
+		t.Fatalf("filtered urns = %q, want only the reference resource", urns)
+	}
+
+	if page.Resources[0].Type != "pulumi:pulumi:StackReference" {
+		t.Fatalf("type = %q, want the reference type verbatim", page.Resources[0].Type)
+	}
+}
+
+func TestListFilterMatchesURN(t *testing.T) {
+	t.Parallel()
+
+	page, err := stack.ListStateResources([]byte(filterDeployment()), nil, "", 100, "custom:resource:Type::res1")
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+
+	urns := filterURNs(t, page)
+	if len(urns) != 1 || urns[0] != "urn:pulumi:dev::web::custom:resource:Type::res1" {
+		t.Fatalf("filtered urns = %q, want only the custom resource", urns)
+	}
+}
+
+func TestListFilterIgnoresValues(t *testing.T) {
+	t.Parallel()
+
+	for _, filter := range []string{"hello-again", "plain", "v1:filtercipher", "acme/web/other"} {
+		page, err := stack.ListStateResources([]byte(filterDeployment()), nil, "", 100, filter)
+		if err != nil {
+			t.Fatalf("list resources with filter %q: %v", filter, err)
+		}
+
+		if len(page.Resources) != 0 {
+			t.Fatalf("filter %q matched %d resources, want none: values never match", filter, len(page.Resources))
+		}
+
+		if page.NextCursor != "" {
+			t.Fatalf("filter %q next cursor = %q, want empty on an empty page", filter, page.NextCursor)
+		}
+	}
+}
+
+func TestListFilterPaging(t *testing.T) {
+	t.Parallel()
+
+	parts := make([]string, 0, 10)
+	for i := range 10 {
+		typ := "custom:resource:Type"
+		if i%2 == 1 {
+			typ = "other:kind:Thing"
+		}
+
+		parts = append(parts, `{"urn":"urn:pulumi:dev::web::`+typ+`::res`+strconv.Itoa(i)+`",`+
+			`"type":"`+typ+`","inputs":{},"outputs":{}}`)
+	}
+
+	deployment := `{"resources":[` + strings.Join(parts, ",") + `]}`
+
+	if seen := collectFilteredResources(t, deployment, "custom:resource", 2); len(seen) != 5 {
+		t.Fatalf("listed %d filtered resources, want 5", len(seen))
+	}
+}
+
+// collectFilteredResources pages through deployment with limit and the
+// filter, and returns every URN it sees. Each page must hold only matches.
+func collectFilteredResources(t *testing.T, deployment, filter string, limit int) map[string]bool {
+	t.Helper()
+
+	seen := map[string]bool{}
+	cursor := ""
+
+	for {
+		page, err := stack.ListStateResources([]byte(deployment), nil, cursor, limit, filter)
+		if err != nil {
+			t.Fatalf("list resources at %q: %v", cursor, err)
+		}
+
+		if page.Incomplete {
+			t.Fatalf("page at %q is incomplete: %q", cursor, page.Reason)
+		}
+
+		for _, res := range page.Resources {
+			checkFilteredMatch(t, res.URN, res.Type, filter)
+
+			if seen[res.URN] {
+				t.Fatalf("resource %q listed twice", res.URN)
+			}
+
+			seen[res.URN] = true
+		}
+
+		cursor = page.NextCursor
+
+		if cursor == "" {
+			return seen
+		}
+	}
+}
+
+// checkFilteredMatch fails when the resource is not a filter match.
+func checkFilteredMatch(t *testing.T, urn, typ, filter string) {
+	t.Helper()
+
+	if !strings.Contains(typ, filter) && !strings.Contains(urn, filter) {
+		t.Fatalf("resource %q of type %q is not a match", urn, typ)
+	}
+}
+
+func TestListFilterKeepsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	deployment := `{"resources":[{` +
+		`"urn":"urn:pulumi:dev::web::custom:resource:Type::res1",` +
+		`"type":"custom:resource:Type","inputs":{},"outputs":{}},` +
+		`{"type":"custom:resource:Type","inputs":{}},` +
+		`{"urn":"urn:pulumi:dev::web::other:kind:Thing::res2",` +
+		`"type":"other:kind:Thing","inputs":{},"outputs":{}}]}`
+
+	page, err := stack.ListStateResources([]byte(deployment), nil, "", 100, "custom:resource")
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+
+	if !page.Incomplete {
+		t.Fatal("page is complete, want incomplete for the entry without a URN")
+	}
+
+	if page.Reason == "" {
+		t.Fatal("page has no reason, want why the server cut the list short")
+	}
+
+	urns := filterURNs(t, page)
+	if len(urns) != 1 || urns[0] != "urn:pulumi:dev::web::custom:resource:Type::res1" {
+		t.Fatalf("filtered urns = %q, want only the matching resource", urns)
+	}
 }
 
 func TestDiffSecretAddedOrRemovedIsChangedSecret(t *testing.T) {

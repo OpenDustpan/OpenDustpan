@@ -899,3 +899,153 @@ func TestStateResourceUnescapedSlashMatchesNothing(t *testing.T) {
 		t.Fatalf("unescaped URN answers with another resource %q (%s)", plainURN, body)
 	}
 }
+
+// stateFilterList fetches the resource list with filter q and requires
+// status 200.
+func stateFilterList(t *testing.T, f updateFixture, q string) stateListDoc {
+	t.Helper()
+
+	target := "/api/stacks/acme/web/prod/state/latest/resources?filter[q]=" + url.QueryEscape(q)
+
+	return decodeStateList(t, getStateOK(t, f, target))
+}
+
+// TestStateListFilterMatchesType proves filter[q] with a type substring
+// answers only resources of that type.
+func TestStateListFilterMatchesType(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	list := stateFilterList(t, f, "StackReference")
+
+	if len(list.Resources) != 1 {
+		t.Fatalf("filtered list holds %d resources, want only the reference", len(list.Resources))
+	}
+
+	if list.Resources[0].URN != stateURNRef {
+		t.Fatalf("urn = %q, want %q", list.Resources[0].URN, stateURNRef)
+	}
+
+	if list.NextCursor != "" || list.Incomplete {
+		t.Fatalf("filtered list = %+v, want one page with no cursor", list)
+	}
+}
+
+// TestStateListFilterMatchesURN proves filter[q] with a URN substring
+// answers the named resource.
+func TestStateListFilterMatchesURN(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	list := stateFilterList(t, f, "pulumi:pulumi:Stack::web-dev")
+
+	if len(list.Resources) != 1 || list.Resources[0].URN != stateURNStack {
+		t.Fatalf("filtered list = %+v, want only the stack resource", list)
+	}
+}
+
+// TestStateListFilterIgnoresValues proves filter[q] never matches attribute
+// values or secret values: a greeting, a plain input and a ciphertext all
+// answer no resources.
+func TestStateListFilterIgnoresValues(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	for _, q := range []string{"hi", "changed", "acme/web/other", "v1:input-cipher", "v1:rotated-cipher"} {
+		list := stateFilterList(t, f, q)
+
+		if len(list.Resources) != 0 {
+			t.Fatalf("filter %q matched %d resources, want none", q, len(list.Resources))
+		}
+
+		if list.NextCursor != "" {
+			t.Fatalf("filter %q next cursor = %q, want empty", q, list.NextCursor)
+		}
+	}
+}
+
+// TestStateListFilterPaging proves paging applies after the filter: a page
+// holds only matching resources and the cursor walks them.
+func TestStateListFilterPaging(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	third := `{"urn":"urn:pulumi:dev::web::custom:resource:Type::res3",` +
+		`"type":"custom:resource:Type","inputs":{},"outputs":{}}`
+	deployment := `{"resources":[{` +
+		`"urn":"` + stateURNStack + `","type":"pulumi:pulumi:Stack","inputs":{},"outputs":{}},` +
+		`{"urn":"` + stateURNRef + `","type":"pulumi:pulumi:StackReference","inputs":{},"outputs":{}},` +
+		third + `]}`
+
+	seedStateVersion(t, f, deployment)
+
+	first := decodeStateList(t, getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:dev")+`&limit=2`,
+	))
+
+	if len(first.Resources) != 2 || first.NextCursor == "" {
+		t.Fatalf("first filtered page = %+v, want 2 matches with a cursor", first)
+	}
+
+	second := decodeStateList(t, getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+
+			url.QueryEscape("pulumi:dev")+`&limit=2&cursor=`+first.NextCursor,
+	))
+
+	if len(second.Resources) != 1 || second.NextCursor != "" {
+		t.Fatalf("second filtered page = %+v, want 1 match with no cursor", second)
+	}
+
+	if first.Resources[0].URN == second.Resources[0].URN {
+		t.Fatalf("filtered pages overlap on %q", second.Resources[0].URN)
+	}
+}
+
+// TestStateListFilterKeepsIncomplete proves the filter keeps the incomplete
+// marker: skipped entries without a URN still mark the page, which holds
+// only matching resources.
+func TestStateListFilterKeepsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersion(t, f, `{"resources":[{`+
+		`"urn":"`+stateURNStack+`","type":"pulumi:pulumi:Stack","inputs":{},"outputs":{}},`+
+		`{"type":"custom:resource:Type","inputs":{}},`+
+		`{"urn":"`+stateURNRef+`","type":"pulumi:pulumi:StackReference","inputs":{},"outputs":{}}]}`)
+
+	body := getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:pulumi:Stack::"),
+	)
+
+	var doc struct {
+		Resources  []stateListItem `json:"resources"`
+		NextCursor string          `json:"nextCursor"`
+		Incomplete bool            `json:"incomplete"`
+		Reason     string          `json:"reason"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode filtered list: %v (%s)", err, body)
+	}
+
+	if !doc.Incomplete || doc.Reason == "" {
+		t.Fatalf("filtered list = %+v, want incomplete with a reason", doc)
+	}
+
+	if len(doc.Resources) != 1 || doc.Resources[0].URN != stateURNStack {
+		t.Fatalf("filtered list = %+v, want only the stack resource", doc)
+	}
+}
