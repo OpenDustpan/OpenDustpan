@@ -5649,9 +5649,9 @@ func stateVersionListBase() string {
 		"&filter[workspace][name]=" + e2e.Workspace
 }
 
-// checkStateVersionListTwo proves the list holds two versions, newest first,
-// with the holder, force and restored-from attributes on every entry.
-func checkStateVersionListTwo(body string) error {
+// checkStateVersionListThree checks the list after two applies and the fence
+// that the maintenance force enter wrote between them (ADR 44, decision 1).
+func checkStateVersionListThree(body string) error {
 	var raw struct {
 		Data []map[string]any `json:"data"`
 	}
@@ -5660,8 +5660,8 @@ func checkStateVersionListTwo(body string) error {
 		return fmt.Errorf("%w: decode state version list: %w", errUnexpected, err)
 	}
 
-	if len(raw.Data) != 2 {
-		return fmt.Errorf("%w: list holds %d versions, want 2: %s", errUnexpected, len(raw.Data), body)
+	if len(raw.Data) != 3 {
+		return fmt.Errorf("%w: list holds %d versions, want 3: %s", errUnexpected, len(raw.Data), body)
 	}
 
 	for _, item := range raw.Data {
@@ -5730,8 +5730,8 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 	}
 }
 
-// tofuStateVersionListScenario proves the list route after two applies: both
-// versions listed newest first with the added attributes, and page[size] and
+// tofuStateVersionListScenario proves the list route after two applies and the
+// fence between them: every version listed newest first with the added attributes, and page[size] and
 // page[number] respected. Every request uses the go-tfe query shape.
 func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -5743,7 +5743,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(body string) error {
-			if err := checkStateVersionListTwo(body); err != nil {
+			if err := checkStateVersionListThree(body); err != nil {
 				return err
 			}
 
