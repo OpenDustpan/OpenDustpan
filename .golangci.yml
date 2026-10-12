@@ -81,6 +81,24 @@ linters:
               desc: Use math/rand/v2 or crypto/rand.
             - pkg: io/ioutil
               desc: Deprecated; use io and os.
+        journal:
+          # The journal takes bytes and gives bytes (ADR 43, decision 3.3). It
+          # imports no part of the server, so a later move to a separate module
+          # is a move of files. The glob matches the absolute path of a file.
+          files:
+            - "**/internal/pulumijournal/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/pkg
+              desc: The journal takes bytes and gives bytes; it never imports a pkg/ package (ADR 43, decision 3.3).
+            - pkg: opendustpan.org/opendustpan/internal/api
+              desc: The journal never imports an API adapter (ADR 43, decision 3.3).
+            - pkg: net/http
+              desc: HTTP belongs in api/, not in the journal (ADR 43, decision 3.3).
+            - pkg: database/sql
+              desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+            - pkg: github.com/jackc/pgx
+              desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
