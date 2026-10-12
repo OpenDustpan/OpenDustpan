@@ -112,3 +112,4 @@ both together.
 | [61](0061-docs-site-and-landing-page.md) | A docs site and a landing page | discussing |
 | [62](0062-pulumi-journaling.md) | Pulumi journaling | draft |
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | draft |
+| [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | draft |
