@@ -1,4 +1,4 @@
-package main
+package client
 
 // Upgrade check subcommand: a client of GET /api/server/upgrade-check
 // (ADR 39 decision 3).
@@ -16,9 +16,9 @@ package main
 //
 // This file is client code: it must not import a store adapter, a blob
 // adapter, backup-target code or key-encryption key code (ADR 39 decision 4).
-// client_gate_test.go and the depguard client rule fail the build when it
-// does. The shared migration list lives in pkg/store/schema, which both
-// dialects and this client import.
+// The depguard rule for internal/cli/client and the gate test in
+// cmd/opendustpan fail the build when it does. The shared migration list
+// lives in pkg/store/schema, which both dialects and this client import.
 
 import (
 	"context"
@@ -32,31 +32,35 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
-// errUpgradeVersionMismatch reports a server answer whose schema version the
+// ErrUpgradeVersionMismatch reports a server answer whose schema version the
 // applied migration names do not support: the answer is inconsistent, so the
 // command trusts neither number.
-var errUpgradeVersionMismatch = errors.New(
+var ErrUpgradeVersionMismatch = errors.New(
 	"server answered a schema version its applied migrations do not match",
 )
 
 // Upgrade verdicts of the upgrade check subcommand.
 const (
-	// verdictUpToDate reports a database with no pending and no unknown migrations.
-	verdictUpToDate = "up to date"
-	// verdictUpgradePossible reports a database with pending migrations and no unknown versions.
-	verdictUpgradePossible = "upgrade possible"
-	// verdictCannotStart reports a database with a version the binary does not embed.
-	verdictCannotStart = "cannot start"
+	// VerdictUpToDate reports a database with no pending and no unknown migrations.
+	VerdictUpToDate = "up to date"
+	// VerdictUpgradePossible reports a database with pending migrations and no unknown versions.
+	VerdictUpgradePossible = "upgrade possible"
+	// VerdictCannotStart reports a database with a version the binary does not embed.
+	VerdictCannotStart = "cannot start"
 )
 
-// upgradeCheck runs `opendustpan upgrade check`: it asks the server for its
+// UpgradeCheck runs `opendustpan upgrade check`: it asks the server for its
 // version, the schema version of its database and the names of the applied
 // migrations, compares them with the migrations in its own binary and prints
 // the binary version, the server version, the schema version of the database,
 // the schema version the binary needs, the names of the pending migrations
 // and one verdict. It writes nothing. The exit code is 0 for `up to date`
 // and `upgrade possible` and 1 for `cannot start` and for errors.
-func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+// binaryVersion is the stamped version of the binary: the report prints it,
+// so it names the same version as --version.
+func UpgradeCheck(
+	ctx context.Context, args []string, stdout, stderr io.Writer, binaryVersion string,
+) error {
 	var f upgradeCheckFlags
 
 	fs := flag.NewFlagSet("upgrade check", flag.ContinueOnError)
@@ -68,19 +72,19 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 
 	if fs.NArg() != 0 {
-		return errUsage
+		return ErrUsage
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan upgrade check again",
-			errBackupNeedsServer,
-			backupServerEnvVar,
+			ErrBackupNeedsServer,
+			BackupServerEnvVar,
 		)
 	}
 
-	token, err := backupToken()
+	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
@@ -100,7 +104,9 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 
-	if err := writeUpgradeReport(stdout, answer.ServerVersion, inspection, keyWarningFor(answer)); err != nil {
+	warning := keyWarningFor(answer)
+
+	if err := writeUpgradeReport(stdout, answer.ServerVersion, binaryVersion, inspection, warning); err != nil {
 		return err
 	}
 
@@ -108,7 +114,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return withBinaryVersion(&schema.NewerError{
 			DatabaseVersion: inspection.DatabaseVersion,
 			BinaryVersion:   inspection.BinaryVersion,
-		})
+		}, binaryVersion)
 	}
 
 	return nil
@@ -126,7 +132,7 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(
 		&f.server,
 		"server",
-		env(backupServerEnvVar, ""),
+		env(BackupServerEnvVar, ""),
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 	)
 	fs.StringVar(
@@ -137,31 +143,31 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 	)
 }
 
-// upgradeCheckAnswer is the server answer the upgrade check compares: the
+// UpgradeCheckAnswer is the server answer the upgrade check compares: the
 // server version, the schema version of its database and the names of the
 // applied migrations ordered by version. KeyEncryptionKey is nil when the
 // server is older than ADR 41 and does not answer the field.
-type upgradeCheckAnswer struct {
+type UpgradeCheckAnswer struct {
 	ServerVersion     string   `json:"version"`
 	SchemaVersion     int64    `json:"schemaVersion"`
 	AppliedMigrations []string `json:"appliedMigrations"`
 	KeyEncryptionKey  *bool    `json:"keyEncryptionKey"`
 }
 
-// keyWarning is the upgrade report line for a server that runs without a
+// KeyWarning is the upgrade report line for a server that runs without a
 // key-encryption key, or that is too old to say. This release needs a key
 // (ADR 41 decision 12), so the operator sets one before the upgrade.
-const keyWarning = "warning: this release needs a key-encryption key (ADR 41): " +
+const KeyWarning = "warning: this release needs a key-encryption key (ADR 41): " +
 	"set DUSTPAN_KEY_ENCRYPTION_KEY or --key-encryption-key-file " +
 	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
 	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"
 
-// keyWarningFor returns keyWarning when the server answer shows no
+// keyWarningFor returns KeyWarning when the server answer shows no
 // key-encryption key (the field is missing on an older server, or false),
 // else "".
-func keyWarningFor(answer upgradeCheckAnswer) string {
+func keyWarningFor(answer UpgradeCheckAnswer) string {
 	if answer.KeyEncryptionKey == nil || !*answer.KeyEncryptionKey {
-		return keyWarning
+		return KeyWarning
 	}
 
 	return ""
@@ -172,8 +178,8 @@ func keyWarningFor(answer upgradeCheckAnswer) string {
 // broken server cannot grow the client without bound.
 func readUpgradeCheck(
 	ctx context.Context, client *http.Client, server, token string,
-) (upgradeCheckAnswer, error) {
-	var none upgradeCheckAnswer
+) (UpgradeCheckAnswer, error) {
+	var none UpgradeCheckAnswer
 
 	endpoint := backupEndpoint(server, "/api/server/upgrade-check")
 
@@ -202,17 +208,17 @@ func readUpgradeCheck(
 	if resp.StatusCode != http.StatusOK {
 		return none, fmt.Errorf(
 			"%w: %s: check the server log and run opendustpan upgrade check again",
-			errBackupRead,
+			ErrBackupRead,
 			decodeBackupError(resp),
 		)
 	}
 
-	var answer upgradeCheckAnswer
+	var answer UpgradeCheckAnswer
 
 	if err := decodeCappedJSON(resp.Body, &answer); err != nil {
 		return none, fmt.Errorf(
 			"%w: %w: check the server log and run opendustpan upgrade check again",
-			errBackupRead,
+			ErrBackupRead,
 			err,
 		)
 	}
@@ -226,7 +232,7 @@ func readUpgradeCheck(
 // Unknown holds the recorded versions the binary does not embed, ordered.
 // The database version is derived from the applied names, never trusted from
 // the wire: a server that answers inconsistent version and names fails here.
-func compareUpgradeCheck(answer upgradeCheckAnswer) (schema.Inspection, error) {
+func compareUpgradeCheck(answer UpgradeCheckAnswer) (schema.Inspection, error) {
 	embedded, binaryVersion := schema.EmbeddedMigrationNames()
 
 	appliedVersions := make([]int64, 0, len(answer.AppliedMigrations))
@@ -246,7 +252,7 @@ func compareUpgradeCheck(answer upgradeCheckAnswer) (schema.Inspection, error) {
 	if answer.SchemaVersion != databaseVersion {
 		return schema.Inspection{}, fmt.Errorf(
 			"%w: answered %d, applied names record %d: check the server log and run opendustpan upgrade check again",
-			errUpgradeVersionMismatch,
+			ErrUpgradeVersionMismatch,
 			answer.SchemaVersion,
 			databaseVersion,
 		)
@@ -285,17 +291,29 @@ func compareUpgradeCheck(answer upgradeCheckAnswer) (schema.Inspection, error) {
 	}, nil
 }
 
+// withBinaryVersion adds the version of the binary to a newer-schema refusal,
+// so the message names the schema version of the database, the schema version
+// of the binary and the version of the binary.
+func withBinaryVersion(err error, binaryVersion string) error {
+	newer, ok := errors.AsType[*schema.NewerError](err)
+	if !ok {
+		return err
+	}
+
+	return fmt.Errorf("binary version is %s. %w", binaryVersion, newer)
+}
+
 // upgradeVerdict returns the one verdict for inspection: `cannot start` when
 // the database records a version the binary does not embed, `upgrade
 // possible` when migrations are pending, else `up to date`.
 func upgradeVerdict(inspection schema.Inspection) string {
 	switch {
 	case len(inspection.Unknown) > 0:
-		return verdictCannotStart
+		return VerdictCannotStart
 	case len(inspection.Pending) > 0:
-		return verdictUpgradePossible
+		return VerdictUpgradePossible
 	default:
-		return verdictUpToDate
+		return VerdictUpToDate
 	}
 }
 
@@ -305,10 +323,10 @@ func upgradeVerdict(inspection schema.Inspection) string {
 // the verdict. When migrations are pending it tells the operator to back up the
 // database first and that no downgrade path exists.
 func writeUpgradeReport(
-	stdout io.Writer, serverVersion string, inspection schema.Inspection, warning string,
+	stdout io.Writer, serverVersion, binaryVersion string, inspection schema.Inspection, warning string,
 ) error {
 	lines := []string{
-		"binary version: " + version,
+		"binary version: " + binaryVersion,
 		"server version: " + serverVersion,
 		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
 		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),

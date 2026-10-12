@@ -1,4 +1,4 @@
-package main
+package client
 
 // Restore subcommand of the installation API (ADR 38, ADR 39): a client of
 // POST /api/server/restores and GET /api/server/restores/{id} (ADR 17).
@@ -34,21 +34,21 @@ import (
 // Sentinel errors of the restore subcommand. Each error text names what
 // failed and the one command that helps.
 var (
-	// errRestoreNeedsServer reports a restore run without --server.
-	errRestoreNeedsServer = errors.New("restore needs --server")
-	// errRestoreNeedsBackup reports a restore run without --backup.
-	errRestoreNeedsBackup = errors.New("restore needs --backup")
-	// errRestoreFailed reports a restore that left checking and applying
+	// ErrRestoreNeedsServer reports a restore run without --server.
+	ErrRestoreNeedsServer = errors.New("restore needs --server")
+	// ErrRestoreNeedsBackup reports a restore run without --backup.
+	ErrRestoreNeedsBackup = errors.New("restore needs --backup")
+	// ErrRestoreFailed reports a restore that left checking and applying
 	// without success.
-	errRestoreFailed = errors.New("restore failed")
-	// errRestoreStart reports a restore that never started.
-	errRestoreStart = errors.New("start restore failed")
-	// errRestoreRead reports a restore row that never arrived.
-	errRestoreRead = errors.New("read restore failed")
-	// errRestoreMissing reports a restore row the server does not hold.
+	ErrRestoreFailed = errors.New("restore failed")
+	// ErrRestoreStart reports a restore that never started.
+	ErrRestoreStart = errors.New("start restore failed")
+	// ErrRestoreRead reports a restore row that never arrived.
+	ErrRestoreRead = errors.New("read restore failed")
+	// ErrRestoreMissing reports a restore row the server does not hold.
 	// waitRestore uses it to tell a transient swap gap from other read
 	// failures: after one successful read, a missing row retries.
-	errRestoreMissing = errors.New("restore not found")
+	ErrRestoreMissing = errors.New("restore not found")
 )
 
 // restoreRerunHelp names the one command that helps after a restore error:
@@ -73,7 +73,7 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(
 		&f.server,
 		"server",
-		env(backupServerEnvVar, ""),
+		env(BackupServerEnvVar, ""),
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 	)
 	fs.StringVar(
@@ -87,10 +87,10 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.force, "force", false, "cancel active updates and runs first, then restore")
 }
 
-// restoreStartRequest asks the server for one restore: the backup ID from
+// RestoreStartRequest asks the server for one restore: the backup ID from
 // its configured target, whether to check only, and whether to cancel active
 // work first.
-type restoreStartRequest struct {
+type RestoreStartRequest struct {
 	BackupID  string `json:"backupID"`
 	CheckOnly bool   `json:"checkOnly,omitempty"`
 	Force     bool   `json:"force,omitempty"`
@@ -102,28 +102,28 @@ type restoreStartResponse struct {
 	ID string `json:"id"`
 }
 
-// restoreManifest holds the manifest fields the command prints: the SQL
+// RestoreManifest holds the manifest fields the command prints: the SQL
 // size of the restored backup.
-type restoreManifest struct {
+type RestoreManifest struct {
 	SQLSize int64 `json:"sqlSize"`
 }
 
-// restoreStatusResponse answers one restore: its state and, when the restore
+// RestoreStatusResponse answers one restore: its state and, when the restore
 // succeeded, the manifest.
-type restoreStatusResponse struct {
+type RestoreStatusResponse struct {
 	ID          string           `json:"id"`
 	State       string           `json:"state"`
 	BackupID    string           `json:"backupID"`
 	PreBackupID string           `json:"preBackupID"`
 	Error       string           `json:"error"`
-	Manifest    *restoreManifest `json:"manifest"`
+	Manifest    *RestoreManifest `json:"manifest"`
 }
 
-// restoreCommand runs `opendustpan restore`: it starts a restore, waits until
+// RestoreCommand runs `opendustpan restore`: it starts a restore, waits until
 // it leaves checking and applying, and prints the ID, the state and the
 // backup taken before it. A failed restore prints the same lines and returns
 // an error, so the exit code is 1.
-func restoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	run, err := parseRestoreArgs(args, stderr)
 	if err != nil {
 		return err
@@ -173,7 +173,7 @@ func restoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if doc.State != "succeeded" {
 		return fmt.Errorf(
 			"%w %s: %s: "+restoreRerunHelp,
-			errRestoreFailed,
+			ErrRestoreFailed,
 			started.ID,
 			restoreFailureText(doc),
 			server,
@@ -207,15 +207,15 @@ func parseRestoreArgs(args []string, stderr io.Writer) (restoreRun, error) {
 	}
 
 	if fs.NArg() != 0 {
-		return restoreRun{}, errUsage
+		return restoreRun{}, ErrUsage
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return restoreRun{}, fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan restore again",
-			errRestoreNeedsServer,
-			backupServerEnvVar,
+			ErrRestoreNeedsServer,
+			BackupServerEnvVar,
 		)
 	}
 
@@ -223,7 +223,7 @@ func parseRestoreArgs(args []string, stderr io.Writer) (restoreRun, error) {
 	if id == "" {
 		return restoreRun{}, fmt.Errorf(
 			"%w: set --backup to the backup ID and run opendustpan restore --server %s again",
-			errRestoreNeedsBackup,
+			ErrRestoreNeedsBackup,
 			server,
 		)
 	}
@@ -236,8 +236,8 @@ func parseRestoreArgs(args []string, stderr io.Writer) (restoreRun, error) {
 // token, as the server signs each token in as a distinct administrator. No
 // token is an error that names both settings and the one command that helps.
 func restoreToken(server, id string) (string, error) {
-	tokens, err := loadAdminTokensFrom(os.LookupEnv)
-	if err != nil && !errors.Is(err, errAdminTokenMissing) {
+	tokens, err := LoadAdminTokensFrom(os.LookupEnv)
+	if err != nil && !errors.Is(err, ErrAdminTokenMissing) {
 		return "", err
 	}
 
@@ -249,9 +249,9 @@ func restoreToken(server, id string) (string, error) {
 
 	return "", fmt.Errorf(
 		"%w: set %s or %s and "+restoreRerunHelp,
-		errBackupNoToken,
-		adminTokenEnvVar,
-		adminTokenFileEnvVar,
+		ErrBackupNoToken,
+		AdminTokenEnvVar,
+		AdminTokenFileEnvVar,
 		server,
 		id,
 	)
@@ -276,7 +276,7 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 
 	endpoint := backupEndpoint(server, "/api/server/restores")
 
-	data, err := json.Marshal(restoreStartRequest{
+	data, err := json.Marshal(RestoreStartRequest{
 		BackupID:  params.backupID,
 		CheckOnly: params.checkOnly,
 		Force:     params.force,
@@ -321,7 +321,7 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	if resp.StatusCode != http.StatusAccepted {
 		return restoreStartResponse{}, fmt.Errorf(
 			"%w: %s: check the server log and "+restoreRerunHelp,
-			errRestoreStart,
+			ErrRestoreStart,
 			decodeBackupError(resp),
 			server,
 			id,
@@ -335,7 +335,7 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	if err := json.NewDecoder(limited).Decode(&doc); err != nil || strings.TrimSpace(doc.ID) == "" {
 		return restoreStartResponse{}, fmt.Errorf(
 			"%w: the server answered no restore ID: check the server log and "+restoreRerunHelp,
-			errRestoreStart,
+			ErrRestoreStart,
 			server,
 			id,
 		)
@@ -357,14 +357,14 @@ type restoreReadParams struct {
 }
 
 // readRestore reads one restore row.
-func readRestore(ctx context.Context, params restoreReadParams) (restoreStatusResponse, error) {
+func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusResponse, error) {
 	endpoint := backupEndpoint(params.server, "/api/server/restores/"+url.PathEscape(params.restoreID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
-		return restoreStatusResponse{}, fmt.Errorf(
+		return RestoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
-			errRestoreRead,
+			ErrRestoreRead,
 			params.restoreID,
 			err,
 			params.server,
@@ -376,9 +376,9 @@ func readRestore(ctx context.Context, params restoreReadParams) (restoreStatusRe
 
 	resp, err := params.client.Do(req)
 	if err != nil {
-		return restoreStatusResponse{}, fmt.Errorf(
+		return RestoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
-			errRestoreRead,
+			ErrRestoreRead,
 			params.restoreID,
 			err,
 			params.server,
@@ -391,17 +391,17 @@ func readRestore(ctx context.Context, params restoreReadParams) (restoreStatusRe
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return restoreStatusResponse{}, restoreStatusError(resp, params)
+		return RestoreStatusResponse{}, restoreStatusError(resp, params)
 	}
 
-	var doc restoreStatusResponse
+	var doc RestoreStatusResponse
 
 	limited := io.LimitReader(resp.Body, maxRestoreStatusBytes)
 
 	if err := json.NewDecoder(limited).Decode(&doc); err != nil {
-		return restoreStatusResponse{}, fmt.Errorf(
+		return RestoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
-			errRestoreRead,
+			ErrRestoreRead,
 			params.restoreID,
 			err,
 			params.server,
@@ -413,15 +413,15 @@ func readRestore(ctx context.Context, params restoreReadParams) (restoreStatusRe
 }
 
 // restoreStatusError answers the read error for a non-200 status. A missing
-// row wraps errRestoreMissing so the wait tells a transient swap gap from
+// row wraps ErrRestoreMissing so the wait tells a transient swap gap from
 // other failures; any other status is a plain read failure.
 func restoreStatusError(resp *http.Response, params restoreReadParams) error {
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf(
 			"%w %s: %w: %s: "+restoreRerunHelp,
-			errRestoreRead,
+			ErrRestoreRead,
 			params.restoreID,
-			errRestoreMissing,
+			ErrRestoreMissing,
 			decodeBackupError(resp),
 			params.server,
 			params.backupID,
@@ -430,7 +430,7 @@ func restoreStatusError(resp *http.Response, params restoreReadParams) error {
 
 	return fmt.Errorf(
 		"%w %s: %s: "+restoreRerunHelp,
-		errRestoreRead,
+		ErrRestoreRead,
 		params.restoreID,
 		decodeBackupError(resp),
 		params.server,
@@ -444,7 +444,7 @@ func restoreStatusError(resp *http.Response, params restoreReadParams) error {
 // between the apply and its recreate. A missing row before any successful
 // read fails at once, so a wrong ID never polls forever. A canceled context
 // stops the wait with the context error.
-func waitRestore(ctx context.Context, params restoreReadParams) (restoreStatusResponse, error) {
+func waitRestore(ctx context.Context, params restoreReadParams) (RestoreStatusResponse, error) {
 	timer := time.NewTimer(backupPollInterval)
 	defer timer.Stop()
 
@@ -453,12 +453,12 @@ func waitRestore(ctx context.Context, params restoreReadParams) (restoreStatusRe
 	for {
 		doc, err := readRestore(ctx, params)
 		if err != nil {
-			if !sawRow || !errors.Is(err, errRestoreMissing) {
-				return restoreStatusResponse{}, err
+			if !sawRow || !errors.Is(err, ErrRestoreMissing) {
+				return RestoreStatusResponse{}, err
 			}
 
 			if waitErr := waitRestoreMissing(ctx, timer, params); waitErr != nil {
-				return restoreStatusResponse{}, waitErr
+				return RestoreStatusResponse{}, waitErr
 			}
 
 			continue
@@ -472,7 +472,7 @@ func waitRestore(ctx context.Context, params restoreReadParams) (restoreStatusRe
 
 		select {
 		case <-ctx.Done():
-			return restoreStatusResponse{}, fmt.Errorf(
+			return RestoreStatusResponse{}, fmt.Errorf(
 				"wait for restore %s: %w: "+restoreRerunHelp,
 				params.restoreID,
 				ctx.Err(),
@@ -506,7 +506,7 @@ func waitRestoreMissing(ctx context.Context, timer *time.Timer, params restoreRe
 
 // restoreFailureText answers the error text of a failed restore row, or a
 // fallback when the row holds none.
-func restoreFailureText(doc restoreStatusResponse) string {
+func restoreFailureText(doc RestoreStatusResponse) string {
 	if strings.TrimSpace(doc.Error) != "" {
 		return strings.TrimSpace(doc.Error)
 	}
@@ -520,7 +520,7 @@ func restoreFailureText(doc restoreStatusResponse) string {
 // untouched.
 //
 //nolint:revive // The check-only flag only selects the last line; the report stays one function.
-func writeRestoreReport(stdout io.Writer, doc restoreStatusResponse, checkOnly bool) error {
+func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly bool) error {
 	size := ""
 	if doc.Manifest != nil {
 		size = fmt.Sprintf(" (SQL %d bytes)", doc.Manifest.SQLSize)
