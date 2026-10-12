@@ -493,13 +493,23 @@ func TestBackupCheckUsage(t *testing.T) {
 	}
 }
 
-// clientSourceFiles holds the command files that must stay clients of the
-// REST API: they take --server and never open the database, a blob adapter,
+// clientSourceFiles holds the client command files that must stay clients of
+// the REST API: they take --server and never open the database, a blob adapter,
 // a backup target or the key-encryption key (ADR 39 decision 4). The serve
-// wiring in main.go may import those packages; these files must not.
+// wiring in main.go may import those packages; these files must not. The
+// paths are relative to cmd/opendustpan.
 //
 //nolint:gochecknoglobals // The gate test reads one fixed file list; passing it as a parameter adds nothing.
-var clientSourceFiles = []string{"backup.go", "backup_check.go", "upgrade_check.go"}
+var clientSourceFiles = []string{
+	"../../internal/cli/client/backup.go",
+	"../../internal/cli/client/backup_check.go",
+	"../../internal/cli/client/namespace.go",
+	"../../internal/cli/client/restore.go",
+	"../../internal/cli/client/upgrade_check.go",
+	"../../internal/cli/client/health.go",
+	"../../internal/cli/client/admintoken.go",
+	"../../internal/cli/client/client.go",
+}
 
 // clientBannedImports holds the import prefixes no client source file may
 // use. pkg/store/schema stays allowed: it is the neutral migration list both
