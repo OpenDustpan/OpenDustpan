@@ -166,8 +166,13 @@ server.
 
 ## Audit log
 
-<!-- Placeholder: written from the merged code of #356, which adds the audit
-log. -->
+No audit log exists today. The Pulumi CLI calls two audit routes,
+`decrypt/log-decryption` and `decrypt/log-batch-decryption`. The server
+checks the `unit:decrypt` action on each, answers 204, and stores nothing.
+
+Planned: an append-only audit log for each namespace, with a SHA-256 hash
+chain, and one entry for each secret that the server gives in plain text
+(ADR 41, decisions 5 and 13). RFC 22 holds the full audit log.
 
 ## Report a vulnerability
 
