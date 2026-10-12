@@ -76,6 +76,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.updateCreateRoutes()...)
 	routes = append(routes, h.updateRunRoutes()...)
 	routes = append(routes, h.updateImportExportRoutes()...)
+	routes = append(routes, h.stateRoutes()...)
 	routes = append(routes, h.updateCancelRoute(), h.updateRestoreRoute())
 
 	return routes
@@ -275,6 +276,16 @@ func (h *Handler) updateCreateRoutes() []Route {
 // Cancel has its own route (updateCancelRoute): it serves the access token,
 // not the lease.
 func (h *Handler) updateRunRoutes() []Route {
+	routes := h.updateLeaseRoutes()
+	routes = append(routes, h.updateCheckpointRoutes()...)
+	routes = append(routes, h.updateReadRoutes()...)
+
+	return routes
+}
+
+// updateLeaseRoutes returns the start, lease renewal, event batch and
+// complete routes of an update.
+func (h *Handler) updateLeaseRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodPost,
@@ -301,6 +312,21 @@ func (h *Handler) updateRunRoutes() []Route {
 			Serve:   h.recordEvents,
 		},
 		{
+			Method:  http.MethodPost,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.completeUpdate,
+		},
+	}
+}
+
+// updateCheckpointRoutes returns the whole, verbatim and delta checkpoint
+// routes of an update. Writes need unit:write.
+func (h *Handler) updateCheckpointRoutes() []Route {
+	return []Route{
+		{
 			// The CLI sends whole checkpoints, and the last write wins. The
 			// server advertises no delta capability, so no sequence number
 			// arrives.
@@ -312,13 +338,34 @@ func (h *Handler) updateRunRoutes() []Route {
 			Serve:   h.saveCheckpoint,
 		},
 		{
-			Method:  http.MethodPost,
-			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/complete",
+			// The first save of an update with the delta capability is a
+			// full body with a sequence number. The deployment travels
+			// exactly as sent, so later deltas apply to these bytes.
+			Method:  http.MethodPatch,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointverbatim",
 			Scope:   ScopeUpdateLease,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.completeUpdate,
+			Serve:   h.saveCheckpointVerbatim,
 		},
+		{
+			// Later saves with the delta capability carry only the edits
+			// since the last save. An invalid delta answers 409 and saves
+			// nothing, so the CLI falls back to a full verbatim save.
+			Method:  http.MethodPatch,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/checkpointdelta",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.saveCheckpointDelta,
+		},
+	}
+}
+
+// updateReadRoutes returns the read, history and export routes of an
+// update. Reads need unit:read.
+func (h *Handler) updateReadRoutes() []Route {
+	return []Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}",

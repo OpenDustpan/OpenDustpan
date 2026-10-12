@@ -34,6 +34,7 @@ import (
 	"strings"
 	"syscall"
 
+	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -77,6 +78,11 @@ var (
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
+	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
+	// the delta capability off, so only negative values fail.
+	errDeltaCutoff = errors.New(
+		"checkpoint delta cutoff must not be negative: set --checkpoint-delta-cutoff (DUSTPAN_CHECKPOINT_DELTA_CUTOFF) to 0 or more",
+	)
 	// errBackupTarget reports a backup target with an unknown form. It shows
 	// the allowed forms, so the operator knows what to set. Only the serve
 	// flag --backup-target takes it.
@@ -100,7 +106,7 @@ var (
 	// shows the allowed forms, so the operator knows what to set. Only the
 	// restore flag --from takes it.
 	errRestoreSource = errors.New(
-		"backup source must be dir:/path: set --from (DUSTPAN_BACKUP_TARGET)",
+		"backup source must be dir:/path or s3://<bucket>[/<prefix>]: set --from (DUSTPAN_BACKUP_TARGET)",
 	)
 	// errRestoreSourceMissing reports a restore source that does not exist.
 	// It names the flag, so the operator knows what to set.
@@ -115,7 +121,7 @@ var (
 	// errRestoreFrom reports a restore without a backup source. It names the
 	// flag, so the operator knows what to set.
 	errRestoreFrom = errors.New(
-		"backup source is missing: set --from to dir:/path (DUSTPAN_BACKUP_TARGET)",
+		"backup source is missing: set --from to dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
 	)
 	// errRestoreBackup reports a restore without a backup ID. It names the
 	// flag, so the operator knows what to set.
@@ -252,6 +258,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
+	if f.checkpointDeltaCutoff < 0 {
+		return errDeltaCutoff
+	}
+
 	return f.run(ctx, stderr)
 }
 
@@ -259,23 +269,24 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 type serveFlags struct {
 	common
 
-	listen               string
-	consoleDir           string
-	origins              string
-	tlsCert              string
-	tlsKey               string
-	publicURL            string
-	blobDir              string
-	blobStore            string
-	s3Endpoint           string
-	s3Region             string
-	backupTarget         string
-	logLevel             string
-	logFormat            string
-	maxCheckpointBytes   int64
-	maxSecretBatchBytes  int64
-	maxStateBytes        int64
-	maxBodyBytesInFlight int64
+	listen                string
+	consoleDir            string
+	origins               string
+	tlsCert               string
+	tlsKey                string
+	publicURL             string
+	blobDir               string
+	blobStore             string
+	s3Endpoint            string
+	s3Region              string
+	backupTarget          string
+	logLevel              string
+	logFormat             string
+	maxCheckpointBytes    int64
+	maxSecretBatchBytes   int64
+	maxStateBytes         int64
+	maxBodyBytesInFlight  int64
+	checkpointDeltaCutoff int64
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -393,6 +404,12 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 		"max-body-bytes-in-flight",
 		envBytes("DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT"),
 		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
+	)
+	fs.Int64Var(
+		&f.checkpointDeltaCutoff,
+		"checkpoint-delta-cutoff",
+		envDeltaCutoff("DUSTPAN_CHECKPOINT_DELTA_CUTOFF"),
+		"checkpoint size in bytes from which the CLI sends delta uploads, 0 turns delta uploads off (DUSTPAN_CHECKPOINT_DELTA_CUTOFF)",
 	)
 }
 
@@ -559,6 +576,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 	}
 }
 
@@ -813,17 +831,30 @@ func openBackupTarget(
 
 // openRestoreSource opens the restore source in raw as a blob store. It
 // never creates the directory: a restore source must already hold a backup,
-// so a missing source is a refusal naming --from. An s3:// source stays
-// reserved for a later change (issue #158). Anything else is an error that
-// shows the allowed forms.
-func openRestoreSource(raw string) (*blobfs.Store, error) {
+// so a missing source is a refusal naming --from. A dir:/path source opens
+// the local directory; an s3://<bucket>[/<prefix>] source opens S3-compatible
+// storage with the same constructor as the live blob store. Credentials come
+// from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
+// Anything else is an error that shows the allowed forms.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openRestoreSource(
+	ctx context.Context,
+	raw, endpoint, region string,
+	logger *slog.Logger,
+) (blob.Store, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, errRestoreFrom
 	}
 
 	if strings.HasPrefix(trimmed, "s3://") {
-		return nil, fmt.Errorf("backup source %q: s3 sources are not supported yet: %w", trimmed, errRestoreSource)
+		return openS3Store(ctx, s3StoreConfig{
+			raw:      trimmed,
+			endpoint: endpoint,
+			region:   region,
+			formErr:  errRestoreSource,
+		}, logger)
 	}
 
 	dir, ok := strings.CutPrefix(trimmed, "dir:")
@@ -933,133 +964,6 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
 }
 
-// Upgrade verdicts of the upgrade check subcommand.
-const (
-	// verdictUpToDate reports a database with no pending and no unknown migrations.
-	verdictUpToDate = "up to date"
-	// verdictUpgradePossible reports a database with pending migrations and no unknown versions.
-	verdictUpgradePossible = "upgrade possible"
-	// verdictCannotStart reports a database with a version the binary does not embed.
-	verdictCannotStart = "cannot start"
-)
-
-// upgradeCheck runs `opendustpan upgrade check`: it reads the schema state of
-// the database and writes nothing. It prints the version of the binary, the
-// schema version of the database, the schema version the binary needs, the
-// names of the pending migrations and one verdict. The exit code is 0 for
-// `up to date` and `upgrade possible` and 1 for `cannot start` and for
-// errors. The command has no REST endpoint and no console view: it is a
-// process-level tool (ADR 33 decision 3, ADR 17 process settings).
-func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var c common
-
-	fs := flag.NewFlagSet("upgrade check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	// The check accepts --region for flag parity with serve and does not use it.
-	c.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 0 {
-		return errUsage
-	}
-
-	inspection, err := inspectDatabase(ctx, c.database)
-	if err != nil {
-		return err
-	}
-
-	if err := writeUpgradeReport(stdout, inspection); err != nil {
-		return err
-	}
-
-	if len(inspection.Unknown) > 0 {
-		return withBinaryVersion(&schema.NewerError{
-			DatabaseVersion: inspection.DatabaseVersion,
-			BinaryVersion:   inspection.BinaryVersion,
-		})
-	}
-
-	return nil
-}
-
-// inspectDatabase reports the schema state of database without changing it.
-// It takes --database as serve does.
-func inspectDatabase(
-	ctx context.Context, database string,
-) (schema.Inspection, error) {
-	switch {
-	case strings.HasPrefix(database, "sqlite:"):
-		inspection, err := sqlite.Inspect(ctx, strings.TrimPrefix(database, "sqlite:"))
-		if err != nil {
-			return schema.Inspection{}, fmt.Errorf("inspect sqlite database: %w", err)
-		}
-
-		return inspection, nil
-	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		inspection, err := postgres.Inspect(ctx, database)
-		if err != nil {
-			return schema.Inspection{}, fmt.Errorf("inspect postgres database: %w", err)
-		}
-
-		return inspection, nil
-	default:
-		return schema.Inspection{}, errUnknownBackend
-	}
-}
-
-// upgradeVerdict returns the one verdict for inspection: `cannot start` when
-// the database records a version the binary does not embed, `upgrade
-// possible` when migrations are pending, else `up to date`.
-func upgradeVerdict(inspection schema.Inspection) string {
-	switch {
-	case len(inspection.Unknown) > 0:
-		return verdictCannotStart
-	case len(inspection.Pending) > 0:
-		return verdictUpgradePossible
-	default:
-		return verdictUpToDate
-	}
-}
-
-// writeUpgradeReport writes the binary version, the schema version of the
-// database, the schema version the binary needs, the pending migration names
-// and the verdict. When migrations are pending it tells the operator to back
-// up the database first and that no downgrade path exists.
-func writeUpgradeReport(stdout io.Writer, inspection schema.Inspection) error {
-	lines := []string{
-		"binary version: " + version,
-		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
-		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),
-	}
-
-	if len(inspection.Pending) == 0 {
-		lines = append(lines, "pending migrations: none")
-	} else {
-		lines = append(lines, "pending migrations:")
-		for _, name := range inspection.Pending {
-			lines = append(lines, "  "+name)
-		}
-
-		lines = append(
-			lines,
-			"Back up the database before the upgrade. No downgrade path exists.",
-		)
-	}
-
-	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
-
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
-			return fmt.Errorf("write output: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // runRestore runs `opendustpan restore --from <target> --backup <id>`: it
 // loads a backup from the target into an empty installation. It opens the
 // destination store in a way that does not start the server, runs
@@ -1149,16 +1053,20 @@ func executeRestore(
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
-	// The offline restore writes to a local blob directory only; ADR 39
-	// (issue #281) moves restore into the server, which owns every store.
-	blobs, err := openFSBlobs(plan.flags.database, plan.flags.blobDir)
+	blobs, err := openBlobs(ctx, blobOpenConfig{
+		database: plan.flags.database,
+		dir:      plan.flags.blobDir,
+		store:    plan.flags.blobStore,
+		endpoint: plan.flags.s3Endpoint,
+		region:   plan.flags.s3Region,
+	}, logger)
 	if err != nil {
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
 	defer closeLiveStore(ctx, logger, blobs)
 
-	target, err := openRestoreSource(plan.from)
+	target, err := openRestoreSource(ctx, plan.from, plan.flags.s3Endpoint, plan.flags.s3Region, logger)
 	if err != nil {
 		return fmt.Errorf("restore backup %s from %q: %w", plan.id, plan.from, err)
 	}
@@ -1193,10 +1101,15 @@ func executeRestore(
 	return nil
 }
 
-// closeRestoreTarget closes the backup source and logs the error with
-// context instead of discarding it, as serve does for its stores.
-func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target *blobfs.Store) {
-	if err := target.Close(); err != nil {
+// closeRestoreTarget closes the backup source when it holds a directory
+// handle, so dir: sources release their handle while S3 sources need no close.
+func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target blob.Store) {
+	closer, ok := target.(io.Closer)
+	if !ok {
+		return
+	}
+
+	if err := closer.Close(); err != nil {
 		logger.WarnContext(ctx, "close backup source", slog.String("error", err.Error()))
 	}
 }
@@ -1230,9 +1143,12 @@ func writeRestoreWarning(stdout io.Writer, warning string) error {
 type restoreFlags struct {
 	common
 
-	from    string
-	backup  string
-	blobDir string
+	from       string
+	backup     string
+	blobDir    string
+	blobStore  string
+	s3Endpoint string
+	s3Region   string
 }
 
 func (f *restoreFlags) register(fs *flag.FlagSet) {
@@ -1241,7 +1157,7 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 		&f.from,
 		"from",
 		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup source dir:/path (DUSTPAN_BACKUP_TARGET)",
+		"backup source dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
 	)
 	fs.StringVar(&f.backup, "backup", "", "backup ID to restore, for example bkp-aaa")
 	fs.StringVar(
@@ -1251,10 +1167,22 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
 	)
 	fs.StringVar(
-		&f.blobDir,
+		&f.blobStore,
 		"blob-store",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"same as --blob-dir (DUSTPAN_BLOB_DIR)",
+		env("DUSTPAN_BLOB_STORE", "fs"),
+		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
+	)
+	fs.StringVar(
+		&f.s3Endpoint,
+		"s3-endpoint",
+		env("DUSTPAN_S3_ENDPOINT", ""),
+		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
+	)
+	fs.StringVar(
+		&f.s3Region,
+		"s3-region",
+		env("DUSTPAN_S3_REGION", ""),
+		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
 	)
 }
 
@@ -1328,96 +1256,6 @@ func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	return backupCommand(ctx, args, stdout, stderr)
-}
-
-// backupCheckFlags holds the settings of the backup check subcommand. It
-// takes no database flag and reads no key: the check reads only the target.
-type backupCheckFlags struct {
-	target     string
-	id         string
-	s3Endpoint string
-	s3Region   string
-}
-
-func (f *backupCheckFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.target,
-		"backup-target",
-		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
-	)
-	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
-	fs.StringVar(
-		&f.s3Endpoint,
-		"s3-endpoint",
-		env("DUSTPAN_S3_ENDPOINT", ""),
-		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
-	)
-	fs.StringVar(
-		&f.s3Region,
-		"s3-region",
-		env("DUSTPAN_S3_REGION", ""),
-		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
-	)
-}
-
-// backupCheck runs `opendustpan backup check --backup <id>`: it reads the
-// target and checks that it holds every object the manifest names with the
-// recorded size. It opens no database, starts no server and reads no key. It
-// prints one verdict and exits 0 when the backup is complete, else it returns
-// the first missing or short object by key with exit 1.
-func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var f backupCheckFlags
-
-	fs := flag.NewFlagSet("backup check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	f.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 0 {
-		return errUsage
-	}
-
-	id := strings.TrimSpace(f.id)
-	if id == "" {
-		return errBackupID
-	}
-
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-
-	target, err := openBackupTarget(ctx, f.target, f.s3Endpoint, f.s3Region, logger)
-	if err != nil {
-		return err
-	}
-
-	if target == nil {
-		return errBackupTarget
-	}
-
-	checkErr := backup.Check(ctx, target, backup.ID(id))
-
-	var closeErr error
-
-	if closer, ok := target.(io.Closer); ok {
-		closeErr = closer.Close()
-	}
-
-	if checkErr != nil {
-		return checkErr
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("close backup target: %w", closeErr)
-	}
-
-	if _, err := fmt.Fprintf(stdout, "backup %s is complete\n", id); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
 }
 
 // store is the persistence adapter chosen by --database.
@@ -1497,6 +1335,23 @@ func envBytes(key string) int64 {
 	raw, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return 0
+	}
+
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+
+	return n
+}
+
+// envDeltaCutoff returns the checkpoint delta cutoff in key, or the
+// default cutoff when unset. An invalid value returns -1, so the serve
+// check rejects it with the flag name.
+func envDeltaCutoff(key string) int64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return int64(pulumi.DefaultCheckpointDeltaCutoff)
 	}
 
 	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)

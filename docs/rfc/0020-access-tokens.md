@@ -1,14 +1,15 @@
 ---
 rfc: 20
 title: Access tokens and machine identity
-status: draft
+status: discussing
 created: 2026-10-10
 ---
 
 # RFC 20. Access tokens and machine identity
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: discussing. Opened as a stub from the competitor review in the
+research doc "IaC and TACOS landscape". The project owner chose
+the token life cycle below on 2026-10-11.
 
 ## Problem
 
@@ -27,6 +28,30 @@ says OpenDustpan issues tokens but sets no kinds, lifetimes or reports.
 - OIDC token exchange: CI presents its provider's token and gets a short-lived
   OpenDustpan token, with trust rules per namespace.
 - Read-only tokens, for dashboards and agents (RFC 41).
+- The token life cycle in the Proposal below: last-used time and expiry on
+  each access token, automatic disable after inactivity, service tokens,
+  rotation, and a first-run prompt for the bootstrap admin token.
+
+## Proposal
+
+### Token life cycle
+
+The project owner chose this life cycle. It covers each access token.
+
+- Each access token records its last-used time and has an expiry.
+- The server disables an access token automatically after a configurable
+  inactivity period. The default and the maximum are 90 days or fewer.
+- Service tokens serve machines that cannot sign in to the console. A service
+  token belongs to a principal that is not a person.
+- Rotation is a call that issues a new access token and sets an end time for
+  the old one. A principal may keep using the old one until its end time.
+- On the first sign-in with the bootstrap admin token (ADR 6), the console
+  and the API ask the operator to make a personal admin token and to retire
+  the bootstrap token. It helps with ISO/IEC 27002:2022 5.17.
+- Every token operation has a REST API and an action (ADR 17). Each operation
+  writes an audit entry (ADR 41).
+- A CLI access token of a person is created after a sign-in. It has an
+  expiry. See RFC 21 for the sign-in step.
 
 ## Open questions
 
@@ -34,6 +59,24 @@ says OpenDustpan issues tokens but sets no kinds, lifetimes or reports.
   This needs a check with `make e2e`.
 - Which TFE token endpoints (organization, team) must the TFE-compatible API
   serve?
+- What inactivity default does the server ship with, within the limit of 90
+  days or fewer?
+- Which roles may rotate or revoke the access token of another principal?
+- How does the server warn a principal before its access token expires?
+
+## Owner direction (2026-10-11)
+
+The project owner chose the token life cycle above. Each access token records
+its last-used time and has an expiry. The server disables an access token
+automatically after a configurable inactivity period. The default and the
+maximum are 90 days or fewer. Service tokens serve machines that cannot sign
+in to the console. Rotation is a call that issues a new access token and sets
+an end time for the old one. On the first sign-in with the bootstrap admin
+token, the console and the API ask the operator to make a personal admin token
+and to retire the bootstrap token (ISO/IEC 27002:2022 5.17). Every token
+operation has a REST API and an action (ADR 17), and writes an audit entry
+(ADR 41).
+The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 
 ## Outcome
 

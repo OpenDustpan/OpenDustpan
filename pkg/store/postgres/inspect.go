@@ -5,50 +5,19 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
-// Inspect connects to the database at url read-only and reports its schema
-// state: the recorded version, the version the binary needs, the pending
-// migration names and the unknown recorded versions. It creates no table,
-// applies no migration, takes no migration lock and opens no blob store. A
-// database with no schema_migrations table reports version 0 with every
-// migration pending.
-func Inspect(ctx context.Context, databaseURL string) (schema.Inspection, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		return schema.Inspection{}, fmt.Errorf("open postgres pool read-only: %w", err)
-	}
-
-	defer pool.Close()
-
-	if pingErr := pool.Ping(ctx); pingErr != nil {
-		return schema.Inspection{}, fmt.Errorf("connect to postgres read-only: %w", pingErr)
-	}
-
-	all, err := migrate.Load(migrations, "migrations")
-	if err != nil {
-		return schema.Inspection{}, err
-	}
-
-	recorded, err := inspectRecorded(ctx, pool)
-	if err != nil {
-		return schema.Inspection{}, err
-	}
-
-	return migrate.Inspect(recorded, all), nil
-}
-
-// inspectRecorded returns the recorded versions, ordered, in one read-only
-// transaction. It returns nothing when the database has no
-// schema_migrations table, and it takes no migration lock.
-func inspectRecorded(ctx context.Context, pool *pgxpool.Pool) ([]int64, error) {
+// AppliedMigrations returns the rows of schema_migrations ordered by
+// version, in one read-only transaction without a migration lock. A schema
+// with no schema_migrations table reports nothing. The installation API
+// answers them for `opendustpan upgrade check`.
+func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error) {
 	//nolint:exhaustruct_v5 // A read-only inspection sets only the access mode.
 	// Isolation, deferrability and begin text stay at the pgx defaults.
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("begin read-only transaction: %w", err)
 	}
@@ -73,31 +42,47 @@ func inspectRecorded(ctx context.Context, pool *pgxpool.Pool) ([]int64, error) {
 		return nil, nil
 	}
 
-	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := tx.Query(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
 	if err != nil {
-		return nil, fmt.Errorf("read schema versions: %w", err)
+		return nil, fmt.Errorf("read schema migrations: %w", err)
 	}
 
 	defer rows.Close()
 
-	var out []int64
+	var out []schema.AppliedMigration
 
 	for rows.Next() {
-		var version int64
-		if scanErr := rows.Scan(&version); scanErr != nil {
+		var applied schema.AppliedMigration
+
+		if scanErr := rows.Scan(&applied.Version, &applied.Name); scanErr != nil {
 			rows.Close()
 
-			return nil, fmt.Errorf("read schema versions: %w", scanErr)
+			return nil, fmt.Errorf("read schema migrations: %w", scanErr)
 		}
 
-		out = append(out, version)
+		out = append(out, applied)
 	}
 
 	rows.Close()
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, fmt.Errorf("read schema versions: %w", iterErr)
+		return nil, fmt.Errorf("read schema migrations: %w", iterErr)
 	}
 
 	return out, nil
+}
+
+// EmbeddedMigrations returns the names of the migrations the binary embeds,
+// ordered by version, with the newest version. The names come from the
+// shared schema list, so the upgrade check verdict never depends on which
+// dialect the server runs. It still loads the embedded directory, so a bad
+// file name fails here and not only in the adapter tests that pin the list.
+func EmbeddedMigrations() ([]string, int64, error) {
+	if _, err := migrate.Load(migrations, "migrations"); err != nil {
+		return nil, 0, err
+	}
+
+	names, newest := schema.EmbeddedMigrationNames()
+
+	return names, newest, nil
 }

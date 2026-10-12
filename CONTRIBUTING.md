@@ -85,8 +85,6 @@ These rules follow the
 
 ### How the project itself uses AI
 
-<!-- Placeholder: the project owner has not approved this section yet. -->
-
 Agent sessions do most of the maintainer work on OpenDustpan. Every commit
 that an agent writes carries a `Co-Authored-By` trailer that names it. Every
 change passes CI, a security review and a review by a second session before

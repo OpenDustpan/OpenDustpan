@@ -57,17 +57,18 @@ func newUpdateFixtureWithGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              updates,
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: inFlight,
-		Audit:                nil,
-		OnAuditFailure:       nil,
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  inFlight,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -126,17 +127,18 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              newEnforcingUpdates(t, namespaces),
-		Secrets:              secrets,
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: inFlight,
-		Audit:                nil,
-		OnAuditFailure:       nil,
+		Stacks:                stacks,
+		Updates:               newEnforcingUpdates(t, namespaces),
+		Secrets:               secrets,
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  inFlight,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

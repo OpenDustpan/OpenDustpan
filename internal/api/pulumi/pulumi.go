@@ -1,6 +1,17 @@
 // Package pulumi serves the HTTP API that the Pulumi CLI speaks to its backend
 // (the "service" or "httpstate" backend). The web console uses the same API.
 //
+// Besides login, stack management and the update cycle, it serves the masked
+// state read of ADR 41: GET
+// /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources (a
+// paged resource list with a changed marker per resource, where {version} is
+// a stack version or "latest"), GET .../state/{version}/resources/{urn} (one
+// resource with masked inputs and outputs) and GET
+// .../state/{version}/outputs (the masked stack outputs). Each secret value
+// answers as a marker with its value path, never as plain or ciphertext.
+// Clients path-escape the URN in the one-resource route, so that "/" in a
+// type token or a resource name becomes "%2F" and the URN stays one segment.
+//
 // Only the endpoints needed to log in and manage stacks exist so far. The CLI's
 // API is not a published, versioned specification, so every endpoint here must
 // be covered by the end-to-end suite that drives real CLI versions.
@@ -27,6 +38,10 @@ import (
 
 // ErrMissingDependency reports a Config without a required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
+
+// ErrInvalidCutoff reports a Config with a negative checkpoint delta cutoff.
+// Zero turns the delta capability off, so only negative values fail.
+var ErrInvalidCutoff = errors.New("checkpoint delta cutoff must not be negative")
 
 // errInvalidBody reports a request body that is not valid JSON. classify maps
 // it to the 400 response the Pulumi CLI expects.
@@ -72,6 +87,9 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still answer 204.
 	OnAuditFailure func()
+	// CheckpointDeltaCutoff is the checkpoint size in bytes from which the
+	// CLI sends delta uploads. Zero turns the delta capability off.
+	CheckpointDeltaCutoff int
 }
 
 // Handler serves the Pulumi CLI API under /api/.
@@ -89,6 +107,9 @@ type Handler struct {
 	onAuditFailure func()
 	mux            *patternMux
 	routes         []Route
+	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
+	// means the server hides the delta capability.
+	deltaCutoff int
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -108,6 +129,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.CheckpointDeltaCutoff < 0:
+		return nil, fmt.Errorf("%w: %d", ErrInvalidCutoff, cfg.CheckpointDeltaCutoff)
 	}
 
 	h := &Handler{
@@ -124,6 +147,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
 		routes:         nil,
+		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 	}
 
 	h.routes = h.buildRoutes()
@@ -147,6 +171,13 @@ func (h *Handler) ExternalBaseURL(r *http.Request) string {
 
 type apiCapabilityConfig struct {
 	Capability string `json:"capability"`
+	// Version names the capability version the CLI reads. The delta
+	// checkpoint capability needs version 2; empty means the capability
+	// needs none.
+	Version int `json:"version,omitempty"`
+	// Configuration holds the capability settings the CLI reads, such as
+	// the delta checkpoint cutoff. Empty means the capability needs none.
+	Configuration json.RawMessage `json:"configuration,omitempty"`
 }
 
 type capabilitiesResponse struct {
@@ -159,10 +190,45 @@ type capabilitiesResponse struct {
 // does not.
 const batchEncryptionCapability = "batch-encrypt"
 
+// deltaCheckpointCapability advertises that the server takes verbatim and
+// delta checkpoint uploads. The CLI reads it as delta-checkpoint-uploads-v2
+// and sends deltas once both the last saved and the new deployment reach
+// the cutoff.
+const deltaCheckpointCapability = "delta-checkpoint-uploads-v2"
+
+// deltaCheckpointVersion is the capability version the CLI reads for delta
+// checkpoint uploads. The CLI ignores the capability without it.
+const deltaCheckpointVersion = 2
+
+// DefaultCheckpointDeltaCutoff is the checkpoint size in bytes from which
+// the CLI sends delta uploads unless configured otherwise. Zero turns the
+// delta capability off.
+const DefaultCheckpointDeltaCutoff = 1 << 20
+
+// deltaCheckpointConfig is the configuration of the delta checkpoint
+// capability as the CLI reads it.
+type deltaCheckpointConfig struct {
+	CheckpointCutoffSizeBytes int `json:"checkpointCutoffSizeBytes"`
+}
+
 func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
-	h.writeJSON(r.Context(), w, http.StatusOK, capabilitiesResponse{
-		Capabilities: []apiCapabilityConfig{{Capability: batchEncryptionCapability}},
-	})
+	caps := []apiCapabilityConfig{{Capability: batchEncryptionCapability, Version: 0, Configuration: nil}}
+
+	if h.deltaCutoff > 0 {
+		cfg, err := json.Marshal(deltaCheckpointConfig{CheckpointCutoffSizeBytes: h.deltaCutoff})
+		if err == nil {
+			caps = append(
+				caps,
+				apiCapabilityConfig{
+					Capability:    deltaCheckpointCapability,
+					Version:       deltaCheckpointVersion,
+					Configuration: cfg,
+				},
+			)
+		}
+	}
+
+	h.writeJSON(r.Context(), w, http.StatusOK, capabilitiesResponse{Capabilities: caps})
 }
 
 // organizationSummary is one namespace as the Pulumi CLI reads it: an
@@ -769,7 +835,8 @@ func classify(err error) (int, string) {
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState):
+		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
+		errors.Is(err, stack.ErrResourceNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):
 		return http.StatusBadRequest, hasResourcesMessage
@@ -809,7 +876,8 @@ func classifySecret(err error) (int, string) {
 func classifyUpdate(err error) (int, string) {
 	switch {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
-		errors.Is(err, stack.ErrConcurrentModification):
+		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
+		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
 		return http.StatusUnauthorized, err.Error()

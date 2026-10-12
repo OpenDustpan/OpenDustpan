@@ -151,6 +151,16 @@ func deleteAuditEntry(ctx context.Context, path string, ns namespace.Name, seq i
 	return nil
 }
 
+func TestSchemaConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunSchema(t, func(t *testing.T) storetest.SchemaStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestPingClosed checks Ping answers on an open store and returns exactly the
 // sentinel text, with no driver text, after Close.
 func TestPingClosed(t *testing.T) {

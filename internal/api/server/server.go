@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -44,6 +45,22 @@ type Config struct {
 	Maintenance Maintenance
 	// Metrics writes the registry for the metrics route.
 	Metrics MetricsWriter
+	// Version is the server version the upgrade check answers. Empty means
+	// dev, as the backup manifest records it.
+	Version string
+	// Schema reports the applied migrations the upgrade check answers. Nil
+	// means the upgrade check answers 500: every production server wires its
+	// store.
+	Schema SchemaReporter
+}
+
+// SchemaReporter reports the applied migrations of the database. Both store
+// adapters implement it. It is defined here, in the package that consumes
+// it, so the domain stays free of transport code.
+type SchemaReporter interface {
+	// AppliedMigrations returns the rows of schema_migrations ordered by
+	// version, or nothing when the database records none.
+	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
 }
 
 // Handler serves the installation API under /api/server/.
@@ -55,6 +72,8 @@ type Handler struct {
 	backups     *backup.Service
 	maintenance Maintenance
 	metrics     MetricsWriter
+	version     string
+	schema      SchemaReporter
 	mux         *patternMux
 	routes      []Route
 }
@@ -86,6 +105,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		backups:     cfg.Backups,
 		maintenance: cfg.Maintenance,
 		metrics:     cfg.Metrics,
+		version:     cfg.Version,
+		schema:      cfg.Schema,
 		mux:         newPatternMux(),
 		routes:      nil,
 	}
@@ -188,19 +209,18 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 }
 
 // classify maps domain errors to an HTTP status and a message safe to show
-// callers. Backup errors carry fixed messages: registry and target failures
-// may hold driver text, so only the sentinel decides the status and the
-// message. A missing backup answers 404, a second start 409, and a server
-// with no backup target 500 that names the setting. Namespace errors map in
-// classifyNamespace. Maintenance errors map in classifyMaintenance: active work answers 409 naming each update and
-// run, and an unreadable installation state answers 500 without driver
-// text.
+// callers. Backup errors map in classifyBackup, namespace errors in
+// classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
 	if status, message, ok := classifyMaintenance(err); ok {
 		return status, message
 	}
 
 	if status, message, ok := classifyNamespace(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyBackup(err); ok {
 		return status, message
 	}
 
@@ -213,17 +233,31 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, errInvalidBody.Error()
-	case errors.Is(err, backup.ErrAlreadyRunning):
-		return http.StatusConflict, "a backup is already running"
-	case errors.Is(err, backup.ErrAlreadyExists):
-		return http.StatusConflict, "backup already exists"
-	case errors.Is(err, backup.ErrNotFound):
-		return http.StatusNotFound, "backup not found"
-	case errors.Is(err, errNoBackupTarget):
-		// No target is a setup problem of the server, not a bad request.
-		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target"
 	default:
 		return http.StatusInternalServerError, "internal error"
+	}
+}
+
+// classifyBackup maps the backup errors to their status and a fixed
+// message: registry and target failures may hold driver text, so only the
+// sentinel decides the status and the message. A missing backup answers 404,
+// a second start 409, and a server with no backup target 503 that names the
+// setting.
+func classifyBackup(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, backup.ErrAlreadyRunning):
+		return http.StatusConflict, "a backup is already running", true
+	case errors.Is(err, backup.ErrAlreadyExists):
+		return http.StatusConflict, "backup already exists", true
+	case errors.Is(err, backup.ErrNotFound):
+		return http.StatusNotFound, "backup not found", true
+	case errors.Is(err, backup.ErrInvalidID):
+		return http.StatusBadRequest, "invalid backup ID", true
+	case errors.Is(err, errNoBackupTarget):
+		// No target is a setup problem of the server, not a bad request.
+		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target", true
+	default:
+		return 0, "", false
 	}
 }
 
