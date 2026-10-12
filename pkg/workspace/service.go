@@ -98,6 +98,14 @@ type StateStore interface {
 	// be current. Callers record the attempt key with RecordUploadAttempt
 	// before finalizing, so the row names sv.Content when the write runs.
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
+	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
+	// state, in one fenced transaction. sv is a finalized fence version of w:
+	// it names the content, the new lineage, its serial and FenceBy. The stored
+	// workspace must be locked and hold revision w.Revision-1, else
+	// ErrNotLocked or ErrConcurrentModification. It returns ErrNotFound if the
+	// workspace does not exist, namespace.ErrNotFound if the namespace does not
+	// exist, or namespace.ErrFenced if fence is stale. An error writes nothing.
+	FenceAndUnlock(ctx context.Context, w Workspace, sv StateVersion, fence namespace.Fence) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
 	// ListStateVersions returns the finalized versions of workspace, newest
@@ -335,10 +343,32 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 }
 
 // ForceUnlock releases the lock whoever holds it, as `tofu force-unlock` does.
-func (s *Service) ForceUnlock(ctx context.Context, id ID) (Workspace, error) {
-	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-		return w.forceUnlock(now)
-	})
+// A workspace with a state gets a fence version with it: a new lineage, the
+// next serial and by as the principal that forced the unlock (ADR 44, decision
+// 1). A workspace without a state only releases its lock. by is the subject of
+// the principal that asks.
+func (s *Service) ForceUnlock(ctx context.Context, id ID, by string) (Workspace, error) {
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	if !w.Lock.Locked() {
+		return Workspace{}, ErrNotLocked
+	}
+
+	cur, err := s.states.CurrentStateVersion(ctx, id)
+
+	switch {
+	case errors.Is(err, ErrNoState):
+		return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+			return w.forceUnlock(now)
+		})
+	case err != nil:
+		return Workspace{}, fmt.Errorf("current state of %s: %w", w.Ref, err)
+	default:
+		return s.releaseWithFence(ctx, w, cur, by)
+	}
 }
 
 // PendingState is a state version waiting for its content, and the

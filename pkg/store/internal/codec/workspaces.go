@@ -50,6 +50,7 @@ type StateVersionRow struct {
 	Force             bool
 	Sealed            bool
 	RestoredFrom      string
+	FencedBy          string
 	SensitiveMarks    []byte
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
@@ -96,7 +97,9 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 	content := sv.Content.String()
 	md5sum := append([]byte{}, sv.MD5[:]...)
 
-	var upload []byte
+	// The column is NOT NULL. A version with no upload capability, such as a
+	// fence, stores an empty digest, which reads back as the zero digest.
+	upload := []byte{}
 	if !sv.Upload.IsZero() {
 		upload = append([]byte{}, sv.Upload[:]...)
 	}
@@ -131,6 +134,7 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		Force:             sv.Force,
 		Sealed:            sv.Sealed,
 		RestoredFrom:      sv.RestoredFrom.String(),
+		FencedBy:          sv.FenceBy,
 		SensitiveMarks:    marks,
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
@@ -239,6 +243,7 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Force:           row.Force,
 		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
+		FenceBy:         row.FencedBy,
 		SensitiveMarks:  marks,
 	}, nil
 }

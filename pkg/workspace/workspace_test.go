@@ -318,6 +318,44 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 	return sv, nil
 }
 
+// FenceAndUnlock implements workspace.StateStore: it releases the lock of w
+// and makes the fence version current, checking the same guards as the
+// adapters: the fence, a held lock and the revision.
+func (m *memStore) FenceAndUnlock(
+	_ context.Context, w workspace.Workspace, sv workspace.StateVersion, fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	stored, ok := m.workspaces[w.ID]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if !stored.Lock.Locked() {
+		return workspace.ErrNotLocked
+	}
+
+	if stored.Revision != w.Revision-1 {
+		return workspace.ErrConcurrentModification
+	}
+
+	if curID, found := m.current[w.ID]; found && sv.Serial != m.versions[curID].Serial+1 {
+		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
+	}
+
+	m.versions[sv.ID] = sv
+	m.current[w.ID] = sv.ID
+	m.workspaces[w.ID] = w
+	m.publish(w)
+
+	return nil
+}
+
 func (m *memStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
@@ -839,7 +877,7 @@ func TestLocking(t *testing.T) {
 		t.Errorf("unlock by another: %v, want ErrLockedByOther", err)
 	}
 
-	if _, err := f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+	if _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
 		t.Errorf("force unlock: %v", err)
 	}
 
@@ -940,7 +978,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 		t.Fatalf("forced begin: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1046,7 +1084,9 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if err := f.push(t, newState("l1", 1, "v1"), "v1"); err != nil {
+	const doc1 = `{"lineage":"l1","serial":1}`
+
+	if err := f.push(t, newState("l1", 1, doc1), doc1); err != nil {
 		t.Fatalf("push v1: %v", err)
 	}
 
@@ -1055,7 +1095,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("begin v5: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1068,7 +1108,17 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Errorf("upload after losing the lock: %v, want ErrLockedByOther", err)
 	}
 
-	checkCurrent(t, f, "l1", "v1")
+	// The force-unlock fenced v1: the current state is the fence, so the
+	// failed upload left it in place.
+	cur, curErr := f.svc.Current(ctx, f.ws.ID)
+	if curErr != nil {
+		t.Fatalf("current: %v", curErr)
+	}
+
+	if cur.FenceBy != "admin" || cur.Serial != 2 || cur.Lineage == "l1" {
+		t.Errorf("current after the failed upload: fence by %q serial %d lineage %q, want the admin fence",
+			cur.FenceBy, cur.Serial, cur.Lineage)
+	}
 }
 
 // The same principal locking again after a force-unlock holds a new lock;
@@ -1088,7 +1138,7 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID); err != nil {
+	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -3082,6 +3132,12 @@ func (f fencedStates) CreateStateVersion(
 }
 
 // FinalizeStateVersion rejects the write with namespace.ErrFenced.
+func (f fencedStates) FenceAndUnlock(
+	_ context.Context, _ workspace.Workspace, _ workspace.StateVersion, _ namespace.Fence,
+) error {
+	return namespace.ErrFenced
+}
+
 func (f fencedStates) FinalizeStateVersion(
 	_ context.Context, _ workspace.StateVersion, _ namespace.Fence,
 ) error {

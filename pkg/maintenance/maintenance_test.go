@@ -319,6 +319,10 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 	return nil
 }
 
+func (fakeStates) FenceAndUnlock(context.Context, workspace.Workspace, workspace.StateVersion, namespace.Fence) error {
+	return nil
+}
+
 func (fakeStates) CurrentStateVersion(context.Context, workspace.ID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrNoState
 }

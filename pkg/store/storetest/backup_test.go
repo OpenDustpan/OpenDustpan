@@ -1395,6 +1395,41 @@ func (s *fakeBackupStore) GetStateVersion(
 
 // FinalizeStateVersion implements workspace.StateStore with the lock,
 // lineage and serial checks.
+func (s *fakeBackupStore) FenceAndUnlock(
+	_ context.Context, w workspace.Workspace, sv workspace.StateVersion, fence namespace.Fence,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return err
+	}
+
+	stored, ok := s.data.workspaces[w.ID.String()]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if !stored.Lock.Locked() {
+		return workspace.ErrNotLocked
+	}
+
+	if stored.Revision != w.Revision-1 {
+		return workspace.ErrConcurrentModification
+	}
+
+	s.data.states[sv.ID.String()] = sv
+	s.data.current[w.ID.String()] = sv.ID.String()
+	s.data.workspaces[w.ID.String()] = w
+	s.publishWorkspace(w.Ref, w.ID.String(), w.UpdatedAt)
+
+	return nil
+}
+
 func (s *fakeBackupStore) FinalizeStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {

@@ -164,6 +164,30 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "delete removes the workspace with its versions and entry",
 			test: testDeleteWorkspace,
 		},
+		{
+			name: "fence and unlock releases the lock and makes the fence current",
+			test: testFenceAndUnlock,
+		},
+		{
+			name: "fence and unlock of an unlocked workspace is ErrNotLocked and writes nothing",
+			test: testFenceNotLocked,
+		},
+		{
+			name: "fence and unlock with a stale revision is ErrConcurrentModification and writes nothing",
+			test: testFenceStaleRevision,
+		},
+		{
+			name: "fence and unlock with a stale fence is ErrFenced and writes nothing",
+			test: testFenceFencedWrite,
+		},
+		{
+			name: "a sealed fence version reads back sealed with its outputs",
+			test: testFenceSealedRoundTrip,
+		},
+		{
+			name: "a fence whose serial is not one more than the current serial is ErrStaleSerial",
+			test: testFenceSerialMustFollow,
+		},
 	}
 
 	for _, tc := range cases {
@@ -3043,5 +3067,265 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 
 	if _, err := s.GetWorkspace(t.Context(), other.Ref); err != nil {
 		t.Fatalf("get workspace after a fenced delete: %v", err)
+	}
+}
+
+// releasedWorkspace returns locked as the caller passes it to FenceAndUnlock:
+// the lock cleared and the revision one on.
+func releasedWorkspace(locked workspace.Workspace, at time.Time) workspace.Workspace {
+	released := locked
+	released.Lock = clearedLock()
+	released.UpdatedAt = at
+	released.Revision++
+
+	return released
+}
+
+// newFenceVersion returns a finalized fence version of w that FenceAndUnlock
+// may make current. It has the new lineage, the serial and the principal that
+// forced the unlock.
+func newFenceVersion(
+	t *testing.T, w workspace.Workspace, lineage, content string, serial int64, fenceBy string, at time.Time,
+) workspace.StateVersion {
+	t.Helper()
+
+	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+
+	return workspace.StateVersion{
+		CreatedAt:       at,
+		FinalizedAt:     at,
+		UploadExpiresAt: time.Time{},
+		Upload:          token.Digest{},
+		ID:              workspace.StateVersionID(ident.NewID("sv-")),
+		Workspace:       w.ID,
+		Holder:          "",
+		LockID:          "",
+		Lineage:         lineage,
+		Status:          workspace.StatusFinalized,
+		Content:         blob.Key("tofu/" + w.ID.String() + "/fence/a1"),
+		Outputs:         nil,
+		MD5:             sum,
+		Serial:          serial,
+		Size:            int64(len(content)),
+		Force:           false,
+		Sealed:          false,
+		RestoredFrom:    "",
+		SensitiveMarks:  nil,
+		FenceBy:         fenceBy,
+	}
+}
+
+// lockedWithState returns a workspace locked by "ops" that holds one finalized
+// version, lineage "lin-a" and serial 1, as the current state.
+func lockedWithState(
+	t *testing.T,
+	s WorkspaceStore,
+	ns namespace.Namespace,
+) (workspace.Workspace, workspace.StateVersion) {
+	t.Helper()
+
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "ops")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-a", "one", 1),
+	))
+	v1 := finalizedVersion(pending, now().Add(time.Hour), "one")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), v1); err != nil {
+		t.Fatalf("finalize v1: %v", err)
+	}
+
+	return locked, v1
+}
+
+func testFenceAndUnlock(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, v1 := lockedWithState(t, s, ns)
+	released := releasedWorkspace(locked, now().Add(2*time.Hour))
+	fence := newFenceVersion(t, locked, "lin-b", "fence", 2, "admin", now().Add(2*time.Hour))
+
+	if err := s.FenceAndUnlock(t.Context(), released, fence, ns.Fence()); err != nil {
+		t.Fatalf("fence and unlock: %v", err)
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), locked.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, released)
+
+	cur, err := s.CurrentStateVersion(t.Context(), locked.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	if cur.ID != fence.ID || cur.Lineage != "lin-b" || cur.Serial != 2 || cur.FenceBy != "admin" {
+		t.Fatalf(
+			"current = %s lineage %q serial %d fence by %q, want the fence",
+			cur.ID,
+			cur.Lineage,
+			cur.Serial,
+			cur.FenceBy,
+		)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), fence.ID)
+	if err != nil {
+		t.Fatalf("get fence version: %v", err)
+	}
+
+	if stored.FenceBy != "admin" || stored.Status != workspace.StatusFinalized {
+		t.Fatalf("stored fence by %q status %s, want admin and finalized", stored.FenceBy, stored.Status)
+	}
+
+	list, total, err := s.ListStateVersions(t.Context(), locked.ID, workspace.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if total != 2 || len(list) != 2 || list[0].ID != fence.ID || list[1].ID != v1.ID {
+		t.Fatalf("history total %d, %d versions, want the fence then v1", total, len(list))
+	}
+}
+
+func testFenceNotLocked(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	released := releasedWorkspace(w, now().Add(time.Hour))
+	fence := newFenceVersion(t, w, "lin-b", "fence", 1, "admin", now().Add(time.Hour))
+
+	if err := s.FenceAndUnlock(t.Context(), released, fence, ns.Fence()); !errors.Is(err, workspace.ErrNotLocked) {
+		t.Fatalf("fence an unlocked workspace: err = %v, want ErrNotLocked", err)
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, w)
+
+	if _, curErr := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(curErr, workspace.ErrNoState) {
+		t.Fatalf("current after a refused fence: err = %v, want ErrNoState", curErr)
+	}
+}
+
+func testFenceStaleRevision(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, _ := lockedWithState(t, s, ns)
+
+	stale := locked
+	stale.Revision += 3
+	released := releasedWorkspace(stale, now().Add(2*time.Hour))
+	fence := newFenceVersion(t, locked, "lin-b", "fence", 2, "admin", now().Add(2*time.Hour))
+
+	err := s.FenceAndUnlock(t.Context(), released, fence, ns.Fence())
+	if !errors.Is(err, workspace.ErrConcurrentModification) {
+		t.Fatalf("fence with a stale revision: err = %v, want ErrConcurrentModification", err)
+	}
+
+	got, getErr := s.GetWorkspaceByID(t.Context(), locked.ID)
+	if getErr != nil {
+		t.Fatalf("get workspace: %v", getErr)
+	}
+
+	assertWorkspace(t, got, locked)
+
+	cur, curErr := s.CurrentStateVersion(t.Context(), locked.ID)
+	if curErr != nil || cur.Lineage != "lin-a" {
+		t.Fatalf("current after a refused fence: lineage %q, err %v, want lin-a", cur.Lineage, curErr)
+	}
+}
+
+func testFenceFencedWrite(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, _ := lockedWithState(t, s, ns)
+	released := releasedWorkspace(locked, now().Add(2*time.Hour))
+	fence := newFenceVersion(t, locked, "lin-b", "fence", 2, "admin", now().Add(2*time.Hour))
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.FenceAndUnlock(t.Context(), released, fence, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("fence with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), locked.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, locked)
+
+	if _, getErr := s.GetStateVersion(t.Context(), fence.ID); !errors.Is(getErr, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("stored fence after a stale fence: err = %v, want ErrStateVersionNotFound", getErr)
+	}
+}
+
+func testFenceSealedRoundTrip(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, _ := lockedWithState(t, s, ns)
+	released := releasedWorkspace(locked, now().Add(2*time.Hour))
+	fence := newFenceVersion(t, locked, "lin-b", "fence", 2, "admin", now().Add(2*time.Hour))
+	fence.Sealed = true
+	fence.Outputs = []byte("sealed-outputs")
+
+	if err := s.FenceAndUnlock(t.Context(), released, fence, ns.Fence()); err != nil {
+		t.Fatalf("fence and unlock of a sealed version: %v", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), fence.ID)
+	if err != nil {
+		t.Fatalf("get sealed fence: %v", err)
+	}
+
+	if !stored.Sealed || string(stored.Outputs) != "sealed-outputs" || stored.FenceBy != "admin" {
+		t.Fatalf("stored sealed=%t outputs %q fence by %q, want sealed, the outputs and admin",
+			stored.Sealed, stored.Outputs, stored.FenceBy)
+	}
+}
+
+func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, _ := lockedWithState(t, s, ns)
+	released := releasedWorkspace(locked, now().Add(2*time.Hour))
+
+	for _, serial := range []int64{1, 3} {
+		fence := newFenceVersion(t, locked, "lin-b", "fence", serial, "admin", now().Add(2*time.Hour))
+
+		if err := s.FenceAndUnlock(
+			t.Context(),
+			released,
+			fence,
+			ns.Fence(),
+		); !errors.Is(
+			err,
+			workspace.ErrStaleSerial,
+		) {
+			t.Fatalf("fence at serial %d: err = %v, want ErrStaleSerial", serial, err)
+		}
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), locked.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, locked)
+
+	fence := newFenceVersion(t, locked, "lin-b", "fence", 2, "admin", now().Add(2*time.Hour))
+	if err := s.FenceAndUnlock(t.Context(), released, fence, ns.Fence()); err != nil {
+		t.Fatalf("fence at serial 2: %v", err)
 	}
 }

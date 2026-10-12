@@ -71,7 +71,7 @@ type WorkspaceLocker interface {
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
 	// ForceUnlock releases the lock whoever holds it.
-	ForceUnlock(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
+	ForceUnlock(ctx context.Context, id workspace.ID, by string) (workspace.Workspace, error)
 }
 
 // StateReader is what the state read routes and the current-state-version

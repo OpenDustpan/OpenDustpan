@@ -169,7 +169,7 @@ func (h *Handler) forceUnlockWorkspace(
 
 	holder := h.lockHolder(ctx, id)
 
-	unlocked, err := h.workspaces.ForceUnlock(ctx, id)
+	unlocked, err := h.workspaces.ForceUnlock(ctx, id, p.Subject)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
