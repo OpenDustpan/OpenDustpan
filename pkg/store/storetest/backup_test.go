@@ -1846,13 +1846,16 @@ func fakeSummaryOf(
 			continue
 		}
 
-		blobs = append(blobs, backup.BlobRef{MD5: sv.MD5, Key: sv.Content.String(), Size: sv.Size})
+		blobs = append(blobs, backup.BlobRef{MD5: sv.MD5, Key: sv.Content.String(), Size: sv.Size, Sealed: false})
 	}
 
 	for _, byStack := range data.checkpoints {
 		for id := range byStack {
 			if cp := byStack[id]; cp.BlobKey != "" {
-				blobs = append(blobs, backup.BlobRef{MD5: cp.BlobMD5, Key: cp.BlobKey.String(), Size: cp.BlobSize})
+				blobs = append(
+					blobs,
+					backup.BlobRef{MD5: cp.BlobMD5, Key: cp.BlobKey.String(), Size: cp.BlobSize, Sealed: false},
+				)
 			}
 		}
 	}

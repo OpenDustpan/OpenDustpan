@@ -756,6 +756,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Serial:          tc.serial,
 			Size:            10,
 			Force:           tc.force,
+			Sealed:          false,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
 		})
 	}

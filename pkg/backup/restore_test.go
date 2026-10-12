@@ -290,9 +290,10 @@ func writeRestoreManifest(
 		sum := md5.Sum(blobs[key]) //nolint:gosec // The test recomputes the MD5 the manifest records.
 
 		entries = append(entries, backup.ManifestBlob{
-			Key:  key,
-			Size: int64(len(blobs[key])),
-			MD5:  hex.EncodeToString(sum[:]),
+			Key:    key,
+			Size:   int64(len(blobs[key])),
+			MD5:    hex.EncodeToString(sum[:]),
+			Sealed: false,
 		})
 	}
 

@@ -491,6 +491,7 @@ func newWorkspaceService(
 		States:             st,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,

@@ -369,14 +369,15 @@ func testDeleteWorkspaceDeletesKey(t *testing.T, s Store) {
 
 	ns := newNamespace(t, s)
 
-	name, err := workspace.ParseName("network")
-	if err != nil {
-		t.Fatalf("parse workspace name: %v", err)
+	name, nameErr := workspace.ParseName("network")
+	if nameErr != nil {
+		t.Fatalf("parse workspace name: %v", nameErr)
 	}
 
 	w := workspace.Workspace{
 		CreatedAt: now(),
 		UpdatedAt: now(),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Revision:  1,

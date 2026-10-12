@@ -157,44 +157,45 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 // scopes, keyed by the workspace ID, so DeleteSecretKeysOfStack removes it.
 func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		row, err := q.GetWorkspace(ctx, db.GetWorkspaceParams{
+		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
 			Name:      ref.Name.String(),
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(getErr, pgx.ErrNoRows) {
 			return workspace.ErrNotFound
 		}
 
-		if err != nil {
-			return fmt.Errorf("select workspace: %w", err)
+		if getErr != nil {
+			return fmt.Errorf("select workspace: %w", getErr)
 		}
 
-		if err := q.DeleteSecretKeysOfStack(ctx, row.ID); err != nil {
-			return fmt.Errorf("delete secret key: %w", err)
+		if keyErr := q.DeleteSecretKeysOfStack(ctx, row.ID); keyErr != nil {
+			return fmt.Errorf("delete secret key: %w", keyErr)
 		}
 
-		if err := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); err != nil {
-			return fmt.Errorf("delete state versions: %w", err)
+		if versionsErr := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); versionsErr != nil {
+			return fmt.Errorf("delete state versions: %w", versionsErr)
 		}
 
-		n, err := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
+		n, deleteErr := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
 			Namespace: ref.Namespace.String(),
 			Name:      ref.Name.String(),
 		})
-		if err != nil {
-			return fmt.Errorf("delete workspace: %w", err)
+		if deleteErr != nil {
+			return fmt.Errorf("delete workspace: %w", deleteErr)
 		}
 
 		if n == 0 {
 			return workspace.ErrNotFound
 		}
 
-		if err := q.DeleteInventory(ctx, db.DeleteInventoryParams{
+		entry := db.DeleteInventoryParams{
 			Namespace: ref.Namespace.String(),
 			Tool:      inventoryToolOpenTofu,
 			Name:      ref.Name.String(),
-		}); err != nil {
-			return fmt.Errorf("delete inventory entry: %w", err)
+		}
+		if inventoryErr := q.DeleteInventory(ctx, entry); inventoryErr != nil {
+			return fmt.Errorf("delete inventory entry: %w", inventoryErr)
 		}
 
 		return nil

@@ -37,6 +37,10 @@ var (
 	// reordered, extended or tampered. It deliberately says no more: the
 	// error holds no key, scope or content.
 	ErrSealedContent = errors.New("cannot open sealed state")
+	// ErrSealerNotConfigured reports a sealed write on a service without a
+	// sealer. Storing plain bytes under a sealed flag would lie about the
+	// content, so the write fails instead.
+	ErrSealerNotConfigured = errors.New("sealed write without a sealer")
 )
 
 const (

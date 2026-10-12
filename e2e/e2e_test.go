@@ -10809,17 +10809,25 @@ func checkMaintenanceUnauthorized(ctx context.Context, t *testing.T, env *e2e.En
 	}
 }
 
+// sealedStateVersionAttributes decodes the MD5, serial and lineage
+// attributes of one state version document.
+type sealedStateVersionAttributes struct {
+	MD5     string `json:"md5"`
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+}
+
+// sealedStateVersionData decodes the ID and attributes of one state version
+// document.
+type sealedStateVersionData struct {
+	ID         string                       `json:"id"`
+	Attributes sealedStateVersionAttributes `json:"attributes"`
+}
+
 // sealedStateVersionDoc decodes the ID and the MD5, serial and lineage
 // attributes of one state version document.
 type sealedStateVersionDoc struct {
-	Data struct {
-		ID         string `json:"id"`
-		Attributes struct {
-			MD5     string `json:"md5"`
-			Serial  int64  `json:"serial"`
-			Lineage string `json:"lineage"`
-		} `json:"attributes"`
-	} `json:"data"`
+	Data sealedStateVersionData `json:"data"`
 }
 
 // tofuSealedStateScenario proves the sealed round trip with a key set (ADR 41

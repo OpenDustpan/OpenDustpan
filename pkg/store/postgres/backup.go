@@ -187,7 +187,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", "size",
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
-				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from",
+				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
 			},
 			orderBy: []string{"id"},
 		},

@@ -668,7 +668,7 @@ func testBackupCheckpointBlob(t *testing.T, newStore BackupFactory) {
 
 	sum, data := exportBackup(t, src)
 
-	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize}}
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize, Sealed: false}}
 	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
 		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
 	}
@@ -768,7 +768,7 @@ func assertExportBlobs(t *testing.T, s BackupStore, seed *backupSeed, sum backup
 		t.Fatalf("finalized state %s holds no blob key", current.ID)
 	}
 
-	wantBlobs := []backup.BlobRef{{MD5: current.MD5, Key: current.Content.String(), Size: current.Size}}
+	wantBlobs := []backup.BlobRef{{MD5: current.MD5, Key: current.Content.String(), Size: current.Size, Sealed: false}}
 	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
 		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
 	}

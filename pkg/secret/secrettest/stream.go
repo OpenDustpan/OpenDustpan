@@ -70,7 +70,7 @@ func (w *streamWrapper) Unwrap(_ context.Context, sealed, aad []byte) ([]byte, e
 }
 
 // streamService builds a secret Service over s with a fresh wrapper.
-func streamService(t *testing.T, s Store) (*secret.Service, *streamWrapper) {
+func streamService(t *testing.T, s Store) *secret.Service {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "local"})
@@ -81,17 +81,14 @@ func streamService(t *testing.T, s Store) (*secret.Service, *streamWrapper) {
 	wrapper := newStreamWrapper(t)
 
 	svc, err := secret.NewService(secret.Config{
-		Keys: wrapperKeys(s), Wrapper: wrapper, Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
+		Keys: s, Wrapper: wrapper, Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("secret service: %v", err)
 	}
 
-	return svc, wrapper
+	return svc
 }
-
-// wrapperKeys adapts s as the KeyStore of the stream service.
-func wrapperKeys(s Store) secret.KeyStore { return s }
 
 // streamScope returns the scope of namespace acme and id.
 func streamScope(t *testing.T, id string) secret.Scope {
@@ -122,7 +119,9 @@ func streamNamespace(t *testing.T, s Store) {
 		FailoverVersion: 1,
 	}
 
-	_ = s.CreateNamespace(t.Context(), ns)
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
 }
 
 // sealAll seals plain and returns the sealed bytes.
@@ -164,7 +163,7 @@ func testSealStreamRoundTrip(t *testing.T, s Store) {
 	t.Helper()
 	streamNamespace(t, s)
 
-	svc, _ := streamService(t, s)
+	svc := streamService(t, s)
 	scope := streamScope(t, "scope-1")
 
 	for _, size := range []int{0, 1, 100, 64 << 10, (64 << 10) + 7, 3 * (64 << 10)} {
@@ -184,7 +183,7 @@ func testSealStreamBindsScope(t *testing.T, s Store) {
 	t.Helper()
 	streamNamespace(t, s)
 
-	svc, _ := streamService(t, s)
+	svc := streamService(t, s)
 	first := streamScope(t, "scope-1")
 	second := streamScope(t, "scope-2")
 
@@ -213,7 +212,7 @@ func testSealStreamTamper(t *testing.T, s Store) {
 	t.Helper()
 	streamNamespace(t, s)
 
-	svc, _ := streamService(t, s)
+	svc := streamService(t, s)
 	scope := streamScope(t, "scope-1")
 
 	plain := bytes.Repeat([]byte("sensitive-state-value"), 8000)

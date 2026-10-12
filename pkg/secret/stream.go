@@ -1,9 +1,3 @@
-// Streaming seal of large content with the data key of a scope.
-//
-// The server seals OpenTofu state blobs in chunks, so it never holds a whole
-// state in memory. Each chunk is AES-GCM under the data key of the scope,
-// with the chunk counter and a final-chunk flag in the nonce and the
-// associated data, so a cut, reordered or extended stream fails.
 package secret
 
 import (
@@ -27,24 +21,37 @@ const (
 	streamNonceSize = 8
 	// streamFrameHeader is the 4-byte ciphertext length and the final flag.
 	streamFrameHeader = 5
+	// streamGCMNonceSize is the GCM nonce of one chunk: the stream prefix
+	// and the chunk counter.
+	streamGCMNonceSize = 12
+	// streamAADSep separates the scope binding from the stream binding in
+	// the associated data of a chunk.
+	streamAADSep = 0x00
+	// streamAADKind names stream chunks in their associated data.
+	streamAADKind = 's'
 )
 
-// streamAAD binds one chunk to its scope, stream, position and final flag.
-func streamAAD(scope Scope, streamNonce []byte, counter uint64, final bool) []byte {
+// streamLast marks whether a chunk ends the stream. It is a byte, not a
+// flag, so the chunk position and its end travel as one value.
+type streamLast byte
+
+const (
+	// streamMore marks a chunk with a successor.
+	streamMore streamLast = 0
+	// streamFinal marks the last chunk of a stream.
+	streamFinal streamLast = 1
+)
+
+// streamAAD binds one chunk to its scope, stream, position and end.
+func streamAAD(scope Scope, streamNonce []byte, counter uint64, last streamLast) []byte {
 	aad := make([]byte, 0, len(scope.aad())+1+len(streamNonce)+8+1)
 	aad = append(aad, scope.aad()...)
-	aad = append(aad, 0x00)
-	aad = append(aad, 's')
+	aad = append(aad, streamAADSep, streamAADKind)
 	aad = append(aad, streamNonce...)
 	var n [8]byte
 	binary.BigEndian.PutUint64(n[:], counter)
 	aad = append(aad, n[:]...)
-
-	if final {
-		aad = append(aad, 1)
-	} else {
-		aad = append(aad, 0)
-	}
+	aad = append(aad, byte(last))
 
 	return aad
 }
@@ -52,10 +59,11 @@ func streamAAD(scope Scope, streamNonce []byte, counter uint64, final bool) []by
 // streamNonceOf returns the GCM nonce of one chunk: the stream prefix and
 // the chunk counter, so every chunk of every stream uses one nonce.
 func streamNonceOf(streamNonce []byte, counter uint64) []byte {
-	nonce := make([]byte, 12)
+	nonce := make([]byte, streamGCMNonceSize)
 	copy(nonce, streamNonce)
 	// The counter fits in 32 bits for every state the size limit admits;
 	// the high bits stay zero.
+	//nolint:gosec // The counter fits in 32 bits for every state the size limit admits.
 	binary.BigEndian.PutUint32(nonce[8:], uint32(counter))
 
 	return nonce
@@ -75,7 +83,10 @@ func (s *Service) SealStream(ctx context.Context, scope Scope, r io.Reader) (io.
 		return nil, fmt.Errorf("generate stream nonce: %w", err)
 	}
 
-	return &sealReader{aead: aead, scope: scope, nonce: nonce, src: r}, nil
+	return &sealReader{
+		aead: aead, scope: scope, nonce: nonce, src: r,
+		counter: 0, header: nil, pending: nil, done: false, srcDone: false,
+	}, nil
 }
 
 // OpenStream opens a stream sealed by SealStream for the same scope and
@@ -87,7 +98,10 @@ func (s *Service) OpenStream(ctx context.Context, scope Scope, r io.Reader) (io.
 		return nil, err
 	}
 
-	return &openReader{aead: aead, scope: scope, src: r}, nil
+	return &openReader{
+		aead: aead, scope: scope, src: r,
+		nonce: nil, counter: 0, pending: nil, final: false, header: false,
+	}, nil
 }
 
 // SealState seals the plaintext in r with the data key of the workspace
@@ -207,31 +221,37 @@ func (r *sealReader) sealNext() error {
 	}
 
 	final := r.srcDone
-	aad := streamAAD(r.scope, r.nonce, r.counter, final)
+
+	last := streamMore
+	if final {
+		last = streamFinal
+	}
+
+	aad := streamAAD(r.scope, r.nonce, r.counter, last)
 	sealed := r.aead.Seal(nil, streamNonceOf(r.nonce, r.counter), plain, aad)
 
 	frame := make([]byte, 0, streamFrameHeader+len(sealed))
 	var ln [4]byte
+	// A sealed chunk holds one plaintext chunk plus the GCM overhead, so
+	// its length always fits the 4-byte frame field.
+	//nolint:gosec // A sealed chunk holds one plaintext chunk plus the GCM overhead.
 	binary.BigEndian.PutUint32(ln[:], uint32(len(sealed)))
 	frame = append(frame, ln[:]...)
-
-	if final {
-		frame = append(frame, 1)
-	} else {
-		frame = append(frame, 0)
-	}
-
+	frame = append(frame, byte(last))
 	frame = append(frame, sealed...)
+
+	var pending []byte
 
 	if r.header == nil {
 		head := make([]byte, 0, 1+len(r.nonce))
 		head = append(head, streamVersion)
 		head = append(head, r.nonce...)
 		r.header = head
-		r.pending = append(head, frame...)
-	} else {
-		r.pending = frame
+		pending = append(pending, head...)
 	}
+
+	pending = append(pending, frame...)
+	r.pending = pending
 
 	r.counter++
 
@@ -277,75 +297,97 @@ func (r *openReader) Read(p []byte) (int, error) {
 // openNext reads one sealed frame and buffers its plaintext. It reports
 // done when the stream ends after its final chunk.
 func (r *openReader) openNext() (bool, error) {
-	fail := func(err error) (bool, error) {
-		return false, err
-	}
-
 	if r.final {
-		// A sealed stream ends after its final chunk: any further byte is
-		// an extension.
-		var probe [1]byte
-
-		n, err := r.src.Read(probe[:])
-		if err == nil && n > 0 {
-			return fail(fmt.Errorf("%w: trailing content", ErrDecrypt))
-		}
-
-		if err != nil && err != io.EOF {
-			return fail(fmt.Errorf("read sealed stream: %w", err))
-		}
-
-		if n > 0 || err == nil {
-			return fail(fmt.Errorf("%w: trailing content", ErrDecrypt))
-		}
-
-		return true, nil
+		return r.checkTrailing()
 	}
 
 	if !r.header {
-		head := make([]byte, 1+streamNonceSize)
-		if _, err := io.ReadFull(r.src, head); err != nil {
-			return fail(fmt.Errorf("%w: sealed stream header", ErrDecrypt))
+		if err := r.readHeader(); err != nil {
+			return false, err
 		}
-
-		if head[0] != streamVersion {
-			return fail(fmt.Errorf("%w: sealed stream header", ErrDecrypt))
-		}
-
-		r.nonce = bytes.Clone(head[1:])
-		r.header = true
 	}
 
+	return r.readFrame()
+}
+
+// checkTrailing reports done when the stream ends after its final chunk. Any
+// further byte is an extension. A zero-byte read retries, so a legal empty
+// read cannot fail a valid download.
+func (r *openReader) checkTrailing() (bool, error) {
+	var probe [1]byte
+
+	for {
+		n, err := r.src.Read(probe[:])
+
+		switch {
+		case n > 0:
+			return false, fmt.Errorf("%w: trailing content", ErrDecrypt)
+		case err == nil:
+			continue
+		case err != io.EOF:
+			return false, fmt.Errorf("read sealed stream: %w", err)
+		default:
+			return true, nil
+		}
+	}
+}
+
+// readHeader reads the stream header: the format byte and the stream nonce.
+func (r *openReader) readHeader() error {
+	head := make([]byte, 1+streamNonceSize)
+	if _, err := io.ReadFull(r.src, head); err != nil {
+		return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	}
+
+	if head[0] != streamVersion {
+		return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	}
+
+	r.nonce = bytes.Clone(head[1:])
+	r.header = true
+
+	return nil
+}
+
+// readFrame reads one sealed frame and buffers its plaintext.
+func (r *openReader) readFrame() (bool, error) {
 	frame := make([]byte, streamFrameHeader)
 	if _, err := io.ReadFull(r.src, frame); err != nil {
-		return fail(fmt.Errorf("%w: sealed stream frame", ErrDecrypt))
+		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
 	}
 
 	length := binary.BigEndian.Uint32(frame[:4])
-	final := frame[4] == 1
 
-	if frame[4] != 0 && frame[4] != 1 {
-		return fail(fmt.Errorf("%w: sealed stream frame", ErrDecrypt))
+	last := streamMore
+	if frame[4] == 1 {
+		last = streamFinal
 	}
 
-	if length > uint32(streamChunkPlain)+uint32(r.aead.Overhead()) {
-		return fail(fmt.Errorf("%w: sealed stream frame", ErrDecrypt))
+	if frame[4] != 0 && frame[4] != 1 {
+		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
+	}
+
+	// A sealed frame holds one plaintext chunk plus the GCM overhead, which
+	// is non-negative, so the bound fits the comparison.
+	//nolint:gosec // The GCM overhead is non-negative, so the bound fits the comparison.
+	if uint64(length) > uint64(streamChunkPlain)+uint64(r.aead.Overhead()) {
+		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
 	}
 
 	sealed := make([]byte, length)
 	if _, err := io.ReadFull(r.src, sealed); err != nil {
-		return fail(fmt.Errorf("%w: sealed stream frame", ErrDecrypt))
+		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
 	}
 
-	aad := streamAAD(r.scope, r.nonce, r.counter, final)
+	aad := streamAAD(r.scope, r.nonce, r.counter, last)
 
 	plain, err := r.aead.Open(nil, streamNonceOf(r.nonce, r.counter), sealed, aad)
 	if err != nil {
-		return fail(fmt.Errorf("%w: sealed content", ErrDecrypt))
+		return false, fmt.Errorf("%w: sealed content", ErrDecrypt)
 	}
 
 	r.counter++
-	r.final = final
+	r.final = last == streamFinal
 	r.pending = plain
 
 	// An empty final chunk buffers no plaintext: the caller still sees EOF

@@ -657,6 +657,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      64,
@@ -689,6 +690,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2036,6 +2038,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		States:             gated,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2211,6 +2214,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         f.namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -3032,6 +3036,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		States:             fencedStates{memStore: f.store},
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -3190,6 +3195,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -3221,7 +3227,7 @@ type sealedKeys struct {
 }
 
 func newSealedKeys() *sealedKeys {
-	return &sealedKeys{keys: map[string]secret.WrappedKey{}}
+	return &sealedKeys{mu: sync.Mutex{}, keys: map[string]secret.WrappedKey{}}
 }
 
 func (m *sealedKeys) CreateKey(
@@ -3343,7 +3349,7 @@ func newSealedFixture(t *testing.T) fixture {
 	}
 
 	secrets, err := secret.NewService(secret.Config{
-		Keys: newSealedKeys(), Wrapper: newSealedWrapper(t), Namespaces: namespaces, Now: nil,
+		Keys: newSealedKeys(), Wrapper: newSealedWrapper(t), Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
 	})
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
@@ -3392,15 +3398,29 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	t.Parallel()
 
 	f := newSealedFixture(t)
+
+	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
+	sensitive := "s3cr3t-state-attribute"
+	outputValue := "s3cr3t-output-value"
+
+	sv := uploadSealedState(t, f, content, outputValue)
+
+	assertBlobSealed(t, f, sv, sensitive)
+	assertOutputsColumnSealed(t, f, sv, outputValue)
+	assertDownloadRoundTrip(t, f, sv, content)
+	assertCurrentOutputsPlain(t, f, outputValue)
+}
+
+// uploadSealedState locks the fixture workspace and uploads content with one
+// sensitive output, returning the sealed version.
+func uploadSealedState(t *testing.T, f fixture, content, outputValue string) workspace.StateVersion {
+	t.Helper()
+
 	ctx := t.Context()
 
 	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
 	}
-
-	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
-	sensitive := "s3cr3t-state-attribute"
-	outputValue := "s3cr3t-output-value"
 
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
 		Lineage: "l1",
@@ -3422,28 +3442,44 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 		t.Fatal("uploaded version reads unsealed, want sealed")
 	}
 
-	// The blob store holds sealed bytes only.
+	return sv
+}
+
+// assertBlobSealed proves the blob store holds sealed bytes only: no
+// sensitive attribute value.
+func assertBlobSealed(t *testing.T, f fixture, sv workspace.StateVersion, sensitive string) {
+	t.Helper()
+
+	ctx := t.Context()
+
 	raw, err := f.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		t.Fatalf("get blob: %v", err)
 	}
 
-	sealed, err := io.ReadAll(raw)
-	if err != nil {
-		t.Fatalf("read blob: %v", err)
+	sealed, readErr := io.ReadAll(raw)
+	closeErr := raw.Close()
+
+	if readErr != nil {
+		t.Fatalf("read blob: %v", readErr)
 	}
 
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close blob: %v", err)
+	if closeErr != nil {
+		t.Fatalf("close blob: %v", closeErr)
 	}
 
 	if bytes.Contains(sealed, []byte(sensitive)) {
 		t.Fatal("blob store holds the sensitive attribute value, want sealed bytes only")
 	}
+}
 
-	// The outputs column holds sealed bytes only. The mem store returns the
-	// stored version, so its outputs are the sealed document.
-	stored, err := f.store.GetStateVersion(ctx, sv.ID)
+// assertOutputsColumnSealed proves the outputs column holds the sealed
+// document: no sensitive output value. The mem store returns the stored
+// version, so its outputs are the sealed document.
+func assertOutputsColumnSealed(t *testing.T, f fixture, sv workspace.StateVersion, outputValue string) {
+	t.Helper()
+
+	stored, err := f.store.GetStateVersion(t.Context(), sv.ID)
 	if err != nil {
 		t.Fatalf("get stored version: %v", err)
 	}
@@ -3451,28 +3487,41 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	if bytes.Contains(stored.Outputs, []byte(outputValue)) {
 		t.Fatal("outputs column holds the sensitive output value, want sealed bytes only")
 	}
+}
 
-	// The download answers the same bytes the CLI sent.
+// assertDownloadRoundTrip proves the download answers the same bytes the CLI
+// sent.
+func assertDownloadRoundTrip(t *testing.T, f fixture, sv workspace.StateVersion, content string) {
+	t.Helper()
+
+	ctx := t.Context()
+
 	r, err := f.svc.Open(ctx, sv)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read download: %v", err)
+	got, readErr := io.ReadAll(r)
+	closeErr := r.Close()
+
+	if readErr != nil {
+		t.Fatalf("read download: %v", readErr)
 	}
 
-	if err := r.Close(); err != nil {
-		t.Fatalf("close download: %v", err)
+	if closeErr != nil {
+		t.Fatalf("close download: %v", closeErr)
 	}
 
 	if string(got) != content {
 		t.Fatalf("download = %q, want %q", got, content)
 	}
+}
 
-	// The current version carries plain outputs.
-	current, err := f.svc.Current(ctx, f.ws.ID)
+// assertCurrentOutputsPlain proves the current version carries plain outputs.
+func assertCurrentOutputsPlain(t *testing.T, f fixture, outputValue string) {
+	t.Helper()
+
+	current, err := f.svc.Current(t.Context(), f.ws.ID)
 	if err != nil {
 		t.Fatalf("current: %v", err)
 	}
@@ -3482,9 +3531,9 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	}
 }
 
-// TestSealedDownloadTamper proves a changed byte, a dropped tail and an
-// extension of a sealed blob each fail the download with an error that holds
-// no key, scope or content.
+// TestSealedDownloadTamper proves a changed byte, a dropped tail, swapped
+// chunks and an extension of a sealed blob each fail the download with an
+// error that holds no key, scope or content.
 func TestSealedDownloadTamper(t *testing.T) {
 	t.Parallel()
 
@@ -3500,6 +3549,7 @@ func TestSealedDownloadTamper(t *testing.T) {
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
 		Lineage: "l1",
 		MD5:     sum(content),
+		Outputs: nil,
 		Serial:  1,
 		Force:   false,
 	})
@@ -3512,19 +3562,42 @@ func TestSealedDownloadTamper(t *testing.T) {
 		t.Fatalf("upload: %v", err)
 	}
 
+	sealed := readSealedBlob(t, f, sv)
+
+	for name, bad := range sealedMutants(t, sealed) {
+		assertTamperedDownloadFails(t, &tamperCase{f: f, sv: sv, name: name, bad: bad})
+	}
+}
+
+// readSealedBlob returns the sealed bytes the upload stored.
+func readSealedBlob(t *testing.T, f fixture, sv workspace.StateVersion) []byte {
+	t.Helper()
+
+	ctx := t.Context()
+
 	raw, err := f.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		t.Fatalf("get blob: %v", err)
 	}
 
-	sealed, err := io.ReadAll(raw)
-	if err != nil {
-		t.Fatalf("read blob: %v", err)
+	sealed, readErr := io.ReadAll(raw)
+	closeErr := raw.Close()
+
+	if readErr != nil {
+		t.Fatalf("read blob: %v", readErr)
 	}
 
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close blob: %v", err)
+	if closeErr != nil {
+		t.Fatalf("close blob: %v", closeErr)
 	}
+
+	return sealed
+}
+
+// sealedMutants returns the tampered blobs the download must refuse: a
+// changed byte, a dropped tail, swapped chunks and an extension.
+func sealedMutants(t *testing.T, sealed []byte) map[string][]byte {
+	t.Helper()
 
 	changed := bytes.Clone(sealed)
 	changed[len(changed)/2] ^= 1
@@ -3535,41 +3608,101 @@ func TestSealedDownloadTamper(t *testing.T) {
 		"extended":     append(bytes.Clone(sealed), 0x00),
 	}
 
-	for name, bad := range mutants {
-		if err := f.blobs.Delete(ctx, sv.Content); err != nil {
-			t.Fatalf("%s: delete blob: %v", name, err)
-		}
+	if swapped := swapSealedFrames(sealed); swapped != nil {
+		mutants["swapped chunks"] = swapped
+	} else {
+		t.Fatal("sealed blob holds less than two chunks, want at least two for the swap case")
+	}
 
-		if err := f.blobs.Put(ctx, sv.Content, bytes.NewReader(bad)); err != nil {
-			t.Fatalf("%s: rewrite blob: %v", name, err)
-		}
+	return mutants
+}
 
-		r, err := f.svc.Open(ctx, sv)
-		if err != nil {
-			t.Fatalf("%s: open: %v", name, err)
-		}
+// tamperCase groups one tampered blob with the version to open it as.
+type tamperCase struct {
+	f    fixture
+	sv   workspace.StateVersion
+	name string
+	bad  []byte
+}
 
-		_, err = io.ReadAll(r)
-		closeErr := r.Close()
+// assertTamperedDownloadFails proves the download of a tampered blob fails
+// with ErrSealedContent and no key, scope or content in the error.
+func assertTamperedDownloadFails(t *testing.T, c *tamperCase) {
+	t.Helper()
 
-		if err == nil {
-			t.Errorf("%s: tampered download succeeded, want ErrSealedContent", name)
+	ctx := t.Context()
 
-			continue
-		}
+	if err := c.f.blobs.Delete(ctx, c.sv.Content); err != nil {
+		t.Fatalf("%s: delete blob: %v", c.name, err)
+	}
 
-		if !errors.Is(err, workspace.ErrSealedContent) {
-			t.Errorf("%s: err = %v, want ErrSealedContent", name, err)
-		}
+	if err := c.f.blobs.Put(ctx, c.sv.Content, bytes.NewReader(c.bad)); err != nil {
+		t.Fatalf("%s: rewrite blob: %v", c.name, err)
+	}
 
-		for _, leaked := range []string{"s3cr3t", "acme", f.ws.ID.String(), "kek"} {
-			if strings.Contains(err.Error(), leaked) {
-				t.Errorf("%s: error %q holds %q, want no key, scope or content", name, err, leaked)
-			}
-		}
+	r, err := c.f.svc.Open(ctx, c.sv)
+	if err != nil {
+		t.Fatalf("%s: open: %v", c.name, err)
+	}
 
-		if closeErr != nil && !errors.Is(closeErr, workspace.ErrSealedContent) {
-			t.Logf("%s: close: %v", name, closeErr)
+	_, err = io.ReadAll(r)
+	closeErr := r.Close()
+
+	if err == nil {
+		t.Errorf("%s: tampered download succeeded, want ErrSealedContent", c.name)
+
+		return
+	}
+
+	if !errors.Is(err, workspace.ErrSealedContent) {
+		t.Errorf("%s: err = %v, want ErrSealedContent", c.name, err)
+	}
+
+	for _, leaked := range []string{"s3cr3t", "acme", c.f.ws.ID.String(), "kek"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("%s: error %q holds %q, want no key, scope or content", c.name, err, leaked)
 		}
 	}
+
+	if closeErr != nil && !errors.Is(closeErr, workspace.ErrSealedContent) {
+		t.Logf("%s: close: %v", c.name, closeErr)
+	}
+}
+
+// swapSealedFrames swaps the first two chunks of a sealed blob, or returns
+// nil when the blob holds less than two chunks. The sealed stream is one
+// version byte and an 8-byte nonce, then frames of a 4-byte big-endian
+// ciphertext length, a final-chunk flag byte and the ciphertext.
+func swapSealedFrames(sealed []byte) []byte {
+	const header = 1 + 8
+
+	frames := [][]byte{}
+	rest := sealed[header:]
+
+	for len(rest) > 0 {
+		if len(rest) < 5 {
+			return nil
+		}
+
+		length := int(uint32(rest[0])<<24 | uint32(rest[1])<<16 | uint32(rest[2])<<8 | uint32(rest[3]))
+		if len(rest) < 5+length {
+			return nil
+		}
+
+		frames = append(frames, rest[:5+length])
+		rest = rest[5+length:]
+	}
+
+	if len(frames) < 2 {
+		return nil
+	}
+
+	frames[0], frames[1] = frames[1], frames[0]
+
+	out := append([]byte{}, sealed[:header]...)
+	for _, f := range frames {
+		out = append(out, f...)
+	}
+
+	return out
 }

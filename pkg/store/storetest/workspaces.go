@@ -289,6 +289,7 @@ func newPendingVersion(
 		Serial:          in.serial,
 		Size:            0,
 		Force:           in.force,
+		Sealed:          false,
 		RestoredFrom:    "",
 	}
 }
@@ -2652,8 +2653,9 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 
 	finalized := finalizedVersion(sealed, now().Add(2*time.Hour), "v1")
 
-	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
-		t.Fatalf("finalize sealed state: %v", err)
+	finalizeErr := finalizeRecorded(t, s, ns.Fence(), finalized)
+	if finalizeErr != nil {
+		t.Fatalf("finalize sealed state: %v", finalizeErr)
 	}
 
 	current, err := s.CurrentStateVersion(t.Context(), w.ID)

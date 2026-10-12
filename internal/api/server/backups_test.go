@@ -122,6 +122,7 @@ func newBackupFixture(
 		Exporter:    exporter,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
+		StateOpener: nil,
 		Target:      stores.target,
 		TargetName:  "dir:test",
 		Now:         now,
