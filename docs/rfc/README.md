@@ -106,7 +106,7 @@ both together.
 | [55](0055-environment-promotion.md) | Environment promotion and comparison | draft |
 | [56](0056-upgrade-pull-requests.md) | Upgrade pull requests for providers, modules and blueprints | draft |
 | [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft |
-| [58](0058-large-request-limits.md) | Bound memory of large request bodies | draft |
+| [58](0058-large-request-limits.md) | Bound memory of large request bodies | accepted |
 | [59](0059-installation-api.md) | Shape of the installation API served by api/server | draft |
 | [60](0060-maintenance-mode-visibility-wait.md) | Wait until every instance sees maintenance mode before a restore applies | draft |
 | [61](0061-docs-site-and-landing-page.md) | A docs site and a landing page | discussing |

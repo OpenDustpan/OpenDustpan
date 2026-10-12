@@ -1,13 +1,14 @@
 ---
 rfc: 58
 title: Bound memory of large request bodies
-status: draft
+status: accepted
+adr: 45
 created: 2026-10-11
 ---
 
 # RFC 58. Bound memory of large request bodies
 
-Status: draft.
+Status: accepted as ADR 45.
 
 ## Problem
 
@@ -41,4 +42,6 @@ What measured checkpoint and batch sizes need higher limits in practice.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted on 2026-10-12 ([ADR 45](../adr/0045-large-bodies-stream-to-blobs.md)).
+Option 2 shipped in #241. ADR 45 records it and adds streaming to blob
+storage for both tools, so the limits become a policy.
