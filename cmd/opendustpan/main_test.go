@@ -232,7 +232,21 @@ func seedMainKey(t *testing.T, path string, key []byte) {
 		}
 	}()
 
-	err = st.CreateNamespace(t.Context(), namespace.Namespace{
+	seedWrappedKey(t, st, key)
+}
+
+// keySeedStore is what seedWrappedKey needs from a store adapter.
+type keySeedStore interface {
+	namespace.Store
+	secret.KeyStore
+}
+
+// seedWrappedKey stores one wrapped key with key in st, through the secret
+// service, as a server that encrypted one value does.
+func seedWrappedKey(t *testing.T, st keySeedStore, key []byte) {
+	t.Helper()
+
+	err := st.CreateNamespace(t.Context(), namespace.Namespace{
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      "local",
