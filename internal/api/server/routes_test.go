@@ -173,17 +173,16 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    authn,
-		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          service,
-		Restores:         restores,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           st,
-		KeyEncryptionKey: false,
+		Authenticator: authn,
+		Authorizer:    authz,
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       service,
+		Restores:      restores,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        st,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -723,17 +722,16 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
-		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           nil,
-		KeyEncryptionKey: false,
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	}
 
 	cases := []struct {
@@ -853,17 +851,16 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    stubAuthenticator{},
-		Authorizer:       stubAuthorizer{},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          service,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           nil,
-		KeyEncryptionKey: false,
+		Authenticator: stubAuthenticator{},
+		Authorizer:    stubAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       service,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -874,17 +871,16 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:    stubAuthenticator{},
-		Authorizer:       stubAuthorizer{},
-		Logger:           slog.New(slog.DiscardHandler),
-		Namespaces:       namespaces,
-		Backups:          nil,
-		Restores:         nil,
-		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
-		Metrics:          stubMetrics{},
-		Version:          "test",
-		Schema:           nil,
-		KeyEncryptionKey: false,
+		Authenticator: stubAuthenticator{},
+		Authorizer:    stubAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    namespaces,
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
