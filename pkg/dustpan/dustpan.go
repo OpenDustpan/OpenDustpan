@@ -650,16 +650,16 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // check that refuses a key-encryption key that opens less than every wrapped
 // key in the database (ADR 23), so a program that embeds the server cannot
 // start with the wrong key. It then marks every running backup failed: the
-// server stopped during it (ADR 30 decision 9).
+// server stopped during it (ADR 30 decision 9). When ctx is done before
+// these start-up steps end, Run returns nil: the caller asked it to stop,
+// and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
-		return err
-	}
-
-	if s.backupRegistry != nil {
-		if err := s.backupRegistry.FailRunningBackups(ctx, s.now().UTC(), backupStoppedText); err != nil {
-			return fmt.Errorf("fail running backups: %w", err)
+	if err := s.startUp(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
 		}
+
+		return err
 	}
 
 	srv := &http.Server{
@@ -714,6 +714,26 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// startUp runs the start-up steps of Run in order: the key check of ADR 23,
+// then marking every running backup failed (ADR 30 decision 9). The store
+// adapters already name the backup step in their error text, so startUp
+// adds no second prefix.
+func (s *Server) startUp(ctx context.Context) error {
+	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
+		return err
+	}
+
+	if s.backupRegistry == nil {
+		return nil
+	}
+
+	return s.backupRegistry.FailRunningBackups(
+		ctx,
+		s.now().UTC(),
+		backupStoppedText,
+	)
 }
 
 // isLoopbackListenAddr reports whether addr binds only the loopback
