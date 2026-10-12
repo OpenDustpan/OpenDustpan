@@ -87,24 +87,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+// lockEntry is the lock of a unit as the console reads it: the subject of
+// the principal that holds it, the take time in Unix seconds as lastChange
+// is, and the tool's own word for what holds it. It never holds a token, a
+// secret or a capability path: the projection stores only the subject.
+type lockEntry struct {
+	Holder    string `json:"holder"`
+	Since     int64  `json:"since"`
+	Operation string `json:"operation"`
+}
+
 // unitEntry is one unit as the console reads it. Tool is the tool label of
 // the glossary ("Pulumi" or "OpenTofu"); Reference is the unit reference
 // with the stored lowercase tool code ("pulumi:acme/web/prod"). Name is the
 // tool's own name for the unit. LastChange is the time of the unit's last
 // change in Unix seconds, as lastUpdate is in the stack list. Status is
-// omitted when unknown; ResourceCount is omitted when unknown.
+// omitted when unknown; ResourceCount is omitted when unknown. Lock is
+// omitted when the unit is not locked: a lock is a flag, not a status, so a
+// unit can hold one in any status.
 //
 // Contract: never remove or rename these fields. The console reads only this
 // API, and it ships on its own schedule, so a released console keeps working
 // only while every field stays.
 type unitEntry struct {
-	Tool          string `json:"tool"`
-	Reference     string `json:"reference"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	LastChange    int64  `json:"lastChange"`
-	Status        string `json:"status,omitempty"`
-	ResourceCount *int64 `json:"resourceCount,omitempty"`
+	Tool          string     `json:"tool"`
+	Reference     string     `json:"reference"`
+	Namespace     string     `json:"namespace"`
+	Name          string     `json:"name"`
+	LastChange    int64      `json:"lastChange"`
+	Status        string     `json:"status,omitempty"`
+	ResourceCount *int64     `json:"resourceCount,omitempty"`
+	Lock          *lockEntry `json:"lock,omitempty"`
 }
 
 // listUnitsResponse is the answered document of the unit list.
@@ -139,7 +152,18 @@ func toUnitEntry(e coreinventory.Entry) unitEntry {
 		LastChange:    e.LastChanged.Unix(),
 		Status:        e.Status,
 		ResourceCount: e.ResourceCount,
+		Lock:          toLockEntry(e.Lock),
 	}
+}
+
+// toLockEntry maps one projection lock to its wire shape, or nil when the
+// unit is not locked, so the field stays omitted.
+func toLockEntry(lock *coreinventory.Lock) *lockEntry {
+	if lock == nil {
+		return nil
+	}
+
+	return &lockEntry{Holder: lock.Holder, Since: lock.Since.Unix(), Operation: lock.Operation}
 }
 
 // listUnits answers GET /api/inventory/units with the entries of the
