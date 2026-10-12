@@ -132,12 +132,6 @@ func TestDecodeEntriesRefusesInvalidBatches(t *testing.T) {
 			want:       pulumijournal.ErrMissingMember,
 		},
 		{
-			name:       "missing entries member",
-			body:       `{}`,
-			negotiated: 1,
-			want:       pulumijournal.ErrBatchShape,
-		},
-		{
 			name:       "capitalized entries member",
 			body:       `{"Entries":[` + validEntry + `]}`,
 			negotiated: 1,
@@ -179,6 +173,22 @@ func TestDecodeEntriesRefusesInvalidBatches(t *testing.T) {
 	}
 }
 
+// TestDecodeEntriesAcceptsEmptyBatch checks that a batch without entries is empty.
+// The upstream batch type is Entries []JournalEntry with the tag json:"entries,omitempty",
+// so the CLI sends {} for an empty batch.
+func TestDecodeEntriesAcceptsEmptyBatch(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`{}`, `{"entries":null}`, `{"entries":[]}`} {
+		got, err := decodeAll(body, 1)
+		if err != nil {
+			t.Fatalf("body %s: %v", body, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("body %s: got %d entries, want 0", body, len(got))
+		}
+	}
+}
+
 // TestDecodeEntriesRejectsBatchShape checks a body that is not an object with an entries array.
 func TestDecodeEntriesRejectsBatchShape(t *testing.T) {
 	t.Parallel()
@@ -215,6 +225,7 @@ func FuzzDecodeEntries(f *testing.F) {
 		`{"entries":[` + validEntry + `]}`,
 		`{"entries":[]}`,
 		`{}`,
+		`{"entries":null}`,
 		`[]`,
 		`{"Entries":[` + validEntry + `]}`,
 		`{"entries":[{"version":0,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}]}`,

@@ -55,9 +55,10 @@ type entryFields struct {
 // stores nothing (ADR 43, decision 5.5). The size bounds of a batch come in
 // item 13, and the 413 answer for a batch that is too large comes in item 9.
 //
-// The body is never held in full (ADR 43, decision 8.6). The batch refuses an
-// unknown or repeated batch member, a missing entries member, data after the
-// closing brace, and an entry with an unknown member or a missing required one.
+// The body is never held in full (ADR 43, decision 8.6). A missing entries
+// member, or a null one, is an empty batch: the upstream batch tags entries
+// omitempty. The batch refuses an unknown or repeated batch member, data after
+// the closing brace, and an entry with an unknown member or a missing required one.
 func DecodeEntries(r io.Reader, negotiated int, fn func(JournalEntry) error) error {
 	dec := jsontext.NewDecoder(r)
 	if err := readDelim(dec, '{'); err != nil {
@@ -79,20 +80,27 @@ func DecodeEntries(r io.Reader, negotiated int, fn func(JournalEntry) error) err
 			return fmt.Errorf("pulumijournal: repeated batch member: %w", ErrBatchShape)
 		}
 		seen = true
-		if err := decodeArray(dec, negotiated, fn); err != nil {
+		if err := decodeEntriesValue(dec, negotiated, fn); err != nil {
 			return err
 		}
 	}
 	if err := readDelim(dec, '}'); err != nil {
 		return err
 	}
-	if !seen {
-		return fmt.Errorf("pulumijournal: batch has no %s member: %w", batchEntriesKey, ErrBatchShape)
-	}
 	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("pulumijournal: data after the batch: %w", ErrBatchShape)
 	}
 	return nil
+}
+
+// decodeEntriesValue reads the value of the entries member. The upstream batch
+// tags entries omitempty, so an empty batch has no entries member, and null is
+// read as no entries.
+func decodeEntriesValue(dec *jsontext.Decoder, negotiated int, fn func(JournalEntry) error) error {
+	if dec.PeekKind() == 'n' {
+		return readDelim(dec, 'n')
+	}
+	return decodeArray(dec, negotiated, fn)
 }
 
 // decodeArray reads the entries array one entry at a time.
