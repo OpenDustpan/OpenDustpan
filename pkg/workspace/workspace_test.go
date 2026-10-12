@@ -475,6 +475,30 @@ func (m *memStore) RecordUploadAttempt(
 	return superseded, nil
 }
 
+// SaveSensitiveMarks implements workspace.StateStore: it stores the secret
+// paths of the json-state rendering of id. It works on a pending and on a
+// finalized version.
+func (m *memStore) SaveSensitiveMarks(
+	_ context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	sv, ok := m.versions[id]
+	if !ok {
+		return workspace.ErrStateVersionNotFound
+	}
+
+	sv.SensitiveMarks = marks
+	m.versions[id] = sv
+
+	return nil
+}
+
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the pending versions of the workspace whose capability expired
 // before before, oldest expiry first, and returns them.

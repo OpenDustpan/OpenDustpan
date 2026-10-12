@@ -525,6 +525,18 @@ func (s *Store) RecordUploadAttempt(
 	return s.inner.RecordUploadAttempt(ctx, id, key, fence)
 }
 
+// SaveSensitiveMarks stores the secret paths of one version, unless a fault
+// fires first.
+func (s *Store) SaveSensitiveMarks(
+	ctx context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "SaveSensitiveMarks"); err != nil {
+		return err
+	}
+
+	return s.inner.SaveSensitiveMarks(ctx, id, marks, fence)
+}
+
 // DeleteExpiredPendingStateVersions deletes the expired pending versions,
 // unless a fault fires first.
 func (s *Store) DeleteExpiredPendingStateVersions(

@@ -136,6 +136,7 @@ type StateVersion struct {
 	FinalizedAtMs     int64
 	RestoredFrom      string
 	Sealed            bool
+	SensitiveMarks    []byte
 }
 
 type Update struct {
