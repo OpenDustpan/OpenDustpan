@@ -31,6 +31,12 @@ package pulumijournal
 //   - deletedWith: lines 376 to 377.
 //   - parent: undangleParentResources, lines 391 to 402.
 //
+// The URN normalization (normalize.go) also reads and writes these members:
+//
+//   - urn and aliases: NormalizeURNReferences and withUpdatedAliases (state
+//     builder, withUpdatedAliases).
+//   - provider: withAllUpdatedDependencies, which calls updateProviderRef.
+//
 // The features read the other members (resourceView). Upstream reads the same
 // members of a state in GenerateDeployment through ApplyFeatures.
 type linkFields struct {
@@ -40,6 +46,8 @@ type linkFields struct {
 	PropertyDependencies map[string][]string `json:"propertyDependencies,omitempty"`
 	ReplaceWith          []string            `json:"replaceWith,omitempty"`
 	DeletedWith          string              `json:"deletedWith,omitempty"`
+	Aliases              []string            `json:"aliases,omitempty"`
+	Provider             string              `json:"provider,omitempty"`
 }
 
 // rebuildLinks rebuilds the dependencies of one resource, the way the upstream
