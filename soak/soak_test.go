@@ -1,6 +1,10 @@
 package soak_test
 
 import (
+	"bytes"
+	"encoding/csv"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -333,5 +337,95 @@ func TestSummaryNamesVerdictPerMetric(t *testing.T) {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary lacks %q:\n%s", want, summary)
 		}
+	}
+}
+
+func TestWriteCSVWritesHeaderAndEmptyMissingValues(t *testing.T) {
+	t.Parallel()
+
+	sample := soakSample(10, 20, 8, 1)
+	sample.ErrorRate = 0.125
+
+	var out bytes.Buffer
+	if err := soak.WriteCSV(&out, []soak.Sample{sample}); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+
+	records, err := csv.NewReader(&out).ReadAll()
+	if err != nil {
+		t.Fatalf("read csv: %v", err)
+	}
+
+	if len(records) != 2 {
+		t.Fatalf("csv has %d records, want header and one row", len(records))
+	}
+
+	wantHeader := "elapsed_s,goroutines,heap_bytes,fds,db_conns,runs,failures,error_rate"
+	if got := strings.Join(records[0], ","); got != wantHeader {
+		t.Fatalf("header = %q, want %q", got, wantHeader)
+	}
+
+	row := records[1]
+	if row[4] != "" {
+		t.Fatalf("db_conns = %q, want empty for a missing value", row[4])
+	}
+
+	if row[5] != "8" || row[6] != "1" || row[7] != "0.1250" {
+		t.Fatalf("runs, failures, error_rate = %q, %q, %q", row[5], row[6], row[7])
+	}
+}
+
+func TestWriteReportWritesCSVAndSummary(t *testing.T) {
+	t.Parallel()
+
+	samples := []soak.Sample{
+		soakSample(0, 20, 8, 0),
+		soakSample(10, 20, 8, 0),
+		soakSample(20, 20, 8, 0),
+		soakSample(30, 20, 8, 0),
+		soakSample(40, 20, 8, 0),
+		soakSample(50, 20, 8, 0),
+	}
+
+	assessed, err := soak.Assess("sqlite", samples)
+	if err != nil {
+		t.Fatalf("assess: %v", err)
+	}
+
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "samples.csv")
+	summaryPath := filepath.Join(dir, "verdict.md")
+
+	if err := soak.WriteReport(csvPath, summaryPath, samples, assessed); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+
+	csvData, err := os.ReadFile(csvPath)
+	if err != nil {
+		t.Fatalf("read csv: %v", err)
+	}
+
+	if !strings.HasPrefix(string(csvData), "elapsed_s,") {
+		t.Fatalf("csv does not start with the header: %q", csvData)
+	}
+
+	summary, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+
+	if !strings.Contains(string(summary), "Overall: PASS") {
+		t.Fatalf("summary does not report the verdict:\n%s", summary)
+	}
+}
+
+func TestWriteReportFailsWhenDirectoryIsMissing(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "no-such-dir", "samples.csv")
+
+	err := soak.WriteReport(missing, missing, nil, soak.Assessment{})
+	if err == nil {
+		t.Fatal("write report into a missing directory returned no error")
 	}
 }

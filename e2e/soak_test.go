@@ -244,14 +244,9 @@ func (d *soakDriver) startPulumiWorkers(ctx context.Context, t *testing.T, insta
 	t.Helper()
 
 	for i := range count {
-		dir, err := os.MkdirTemp("", "soak-pulumi-*")
-		if err != nil {
-			t.Fatalf("soak: make pulumi work dir: %v", err)
-		}
-
 		worker := soakPulumiWorker{
 			install: install,
-			dir:     dir,
+			dir:     t.TempDir(),
 			stack:   fmt.Sprintf("%s/%s/soak-pulumi-%d", e2e.Namespace, e2e.Project, i),
 		}
 
@@ -328,12 +323,7 @@ func (d *soakDriver) startTofuWorkers(ctx context.Context, t *testing.T, install
 	}
 
 	for i := range count {
-		dir, err := os.MkdirTemp("", "soak-tofu-*")
-		if err != nil {
-			t.Fatalf("soak: make tofu work dir: %v", err)
-		}
-
-		worker := soakTofuWorker{install: install, dir: dir, workspace: fmt.Sprintf("soak-tofu-%d", i)}
+		worker := soakTofuWorker{install: install, dir: t.TempDir(), workspace: fmt.Sprintf("soak-tofu-%d", i)}
 
 		soakWriteFile(t, worker.dir, "main.tf", soakTofuConfig(d.env.Host(), worker.workspace, "hello-0"))
 		d.setupTofu(ctx, t, worker)
