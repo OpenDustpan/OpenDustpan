@@ -444,13 +444,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	// With journaling off, the CLI gets checkpoints whatever it offers.
-	offered := offer.JournalVersion
-	if h.disablePulumiJournaling {
-		offered = 0
-	}
-
-	journal := negotiateJournalVersion(r.UserAgent(), offered, maxSupportedJournalVersion)
+	journal := h.journalVersionFor(r.UserAgent(), offer)
 
 	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
 	if err != nil {
@@ -465,6 +459,16 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		Version:         int(started.Update.Version),
 		JournalVersion:  int(started.Update.JournalVersion),
 	})
+}
+
+// journalVersionFor answers the journal version of a start. With journaling
+// off, the CLI gets checkpoints whatever it offers, so the gate does not run.
+func (h *Handler) journalVersionFor(userAgent string, offer startUpdateOffer) int {
+	if h.disablePulumiJournaling {
+		return 0
+	}
+
+	return negotiateJournalVersion(userAgent, offer.JournalVersion, h.supportedJournal)
 }
 
 // startOffer reads the start-update body. An empty body offers no journal

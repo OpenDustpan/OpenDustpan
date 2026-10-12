@@ -113,3 +113,31 @@ func TestNegotiateJournalVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestJournalVersionForDisabled checks that a start answers 0 when journaling
+// is off, whatever the gate would decide. The supported version is raised to 2
+// so that the gate would answer 2 without the setting, which shows that the
+// setting decides the answer.
+func TestJournalVersionForDisabled(t *testing.T) {
+	t.Parallel()
+
+	const userAgent = "pulumi-cli/1 (v3.268.0; linux)"
+	offer := startUpdateOffer{JournalVersion: 2}
+
+	// A handler is built field by field, so each field is set on purpose.
+	enabled := new(Handler)
+	enabled.disablePulumiJournaling = false
+	enabled.supportedJournal = 2
+
+	disabled := new(Handler)
+	disabled.disablePulumiJournaling = true
+	disabled.supportedJournal = 2
+
+	if got := enabled.journalVersionFor(userAgent, offer); got != 2 {
+		t.Fatalf("journaling on: journalVersionFor = %d, want 2", got)
+	}
+
+	if got := disabled.journalVersionFor(userAgent, offer); got != 0 {
+		t.Fatalf("journaling off: journalVersionFor = %d, want 0", got)
+	}
+}

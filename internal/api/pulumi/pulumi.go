@@ -122,6 +122,9 @@ type Handler struct {
 	// disablePulumiJournaling turns journaling off for every start (ADR 43,
 	// decision 1.2).
 	disablePulumiJournaling bool
+	// supportedJournal is the highest journal version that a start may answer.
+	// It is maxSupportedJournalVersion in production.
+	supportedJournal int
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -162,6 +165,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		deltaCutoff:    cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
+		supportedJournal:        maxSupportedJournalVersion,
 	}
 
 	h.routes = h.buildRoutes()
