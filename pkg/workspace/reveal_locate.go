@@ -77,11 +77,9 @@ type walkResult struct {
 // same rule as revealFromResource. A visitor that returns errStopWalk ends
 // the walk at once with found set: only passes that run after pass 0 has
 // validated the whole state may return it.
-//
-//nolint:nonamedreturns // S3 names these results as the locate contract.
 func locateInstance(
 	dec *jsontext.Decoder, target revealTarget, visit instanceVisitor,
-) (fields map[string]any, found bool, err error) {
+) (map[string]any, bool, error) {
 	res := new(walkResult)
 	res.fields = map[string]any{}
 
