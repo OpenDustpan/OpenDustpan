@@ -13,12 +13,35 @@ the action `unit:decrypt` and the kind `reveal`.
 The Pulumi CLI calls them when a person asks it to show secrets, for example
 `pulumi config --show-secrets`.
 
+The routes that answer a secret value to a tool write one entry each with the
+kind `tool-operation`, so a reader never confuses a tool that needed secrets
+with a person who asked to see one:
+
+- The Pulumi `decrypt` and `batch-decrypt` routes write one entry each with
+  the action `unit:decrypt`, the count of values in `valueCount` and an empty
+  `version` and value path.
+- The OpenTofu state download writes one entry with the action
+  `unit:read-secrets`, the state version in `version` and an empty value
+  path.
+- The OpenTofu route for one output writes one entry with the action
+  `unit:read-secrets`, the state version in `version` and the value path
+  `/outputs/<name>` when the output is sensitive. A non-sensitive output
+  writes no entry.
+
+The server cannot see who runs a CLI command, so a person who runs
+`tofu state pull` makes a `tool-operation` entry.
+A failed append on a route that answers a secret value answers 500 with no
+secret value, so a value without its entry never reaches the client.
+The two `log-decryption` routes answer no secret value, so they keep
+answering 204 when the append fails.
+
 An entry holds these fields:
 
 - Who: `subject`, `idpSubject` (empty until an identity provider exists),
   `tokenID` (empty until tokens have IDs).
 - What: `action`, `object` (a unit reference or a namespace), `version` and
-  `valuePath` (for a state read, else empty).
+  `valuePath` (for a state read, else empty), `valueCount` (the count of
+  secret values of a decrypt call, else omitted).
 - When: `atMs` (UTC, Unix milliseconds).
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
@@ -31,6 +54,10 @@ An entry holds these fields:
   (ADR 32).
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
+  When `valueCount` is set, the encoding appends one more field after
+  `prevHash`: the text `value_count=` with the decimal count. When it is
+  omitted, the encoding is unchanged, so an entry written before the count
+  keeps its hash.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
@@ -83,8 +110,9 @@ Protect the database and its backups as the guide for backups says.
 
 A failed append writes a log line with no secret and no value and counts
 `dustpan_audit_append_failures_total`.
-The routes still answer, so the counter is the only record of the lost
-entry besides the log line.
+On the two `log-decryption` routes the call still answers, so the counter is
+the only record of the lost entry besides the log line.
+On a route that answers a secret value the call answers 500 with no value.
 Alert when the counter is above zero.
 This is the alert for failed logging (PCI DSS 10.7).
 
