@@ -42,30 +42,42 @@ conflict and asks the questions. It decides nothing.
 
 ## Open questions
 
-- What is the route prefix of the installation API, and does `api/server`
-  keep it.
-  - Let's go `api/dustpan/v1` or something to that effect.
-- What are its objects and its action names, and does `@server`,
+- (research) What are its objects and its action names, and does `@server`,
   `server:backup` and `server:observe` keep their form.
-  - Keep it intuitive according to industry norms. We aren't the first building a permission system or trying to find
-    terms for these actions, let's try to keep it standardized.
-- What are its JSON and error shapes. Do they follow the Pulumi
+- (research) What are its JSON and error shapes. Do they follow the Pulumi
   Cloud-compatible API (camelCase, `{"code", "message"}`), the TFE-compatible
   API (JSON:API), or a third shape.
-  - Firstly keep it as ergonomic and standard compared with industry as possible. Someone integrating it should NEVER
-    curse our names when trying to integrate with it. If anything, find out who has the REST API developers love and
-    learn from them.
-- How is the API versioned as new installation features (backups, metrics,
-  upgrade checks, audit log) join it.
-  - Same answer as before. Let's follow industry standards and also try our best not to break shit.
-- Does the offline `restore` stay an exception to ADR 17, or does restore get
-  a REST API.
-  - obsolete: ADR 38 and ADR 39
-- How does the console use this API (ADR 8), and which routes does the
-  published endpoint list name.
-  - It uses the same endpoints we expose in our REST API. We do not provide a separate user-facing and console API. Our
-    APIs must be good enough for ourselves, no? Follow Temporal's lead here (I know they use gRPC but you know what I
-    mean).
+- (research) How is the API versioned as new installation features (backups,
+  metrics, upgrade checks, audit log) join it.
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "What is the route prefix of the installation API": "Let's go
+  `api/dustpan/v1` or something to that effect."
+- Question "What are its objects and its action names": "Keep it intuitive
+  according to industry norms. We aren't the first building a permission
+  system or trying to find terms for these actions, let's try to keep it
+  standardized." The question stays in "Open questions".
+- Question "What are its JSON and error shapes": "Firstly keep it as ergonomic
+  and standard compared with industry as possible. Someone integrating it
+  should NEVER curse our names when trying to integrate with it. If anything,
+  find out who has the REST API developers love and learn from them." The
+  question stays in "Open questions".
+- Question "How is the API versioned": "Same answer as before. Let's follow
+  industry standards and also try our best not to break shit." The question
+  stays in "Open questions".
+- Question "Does the offline `restore` stay an exception to ADR 17": "obsolete:
+  ADR 38 and ADR 39"
+- Question "How does the console use this API (ADR 8)": "It uses the same
+  endpoints we expose in our REST API. We do not provide a separate
+  user-facing and console API. Our APIs must be good enough for ourselves, no?
+  Follow Temporal's lead here (I know they use gRPC but you know what I
+  mean)."
 
 ## Outcome
 
