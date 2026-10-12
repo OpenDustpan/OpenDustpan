@@ -63,6 +63,23 @@ decrypt it. The server uses envelope encryption:
 The values stay encrypted in your stack configuration and in the checkpoints,
 because the Pulumi CLI writes only the ciphertext there.
 
+## OpenTofu state
+
+The server seals each new OpenTofu state version before it stores it:
+
+- **One data key for each workspace.** The key-encryption key wraps it, as
+  for a Pulumi stack.
+- **The server seals the state blob in chunks of 64 KiB** with AES-256-GCM. The
+  associated data of each chunk binds it to its workspace, its position and
+  the end of the stream. A changed, reordered or cut-off blob does not open.
+- **The server also seals the outputs document in the database.**
+- **A download answers the same bytes that the CLI sent.** The MD5 and the
+  size of a state version stay those of the plain bytes.
+
+State versions that an older server wrote stay plain text after the
+upgrade. Planned: a change that seals the existing versions (ADR 41,
+decision 11).
+
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes
@@ -84,33 +101,31 @@ A key file that the server makes holds 32 random bytes in base64, with mode
 the path of the key file, never the key. No flag takes the key itself.
 
 The database and the backups hold no copy of the key. A lost key means lost
-secrets: nobody can decrypt them. A copy of the data directory that holds
+secrets and lost OpenTofu state: nobody can decrypt them. A copy of the data directory that holds
 the default key file also holds the key, so keep the backups and the key
 apart.
 
 Planned: a command that rotates the key-encryption key (ADR 23), and keys
 that a key management service holds (RFC 33).
 
-## What the server stores in plain text
+## What the server encrypts at rest
 
-The server applies no encryption of its own to the database or to the blob
-store. Protect both, for example with disk encryption and with access rules
-on the S3 bucket.
+The server encrypts only the data in the table below. It does not encrypt
+the database or the blob store as a whole. Protect both, for example with
+disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | No |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes, for each version that this server wrote. Versions from an older server stay plain text |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
 | Audit entries, with no secret value | Database | No |
-| Backups | Backup target | No. A backup holds no key-encryption key |
+| Backups | Backup target | Not as a whole. A backup holds the stored bytes: sealed state stays sealed. It holds no key-encryption key |
 
 The server creates the blob directory with access for its owner only.
 
-Planned: the server encrypts OpenTofu state and outputs with a data key per
-workspace (ADR 41, decision 10). Encryption of a whole backup is not decided
-(ADR 30, RFC 8).
+Encryption of a whole backup is not decided (ADR 30, RFC 8).
 
 ## Integrity
 
@@ -161,8 +176,8 @@ through each API and check that the log and the metrics do not hold them.
 
 The server sends no telemetry. It connects only to the PostgreSQL database
 and the S3-compatible storage that you configure. The commands
-`namespace create`, `backup`, `backup check` and `upgrade check` call only the
-server in `--server`. `health` calls only the listen address of the local
+`namespace create`, `backup`, `backup check`, `upgrade check` and `restore`
+call only the server in `--server`. `health` calls only the listen address of the local
 server.
 
 ## Audit log
