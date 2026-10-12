@@ -201,7 +201,8 @@ func (h *Handler) lockRoutes() []Route {
 
 // stateRoutes returns the state read routes: the current state version, one
 // state version, its download, its outputs and the state version list. Every
-// route needs unit:read.
+// route needs unit:read. The download and the single output route also need
+// unit:read-secrets, as they answer plain secret values.
 func (h *Handler) stateRoutes() []Route {
 	return []Route{
 		{
@@ -241,10 +242,10 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-versions/{state_version_id}/download",
-			// A download is a normal authorized route: the CLI sends its
-			// token, so it needs unit:read on the unit of the workspace.
+			// A download answers plain secret values, so it needs unit:read
+			// and unit:read-secrets on the unit of the workspace.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			Resolve: h.resolveStateVersionID,
 			Serve:   h.downloadState,
 		},
@@ -262,10 +263,11 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-version-outputs/{output_id}",
-			// A state read needs unit:read. The resolver maps the output to
-			// the unit of its workspace. Unknown outputs answer 404.
+			// A single output answers a plain secret value, so it needs
+			// unit:read and unit:read-secrets. The resolver maps the output
+			// to the unit of its workspace. Unknown outputs answer 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			Resolve: h.resolveStateOutputID,
 			Serve:   h.readStateOutput,
 		},

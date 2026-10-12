@@ -23,9 +23,9 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/workspaces/{id}/current-state-version | Token, `unit:read` | Reads the current state version. Workspaces without state answer 404. |
 | GET | /api/v2/state-versions | Token, `unit:read` | Lists the finalized state versions of the filtered workspace, newest first. Needs `filter[organization][name]` and `filter[workspace][name]`. Supports `page[number]` and `page[size]`. |
 | GET | /api/v2/state-versions/{state_version_id} | Token, `unit:read` | Reads one finalized state version. Other versions answer 404. |
-| GET | /api/v2/state-versions/{state_version_id}/download | Token, `unit:read` | Downloads the state document as JSON. |
+| GET | /api/v2/state-versions/{state_version_id}/download | Token, `unit:read` and `unit:read-secrets` | Downloads the state document as JSON. |
 | GET | /api/v2/workspaces/{id}/current-state-version-outputs | Token, `unit:read` | Reads the outputs of the current state. |
-| GET | /api/v2/state-version-outputs/{output_id} | Token, `unit:read` | Reads one output by ID. Unknown outputs answer 404. |
+| GET | /api/v2/state-version-outputs/{output_id} | Token, `unit:read` and `unit:read-secrets` | Reads one output by ID. Unknown outputs answer 404. |
 | POST | /api/v2/workspaces/{id}/state-versions | Token, `unit:write` | Declares a state version. The caller must hold the lock. |
 | POST | /api/v2/state-versions/{state_version_id}/actions/restore | Token, `unit:write` | Makes the version current again as a new, forced version. Unknown versions answer 404. Another holder answers 409. |
 | PUT | /api/v2/state-uploads/{id}/{token} | Capability URL, no sign-in | Uploads the state document. The token is single use. |
