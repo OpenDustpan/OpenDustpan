@@ -175,6 +175,25 @@ skill (ADR 14):
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
   two weeks old (ADR 7), and review its diff first.
 
+## Rules for agent sessions
+
+- Read the coordination issue (#399) at the start of a session. If it does
+  not agree with GitHub, GitHub is correct.
+- Before you stop, update the "Handoff brief" comment of your workstream: what
+  is done, what is next, and the decisions that you made. Only the lead
+  session edits the body of #399.
+- Do one task in each session. Stop when the task is done or blocked. Do not
+  wait in a session for CI or for a review.
+- Do not merge a pull request. Only the owner, or the lead session that the
+  owner names, merges.
+- Do not create, push, move or delete a Git tag. Do not create a GitHub
+  release. Only the owner does these.
+- Do not contact an upstream project. Do not open an issue, a pull request,
+  a comment, a reaction or a star there, and do not post in its forums. You
+  can read its public source and run its released CLIs.
+- Do not change repository settings, branch protection, secrets, variables
+  or runners.
+
 ## Agent skills
 
 ### Issue tracker
