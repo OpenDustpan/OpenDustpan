@@ -224,10 +224,8 @@ func (s *Store) CreateStateVersion(
 			return fmt.Errorf("read workspace: %w", err)
 		}
 
-		if sv.UnlockedWrite {
-			if switchErr := checkUnlockedSwitches(ctx, q, wrow); switchErr != nil {
-				return switchErr
-			}
+		if switchErr := checkDeclareSwitches(ctx, q, sv, wrow); switchErr != nil {
+			return switchErr
 		}
 
 		pending, err := q.CountPendingStateVersions(ctx, row.WorkspaceID)
@@ -724,6 +722,15 @@ func checkFinalizeGuards(
 		return db.Workspace{}, switchErr
 	}
 
+	// A forced version finalizes only while the forced-write switches are on, and
+	// it skips the order check only after this check passes (ADR 44, decisions 4
+	// and 6). A restore sets Force itself, so it is not a client's forced write.
+	if sv.Force && sv.RestoredFrom == "" {
+		if switchErr := checkForcedSwitches(ctx, q, wrow); switchErr != nil {
+			return db.Workspace{}, switchErr
+		}
+	}
+
 	if !sv.Force {
 		if orderErr := checkFinalizeOrder(ctx, q, row); orderErr != nil {
 			return db.Workspace{}, orderErr
@@ -821,6 +828,23 @@ func checkForcedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) 
 			"%w: the forced-write switch of the namespace or the unit is off",
 			workspace.ErrOverrideRefused,
 		)
+	}
+
+	return nil
+}
+
+// checkDeclareSwitches checks the switches of an unlocked or a forced declare in
+// the caller's transaction (ADR 44, decisions 5, 4 and 6). A restore sets Force
+// itself, so it is not checked as a client's forced write.
+func checkDeclareSwitches(ctx context.Context, q *db.Queries, sv workspace.StateVersion, wrow db.Workspace) error {
+	if sv.UnlockedWrite {
+		if err := checkUnlockedSwitches(ctx, q, wrow); err != nil {
+			return err
+		}
+	}
+
+	if sv.Force && sv.RestoredFrom == "" {
+		return checkForcedSwitches(ctx, q, wrow)
 	}
 
 	return nil

@@ -216,3 +216,45 @@ func TestForceUnlockStopsWhenItsAuditEntryFails(t *testing.T) {
 		t.Fatal("the lock was released although its audit entry failed")
 	}
 }
+
+// TestForcedDeclareNeedsTheActionAndSwitches proves a forced declare writes
+// nothing without the unit:write-forced action, or while a switch is off. With
+// both the action and the switches it is allowed (ADR 44, decisions 4 and 6).
+func TestForcedDeclareNeedsTheActionAndSwitches(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	forced := newState("lin-old", 1, smallDoc)
+	forced.Force = true
+
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, noOverrides())
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("forced declare without the action: err = %v, want ErrOverrideRefused", err)
+	}
+
+	if !strings.Contains(err.Error(), "unit:write-forced") {
+		t.Fatalf("refusal does not name the action: %v", err)
+	}
+
+	if _, curErr := f.svc.Current(ctx, f.ws.ID); !errors.Is(curErr, workspace.ErrNoState) {
+		t.Fatalf("current after a refused forced declare: err = %v, want ErrNoState", curErr)
+	}
+
+	// The action alone is not enough: the store refuses while the switches are off.
+	_, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("forced declare with the action and the switches off: err = %v, want ErrOverrideRefused", err)
+	}
+
+	enableForced(t, f)
+
+	if _, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly()); err != nil {
+		t.Fatalf("forced declare with the action and both switches: %v", err)
+	}
+}

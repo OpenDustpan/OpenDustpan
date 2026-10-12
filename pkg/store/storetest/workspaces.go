@@ -217,6 +217,14 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testReleaseUnfencedNeedsForcedSwitches,
 		},
 		{
+			name: "a forced declare is ErrOverrideRefused while the forced-write switches are off",
+			test: testForcedDeclareNeedsSwitches,
+		},
+		{
+			name: "a switch turned off before a forced write finalizes stops the finalize",
+			test: testForcedFinalizeNeedsSwitches,
+		},
+		{
 			name: "a declare of an unlocked write is ErrOverrideRefused unless both switches are on",
 			test: testUnlockedDeclareNeedsSwitches,
 		},
@@ -1118,7 +1126,8 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ns := newWorkspaceNamespace(t, s, "acme")
-	w := createTestWorkspace(t, s, ns, "network")
+	w := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 	first := finalizedVersion(createPendingVersion(t, s, ns, newPendingVersion(
 		t, locked, locked.Lock.ID, stateInput("l1", "v5", 5),
@@ -1808,7 +1817,8 @@ func testListStateVersionsForcedLowerSerial(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ns := newWorkspaceNamespace(t, s, "acme")
-	w := createTestWorkspace(t, s, ns, "network")
+	w := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 
 	firstPending := createPendingVersion(t, s, ns, newPendingVersion(

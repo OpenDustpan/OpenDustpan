@@ -281,3 +281,54 @@ func testReleaseUnfencedNeedsForcedSwitches(t *testing.T, s WorkspaceStore) {
 
 	assertWorkspace(t, got, released)
 }
+
+// testForcedDeclareNeedsSwitches checks that the store refuses a forced declare
+// while the forced-write switches are off, and writes nothing (ADR 44, decisions
+// 4 and 6).
+func testForcedDeclareNeedsSwitches(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	in := newPendingVersion(t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1))
+
+	err := s.CreateStateVersion(t.Context(), in, ns.Fence(), generousPendingCap)
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("declare a forced write with the switches off: err = %v, want ErrOverrideRefused", err)
+	}
+
+	if _, curErr := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(curErr, workspace.ErrNoState) {
+		t.Fatalf("current after a refused declare: err = %v, want ErrNoState", curErr)
+	}
+}
+
+// testForcedFinalizeNeedsSwitches checks that a switch turned off after a forced
+// declare stops its finalize: the forced version never becomes current.
+func testForcedFinalizeNeedsSwitches(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	on := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
+	locked := lockTestWorkspace(t, s, ns, on, "alice")
+
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1),
+	))
+
+	setErr := s.SetOverrides(t.Context(), ns.Name, namespace.Overrides{Forced: false, Unlocked: false})
+	if setErr != nil {
+		t.Fatalf("turn off the namespace switch: %v", setErr)
+	}
+
+	err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(pending, now().Add(time.Hour), "v1"))
+	if !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("finalize a forced write after the switch is off: err = %v, want ErrOverrideRefused", err)
+	}
+
+	if _, curErr := s.CurrentStateVersion(t.Context(), locked.ID); !errors.Is(curErr, workspace.ErrNoState) {
+		t.Fatalf("current after a refused forced finalize: err = %v, want ErrNoState", curErr)
+	}
+}

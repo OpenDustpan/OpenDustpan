@@ -468,7 +468,7 @@ func (s *Service) BeginState(
 		return PendingState{}, err
 	}
 
-	unlocked, err := declareAllowed(w, holder, allow)
+	unlocked, err := declareAllowed(w, holder, in, allow)
 	if err != nil {
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
@@ -524,7 +524,11 @@ func (s *Service) BeginState(
 
 // declareAllowed checks the lock of one declare. It returns whether the declare
 // is an unlocked write, which the override allows (ADR 44, decisions 5 and 8).
-func declareAllowed(w Workspace, holder string, allow namespace.Overrides) (bool, error) {
+func declareAllowed(w Workspace, holder string, in NewState, allow namespace.Overrides) (bool, error) {
+	if in.Force && !allow.Forced {
+		return false, forcedRefusal()
+	}
+
 	lockErr := w.heldBy(holder)
 	if lockErr == nil {
 		return false, nil
@@ -542,6 +546,14 @@ func declareAllowed(w Workspace, holder string, allow namespace.Overrides) (bool
 type pendingDeclare struct {
 	restoredFrom StateVersionID
 	unlocked     bool
+}
+
+// forcedRefusal names the action and the switches that allow a forced write.
+func forcedRefusal() error {
+	return fmt.Errorf(
+		"%w: a forced write needs the unit:write-forced action and both forced-write switches on",
+		ErrOverrideRefused,
+	)
 }
 
 // unlockedRefusal keeps the status of a refused declare on an unlocked unit

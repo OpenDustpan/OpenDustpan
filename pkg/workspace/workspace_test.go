@@ -303,10 +303,8 @@ func (m *memStore) CreateStateVersion(
 		return workspace.ErrNotFound
 	}
 
-	if sv.UnlockedWrite {
-		if err := m.checkUnlockedSwitches(w); err != nil {
-			return err
-		}
+	if err := m.checkDeclareSwitches(w, sv); err != nil {
+		return err
 	}
 
 	pending := 0
@@ -456,10 +454,8 @@ func (m *memStore) FinalizeStateVersion(
 func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVersion) error {
 	// A version declared without the lock (ADR 44, decision 5) has no lock to keep,
 	// but its switches must still be on when it finalizes (ADR 44, decision 6).
-	if sv.UnlockedWrite {
-		if err := m.checkUnlockedSwitches(w); err != nil {
-			return err
-		}
+	if err := m.checkDeclareSwitches(w, sv); err != nil {
+		return err
 	}
 
 	if !sv.UnlockedWrite {
@@ -919,6 +915,7 @@ func TestStateVersions(t *testing.T) {
 
 	f := newFixture(t)
 	ctx := t.Context()
+	enableForced(t, f)
 
 	if err := f.push(t, newState("l1", 1, "v1"), "v1"); !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("push without lock: %v, want ErrNotLocked", err)
@@ -991,6 +988,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 
 	f := newFixture(t)
 	ctx := t.Context()
+	enableForced(t, f)
 
 	forced := workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true}
 
@@ -4244,6 +4242,50 @@ func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
 
 	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
 		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
+	}
+
+	return nil
+}
+
+// checkForcedSwitches refuses a forced write when the namespace or the unit
+// forced-write switch is off. The caller holds mu.
+func (m *memStore) checkForcedSwitches(w workspace.Workspace) error {
+	ns, ok := m.namespaces[w.Ref.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if !ns.Overrides.Forced || !w.Overrides.Forced {
+		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+	}
+
+	return nil
+}
+
+// enableForced turns on the forced-write switches of the namespace and of the unit.
+func enableForced(t *testing.T, f fixture) {
+	t.Helper()
+
+	if _, err := f.namespaces.SetOverrides(t.Context(), f.ws.Ref.Namespace, forcedOnly()); err != nil {
+		t.Fatalf("turn on the namespace switch: %v", err)
+	}
+
+	if _, err := f.svc.SetOverrides(t.Context(), f.ws.ID, forcedOnly()); err != nil {
+		t.Fatalf("turn on the unit switch: %v", err)
+	}
+}
+
+// checkDeclareSwitches mirrors the store's declare and finalize checks for the
+// unlocked and the forced override. The caller holds mu.
+func (m *memStore) checkDeclareSwitches(w workspace.Workspace, sv workspace.StateVersion) error {
+	if sv.UnlockedWrite {
+		if err := m.checkUnlockedSwitches(w); err != nil {
+			return err
+		}
+	}
+
+	if sv.Force && sv.RestoredFrom == "" {
+		return m.checkForcedSwitches(w)
 	}
 
 	return nil

@@ -178,6 +178,18 @@ func (h *Handler) createStateVersion(
 
 	// An unlocked write is an override: its audit entry is written before the
 	// declare, and a failed entry stops the declare (ADR 41, decision 5).
+	// A forced declare is an override: its audit entry is written before the
+	// declare (ADR 41, decision 5).
+	if in.Force && allow.Forced {
+		version := strconv.FormatInt(in.Serial, 10)
+
+		if auditErr := h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteForced, version); auditErr != nil {
+			h.writeError(ctx, w, auditErr)
+
+			return
+		}
+	}
+
 	if allow.Unlocked && !locked {
 		version := strconv.FormatInt(in.Serial, 10)
 
