@@ -507,6 +507,44 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = $1;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+UPDATE restores
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = $1
+WHERE id = $2 AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+UPDATE restores
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;
+
 -- name: BackupHomeRegions :many
 SELECT DISTINCT home_region
 FROM namespaces

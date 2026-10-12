@@ -211,6 +211,7 @@ func testActions() []identity.Action {
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
+		identity.ActionServerRestore,
 	}
 }
 

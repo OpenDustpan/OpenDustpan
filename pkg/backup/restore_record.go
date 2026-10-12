@@ -1,0 +1,121 @@
+package backup
+
+// Restore records of the online restore (ADR 38 decisions 8 and 9): one row
+// for each restore the installation runs, with its state, the backup it
+// restores, the backup taken before it, who asked, and the times.
+
+import (
+	"context"
+	"errors"
+	"time"
+)
+
+// Restore states.
+const (
+	// RestoreChecking runs the restore checks before it changes live data.
+	RestoreChecking RestoreState = "checking"
+	// RestoreApplying applies the staged data after the checks pass.
+	RestoreApplying RestoreState = "applying"
+	// RestoreSucceeded is a restore that replaced the live data.
+	RestoreSucceeded RestoreState = "succeeded"
+	// RestoreFailed is a restore that stopped early. Error names the cause.
+	RestoreFailed RestoreState = "failed"
+)
+
+// RestoreID identifies one restore. IDs carry the prefix "rst-".
+type RestoreID string
+
+// String returns the ID as a plain string.
+func (id RestoreID) String() string {
+	return string(id)
+}
+
+// RestoreState is where a restore is in its run.
+type RestoreState string
+
+// String returns the state as a plain string.
+func (s RestoreState) String() string {
+	return string(s)
+}
+
+// RestoreRecord is one row of the restores table. BackupID is the backup the
+// restore applies; PreBackupID is the backup of the live data taken before
+// the apply, empty when the restore stopped before it. RequestedBy is the
+// subject that asked. Error holds the failure text for an operator.
+type RestoreRecord struct {
+	StartedAt   time.Time
+	EndedAt     time.Time
+	ID          RestoreID
+	BackupID    ID
+	PreBackupID ID
+	RequestedBy string
+	Error       string
+	State       RestoreState
+}
+
+// Sentinel errors returned by the restore registry.
+var (
+	// ErrRestoreNotFound reports that a restore row does not exist.
+	ErrRestoreNotFound = errors.New("restore not found")
+	// ErrRestoreExists reports that a restore row with the same ID exists.
+	ErrRestoreExists = errors.New("restore already exists")
+	// ErrRestoreNotRunning reports that a restore is not running, so it
+	// cannot finish.
+	ErrRestoreNotRunning = errors.New("restore is not running")
+	// ErrRestoreRunning reports a second restore started while one runs.
+	// Only one restore runs at a time.
+	ErrRestoreRunning = errors.New("restore already running")
+)
+
+// RestoreRegistry tracks the restores table: one row for each restore. Rows
+// carry no fence: they describe the installation, not one namespace. A
+// server that starts marks every running row failed.
+type RestoreRegistry interface {
+	// CreateRestore stores r as a running restore. It returns
+	// ErrRestoreExists if the ID is taken.
+	CreateRestore(ctx context.Context, r RestoreRecord) error
+	// FinishRestore moves the running restore id to state, which is
+	// RestoreSucceeded or RestoreFailed, with the error text and the end
+	// time. Any other state reports ErrRestoreNotRunning. It returns the
+	// finished row, ErrRestoreNotFound if id does not exist, or
+	// ErrRestoreNotRunning if the row is not running.
+	FinishRestore(
+		ctx context.Context, id RestoreID, state RestoreState, errText string, endedAt time.Time,
+	) (RestoreRecord, error)
+	// GetRestore returns the restore row id, or ErrRestoreNotFound.
+	GetRestore(ctx context.Context, id RestoreID) (RestoreRecord, error)
+	// MarkRestoreApplying moves the restore id from checking to applying and
+	// records the backup taken before the apply. It returns ErrRestoreNotFound
+	// if id does not exist, or ErrRestoreNotRunning if the row already left
+	// checking.
+	MarkRestoreApplying(ctx context.Context, id RestoreID, preBackupID ID) error
+	// ListRestores returns every restore row, newest first.
+	ListRestores(ctx context.Context) ([]RestoreRecord, error)
+	// FailRunningRestores marks every running row failed with the error
+	// text and the end time. The server calls it at start, after a stop
+	// during a restore.
+	FailRunningRestores(ctx context.Context, endedAt time.Time, errText string) error
+}
+
+// Applier swaps the staged restore data into the live data in one step and
+// fences it (ADR 38 decisions 6 and 7): a file rename plus a fence for
+// SQLite, a schema swap plus a fence in one transaction for PostgreSQL. The
+// staging area holds checked data from StageRestore; the apply step moves it
+// live and increments the failover version of every namespace, so leases,
+// locks and update tokens from before the restore stop working even when the
+// server crashes right after the swap.
+type Applier interface {
+	// ApplyStaging swaps the staged restore data into the live data, fences
+	// every namespace, and removes the staging area. It reports ErrCorrupt
+	// when no staged data exists.
+	ApplyStaging(ctx context.Context) error
+}
+
+// Fencer increments the failover version of every namespace (ADR 38
+// decision 7), so leases, update tokens, locks and upload capabilities from
+// before the restore stop working.
+type Fencer interface {
+	// BumpFailoverVersions increments the failover version of every
+	// namespace by one and returns the count of namespaces bumped.
+	BumpFailoverVersions(ctx context.Context) (int64, error)
+}

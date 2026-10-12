@@ -66,6 +66,12 @@ var (
 	// errBackupNeedsRegistry reports a backup target with a namespace store
 	// that cannot track backups.
 	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+	// errRestoreNeedsLive reports a backup target with a namespace store
+	// that cannot check, apply or fence a restore.
+	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
+	// errRestoreNeedsRegistry reports a backup target with a namespace store
+	// that cannot track restores.
+	errRestoreNeedsRegistry = errors.New("backup target needs a namespace store that tracks restores")
 	// errMaintenanceNeedsStore reports a namespace store that cannot keep
 	// the installation state. Every SQL adapter serves it from the same
 	// database connection; a custom store must serve it too, so every
@@ -83,6 +89,11 @@ const (
 // backupStoppedText marks a backup that was running when the server stopped.
 // FailRunningBackups writes it at the next start (ADR 30 decision 9).
 const backupStoppedText = "server stopped during backup"
+
+// restoreStoppedText marks a restore that was running when the server
+// stopped. FailRunningRestores writes it at the next start (ADR 38 decision
+// 9).
+const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
@@ -297,21 +308,23 @@ func WithBackupTarget(target blob.Store, name string) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler        http.Handler
-	logger         *slog.Logger
-	listenAddr     string
-	listener       net.Listener
-	secrets        *secret.Service
-	secretKeys     secret.KeyStore
-	secretWrapper  secret.Wrapper
-	workspaces     *workspace.Service
-	backups        *backup.Service
-	backupRegistry backup.Registry
-	now            func() time.Time
-	registry       *metrics.Registry
-	tlsCertFile    string
-	tlsKeyFile     string
-	observed       *metrics.ServerMetrics
+	handler         http.Handler
+	logger          *slog.Logger
+	listenAddr      string
+	listener        net.Listener
+	secrets         *secret.Service
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
+	workspaces      *workspace.Service
+	backups         *backup.Service
+	backupRegistry  backup.Registry
+	restores        *backup.RestoreService
+	restoreRegistry backup.RestoreRegistry
+	now             func() time.Time
+	registry        *metrics.Registry
+	tlsCertFile     string
+	tlsKeyFile      string
+	observed        *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -405,22 +418,29 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		backupRegistry = reg
 	}
 
+	var restoreRegistry backup.RestoreRegistry
+	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
+		restoreRegistry = reg
+	}
+
 	return &Server{
-		handler:        handler,
-		logger:         cfg.logger,
-		listenAddr:     cfg.listenAddr,
-		listener:       cfg.listener,
-		secrets:        svc.secrets,
-		secretKeys:     cfg.secretKeys,
-		secretWrapper:  cfg.secretWrapper,
-		workspaces:     svc.workspaces,
-		backups:        backups,
-		backupRegistry: backupRegistry,
-		now:            cfg.now,
-		registry:       registry,
-		tlsCertFile:    cfg.tlsCertFile,
-		tlsKeyFile:     cfg.tlsKeyFile,
-		observed:       observed,
+		handler:         handler,
+		logger:          cfg.logger,
+		listenAddr:      cfg.listenAddr,
+		listener:        cfg.listener,
+		secrets:         svc.secrets,
+		secretKeys:      cfg.secretKeys,
+		secretWrapper:   cfg.secretWrapper,
+		workspaces:      svc.workspaces,
+		backups:         backups,
+		backupRegistry:  backupRegistry,
+		restores:        adapters.restores,
+		restoreRegistry: restoreRegistry,
+		now:             cfg.now,
+		registry:        registry,
+		tlsCertFile:     cfg.tlsCertFile,
+		tlsKeyFile:      cfg.tlsKeyFile,
+		observed:        observed,
 	}, nil
 }
 
@@ -432,6 +452,7 @@ type adapters struct {
 	server      http.Handler
 	ready       http.Handler
 	maintenance *maintenance.Watcher
+	restores    *backup.RestoreService
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -480,7 +501,12 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, svc, backups, maint, observed)
+	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
+		services: svc,
+		backups:  backups,
+		maint:    maint,
+		observed: observed,
+	})
 	if err != nil {
 		return adapters{}, err
 	}
@@ -500,6 +526,7 @@ func newAdapters(
 		server:      serverAPI,
 		ready:       ready,
 		maintenance: watcher,
+		restores:    restores,
 	}, nil
 }
 
@@ -653,6 +680,12 @@ func (s *Server) Backups() *backup.Service {
 	return s.backups
 }
 
+// Restores returns the restore service the server was wired with, or nil
+// when no backup target is configured.
+func (s *Server) Restores() *backup.RestoreService {
+	return s.restores
+}
+
 // Metrics returns the request, build, process, runtime and readiness
 // metrics the middleware records. The metrics route of issue #165 reads
 // through it.
@@ -669,11 +702,12 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // runs the start-up check that refuses a key-encryption key that opens less
 // than every wrapped key in the database (ADR 23), so a program that embeds
 // the server cannot start with the wrong key. It then marks every running
-// backup failed: the server stopped during it (ADR 30 decision 9). When ctx
+// backup and every running restore failed: the server stopped during them
+// (ADR 30 decision 9, ADR 38 decision 9). When ctx
 // is done before these start-up steps end, Run returns nil: the caller asked
 // it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := s.startUp(ctx); err != nil {
+	if err := s.runStartUp(ctx); err != nil {
 		return startUpResult(ctx, err)
 	}
 
@@ -781,6 +815,12 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 	case <-ctx.Done():
 	}
 
+	return shutdownServer(ctx, srv, serveErr)
+}
+
+// shutdownServer shuts down srv after ctx is done and reports the serve
+// result: a clean close reads ErrServerClosed.
+func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
@@ -790,6 +830,73 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
+	}
+
+	return nil
+}
+
+// runStartUp runs the start-up steps of Run in order: the key check and the
+// running backups of startUp (ADR 23, ADR 30 decision 9), then the running
+// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// the steps is a stop, not a failure, so it answers nil: the caller asked
+// the server to stop.
+func (s *Server) runStartUp(ctx context.Context) error {
+	startErr := s.startUp(ctx)
+	if startErr == nil {
+		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr != nil && ctx.Err() == nil {
+		return startErr
+	}
+
+	return nil
+}
+
+// failStoppedRestores marks every running restore failed: the server stopped
+// during it (ADR 38 decision 9). When a restore was running, it fences every
+// namespace again before serving tool APIs: a stop during the checks or the
+// apply may leave live data that a later restore cannot fence, so leases
+// from before the restore still stop working (ADR 38 decision 7). Both
+// adapters fence with the swap (PostgreSQL in the same transaction, SQLite in
+// the staged file before the rename), so a crash after the swap already lands
+// fenced; this is the crash recovery for a stop before it.
+func (s *Server) failStoppedRestores(ctx context.Context) error {
+	if s.restoreRegistry == nil {
+		return nil
+	}
+
+	running, err := s.restoreRegistry.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list running restores: %w", err)
+	}
+
+	crashed := false
+
+	for i := range running {
+		state := running[i].State
+		if state == backup.RestoreChecking || state == backup.RestoreApplying {
+			crashed = true
+
+			break
+		}
+	}
+
+	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
+		return fmt.Errorf("fail running restores: %w", err)
+	}
+
+	if !crashed {
+		return nil
+	}
+
+	fencer, ok := s.restoreRegistry.(backup.Fencer)
+	if !ok {
+		return nil
+	}
+
+	if _, err := fencer.BumpFailoverVersions(ctx); err != nil {
+		return fmt.Errorf("fence namespaces after a killed restore: %w", err)
 	}
 
 	return nil
@@ -874,26 +981,50 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// installationDeps carries the services of the installation API.
+type installationDeps struct {
+	services services
+	backups  *backup.Service
+	maint    *maintenance.Service
+	observed *metrics.ServerMetrics
+}
+
+// newInstallationAPI builds the restore service and the tool-neutral
+// installation API from the backup service and the maintenance service.
+func newInstallationAPI(
+	cfg settings, deps installationDeps,
+) (http.Handler, *backup.RestoreService, error) {
+	restores, err := newRestoreService(cfg, deps.backups, deps.maint)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serverAPI, err := newServerHandler(cfg, deps, restores)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return serverAPI, restores, nil
+}
+
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
-// backup target is configured, else nil, the maintenance service, the
-// registry that the metrics route writes, the server version and the schema
-// store that the upgrade check reads.
+// backup target is configured, else nil, the restore service when a backup
+// target is configured, else nil, the maintenance service, the registry
+// that the metrics route writes, the server version and the schema store
+// that the upgrade check reads.
 func newServerHandler(
-	cfg settings,
-	svc services,
-	backups *backup.Service,
-	maint *maintenance.Service,
-	observed *metrics.ServerMetrics,
+	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator:    cfg.authenticator,
 		Authorizer:       cfg.authorizer,
 		Logger:           cfg.logger,
-		Namespaces:       svc.namespaces,
-		Backups:          backups,
-		Maintenance:      maint,
-		Metrics:          observed,
+		Namespaces:       deps.services.namespaces,
+		Backups:          deps.backups,
+		Restores:         restores,
+		Maintenance:      deps.maint,
+		Metrics:          deps.observed,
 		Version:          cfg.version,
 		Schema:           schemaReporterOf(cfg.namespaceStore),
 		KeyEncryptionKey: cfg.secretWrapper != nil,
@@ -958,6 +1089,53 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
+	}
+
+	return service, nil
+}
+
+// newRestoreService builds the installation restore service when a backup
+// target is configured, else returns nil. The live store, the registry and
+// the check ports come from the namespace store: every SQL adapter serves
+// all ports from one database connection. The backup service takes the
+// backup of the live data before the apply. A nil target means no backup
+// target is configured.
+func newRestoreService(
+	cfg settings, backups *backup.Service, maint *maintenance.Service,
+) (*backup.RestoreService, error) {
+	if cfg.backupTarget == nil {
+		//nolint:nilnil // Nil without an error means no backup target is configured.
+		return nil, nil
+	}
+
+	if backups == nil {
+		return nil, errBackupNeedsRegistry
+	}
+
+	live, ok := cfg.namespaceStore.(backup.RestoreLive)
+	if !ok {
+		return nil, errRestoreNeedsLive
+	}
+
+	registry, ok := cfg.namespaceStore.(backup.RestoreRegistry)
+	if !ok {
+		return nil, errRestoreNeedsRegistry
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        live,
+		Registry:    registry,
+		Backups:     backups,
+		Maintenance: maint,
+		Blobs:       cfg.blobStore,
+		Target:      cfg.backupTarget,
+		Key:         cfg.secretWrapper,
+		Region:      cfg.region.String(),
+		Now:         cfg.now,
+		Logger:      cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("restore service: %w", err)
 	}
 
 	return service, nil

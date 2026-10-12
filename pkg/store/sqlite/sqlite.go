@@ -45,6 +45,10 @@ type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
 	path    string
+	// mu guards conn and queries across the online restore swap: readers
+	// hold it shared, and the swap holds it exclusive while it renames the
+	// database file. Lock order with stagingMu is stagingMu before mu.
+	mu sync.RWMutex
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
@@ -71,7 +75,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 
-	s := &Store{conn: conn, queries: db.New(conn), path: abs, stagingMu: sync.Mutex{}, stagingPath: ""}
+	s := &Store{
+		conn:        conn,
+		queries:     db.New(conn),
+		path:        abs,
+		mu:          sync.RWMutex{},
+		stagingMu:   sync.Mutex{},
+		stagingPath: "",
+	}
 	if err := s.migrate(ctx); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
@@ -105,7 +116,15 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 // Close closes the database. It removes a staged restore file first, so no
 // scratch file survives the handle.
 func (s *Store) Close() error {
-	s.discardStagingFile()
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stagingPath != "" {
+		removeSnapshot(s.stagingPath)
+		s.stagingPath = ""
+	}
 
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close sqlite database: %w", err)
@@ -117,6 +136,9 @@ func (s *Store) Close() error {
 // Ping implements namespace.Store. It maps any driver failure to
 // ErrUnavailable without driver text.
 func (s *Store) Ping(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if err := s.conn.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping sqlite database: %w", namespace.ErrUnavailable)
 	}
@@ -126,6 +148,9 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToNamespaceRow(ns)
 
 	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
@@ -147,6 +172,9 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 
 // GetNamespace implements namespace.Store.
 func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetNamespace(ctx, name.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return namespace.Namespace{}, namespace.ErrNotFound
@@ -161,6 +189,9 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 
 // ListNamespaces implements namespace.Store.
 func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	rows, err := s.queries.ListNamespaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("select namespaces: %w", err)
@@ -178,6 +209,9 @@ func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, erro
 // stack_tags table, keyed by the new stack ID. The inventory entry is written
 // in the same transaction.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToStackRow(st)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -208,6 +242,9 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 
 // GetStack implements stack.Store.
 func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetStack(ctx, db.GetStackParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
@@ -243,6 +280,9 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 func (s *Store) UpdateStackTags(
 	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		id, err := q.GetStackID(ctx, db.GetStackIDParams{
 			Namespace: ref.Namespace.String(),
@@ -316,6 +356,9 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		if newName == oldRef.Stack {
 			return confirmStackPresent(ctx, q, oldRef)
@@ -416,6 +459,9 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 func (s *Store) DeleteStack(
 	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
@@ -440,6 +486,9 @@ func (s *Store) DeleteStack(
 // ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
@@ -584,6 +633,9 @@ func removeStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID stri
 // ListStacks implements stack.Store. Tags come from one query for the whole
 // namespace, not one query per stack.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if filter.Project == "" {
 		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
 		if err != nil {
@@ -679,17 +731,6 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	}
 
 	return out, nil
-}
-
-// discardStagingFile removes the staged restore file, if any.
-func (s *Store) discardStagingFile() {
-	s.stagingMu.Lock()
-	defer s.stagingMu.Unlock()
-
-	if s.stagingPath != "" {
-		removeSnapshot(s.stagingPath)
-		s.stagingPath = ""
-	}
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {

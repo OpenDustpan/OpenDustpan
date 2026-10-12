@@ -60,6 +60,7 @@ func newMetricsHandler(
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
 		Backups:          nil,
+		Restores:         nil,
 		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
 		Metrics:          metrics,
 		Version:          "test",
