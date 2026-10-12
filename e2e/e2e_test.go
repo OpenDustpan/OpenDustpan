@@ -3140,31 +3140,60 @@ type auditListItem struct {
 	Hash      string `json:"hash"`
 }
 
-// fetchAuditEntries lists the audit entries of org through the API.
+// fetchAuditEntries lists every audit entry of org through the API, one page
+// at a time. The list defaults to 50 entries per page, while a run with
+// decrypt calls writes more, so one page never holds the full log.
 func fetchAuditEntries(ctx context.Context, env *e2e.Env, org string) ([]auditListItem, error) {
-	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization="+org, "")
-	if err != nil {
-		return nil, err
+	const size = 200
+
+	var all []auditListItem
+
+	var total int64 = -1
+
+	for number := 1; ; number++ {
+		path := "/api/audit/entries?organization=" + url.QueryEscape(org) +
+			"&page[number]=" + strconv.Itoa(number) + "&page[size]=" + strconv.Itoa(size)
+
+		status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+		if err != nil {
+			return nil, err
+		}
+
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("%w: list audit entries answers %d: %s", errUnexpected, status, body)
+		}
+
+		var got struct {
+			Entries []auditListItem `json:"entries"`
+			Total   int64           `json:"total"`
+		}
+
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			return nil, fmt.Errorf("%w: decode audit entries: %w (%s)", errUnexpected, err, body)
+		}
+
+		if total < 0 {
+			total = got.Total
+		} else if got.Total != total {
+			total = max(total, got.Total)
+		}
+
+		all = append(all, got.Entries...)
+
+		if int64(len(all)) >= total {
+			break
+		}
+
+		if len(got.Entries) == 0 {
+			break
+		}
 	}
 
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("%w: list audit entries answers %d: %s", errUnexpected, status, body)
+	if int64(len(all)) != total {
+		return nil, fmt.Errorf("%w: entries = %d with total %d", errUnexpected, len(all), total)
 	}
 
-	var got struct {
-		Entries []auditListItem `json:"entries"`
-		Total   int64           `json:"total"`
-	}
-
-	if err := json.Unmarshal([]byte(body), &got); err != nil {
-		return nil, fmt.Errorf("%w: decode audit entries: %w (%s)", errUnexpected, err, body)
-	}
-
-	if int64(len(got.Entries)) != got.Total {
-		return nil, fmt.Errorf("%w: entries = %d with total %d: %s", errUnexpected, len(got.Entries), got.Total, body)
-	}
-
-	return got.Entries, nil
+	return all, nil
 }
 
 // readAuditEntries lists the audit entries of org through the API.
