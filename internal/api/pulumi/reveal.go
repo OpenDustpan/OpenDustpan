@@ -60,11 +60,15 @@ func (h *Handler) revealRoute() Route {
 	}
 }
 
-// revealStateValue serves the reveal call.
+// revealStateValue serves the reveal call. It sets Cache-Control: no-store
+// before any other work, so every answer of the call, including the errors
+// of the state and scope lookups below, carries it.
 func (h *Handler) revealStateValue(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
+
+	w.Header().Set("Cache-Control", noStoreValue)
 
 	path, ok := h.revealPath(w, r)
 	if !ok {

@@ -227,6 +227,60 @@ func reveal(t *testing.T, f revealFixture, body string) (int, http.Header, strin
 	return rec.Code, rec.Header(), rec.Body.String()
 }
 
+// revealTo sends one reveal request to target with body and returns the
+// status, headers and body.
+func revealTo(t *testing.T, f revealFixture, target, body string) (int, http.Header, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(
+		requestid.WithContext(t.Context(), "req-reveal"),
+		http.MethodPost,
+		target,
+		strings.NewReader(body),
+	)
+	req.Header.Set("Authorization", "token test-token")
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Header(), rec.Body.String()
+}
+
+// TestRevealUnknownVersionAnswersNoStore proves a reveal against a version
+// with no checkpoint answers 404 with Cache-Control: no-store and no value.
+func TestRevealUnknownVersionAnswersNoStore(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	_, path := seedRevealVersion(t, f, "service")
+
+	status, header, body := revealTo(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/999/reveal",
+		revealBody(t, path),
+	)
+
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown version answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("404 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
 // revealBody encodes one reveal request body for path.
 func revealBody(t *testing.T, path string) string {
 	t.Helper()
@@ -555,7 +609,12 @@ func TestRevealOtherProviderAuditFailureAnswers500(t *testing.T) {
 	status, header, body := reveal(t, f, revealBody(t, path))
 
 	if status != http.StatusInternalServerError {
-		t.Fatalf("passphrase reveal with a failed audit answers %d, want %d (%s)", status, http.StatusInternalServerError, body)
+		t.Fatalf(
+			"passphrase reveal with a failed audit answers %d, want %d (%s)",
+			status,
+			http.StatusInternalServerError,
+			body,
+		)
 	}
 
 	if strings.Contains(body, revealSecretValue) {
