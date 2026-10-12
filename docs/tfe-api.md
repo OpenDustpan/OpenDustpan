@@ -63,3 +63,13 @@ The server keeps remote state and locks for local execution only.
 - A force upload never skips the lock check.
 - Errors are JSON:API documents with `status`, `title`, and `detail`.
 - The media type is `application/vnd.api+json`.
+
+## State at rest
+
+The server seals each new state blob and each new outputs document with the
+data key of the workspace scope, under the key-encryption key in
+`DUSTPAN_KEY_ENCRYPTION_KEY` or the file in
+`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`. The MD5 and the size of a state version
+stay those of the plain bytes. A download answers the same bytes the CLI
+sent. A lost key means lost OpenTofu state, and nobody can recover it. A
+backup holds the sealed bytes: keep the key apart from the backup target.

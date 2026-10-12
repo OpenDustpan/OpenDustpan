@@ -46,6 +46,7 @@ type StateVersionRow struct {
 	Serial            int64
 	Size              int64
 	Force             bool
+	Sealed            bool
 	RestoredFrom      string
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
@@ -118,6 +119,7 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		Serial:            sv.Serial,
 		Size:              sv.Size,
 		Force:             sv.Force,
+		Sealed:            sv.Sealed,
 		RestoredFrom:      sv.RestoredFrom.String(),
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
@@ -187,6 +189,7 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Serial:          row.Serial,
 		Size:            row.Size,
 		Force:           row.Force,
+		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
 	}, nil
 }

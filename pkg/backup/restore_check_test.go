@@ -167,7 +167,7 @@ func stagedSummary(t *testing.T, manifest backup.Manifest) backup.Summary {
 		var sum [16]byte
 
 		copy(sum[:], raw)
-		refs = append(refs, backup.BlobRef{MD5: sum, Key: ref.Key, Size: ref.Size})
+		refs = append(refs, backup.BlobRef{MD5: sum, Key: ref.Key, Size: ref.Size, Sealed: false})
 	}
 
 	return backup.Summary{

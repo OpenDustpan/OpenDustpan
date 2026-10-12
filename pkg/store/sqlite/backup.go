@@ -678,8 +678,10 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 }
 
 // checkStagedBlobs compares the blob references of the staged data with the
-// manifest: the staged data must name exactly the keys of the manifest, each
-// with its size and checksum.
+// manifest: the staged data must name exactly the keys of the manifest with
+// the same sealed flags. Unsealed entries also match in size and checksum;
+// sealed entries name sealed stored bytes in the manifest, so only the key
+// and the flag match.
 func checkStagedBlobs(staged, want []backup.BlobRef) error {
 	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
 
@@ -690,7 +692,11 @@ func checkStagedBlobs(staged, want []backup.BlobRef) error {
 	slices.SortFunc(wanted, byKey)
 
 	same := func(a, b backup.BlobRef) bool {
-		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+		if a.Key != b.Key || a.Sealed != b.Sealed {
+			return false
+		}
+
+		return a.Sealed || (a.Size == b.Size && a.MD5 == b.MD5)
 	}
 
 	if !slices.EqualFunc(ordered, wanted, same) {
@@ -899,12 +905,15 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
 // MD5 of every state version that names content, with the blob key, size and
-// MD5 of every checkpoint kept in blobs, ordered by key. A pending version
-// names no content, so only finalized versions appear.
+// MD5 of every checkpoint kept in blobs, ordered by key. Size and MD5 stay
+// those of the plain bytes, as the state version stores them; sealed versions
+// mark their references sealed, so the backup opens them to check and stores
+// the sealed bytes. A pending version names no content, so only finalized
+// versions appear.
 func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
-	const query = `SELECT content_key, size, md5 FROM state_versions WHERE content_key <> ''
+	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> ''
 		UNION ALL
-		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5 FROM checkpoints
+		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
 		WHERE blob_key IS NOT NULL AND blob_key <> ''
 		ORDER BY content_key`
 
@@ -923,12 +932,13 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 
 	for rows.Next() {
 		var (
-			key  string
-			size int64
-			raw  []byte
+			key    string
+			size   int64
+			raw    []byte
+			sealed bool
 		)
 
-		if scanErr := rows.Scan(&key, &size, &raw); scanErr != nil {
+		if scanErr := rows.Scan(&key, &size, &raw, &sealed); scanErr != nil {
 			return nil, fmt.Errorf("read backup blob references: %w", scanErr)
 		}
 
@@ -944,7 +954,7 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 		var sum [md5.Size]byte
 
 		copy(sum[:], raw)
-		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size})
+		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size, Sealed: sealed})
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
