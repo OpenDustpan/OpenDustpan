@@ -12,10 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
-	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // clearKeyEnv clears every key-encryption key setting, so a bootstrap test
@@ -378,92 +374,6 @@ func TestServeKeyRestartOpensWrappedKeys(t *testing.T) {
 
 	if strings.Contains(second.String(), keyBase64) {
 		t.Fatal("restart output holds the key")
-	}
-}
-
-func TestUpgradeCheckWarnsWithoutKeyWhenStateExists(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "dustpan.db")
-
-	seedUpgradeOpenTofuState(t, dir, dbPath)
-	unsetUpgradeKeyEnv(t)
-
-	out, checkErr := runUpgradeCheck(t, "sqlite:"+dbPath)
-	if checkErr != nil {
-		t.Fatalf("upgrade check with state and no key: %v", checkErr)
-	}
-
-	for _, want := range []string{
-		"OpenTofu state",
-		"--generate-key-encryption-key",
-		"DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY",
-		"--key-encryption-key-file",
-		keyFileEnvVar,
-		keyEnvVar,
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("upgrade check output lacks %q:\n%s", want, out)
-		}
-	}
-
-	t.Setenv(keyEnvVar, testKeyBase64())
-
-	keyedOut, keyedErr := runUpgradeCheck(t, "sqlite:"+dbPath)
-	if keyedErr != nil {
-		t.Fatalf("upgrade check with state and a key: %v", keyedErr)
-	}
-
-	if strings.Contains(keyedOut, "OpenTofu state") {
-		t.Fatalf("upgrade check with a key warns about state:\n%s", keyedOut)
-	}
-}
-
-// seedUpgradeOpenTofuState stores one wrapped key and one finalized OpenTofu
-// state version in the SQLite database at dbPath with blobs in dir.
-func seedUpgradeOpenTofuState(t *testing.T, dir, dbPath string) {
-	t.Helper()
-
-	seedMainKey(t, dbPath, []byte(testKeyString))
-
-	st, err := sqlite.Open(t.Context(), dbPath)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	defer func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	}()
-
-	blobs, blobErr := blobfs.Open(filepath.Join(dir, "blobs"))
-	if blobErr != nil {
-		t.Fatalf("open blobs: %v", blobErr)
-	}
-
-	defer func() {
-		if closeErr := blobs.Close(); closeErr != nil {
-			t.Errorf("close blobs: %v", closeErr)
-		}
-	}()
-
-	namespaces, nsErr := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "local"})
-	if nsErr != nil {
-		t.Fatalf("namespace service: %v", nsErr)
-	}
-
-	seedRestoreState(t.Context(), t, st, blobs, namespaces)
-}
-
-// unsetUpgradeKeyEnv clears the key settings, so the upgrade check sees an
-// installation with OpenTofu state and no key.
-func unsetUpgradeKeyEnv(t *testing.T) {
-	t.Helper()
-
-	for _, key := range []string{keyEnvVar, keyFileEnvVar} {
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatalf("unset %s: %v", key, err)
-		}
 	}
 }
 

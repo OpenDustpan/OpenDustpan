@@ -4,175 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
-
-func TestInspect(t *testing.T) {
-	t.Parallel()
-
-	t.Run("fresh database", func(t *testing.T) {
-		t.Parallel()
-
-		migrated := isolatedURL(t, baseURL(t))
-		names, newest := listMigrationNames(t)
-
-		checkInspectState(
-			t,
-			migrated,
-			wantInspection{database: 0, binary: newest, pending: names, unknown: nil, holds: false},
-		)
-	})
-
-	t.Run("old database", func(t *testing.T) {
-		t.Parallel()
-
-		migrated := isolatedURL(t, baseURL(t))
-		seedAt0008WithStacks(t, migrated)
-
-		names, newest := listMigrationNames(t)
-
-		checkInspectState(
-			t,
-			migrated,
-			wantInspection{database: 8, binary: newest, pending: names[8:], unknown: nil, holds: false},
-		)
-	})
-
-	t.Run("up-to-date database", func(t *testing.T) {
-		t.Parallel()
-
-		migrated := isolatedURL(t, baseURL(t))
-
-		s, err := postgres.Open(t.Context(), migrated)
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		s.Close()
-
-		_, newest := listMigrationNames(t)
-
-		checkInspectState(
-			t,
-			migrated,
-			wantInspection{database: newest, binary: newest, pending: nil, unknown: nil, holds: false},
-		)
-	})
-
-	t.Run("newer database", func(t *testing.T) {
-		t.Parallel()
-
-		migrated := isolatedURL(t, baseURL(t))
-
-		s, err := postgres.Open(t.Context(), migrated)
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		s.Close()
-
-		_, newest := listMigrationNames(t)
-
-		insertFutureVersion(t, migrated, newest+1)
-		checkInspectState(t, migrated, wantInspection{
-			database: newest + 1,
-			binary:   newest,
-			pending:  nil,
-			unknown:  []int64{newest + 1},
-			holds:    false,
-		})
-	})
-}
-
-// TestInspectHoldsOpenTofuState proves Inspect reports whether the database
-// holds OpenTofu state: false for a fresh database, false for a migrated
-// database with no state version, and true with one state version row.
-func TestInspectHoldsOpenTofuState(t *testing.T) {
-	t.Parallel()
-
-	t.Run("fresh database", func(t *testing.T) {
-		t.Parallel()
-		checkInspectHoldsFresh(t)
-	})
-
-	t.Run("migrated database with no state version", func(t *testing.T) {
-		t.Parallel()
-		checkInspectHoldsEmpty(t)
-	})
-
-	t.Run("migrated database with a state version", func(t *testing.T) {
-		t.Parallel()
-		checkInspectHoldsSeeded(t)
-	})
-}
-
-// checkInspectHoldsFresh proves a fresh database reports no OpenTofu state.
-func checkInspectHoldsFresh(t *testing.T) {
-	t.Helper()
-
-	migrated := isolatedURL(t, baseURL(t))
-	names, newest := listMigrationNames(t)
-
-	checkInspectState(
-		t,
-		migrated,
-		wantInspection{database: 0, binary: newest, pending: names, unknown: nil, holds: false},
-	)
-}
-
-// checkInspectHoldsEmpty proves a migrated database with no state version
-// reports no OpenTofu state.
-func checkInspectHoldsEmpty(t *testing.T) {
-	t.Helper()
-
-	migrated := isolatedURL(t, baseURL(t))
-
-	s, err := postgres.Open(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	s.Close()
-
-	_, newest := listMigrationNames(t)
-
-	checkInspectState(
-		t,
-		migrated,
-		wantInspection{database: newest, binary: newest, pending: nil, unknown: nil, holds: false},
-	)
-}
-
-// checkInspectHoldsSeeded proves a migrated database with one state version
-// row reports OpenTofu state.
-func checkInspectHoldsSeeded(t *testing.T) {
-	t.Helper()
-
-	migrated := isolatedURL(t, baseURL(t))
-
-	s, err := postgres.Open(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	s.Close()
-
-	seedInspectStateVersion(t, migrated)
-
-	_, newest := listMigrationNames(t)
-
-	checkInspectState(
-		t,
-		migrated,
-		wantInspection{database: newest, binary: newest, pending: nil, unknown: nil, holds: true},
-	)
-}
 
 // baseURL returns the shared PostgreSQL URL or skips the test without it.
 func baseURL(t *testing.T) string {
@@ -184,145 +22,6 @@ func baseURL(t *testing.T) string {
 	}
 
 	return base
-}
-
-// wantInspection holds the expected schema state of one database.
-type wantInspection struct {
-	database int64
-	binary   int64
-	pending  []string
-	unknown  []int64
-	holds    bool
-}
-
-// checkInspectState runs Inspect on migrated, checks the five reported values
-// and proves the call wrote nothing: versions and tables match the snapshot
-// taken before the call.
-func checkInspectState(t *testing.T, migrated string, want wantInspection) {
-	t.Helper()
-
-	beforeVersions, beforeTables := inspectSnapshot(t, migrated)
-
-	got, err := postgres.Inspect(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("inspect: %v", err)
-	}
-
-	if got.DatabaseVersion != want.database || got.BinaryVersion != want.binary {
-		t.Fatalf(
-			"versions = %d/%d, want %d/%d",
-			got.DatabaseVersion,
-			got.BinaryVersion,
-			want.database,
-			want.binary,
-		)
-	}
-
-	if !slices.Equal(got.Pending, want.pending) {
-		t.Fatalf("pending = %v, want %v", got.Pending, want.pending)
-	}
-
-	if !slices.Equal(got.Unknown, want.unknown) {
-		t.Fatalf("unknown = %v, want %v", got.Unknown, want.unknown)
-	}
-
-	if got.HoldsOpenTofuState != want.holds {
-		t.Fatalf("holds OpenTofu state = %v, want %v", got.HoldsOpenTofuState, want.holds)
-	}
-
-	afterVersions, afterTables := inspectSnapshot(t, migrated)
-
-	if !slices.Equal(afterVersions, beforeVersions) {
-		t.Fatalf("versions after inspect = %v, want %v", afterVersions, beforeVersions)
-	}
-
-	if !slices.Equal(afterTables, beforeTables) {
-		t.Fatalf("tables after inspect = %v, want %v", afterTables, beforeTables)
-	}
-
-	if want.database == 0 && slices.Contains(afterTables, "schema_migrations") {
-		t.Fatal("inspect created schema_migrations, want no such table")
-	}
-}
-
-// listMigrationNames returns the embedded migration file names in version
-// order with the newest version.
-func listMigrationNames(t *testing.T) ([]string, int64) {
-	t.Helper()
-
-	entries, err := os.ReadDir("migrations")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
-	}
-
-	var names []string
-
-	var newest int64
-
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
-		}
-
-		version, parseErr := strconv.ParseInt(strings.SplitN(entry.Name(), "_", 2)[0], 10, 64)
-		if parseErr != nil {
-			t.Fatalf("parse migration version %q: %v", entry.Name(), parseErr)
-		}
-
-		names = append(names, entry.Name())
-
-		if version > newest {
-			newest = version
-		}
-	}
-
-	slices.Sort(names)
-
-	return names, newest
-}
-
-// seedInspectStateVersion writes one namespace, one workspace and one state
-// version row to the migrated database at migrated, so Inspect reports state.
-func seedInspectStateVersion(t *testing.T, migrated string) {
-	t.Helper()
-
-	conn, err := pgx.Connect(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	const namespace = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'local', 1, 0)`
-
-	if _, err := conn.Exec(t.Context(), namespace); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-
-	const workspace = `INSERT INTO workspaces (id, namespace, name, revision, lock_id, lock_holder,
-		lock_reason, locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms)
-		VALUES ('ws-aaaaaaaaaaaaaaaaaaaa', 'acme', 'web', 1, '', '', '', 0,
-		'sv-aaaaaaaaaaaaaaaaaaaa', 1000, 2000)`
-
-	if _, err := conn.Exec(t.Context(), workspace); err != nil {
-		t.Fatalf("seed workspace: %v", err)
-	}
-
-	const state = `INSERT INTO state_versions (id, workspace_id, status, serial, lineage, md5, size,
-		content_key, outputs, force, upload_digest, upload_expires_at_ms, holder, lock_id,
-		created_at_ms, finalized_at_ms)
-		VALUES ('sv-aaaaaaaaaaaaaaaaaaaa', 'ws-aaaaaaaaaaaaaaaaaaaa', 'finalized', 1, 'lineage-1',
-		'\x00000000000000000000000000000001', 11, '', NULL, FALSE, ''::bytea, 5000,
-		'seed', 'lock-1', 1000, 2000)`
-
-	if _, err := conn.Exec(t.Context(), state); err != nil {
-		t.Fatalf("seed state version: %v", err)
-	}
 }
 
 // inspectSnapshot reads the recorded versions (nil when schema_migrations is
@@ -358,4 +57,163 @@ func inspectSnapshot(t *testing.T, migrated string) ([]int64, []string) {
 	}
 
 	return versions, readSchemaTables(t, conn)
+}
+
+// TestAppliedMigrations proves the store reports the applied rows ordered by
+// version without migrating: an empty schema_migrations table means no rows,
+// and a missing table reports nothing while staying missing.
+func TestAppliedMigrations(t *testing.T) {
+	t.Parallel()
+
+	t.Run("migrated schema", func(t *testing.T) {
+		t.Parallel()
+		checkAppliedMigrated(t)
+	})
+
+	t.Run("missing table", func(t *testing.T) {
+		t.Parallel()
+		checkAppliedMissingTable(t)
+	})
+}
+
+// checkAppliedMigrated proves AppliedMigrations on a migrated schema reports
+// the embedded rows ordered, with names matching their versions, and changes
+// nothing.
+func checkAppliedMigrated(t *testing.T) {
+	t.Helper()
+
+	migrated := isolatedURL(t, baseURL(t))
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	beforeVersions, beforeTables := inspectSnapshot(t, migrated)
+
+	applied, err := s.AppliedMigrations(t.Context())
+	if err != nil {
+		t.Fatalf("applied migrations: %v", err)
+	}
+
+	wantNames, wantNewest := schema.EmbeddedMigrationNames()
+
+	if len(applied) != len(wantNames) {
+		t.Fatalf("applied holds %d rows, want the embedded %d", len(applied), len(wantNames))
+	}
+
+	checkAppliedRows(t, applied, wantNames)
+
+	if got := applied[len(applied)-1].Version; got != wantNewest {
+		t.Fatalf("newest applied version = %d, want %d", got, wantNewest)
+	}
+
+	afterVersions, afterTables := inspectSnapshot(t, migrated)
+	if !slices.Equal(afterVersions, beforeVersions) || !slices.Equal(afterTables, beforeTables) {
+		t.Fatal("applied migrations changed the database, want a read-only report")
+	}
+}
+
+// checkAppliedRows proves every applied row names the embedded name at its
+// position with the version its name parses to.
+func checkAppliedRows(t *testing.T, applied []schema.AppliedMigration, wantNames []string) {
+	t.Helper()
+
+	for i, migration := range applied {
+		if migration.Name != wantNames[i] {
+			t.Fatalf("applied row %d = %q, want %q", i, migration.Name, wantNames[i])
+		}
+
+		version, err := schema.ParseMigrationVersion(migration.Name)
+		if err != nil {
+			t.Fatalf("applied name %q: %v", migration.Name, err)
+		}
+
+		if version != migration.Version {
+			t.Fatalf("applied row %q records version %d, want %d",
+				migration.Name, migration.Version, version)
+		}
+	}
+}
+
+// checkAppliedMissingTable proves AppliedMigrations without the
+// schema_migrations table reports nothing and creates no table.
+func checkAppliedMissingTable(t *testing.T) {
+	t.Helper()
+
+	migrated := isolatedURL(t, baseURL(t))
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	conn, connErr := pgx.Connect(t.Context(), migrated)
+	if connErr != nil {
+		t.Fatalf("connect: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, dropErr := conn.Exec(t.Context(), `DROP TABLE schema_migrations`); dropErr != nil {
+		t.Fatalf("drop schema_migrations: %v", dropErr)
+	}
+
+	applied, err := s.AppliedMigrations(t.Context())
+	if err != nil {
+		t.Fatalf("applied migrations without the table: %v", err)
+	}
+
+	if len(applied) != 0 {
+		t.Fatalf("applied migrations = %v, want nothing without the table", applied)
+	}
+
+	if _, tables := inspectSnapshot(t, migrated); slices.Contains(tables, "schema_migrations") {
+		t.Fatal("applied migrations created schema_migrations, want no such table")
+	}
+}
+
+// TestEmbeddedMigrationsMatchSchema proves the adapter embeds exactly the
+// shared schema list: the upgrade check verdict never depends on the
+// dialect. Add a migration to both dialects and to the schema list together.
+func TestEmbeddedMigrationsMatchSchema(t *testing.T) {
+	t.Parallel()
+
+	names, newest := schema.EmbeddedMigrationNames()
+
+	got, gotNewest, err := postgres.EmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("embedded migrations: %v", err)
+	}
+
+	if !slices.Equal(got, names) || gotNewest != newest {
+		t.Fatalf("embedded = %v/%d, want the schema list %v/%d", got, gotNewest, names, newest)
+	}
+
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+
+	var files []string
+
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sql" {
+			files = append(files, entry.Name())
+		}
+	}
+
+	slices.Sort(files)
+
+	if !slices.Equal(files, names) {
+		t.Fatalf("migration files = %v, want the schema list %v", files, names)
+	}
 }

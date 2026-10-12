@@ -41,11 +41,10 @@ func Inspect(recorded []int64, embedded []Migration) schema.Inspection {
 	}
 
 	return schema.Inspection{
-		DatabaseVersion:    schema.DatabaseVersion(recorded),
-		BinaryVersion:      schema.BinaryVersion(versions),
-		Pending:            pending,
-		Unknown:            UnknownRecorded(recorded, embedded),
-		HoldsOpenTofuState: false,
+		DatabaseVersion: schema.DatabaseVersion(recorded),
+		BinaryVersion:   schema.BinaryVersion(versions),
+		Pending:         pending,
+		Unknown:         UnknownRecorded(recorded, embedded),
 	}
 }
 

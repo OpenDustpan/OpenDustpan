@@ -55,13 +55,16 @@ func newMetricsHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: authn,
-		Authorizer:    identity.AdminOnly{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       metrics,
+		Authenticator:    authn,
+		Authorizer:       identity.AdminOnly{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          metrics,
+		Version:          "test",
+		Schema:           nil,
+		KeyEncryptionKey: false,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
