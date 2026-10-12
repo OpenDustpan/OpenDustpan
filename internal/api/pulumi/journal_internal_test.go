@@ -21,18 +21,18 @@ func TestCLIVersionOf(t *testing.T) {
 			ok:        true,
 		},
 		{name: "no leading v", userAgent: "pulumi-cli/1 (3.260.1; linux)", want: cliVersion{3, 260, 1}, ok: true},
-		{name: "empty", userAgent: "", ok: false},
-		{name: "browser", userAgent: "Mozilla/5.0 (X11; Linux x86_64)", ok: false},
-		{name: "other protocol version", userAgent: "pulumi-cli/2 (v3.268.0; linux)", ok: false},
-		{name: "no closing parenthesis", userAgent: "pulumi-cli/1 (v3.268.0", ok: false},
-		{name: "development build", userAgent: "pulumi-cli/1 (v3.269.0-dev.0; linux)", ok: false},
-		{name: "pre-release suffix", userAgent: "pulumi-cli/1 (v3.268.0-rc1; linux)", ok: false},
-		{name: "two parts", userAgent: "pulumi-cli/1 (v3.268; linux)", ok: false},
-		{name: "four parts", userAgent: "pulumi-cli/1 (v3.268.0.1; linux)", ok: false},
-		{name: "not a number", userAgent: "pulumi-cli/1 (vx.268.0; linux)", ok: false},
-		{name: "signed part", userAgent: "pulumi-cli/1 (v+3.268.0; linux)", ok: false},
-		{name: "empty version", userAgent: "pulumi-cli/1 (; linux)", ok: false},
-		{name: "dev word", userAgent: "pulumi-cli/1 (dev; linux)", ok: false},
+		{name: "empty", userAgent: "", want: cliVersion{}, ok: false},
+		{name: "browser", userAgent: "Mozilla/5.0 (X11; Linux x86_64)", want: cliVersion{}, ok: false},
+		{name: "other protocol version", userAgent: "pulumi-cli/2 (v3.268.0; linux)", want: cliVersion{}, ok: false},
+		{name: "no closing parenthesis", userAgent: "pulumi-cli/1 (v3.268.0", want: cliVersion{}, ok: false},
+		{name: "development build", userAgent: "pulumi-cli/1 (v3.269.0-dev.0; linux)", want: cliVersion{}, ok: false},
+		{name: "pre-release suffix", userAgent: "pulumi-cli/1 (v3.268.0-rc1; linux)", want: cliVersion{}, ok: false},
+		{name: "two parts", userAgent: "pulumi-cli/1 (v3.268; linux)", want: cliVersion{}, ok: false},
+		{name: "four parts", userAgent: "pulumi-cli/1 (v3.268.0.1; linux)", want: cliVersion{}, ok: false},
+		{name: "not a number", userAgent: "pulumi-cli/1 (vx.268.0; linux)", want: cliVersion{}, ok: false},
+		{name: "signed part", userAgent: "pulumi-cli/1 (v+3.268.0; linux)", want: cliVersion{}, ok: false},
+		{name: "empty version", userAgent: "pulumi-cli/1 (; linux)", want: cliVersion{}, ok: false},
+		{name: "dev word", userAgent: "pulumi-cli/1 (dev; linux)", want: cliVersion{}, ok: false},
 	}
 
 	for _, tc := range tests {
@@ -53,7 +53,8 @@ func TestCLIVersionOf(t *testing.T) {
 
 // TestNegotiateJournalVersion checks the gate of ADR 43, decisions 2 and 5. The
 // production server supports 0 only, so the tests pass the supported version
-// in order to exercise the answers 1 and 2.
+// in order to exercise the answers 1 and 2. The journaling setting is checked
+// by the handler, which offers 0 when journaling is off.
 func TestNegotiateJournalVersion(t *testing.T) {
 	t.Parallel()
 
@@ -72,7 +73,6 @@ func TestNegotiateJournalVersion(t *testing.T) {
 		userAgent string
 		offered   int
 		supported int
-		disabled  bool
 		want      int
 	}{
 		{
@@ -100,14 +100,13 @@ func TestNegotiateJournalVersion(t *testing.T) {
 		{name: "unknown client is rejected", userAgent: unknown, offered: 1, supported: 2, want: 0},
 		{name: "no offer answers 0", userAgent: inRange, offered: 0, supported: 2, want: 0},
 		{name: "negative offer answers 0", userAgent: inRange, offered: -1, supported: 2, want: 0},
-		{name: "disabled answers 0", userAgent: inRange, offered: 2, supported: 2, disabled: true, want: 0},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := negotiateJournalVersion(tc.userAgent, tc.offered, tc.disabled, tc.supported)
+			got := negotiateJournalVersion(tc.userAgent, tc.offered, tc.supported)
 			if got != tc.want {
 				t.Fatalf("negotiateJournalVersion = %d, want %d", got, tc.want)
 			}

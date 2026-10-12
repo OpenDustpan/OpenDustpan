@@ -401,7 +401,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -444,9 +444,13 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	journal := negotiateJournalVersion(
-		r.UserAgent(), offer.JournalVersion, h.disablePulumiJournaling, maxSupportedJournalVersion,
-	)
+	// With journaling off, the CLI gets checkpoints whatever it offers.
+	offered := offer.JournalVersion
+	if h.disablePulumiJournaling {
+		offered = 0
+	}
+
+	journal := negotiateJournalVersion(r.UserAgent(), offered, maxSupportedJournalVersion)
 
 	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
 	if err != nil {
@@ -468,7 +472,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 func (h *Handler) startOffer(w http.ResponseWriter, r *http.Request) (startUpdateOffer, bool) {
 	var offer startUpdateOffer
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return offer, false
 	}
@@ -501,7 +505,7 @@ func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, _ identity.
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -568,7 +572,7 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -920,9 +924,11 @@ func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Toke
 	return tok, raw, true
 }
 
-// readBody reads at most limit request bytes. An oversized body answers 413,
-// an unreadable one 400.
-func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+// readBody reads at most maxBodyBytes request bytes. An oversized body answers
+// 413, an unreadable one 400.
+func (h *Handler) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	limit := int64(maxBodyBytes)
+
 	body, err := io.ReadAll(io.LimitReader(http.MaxBytesReader(w, r.Body, limit), limit+1))
 	if err != nil {
 		if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok && tooLarge != nil {

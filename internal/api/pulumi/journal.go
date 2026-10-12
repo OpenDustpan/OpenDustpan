@@ -8,14 +8,24 @@ import (
 // The journal gate of ADR 43, decisions 2 and 5. It decides which journal
 // version a start answers.
 
-// oldestVerifiedJournalCLI and newestVerifiedJournalCLI bound the Pulumi CLI
-// releases that the gate lets through (ADR 43, decisions 5.2 and 5.3). The
-// values come from the research note of RFC 64. The replay corpus of work item
-// 7 must check each release before the newest value moves.
-var (
-	oldestVerifiedJournalCLI = cliVersion{3, 250, 0}
-	newestVerifiedJournalCLI = cliVersion{3, 268, 0}
-)
+// oldestVerifiedJournalCLI is the oldest Pulumi CLI release that the gate lets
+// through (ADR 43, decision 5.3). The value comes from the research note of RFC
+// 64.
+func oldestVerifiedJournalCLI() cliVersion {
+	return cliVersion{3, 250, 0}
+}
+
+// newestVerifiedJournalCLI is the newest Pulumi CLI release that the gate lets
+// through (ADR 43, decision 5.2). The value comes from the research note of RFC
+// 64. The replay corpus of work item 7 must check each release before this
+// value moves.
+func newestVerifiedJournalCLI() cliVersion {
+	return cliVersion{3, 268, 0}
+}
+
+// cliVersionParts is the number of parts in a release version: major, minor
+// and patch.
+const cliVersionParts = 3
 
 // maxSupportedJournalVersion is the highest journal version that the server
 // answers. The server has no journal route until work item 9, and no version 2
@@ -44,7 +54,7 @@ func (v cliVersion) less(w cliVersion) bool {
 // optional. It rejects a pre-release, a build suffix and any other form.
 func parseCLIVersion(s string) (cliVersion, bool) {
 	parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
-	if len(parts) != 3 {
+	if len(parts) != cliVersionParts {
 		return cliVersion{}, false
 	}
 
@@ -84,16 +94,17 @@ func cliVersionOf(userAgent string) (cliVersion, bool) {
 }
 
 // negotiateJournalVersion answers the journal version of a start. It answers 0
-// when journaling is off, when the CLI offered no version, or when the gate
-// rejects the CLI. Otherwise it answers the highest version that both the CLI
-// offered and the server supports (ADR 43, decisions 2.1 and 5.4).
-func negotiateJournalVersion(userAgent string, offered int, disabled bool, supported int) int {
-	if disabled || offered <= 0 || supported <= 0 {
+// when the CLI offered no version, or when the gate rejects the CLI. Otherwise
+// it answers the highest version that both the CLI offered and the server
+// supports (ADR 43, decisions 2.1 and 5.4). The caller answers 0 when
+// journaling is off, before it calls this function.
+func negotiateJournalVersion(userAgent string, offered, supported int) int {
+	if offered <= 0 || supported <= 0 {
 		return 0
 	}
 
 	v, ok := cliVersionOf(userAgent)
-	if !ok || v.less(oldestVerifiedJournalCLI) || newestVerifiedJournalCLI.less(v) {
+	if !ok || v.less(oldestVerifiedJournalCLI()) || newestVerifiedJournalCLI().less(v) {
 		return 0
 	}
 
