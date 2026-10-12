@@ -440,6 +440,27 @@ func testServerCloser(ts *httptest.Server) func(context.Context) {
 	}
 }
 
+// harnessKeyBytes is the size of the key-encryption key of one instance.
+const harnessKeyBytes = 32
+
+// newHarnessWrapper returns a key-encryption key wrapper over 32 random
+// bytes. Each instance starts on empty stores, so a new key per instance is
+// enough. The server seals OpenTofu state with it (ADR 41 decision 10) and
+// cannot store state without one.
+func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
+	key := make([]byte, harnessKeyBytes)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("key-encryption key: %w", err)
+	}
+
+	wrapper, err := secret.NewBuiltinWrapper(key)
+	if err != nil {
+		return nil, fmt.Errorf("key-encryption key: %w", err)
+	}
+
+	return wrapper, nil
+}
+
 // serveInstance builds the server for one instance and answers its test URL.
 func serveInstance(served instance) (string, func(context.Context), error) {
 	noop := func(context.Context) {}
@@ -447,6 +468,11 @@ func serveInstance(served instance) (string, func(context.Context), error) {
 	authn, err := identity.NewStaticToken("load", harnessToken())
 	if err != nil {
 		return "", noop, fmt.Errorf("authenticator: %w", err)
+	}
+
+	wrapper, err := newHarnessWrapper()
+	if err != nil {
+		return "", noop, err
 	}
 
 	srv, err := dustpan.NewServer(
@@ -457,6 +483,7 @@ func serveInstance(served instance) (string, func(context.Context), error) {
 		dustpan.WithCheckpointStore(served.ports.checkpoints),
 		dustpan.WithEventStore(served.ports.events),
 		dustpan.WithSecretKeyStore(served.ports.keys),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithWorkspaceStore(served.ports.workspaces),
 		dustpan.WithStateStore(served.ports.states),
 		dustpan.WithBlobStore(served.blobs),
