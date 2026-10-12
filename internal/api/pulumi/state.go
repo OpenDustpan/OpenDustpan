@@ -68,15 +68,45 @@ type stateOutputsResponse struct {
 	Masked  []string `json:"masked"`
 }
 
+// stateDiffChangedItem is one resource present in both versions with a
+// change: the URN, the resource-relative value paths that changed, and the
+// paths of secrets whose ciphertext changed. A secret value is never in the
+// diff: a changed secret is one path in changedSecrets. Secrets compare as
+// ciphertext, and the CLI may encrypt the same value again with a new nonce,
+// so changedSecrets may name a secret whose value did not change. The
+// server never decrypts for a diff.
+type stateDiffChangedItem struct {
+	URN            string   `json:"urn"`
+	ChangedPaths   []string `json:"changedPaths"`
+	ChangedSecrets []string `json:"changedSecrets"`
+}
+
+// diffStateResponse is one page of the diff of two checkpoint versions:
+// the sorted URNs added and removed, and the sorted changed resources with
+// their paths. NextCursor names the cursor of the next page, or is empty on
+// the last page. Incomplete with a Reason says the server cut the list short
+// of paging.
+type diffStateResponse struct {
+	Added      []string               `json:"added"`
+	Removed    []string               `json:"removed"`
+	Changed    []stateDiffChangedItem `json:"changed"`
+	NextCursor string                 `json:"nextCursor"`
+	Incomplete bool                   `json:"incomplete"`
+	Reason     string                 `json:"reason,omitempty"`
+}
+
 // stateRoutes returns the masked state read routes (ADR 41 decisions 1 to
 // 3 and 7): a paged resource list, one resource and the stack outputs of
-// one checkpoint version. Each secret value answers as a marker with its
-// value path, never as plain or ciphertext. The URN in the one-resource
-// route is path-escaped, so that "/" becomes "%2F" and the URN stays one
-// segment. Every route reads state, so
+// one checkpoint version, and the diff of two versions. Each secret value
+// answers as a marker with its value path, never as plain or ciphertext;
+// the diff answers no value at all, only URNs and value paths. The URN in
+// the one-resource route is path-escaped, so that "/" becomes "%2F" and the
+// URN stays one segment. The diff path holds the literal "diff", so it does
+// not clash with the version routes, which always carry one more segment
+// (resources or outputs) after the version. Every route reads state, so
 // each needs unit:read.
 func (h *Handler) stateRoutes() []Route {
-	return []Route{
+	versioned := []Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/stacks/{namespace}/{project}/{stack}/state/{version}/resources",
@@ -102,6 +132,20 @@ func (h *Handler) stateRoutes() []Route {
 			Serve:   h.getStateOutputs,
 		},
 	}
+
+	// The diff path holds the literal "diff", so it does not clash with the
+	// version routes, which always carry one more segment (resources or
+	// outputs) after the version.
+	diff := Route{
+		Method:  http.MethodGet,
+		Path:    "/api/stacks/{namespace}/{project}/{stack}/state/diff",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitRead},
+		Resolve: resolveGetStack,
+		Serve:   h.diffState,
+	}
+
+	return []Route{versioned[0], versioned[1], versioned[2], diff}
 }
 
 // stateTargetOf parses the stack reference and the version of a state
@@ -322,6 +366,136 @@ func (h *Handler) getStateResource(
 		Inputs:   detail.Inputs,
 		Outputs:  detail.Outputs,
 		Masked:   detail.Masked,
+	})
+}
+
+// diffCheckpointOf resolves one side of a diff request: "latest" names the
+// latest checkpoint, otherwise a non-negative integer version. It writes the
+// error and reports false when the value is missing or invalid, or when the
+// version has no checkpoint.
+func (h *Handler) diffCheckpointOf(
+	w http.ResponseWriter, r *http.Request, ref stack.Ref, name, raw string,
+) (stack.Checkpoint, bool) {
+	var zero stack.Checkpoint
+
+	if raw == "" {
+		h.writeError(r.Context(), w, invalidDiffVersion(name, raw))
+
+		return zero, false
+	}
+
+	var (
+		cp  stack.Checkpoint
+		err error
+	)
+
+	if raw == latestVersionName {
+		cp, err = h.updates.Export(r.Context(), ref)
+	} else {
+		var version int64
+
+		version, err = stack.ParseStackVersion(raw)
+		if err != nil {
+			h.writeError(r.Context(), w, err)
+
+			return zero, false
+		}
+
+		cp, err = h.updates.ExportVersion(r.Context(), ref, version)
+	}
+
+	if err != nil {
+		h.writeError(r.Context(), w, err)
+
+		return zero, false
+	}
+
+	return cp, true
+}
+
+// invalidDiffVersion reports a missing or empty diff side.
+func invalidDiffVersion(name, raw string) error {
+	return fmt.Errorf("%w: diff %s version %q", stack.ErrInvalidUpdate, name, raw)
+}
+
+// diffState answers the diff of two checkpoint versions named by the from
+// and to query values: each is a version or "latest". It answers the sorted
+// URNs added and removed, and for each changed resource the
+// resource-relative value paths that changed. A secret value is never in the
+// diff: a changed secret is one path in changedSecrets, compared as
+// ciphertext, so a re-encrypted but unchanged value may still be listed. The
+// server never decrypts for a diff. The page holds at most limit differing
+// URNs; NextCursor pages through them.
+func (h *Handler) diffState(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	ref, ok := h.updateRef(w, r)
+	if !ok {
+		return
+	}
+
+	cursor, limit, ok := h.statePaging(w, r)
+	if !ok {
+		return
+	}
+
+	query := r.URL.Query()
+
+	from, ok := h.diffCheckpointOf(w, r, ref, "from", query.Get("from"))
+	if !ok {
+		return
+	}
+
+	to, ok := h.diffCheckpointOf(w, r, ref, "to", query.Get("to"))
+	if !ok {
+		return
+	}
+
+	diff, err := stack.DiffStates(from.Deployment, to.Deployment, cursor, limit)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	changed := make([]stateDiffChangedItem, 0, len(diff.Changed))
+	for i := range diff.Changed {
+		paths := diff.Changed[i].ChangedPaths
+		if paths == nil {
+			paths = []string{}
+		}
+
+		secrets := diff.Changed[i].ChangedSecrets
+		if secrets == nil {
+			secrets = []string{}
+		}
+
+		changed = append(changed, stateDiffChangedItem{
+			URN:            diff.Changed[i].URN,
+			ChangedPaths:   paths,
+			ChangedSecrets: secrets,
+		})
+	}
+
+	added := diff.Added
+	if added == nil {
+		added = []string{}
+	}
+
+	removed := diff.Removed
+	if removed == nil {
+		removed = []string{}
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, diffStateResponse{
+		Added:      added,
+		Removed:    removed,
+		Changed:    changed,
+		NextCursor: diff.NextCursor,
+		Incomplete: diff.Incomplete,
+		Reason:     diff.Reason,
 	})
 }
 

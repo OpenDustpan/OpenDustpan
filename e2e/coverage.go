@@ -681,6 +681,13 @@ func stateAllowEntries() []AllowEntry {
 			Reason: "Console route (ADR 41): the CLI never reads masked outputs. " +
 				"The harness step reads them after two ups and checks masking.",
 		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/diff",
+			CoveringTest: "TestCLIs (pulumiDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two ups with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
+		},
 	}
 }
 

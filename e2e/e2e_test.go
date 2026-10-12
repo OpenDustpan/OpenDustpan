@@ -1321,6 +1321,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiChangeSecretsProviderScenario(t, env, org)
 
 	pulumiMaskedStateScenario(t, env, org)
+
+	pulumiDiffScenario(t, env, org)
 }
 
 // changeSecretsProviderProgram is the scratch YAML program for the
@@ -1507,6 +1509,282 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// diffSecretV1 and diffSecretV2 are the config secret values of the two diff
+// ups. They are test values only; no diff response may ever return them.
+const (
+	diffSecretV1 = "s3cr3t-diff-v1"
+	diffSecretV2 = "s3cr3t-diff-v2" //nolint:gosec // Test value only; no diff response may return it.
+)
+
+// stateDiffProgram returns the Pulumi.yaml of the diff scenario: a secret
+// output from config, a plain greeting that changes between the two ups,
+// one kept stack reference, and one reference whose logical name is extra.
+func stateDiffProgram(org, greeting, extra string) string {
+	return "name: " + e2e.Project + "\nruntime: yaml\n" +
+		"config:\n" +
+		"  apiKey:\n" +
+		"    type: string\n" +
+		"    secret: true\n" +
+		"outputs:\n" +
+		"  apiKeyOut:\n" +
+		"    fn::secret: ${apiKey}\n" +
+		"  greeting: " + greeting + "\n" +
+		"resources:\n" +
+		"  keep:\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + org + "/" + e2e.Project + "/other\n" +
+		"  " + extra + ":\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + org + "/" + e2e.Project + "/other\n"
+}
+
+// pulumiDiffScenario proves the state diff (ADR 41 decision 9, masked per
+// decision 2) on a stack of its own that it removes: two ups with one added
+// reference, one removed reference, one changed greeting and one changed
+// secret. The diff answers each, with no secret value in the response.
+func pulumiDiffScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	qualified := fmt.Sprintf("%s/%s/diffed", org, e2e.Project)
+
+	env.WritePulumiProject(t, stateDiffProgram(org, "hi", "gone"))
+	env.Step(ctx, t, step("stack init diffed", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for diff 1",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", diffSecretV1,
+		),
+	)
+	env.Step(ctx, t, step("up diffed 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.WritePulumiProject(t, stateDiffProgram(org, "hello-again", "added"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for diff 2",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", diffSecretV2,
+		),
+	)
+	env.Step(ctx, t, step("up diffed 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.Step(ctx, t, step(
+		"state diff",
+		checkStateDiff(ctx, env, org),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm diffed", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// stateDiffChangedEntry is one changed resource of the diff in e2e checks.
+type stateDiffChangedEntry struct {
+	URN            string   `json:"urn"`
+	ChangedPaths   []string `json:"changedPaths"`
+	ChangedSecrets []string `json:"changedSecrets"`
+}
+
+// stateDiffDoc is the diff body in e2e checks.
+type stateDiffDoc struct {
+	Added      []string                `json:"added"`
+	Removed    []string                `json:"removed"`
+	Changed    []stateDiffChangedEntry `json:"changed"`
+	NextCursor string                  `json:"nextCursor"`
+	Incomplete bool                    `json:"incomplete"`
+}
+
+// decodeStateDiffBody decodes a diff body.
+func decodeStateDiffBody(body string) (stateDiffDoc, error) {
+	var doc stateDiffDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return stateDiffDoc{}, fmt.Errorf("%w: decode state diff: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// checkStateDiff proves the diff of versions 1 and 2 of the diffed stack:
+// one added reference, one removed reference, and the changed stack with
+// the changed greeting in changedPaths and the changed secret in
+// changedSecrets. No body holds a secret value, a ciphertext field or the
+// secret signature. A paged read with a limit of one lists the same three
+// URNs, and the diff of version 2 with itself is empty.
+func checkStateDiff(ctx context.Context, env *e2e.Env, org string) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/diffed", org, e2e.Project)
+
+		raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=1&to=2")
+		if err != nil {
+			return err
+		}
+
+		doc, err := decodeStateDiffBody(raw)
+		if err != nil {
+			return err
+		}
+
+		if err := assertStateDiffEntries(doc); err != nil {
+			return err
+		}
+
+		if err := assertStateDiffHasNoSecrets(raw); err != nil {
+			return err
+		}
+
+		if err := assertStateDiffPaged(ctx, env, base, doc); err != nil {
+			return err
+		}
+
+		return assertStateDiffEmpty(ctx, env, base)
+	}
+}
+
+// assertStateDiffEntries proves the diff holds one added reference, one
+// removed reference, and the changed stack with the greeting path and the
+// secret path.
+func assertStateDiffEntries(doc stateDiffDoc) error {
+	if len(doc.Added) != 1 || !strings.HasSuffix(doc.Added[0], "::added") {
+		return fmt.Errorf("%w: diff added = %q, want the added reference", errUnexpected, doc.Added)
+	}
+
+	if len(doc.Removed) != 1 || !strings.HasSuffix(doc.Removed[0], "::gone") {
+		return fmt.Errorf("%w: diff removed = %q, want the gone reference", errUnexpected, doc.Removed)
+	}
+
+	if len(doc.Changed) != 1 {
+		return fmt.Errorf("%w: diff changed = %+v, want only the stack resource", errUnexpected, doc.Changed)
+	}
+
+	entry := doc.Changed[0]
+
+	if !strings.Contains(entry.URN, "pulumi:pulumi:Stack::") {
+		return fmt.Errorf("%w: diff changed URN %q is not the stack resource", errUnexpected, entry.URN)
+	}
+
+	if !slices.Contains(entry.ChangedPaths, "/outputs/greeting") {
+		return fmt.Errorf(
+			"%w: diff changed paths = %q, want /outputs/greeting",
+			errUnexpected,
+			entry.ChangedPaths,
+		)
+	}
+
+	if !slices.ContainsFunc(entry.ChangedSecrets, func(path string) bool {
+		return strings.Contains(path, "/outputs/")
+	}) {
+		return fmt.Errorf(
+			"%w: diff changed secrets = %q, want the secret output",
+			errUnexpected,
+			entry.ChangedSecrets,
+		)
+	}
+
+	if doc.NextCursor != "" || doc.Incomplete {
+		return fmt.Errorf("%w: diff = %+v, want a single complete page", errUnexpected, doc)
+	}
+
+	return nil
+}
+
+// assertStateDiffHasNoSecrets fails when the diff body holds a secret value,
+// a ciphertext field or the secret signature key.
+func assertStateDiffHasNoSecrets(body string) error {
+	for _, leaked := range []string{diffSecretV1, diffSecretV2, "ciphertext", maskedStateSigKey} {
+		if strings.Contains(body, leaked) {
+			return fmt.Errorf("%w: diff body holds %q", errUnexpected, leaked)
+		}
+	}
+
+	return nil
+}
+
+// stateDiffPageURNs returns the URNs of one diff page.
+func stateDiffPageURNs(doc stateDiffDoc) []string {
+	urns := make([]string, 0, len(doc.Added)+len(doc.Removed)+len(doc.Changed))
+	urns = append(urns, doc.Added...)
+	urns = append(urns, doc.Removed...)
+
+	for _, entry := range doc.Changed {
+		urns = append(urns, entry.URN)
+	}
+
+	return urns
+}
+
+// assertStateDiffPaged proves a paged read with a limit of one lists the
+// same differing URNs as the full diff, with no secret value in any page.
+func assertStateDiffPaged(ctx context.Context, env *e2e.Env, base string, full stateDiffDoc) error {
+	want := map[string]bool{}
+	for _, urn := range stateDiffPageURNs(full) {
+		want[urn] = true
+	}
+
+	seen := map[string]bool{}
+	cursor := ""
+
+	for {
+		raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=1&to=2&limit=1&cursor="+cursor)
+		if err != nil {
+			return err
+		}
+
+		if leakErr := assertStateDiffHasNoSecrets(raw); leakErr != nil {
+			return leakErr
+		}
+
+		doc, err := decodeStateDiffBody(raw)
+		if err != nil {
+			return err
+		}
+
+		urns := stateDiffPageURNs(doc)
+		if len(urns) != 1 {
+			return fmt.Errorf("%w: diff page at %q holds %d entries, want 1", errUnexpected, cursor, len(urns))
+		}
+
+		if seen[urns[0]] {
+			return fmt.Errorf("%w: diff page lists %q twice", errUnexpected, urns[0])
+		}
+
+		seen[urns[0]] = true
+		cursor = doc.NextCursor
+
+		if cursor == "" {
+			break
+		}
+	}
+
+	if !maps.Equal(seen, want) {
+		return fmt.Errorf("%w: paged diff URNs %v differ from full diff URNs %v", errUnexpected, seen, want)
+	}
+
+	return nil
+}
+
+// assertStateDiffEmpty proves the diff of version 2 with itself is empty.
+func assertStateDiffEmpty(ctx context.Context, env *e2e.Env, base string) error {
+	raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=2&to=2")
+	if err != nil {
+		return err
+	}
+
+	doc, err := decodeStateDiffBody(raw)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Added) != 0 || len(doc.Removed) != 0 || len(doc.Changed) != 0 {
+		return fmt.Errorf("%w: same-version diff = %+v, want no change", errUnexpected, doc)
+	}
+
+	return nil
 }
 
 // maskedStateItem is one entry of the masked resource list in e2e checks.
