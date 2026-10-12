@@ -5716,9 +5716,9 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 		}
 
 		page := doc.Meta.Pagination
-		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 2 || page.TotalPages != 2 {
+		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 3 || page.TotalPages != 3 {
 			return fmt.Errorf(
-				"%w: pagination %+v, want page %d of size %d with 2 entries in 2 pages",
+				"%w: pagination %+v, want page %d of size %d with 3 entries in 3 pages",
 				errUnexpected,
 				page,
 				number,
@@ -5764,7 +5764,9 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(newest, 1, 1),
+		Check: func(body string) error {
+			return checkStateVersionListPage(newest, 1, 1)(body)
+		},
 		Name:   "list state versions first page",
 		Method: http.MethodGet,
 		Path:   base + "&page[size]=1&page[number]=1",
@@ -5773,7 +5775,9 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(oldest, 2, 1),
+		Check: func(body string) error {
+			return checkStateVersionListPage(oldest, 2, 1)(body)
+		},
 		Name:   "list state versions second page",
 		Method: http.MethodGet,
 		Path:   base + "&page[size]=1&page[number]=2",
