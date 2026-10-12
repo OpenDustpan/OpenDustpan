@@ -110,18 +110,19 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               updates,
-		Secrets:               secrets,
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            authz,
-		Logger:                cfg.logger,
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 cfg.store,
-		OnAuditFailure:        cfg.onFail,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 updates,
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  cfg.logger,
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   cfg.store,
+		OnAuditFailure:          cfg.onFail,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

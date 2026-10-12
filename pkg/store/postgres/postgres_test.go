@@ -2251,6 +2251,7 @@ func seedAddedUpdate(t *testing.T, s *postgres.Store, ns namespace.Namespace, re
 	ctx := t.Context()
 
 	u := stack.Update{
+		JournalVersion:  0,
 		CreatedAt:       now,
 		StartedAt:       time.Time{},
 		EndedAt:         time.Time{},

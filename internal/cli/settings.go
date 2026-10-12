@@ -186,6 +186,12 @@ var Settings = []*Setting{
 			"0 turns delta uploads off (DUSTPAN_CHECKPOINT_DELTA_CUTOFF)",
 		"`1048576` (1 MiB). `0` turns delta checkpoint uploads off",
 	),
+	boolSetting(
+		"disable-pulumi-journaling", "DUSTPAN_DISABLE_PULUMI_JOURNALING",
+		"answer journalVersion 0 at the start of a Pulumi update, so the CLI saves checkpoints "+
+			"(DUSTPAN_DISABLE_PULUMI_JOURNALING=true)",
+		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
+	),
 	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",

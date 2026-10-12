@@ -164,18 +164,19 @@ func newUserHandler(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newUnusedUpdates(t, namespaces),
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            authz,
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newUnusedUpdates(t, namespaces),
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

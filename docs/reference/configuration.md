@@ -27,6 +27,7 @@ same list.
 | `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
 | `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `0`: 32 MiB, the largest Pulumi checkpoint |
 | `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
+| `--disable-pulumi-journaling` | `DUSTPAN_DISABLE_PULUMI_JOURNALING` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `0`: 512 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `0`: 128 MiB of large Pulumi request bodies at the same time |

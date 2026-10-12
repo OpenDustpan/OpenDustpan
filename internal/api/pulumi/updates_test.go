@@ -455,18 +455,19 @@ func newUpdateFixtureWithCutoff(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               updates,
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            authz,
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: cutoff,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 updates,
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   cutoff,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -2645,18 +2646,19 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 	}
 
 	_, err = pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               updates,
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            allowAll(),
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		CheckpointDeltaCutoff: -1,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 updates,
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              allowAll(),
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		CheckpointDeltaCutoff:   -1,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
 	})
 	if !errors.Is(err, pulumi.ErrInvalidCutoff) {
 		t.Fatalf("negative cutoff: err = %v, want %v", err, pulumi.ErrInvalidCutoff)
@@ -2948,5 +2950,38 @@ func TestCapabilitiesHideDeltaWhenCutoffZero(t *testing.T) {
 		if c.Capability == "delta-checkpoint-uploads-v2" {
 			t.Fatalf("capabilities = %s, want no delta capability with a zero cutoff", body)
 		}
+	}
+}
+
+// TestStartAnswersJournalVersion checks that a start answers journalVersion
+// with the value that the store kept. Until the version gate of ADR 43 lands,
+// every update answers 0, which means checkpoints. The field must be present,
+// because the CLI reads it.
+func TestStartAnswersJournalVersion(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	id := createPreviewUpdate(t, f)
+	paths := mintedPaths(id)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodPost, paths.Start, `{}`))
+	if status != http.StatusOK {
+		t.Fatalf("start answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var started struct {
+		JournalVersion *int `json:"journalVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil {
+		t.Fatalf("decode start: %v (%s)", err, body)
+	}
+
+	if started.JournalVersion == nil {
+		t.Fatalf("start answers no journalVersion (%s)", body)
+	}
+
+	if *started.JournalVersion != 0 {
+		t.Fatalf("journalVersion = %d, want 0 until the version gate lands", *started.JournalVersion)
 	}
 }

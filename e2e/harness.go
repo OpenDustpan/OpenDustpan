@@ -238,6 +238,28 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
 }
 
+// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
+// journaling turned off, so each update answers journalVersion 0.
+func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	dir := tb.TempDir()
+	token := newToken(tb)
+	tokenB := newToken(tb)
+	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
+	in := envInput{
+		deltaCutoff: 0,
+		tb:          tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec,
+		disableJournaling: true,
+	}
+
+	if UseBinaryServer() {
+		return newBinaryEnv(ctx, in)
+	}
+
+	return newInprocessEnv(ctx, in)
+}
+
 // NewEnvWithDeltaCutoff starts a server as NewEnv does, with the delta
 // checkpoint cutoff in bytes. A cutoff of 1 makes every save after the
 // first a delta; 0 hides the delta capability.
@@ -249,7 +271,15 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 	in := envInput{
-		tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec, deltaCutoff: cutoff,
+		disableJournaling: false,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               dir,
+		token:             token,
+		tokenB:            tokenB,
+		rec:               rec,
+		deltaCutoff:       cutoff,
 	}
 
 	if UseBinaryServer() {
@@ -266,10 +296,11 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb.Helper()
 
 	build := newServer(ctx, tb, serverArgs{
-		store:       in.store,
-		dbPath:      filepath.Join(in.dir, "dustpan.db"),
-		tokens:      serverTokens{tokenA: in.token, tokenB: in.tokenB},
-		deltaCutoff: in.deltaCutoff,
+		store:             in.store,
+		dbPath:            filepath.Join(in.dir, "dustpan.db"),
+		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB},
+		deltaCutoff:       in.deltaCutoff,
+		disableJournaling: in.disableJournaling,
 	})
 
 	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
@@ -393,6 +424,8 @@ type serverArgs struct {
 	dbPath      string
 	tokens      serverTokens
 	deltaCutoff int
+	// disableJournaling turns Pulumi journaling off on the in-process server.
+	disableJournaling bool
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
@@ -448,6 +481,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
+		dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 	)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)

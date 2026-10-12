@@ -231,26 +231,27 @@ func serveWithIO(
 type serveFlags struct {
 	common
 
-	listen                string
-	consoleDir            string
-	origins               string
-	tlsCert               string
-	tlsKey                string
-	publicURL             string
-	blobDir               string
-	blobStore             string
-	s3Endpoint            string
-	s3Region              string
-	backupTarget          string
-	logLevel              string
-	logFormat             string
-	keyFile               string
-	generateKey           bool
-	maxCheckpointBytes    int64
-	maxSecretBatchBytes   int64
-	maxStateBytes         int64
-	maxBodyBytesInFlight  int64
-	checkpointDeltaCutoff int64
+	listen                  string
+	consoleDir              string
+	origins                 string
+	tlsCert                 string
+	tlsKey                  string
+	publicURL               string
+	blobDir                 string
+	blobStore               string
+	s3Endpoint              string
+	s3Region                string
+	backupTarget            string
+	logLevel                string
+	logFormat               string
+	keyFile                 string
+	generateKey             bool
+	maxCheckpointBytes      int64
+	maxSecretBatchBytes     int64
+	maxStateBytes           int64
+	maxBodyBytesInFlight    int64
+	checkpointDeltaCutoff   int64
+	disablePulumiJournaling bool
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -299,6 +300,7 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("max-state-bytes").Int64(fs, &f.maxStateBytes)
 	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
+	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -897,6 +899,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
+		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 	}
 }
 

@@ -95,6 +95,10 @@ type Config struct {
 	// CheckpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero turns the delta capability off.
 	CheckpointDeltaCutoff int
+	// DisablePulumiJournaling turns journaling off. ADR 43 item 2 reads it when
+	// the version gate answers the journal version. Until that item lands,
+	// every update answers journalVersion 0.
+	DisablePulumiJournaling bool
 }
 
 // Handler serves the Pulumi CLI API under /api/.
