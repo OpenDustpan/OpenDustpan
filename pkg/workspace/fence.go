@@ -65,7 +65,7 @@ func (s *Service) releaseWithFence(
 	released.UpdatedAt = sv.FinalizedAt
 	released.Revision++
 
-	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, fence); fenceErr != nil {
+	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence); fenceErr != nil {
 		return Workspace{}, s.fenceRefused(ctx, w, sv.Content, fenceErr)
 	}
 
@@ -148,7 +148,10 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 	}
 
 	if encrypted {
-		return nil, ErrClientEncrypted
+		return nil, fmt.Errorf(
+			"%w. The server cannot fence it. Run tofu force-unlock from the client that holds the lock",
+			ErrClientEncrypted,
+		)
 	}
 
 	var doc map[string]json.RawMessage

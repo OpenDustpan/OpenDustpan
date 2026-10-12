@@ -551,7 +551,10 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 	}
 
 	if _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject); err != nil {
-		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) {
+		// A client-encrypted state cannot be fenced, so its lock stays. The
+		// enter goes on and does not report the unit as released.
+		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) ||
+			errors.Is(err, workspace.ErrClientEncrypted) {
 			return "", false, nil
 		}
 

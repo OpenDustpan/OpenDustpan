@@ -36,12 +36,14 @@ const memInventoryTool = "opentofu"
 // memStore implements namespace.Store, workspace.Store, workspace.StateStore
 // and inventory.Reader in memory, following their contracts.
 type memStore struct {
-	namespaces map[namespace.Name]namespace.Namespace
-	workspaces map[workspace.ID]workspace.Workspace
-	versions   map[workspace.StateVersionID]workspace.StateVersion
-	current    map[workspace.ID]workspace.StateVersionID
-	entries    map[memInventoryKey]inventory.Entry
-	mu         sync.Mutex
+	// beforeFence, when set, runs before FenceAndUnlock takes the store lock.
+	beforeFence func(sv workspace.StateVersion)
+	namespaces  map[namespace.Name]namespace.Namespace
+	workspaces  map[workspace.ID]workspace.Workspace
+	versions    map[workspace.StateVersionID]workspace.StateVersion
+	current     map[workspace.ID]workspace.StateVersionID
+	entries     map[memInventoryKey]inventory.Entry
+	mu          sync.Mutex
 	// lostAck makes the next finalize commit and then report an error, as a
 	// dropped connection after COMMIT would.
 	lostAck bool
@@ -322,8 +324,16 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 // and makes the fence version current, checking the same guards as the
 // adapters: the fence, a held lock and the revision.
 func (m *memStore) FenceAndUnlock(
-	_ context.Context, w workspace.Workspace, sv workspace.StateVersion, fence namespace.Fence,
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
 ) error {
+	// The hook runs before the store takes its lock, so a test can land a
+	// write between the caller's read and this fence, as a concurrent
+	// finalize would.
+	if m.beforeFence != nil {
+		m.beforeFence(sv)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -344,7 +354,12 @@ func (m *memStore) FenceAndUnlock(
 		return workspace.ErrConcurrentModification
 	}
 
-	if curID, found := m.current[w.ID]; found && sv.Serial != m.versions[curID].Serial+1 {
+	curID, found := m.current[w.ID]
+	if (found && curID != expect) || (!found && expect != "") {
+		return workspace.ErrConcurrentModification
+	}
+
+	if found && sv.Serial != m.versions[curID].Serial+1 {
 		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
 	}
 
@@ -3133,7 +3148,7 @@ func (f fencedStates) CreateStateVersion(
 
 // FinalizeStateVersion rejects the write with namespace.ErrFenced.
 func (f fencedStates) FenceAndUnlock(
-	_ context.Context, _ workspace.Workspace, _ workspace.StateVersion, _ namespace.Fence,
+	_ context.Context, _ workspace.Workspace, _ workspace.StateVersion, _ workspace.StateVersionID, _ namespace.Fence,
 ) error {
 	return namespace.ErrFenced
 }

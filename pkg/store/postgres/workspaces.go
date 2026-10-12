@@ -507,10 +507,11 @@ func (s *Store) FinalizeStateVersion(
 // inserts sv as the finalized current version and moves the workspace pointer
 // to it, in one fenced transaction. The inventory entry moves with the release.
 func (s *Store) FenceAndUnlock(
-	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion, fence namespace.Fence,
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
 ) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv))
+		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv), expect)
 	})
 }
 
@@ -521,6 +522,7 @@ func (s *Store) FenceAndUnlock(
 // changes nothing.
 func fenceAndUnlockInTx(
 	ctx context.Context, q *db.Queries, w workspace.Workspace, row codec.StateVersionRow,
+	expect workspace.StateVersionID,
 ) error {
 	wrow, err := lockWorkspace(ctx, q, w.ID.String())
 	if err != nil {
@@ -531,7 +533,7 @@ func fenceAndUnlockInTx(
 		return workspace.ErrNotLocked
 	}
 
-	if fenceErr := checkFenceSerial(ctx, q, wrow.ID, row.Serial); fenceErr != nil {
+	if fenceErr := checkFenceCurrent(ctx, q, wrow.ID, expect, row.Serial); fenceErr != nil {
 		return fenceErr
 	}
 
@@ -893,18 +895,30 @@ func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersi
 	return nil
 }
 
-// checkFenceSerial checks that a fence has the serial one more than the
-// current version of the workspace, read in the same transaction, so a
-// finalize that landed after the caller read the current state is refused.
-// A workspace with no current state accepts any serial.
-func checkFenceSerial(ctx context.Context, q *db.Queries, workspaceID string, serial int64) error {
+// checkFenceCurrent checks that a fence was made from the current version the
+// caller read: the current version is expect, and the fence serial is one more
+// than its serial. The read runs in the same transaction as the write, so a
+// finalize that landed after the caller read the current version fails here.
+// A workspace with no current state matches the empty expect, and accepts any
+// serial.
+func checkFenceCurrent(
+	ctx context.Context, q *db.Queries, workspaceID string, expect workspace.StateVersionID, serial int64,
+) error {
 	current, err := q.GetCurrentStateVersion(ctx, workspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if expect != "" {
+			return workspace.ErrConcurrentModification
+		}
+
 		return nil
 	}
 
 	if err != nil {
 		return fmt.Errorf("read current state: %w", err)
+	}
+
+	if current.ID != expect.String() {
+		return workspace.ErrConcurrentModification
 	}
 
 	if serial != current.Serial+1 {

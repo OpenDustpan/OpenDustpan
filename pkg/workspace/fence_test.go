@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -206,5 +207,97 @@ func TestForceUnlockSealedNeedsSealer(t *testing.T) {
 
 	if !held.Lock.Locked() {
 		t.Fatal("the lock was released without a fence")
+	}
+}
+
+// A finalize that lands between the read of the current state and the fence
+// refuses the fence with ErrConcurrentModification, leaves the lock held, and
+// deletes the blob of the refused fence.
+func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	const next = `{"lineage":"lin-old","serial":2,"resources":[]}`
+
+	var fenceKey blob.Key
+
+	f.store.beforeFence = func(sv workspace.StateVersion) {
+		fenceKey = sv.Content
+
+		// A holder finalizes a newer version before the fence takes the store lock.
+		if err := f.push(t, newState("lin-old", 2, next), next); err != nil {
+			t.Errorf("push v2 during the fence: %v", err)
+		}
+	}
+
+	_, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin")
+	if !errors.Is(err, workspace.ErrConcurrentModification) {
+		t.Fatalf("force unlock beside a finalize: err = %v, want ErrConcurrentModification", err)
+	}
+
+	held, getErr := f.svc.GetByID(ctx, f.ws.ID)
+	if getErr != nil {
+		t.Fatalf("get workspace: %v", getErr)
+	}
+
+	if !held.Lock.Locked() {
+		t.Fatal("the lock was released by a refused fence")
+	}
+
+	if fenceKey == "" {
+		t.Fatal("the hook saw no fence")
+	}
+
+	if r, blobErr := f.blobs.Get(ctx, fenceKey); blobErr == nil {
+		_ = r.Close()
+
+		t.Fatal("the blob of the refused fence was kept")
+	}
+}
+
+// A force-unlock of a state the client encrypted is refused, and the lock
+// stays. The refusal names the command that releases the lock.
+func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
+
+	if err := f.push(t, newState("lin-old", 1, encrypted), encrypted); err != nil {
+		t.Fatalf("push encrypted state: %v", err)
+	}
+
+	_, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin")
+	if !errors.Is(err, workspace.ErrClientEncrypted) {
+		t.Fatalf("force unlock of an encrypted state: err = %v, want ErrClientEncrypted", err)
+	}
+
+	if !strings.Contains(err.Error(), "tofu force-unlock from the client that holds the lock") {
+		t.Fatalf("refusal does not name the way out: %v", err)
+	}
+
+	held, getErr := f.svc.GetByID(ctx, f.ws.ID)
+	if getErr != nil {
+		t.Fatalf("get workspace: %v", getErr)
+	}
+
+	if !held.Lock.Locked() {
+		t.Fatal("the lock was released although the state cannot be fenced")
 	}
 }

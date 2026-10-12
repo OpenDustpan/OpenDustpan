@@ -102,10 +102,15 @@ type StateStore interface {
 	// state, in one fenced transaction. sv is a finalized fence version of w:
 	// it names the content, the new lineage, its serial and FenceBy. The stored
 	// workspace must be locked and hold revision w.Revision-1, else
-	// ErrNotLocked or ErrConcurrentModification. It returns ErrNotFound if the
-	// workspace does not exist, namespace.ErrNotFound if the namespace does not
-	// exist, or namespace.ErrFenced if fence is stale. An error writes nothing.
-	FenceAndUnlock(ctx context.Context, w Workspace, sv StateVersion, fence namespace.Fence) error
+	// ErrNotLocked or ErrConcurrentModification. The current version must be
+	// expect (the empty ID when the workspace has no state), else
+	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
+	// else ErrStaleSerial. It returns ErrNotFound if the workspace does not
+	// exist, namespace.ErrNotFound if the namespace does not exist, or
+	// namespace.ErrFenced if fence is stale. An error writes nothing.
+	FenceAndUnlock(
+		ctx context.Context, w Workspace, sv StateVersion, expect StateVersionID, fence namespace.Fence,
+	) error
 	// CurrentStateVersion returns the workspace's current state, or ErrNoState.
 	CurrentStateVersion(ctx context.Context, workspace ID) (StateVersion, error)
 	// ListStateVersions returns the finalized versions of workspace, newest
