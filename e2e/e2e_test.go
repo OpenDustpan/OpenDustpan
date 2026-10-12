@@ -3852,8 +3852,6 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
-	tofuForceUnlockFenceScenario(t, env)
-
 	tofuMaintenanceScenario(t, env)
 
 	// A second apply with a changed output makes a second state version, so
@@ -3863,6 +3861,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	// The list route serves the two versions with the go-tfe query shape.
 	tofuStateVersionListScenario(t, env)
+
+	// The stale job's declare after a force-unlock. It runs after the list, which
+	// counts the versions this scenario has written so far.
+	tofuForceUnlockFenceScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
