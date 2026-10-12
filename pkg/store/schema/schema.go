@@ -141,7 +141,7 @@ var embeddedMigrationNames = []string{
 	"0014_checkpoint_resource_count.sql",
 	"0015_maintenance.sql",
 	"0016_checkpoint_blobs.sql",
-	"0017_audit_entries.sql",
+	"0019_audit_entries.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
