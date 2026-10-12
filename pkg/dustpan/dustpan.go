@@ -124,8 +124,11 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	maxBodyBytesInFlight int64
-	backupTarget         blob.Store
-	backupTargetName     string
+	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
+	// CLI sends delta uploads. Zero hides the delta capability.
+	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
 }
 
 // Option configures a Server.
@@ -273,6 +276,14 @@ func WithMaxBodyBytesInFlight(n int64) Option {
 	return func(o *settings) { o.maxBodyBytesInFlight = n }
 }
 
+// WithCheckpointDeltaCutoff sets the checkpoint size in bytes from which
+// the CLI sends delta uploads. Zero hides the delta capability, so the CLI
+// sends whole checkpoints. A negative value fails NewServer. Without this
+// option the server advertises the default cutoff.
+func WithCheckpointDeltaCutoff(n int) Option {
+	return func(o *settings) { o.checkpointDeltaCutoff = n }
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -317,35 +328,36 @@ type services struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore:       nil,
-		stackStore:           nil,
-		updateStore:          nil,
-		checkpointStore:      nil,
-		eventStore:           nil,
-		secretKeys:           nil,
-		secretWrapper:        nil,
-		workspaceStore:       nil,
-		stateStore:           nil,
-		blobStore:            nil,
-		inventoryReader:      nil,
-		authenticator:        nil,
-		authorizer:           identity.AdminOnly{},
-		logger:               slog.New(slog.DiscardHandler),
-		now:                  time.Now,
-		region:               "",
-		listenAddr:           defaultListenAddr,
-		consoleDir:           "",
-		allowedOrigins:       nil,
-		tlsCertFile:          "",
-		tlsKeyFile:           "",
-		publicURL:            "",
-		version:              "",
-		maxCheckpointBytes:   0,
-		maxSecretBatchBytes:  0,
-		maxStateBytes:        0,
-		maxBodyBytesInFlight: 0,
-		backupTarget:         nil,
-		backupTargetName:     "",
+		namespaceStore:        nil,
+		stackStore:            nil,
+		updateStore:           nil,
+		checkpointStore:       nil,
+		eventStore:            nil,
+		secretKeys:            nil,
+		secretWrapper:         nil,
+		workspaceStore:        nil,
+		stateStore:            nil,
+		blobStore:             nil,
+		inventoryReader:       nil,
+		authenticator:         nil,
+		authorizer:            identity.AdminOnly{},
+		logger:                slog.New(slog.DiscardHandler),
+		now:                   time.Now,
+		region:                "",
+		listenAddr:            defaultListenAddr,
+		consoleDir:            "",
+		allowedOrigins:        nil,
+		tlsCertFile:           "",
+		tlsKeyFile:            "",
+		publicURL:             "",
+		version:               "",
+		maxCheckpointBytes:    0,
+		maxSecretBatchBytes:   0,
+		maxStateBytes:         0,
+		maxBodyBytesInFlight:  0,
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
+		backupTarget:          nil,
+		backupTargetName:      "",
 	}
 
 	for _, opt := range opts {
@@ -671,19 +683,11 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // check that refuses a key-encryption key that opens less than every wrapped
 // key in the database (ADR 23), so a program that embeds the server cannot
 // start with the wrong key. It then marks every running backup failed: the
-// server stopped during it (ADR 30 decision 9).
+// server stopped during it (ADR 30 decision 9). When ctx is done before
+// these start-up steps end, Run returns nil: the caller asked it to stop,
+// and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
-		return err
-	}
-
-	if s.backupRegistry != nil {
-		if err := s.backupRegistry.FailRunningBackups(ctx, s.now().UTC(), backupStoppedText); err != nil {
-			return fmt.Errorf("fail running backups: %w", err)
-		}
-	}
-
-	if err := s.failStoppedRestores(ctx); err != nil {
+	if err := s.runStartUp(ctx); err != nil {
 		return err
 	}
 
@@ -762,6 +766,24 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 	return nil
 }
 
+// runStartUp runs the start-up steps of Run in order: the key check and the
+// running backups of startUp (ADR 23, ADR 30 decision 9), then the running
+// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// the steps is a stop, not a failure, so it answers nil: the caller asked
+// the server to stop.
+func (s *Server) runStartUp(ctx context.Context) error {
+	startErr := s.startUp(ctx)
+	if startErr == nil {
+		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr != nil && ctx.Err() == nil {
+		return startErr
+	}
+
+	return nil
+}
+
 // failStoppedRestores marks every running restore failed: the server stopped
 // during it (ADR 38 decision 9). When a restore was running, it fences every
 // namespace again before serving tool APIs: a stop during the checks or the
@@ -811,6 +833,26 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 	return nil
 }
 
+// startUp runs the start-up steps of Run in order: the key check of ADR 23,
+// then marking every running backup failed (ADR 30 decision 9). The store
+// adapters already name the backup step in their error text, so startUp
+// adds no second prefix.
+func (s *Server) startUp(ctx context.Context) error {
+	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
+		return err
+	}
+
+	if s.backupRegistry == nil {
+		return nil
+	}
+
+	return s.backupRegistry.FailRunningBackups(
+		ctx,
+		s.now().UTC(),
+		backupStoppedText,
+	)
+}
+
 // isLoopbackListenAddr reports whether addr binds only the loopback
 // interface. An empty host binds every interface, so it is not loopback. A
 // name that is not an IP address counts as loopback only for localhost.
@@ -835,15 +877,16 @@ func isLoopbackListenAddr(addr string) bool {
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
 func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               svc.stacks,
-		Updates:              svc.updates,
-		Secrets:              svc.secrets,
-		Namespaces:           svc.namespaces,
-		Authenticator:        cfg.authenticator,
-		Authorizer:           cfg.authorizer,
-		Logger:               cfg.logger,
-		BaseURL:              base,
-		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Stacks:                svc.stacks,
+		Updates:               svc.updates,
+		Secrets:               svc.secrets,
+		Namespaces:            svc.namespaces,
+		Authenticator:         cfg.authenticator,
+		Authorizer:            cfg.authorizer,
+		Logger:                cfg.logger,
+		BaseURL:               base,
+		MaxBodyBytesInFlight:  cfg.maxBodyBytesInFlight,
+		CheckpointDeltaCutoff: cfg.checkpointDeltaCutoff,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
@@ -869,15 +912,6 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
-// serverServices carries the domain services of the installation API.
-type serverServices struct {
-	services services
-	backups  *backup.Service
-	restores *backup.RestoreService
-	maint    *maintenance.Service
-	observed *metrics.ServerMetrics
-}
-
 // installationDeps carries the services of the installation API.
 type installationDeps struct {
 	services services
@@ -896,13 +930,7 @@ func newInstallationAPI(
 		return nil, nil, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, serverServices{
-		services: deps.services,
-		backups:  deps.backups,
-		restores: restores,
-		maint:    deps.maint,
-		observed: deps.observed,
-	})
+	serverAPI, err := newServerHandler(cfg, deps, restores)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -913,24 +941,45 @@ func newInstallationAPI(
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
 // backup target is configured, else nil, the restore service when a backup
-// target is configured, else nil, the maintenance service, and the registry
-// that the metrics route writes.
-func newServerHandler(cfg settings, svc serverServices) (http.Handler, error) {
+// target is configured, else nil, the maintenance service, the registry
+// that the metrics route writes, the server version and the schema store
+// that the upgrade check reads.
+func newServerHandler(
+	cfg settings, deps installationDeps, restores *backup.RestoreService,
+) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
-		Namespaces:    svc.services.namespaces,
-		Backups:       svc.backups,
-		Restores:      svc.restores,
-		Maintenance:   svc.maint,
-		Metrics:       svc.observed,
+		Namespaces:    deps.services.namespaces,
+		Backups:       deps.backups,
+		Restores:      restores,
+		Maintenance:   deps.maint,
+		Metrics:       deps.observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// schemaReporterOf returns the schema reporter of the namespace store, or
+// nil when the store does not report applied migrations. Both SQL adapters
+// report them.
+//
+// caller keeps the interface the installation API consumes.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
+	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
 }
 
 // newBackupService builds the installation backup service when a backup

@@ -1,8 +1,8 @@
 package server
 
 // Backup routes of the installation API (ADR 30 decision 9): start a backup,
-// list the backups this installation made, and read one backup with its
-// manifest.
+// list the backups this installation made, read one backup with its
+// manifest, and check a backup in the configured target.
 //
 // POST /api/server/backups starts a backup in the background and answers 202
 // with the ID. Only one backup runs at a time; a second start answers 409.
@@ -10,7 +10,7 @@ package server
 // GET /api/server/backups/{id} answers the state (running, succeeded or
 // failed) and, when the backup succeeded, the manifest.
 //
-// All three need the action server:backup on the installation (@server). The
+// All four need the action server:backup on the installation (@server). The
 // target comes only from the backup service the server was wired with: no
 // request field, header or query value sets it.
 
@@ -188,4 +188,62 @@ func summarizeBackup(record backup.Record) backupSummaryJSON {
 // form of backup times.
 func formatBackupTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// checkBackupResponse answers the backup check: whether the configured
+// target holds every object the manifest names with the recorded size.
+// Complete is false with the first missing or short object in Error.
+type checkBackupResponse struct {
+	ID       string `json:"id"`
+	Complete bool   `json:"complete"`
+	Error    string `json:"error,omitempty"`
+}
+
+// checkBackup checks the backup in the configured target and answers the
+// result. The server reads the target, not the command (ADR 39). A complete
+// backup answers 200 with complete true. A backup the target holds
+// incompletely answers 200 with complete false and the first missing or
+// short object by key, so the command prints it and exits 1. An ID with no
+// backup row answers 404 like GET /api/server/backups/{id}: callers can tell
+// unknown from corrupt. A malformed ID answers 400. A storage failure
+// answers 500.
+func (h *Handler) checkBackup(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	ctx := r.Context()
+
+	if h.backups == nil {
+		h.writeError(ctx, w, errNoBackupTarget)
+
+		return
+	}
+
+	id, err := backup.ParseID(r.PathValue("id"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if _, err := h.backups.Get(ctx, id); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if err := h.backups.Check(ctx, id); err != nil {
+		if errors.Is(err, backup.ErrCorrupt) {
+			h.writeJSON(ctx, w, http.StatusOK, checkBackupResponse{
+				ID:       id.String(),
+				Complete: false,
+				Error:    err.Error(),
+			})
+
+			return
+		}
+
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, checkBackupResponse{ID: id.String(), Complete: true, Error: ""})
 }

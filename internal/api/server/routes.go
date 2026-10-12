@@ -61,16 +61,17 @@ type Route struct {
 // console and operators read only this API, and they update on their own
 // schedule.
 func (h *Handler) buildRoutes() []Route {
-	routes := append([]Route{}, h.namespaceRoutes()...)
+	routes := append([]Route{}, h.coreRoutes()...)
 	routes = append(routes, h.backupRoutes()...)
+	routes = append(routes, h.checkRoutes()...)
 	routes = append(routes, h.restoreRoutes()...)
 	routes = append(routes, h.maintenanceRoutes()...)
 
 	return routes
 }
 
-// namespaceRoutes returns the namespace rows of the route table.
-func (h *Handler) namespaceRoutes() []Route {
+// coreRoutes returns the namespace and metrics rows of the route table.
+func (h *Handler) coreRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodPost,
@@ -152,7 +153,30 @@ func (h *Handler) restoreRoutes() []Route {
 	}
 }
 
-// maintenanceRoutes returns the maintenance rows of the route table.
+// checkRoutes returns the check rows of the route table (ADR 39 decision 3):
+// backup check and upgrade check.
+func (h *Handler) checkRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/backups/{id}/check",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerBackup},
+			Resolve: resolveServer,
+			Serve:   h.checkBackup,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/upgrade-check",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer,
+			Serve:   h.serveUpgradeCheck,
+		},
+	}
+}
+
+// maintenanceRoutes returns the maintenance routes (ADR 38).
 func (h *Handler) maintenanceRoutes() []Route {
 	return []Route{
 		{

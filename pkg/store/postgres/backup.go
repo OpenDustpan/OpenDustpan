@@ -226,6 +226,38 @@ func pgCopySpec(table string) (pgCopyTable, error) {
 	return pgCopyTable{}, fmt.Errorf("backup table %q: %w", table, backup.ErrCorrupt)
 }
 
+// checkCopyColumns compares the COPY column list of table with the live
+// columns of the table. It reports the first column the list omits or names
+// without a live column, naming the table and the column, so a migration
+// that adds a column fails the coverage test until its author extends
+// pgCopyTables. Column order does not matter: the dump and the load name
+// every column on both COPY statements.
+func checkCopyColumns(table string, listed, live []string) error {
+	for _, column := range listed {
+		if !slices.Contains(live, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q name unknown column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	for _, column := range live {
+		if !slices.Contains(listed, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q miss column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	return nil
+}
+
 // pgIdent quotes one identifier. Table and column names come from the
 // constant spec above, never from the network.
 func pgIdent(name string) string {

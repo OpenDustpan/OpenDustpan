@@ -39,6 +39,8 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "",
+		Schema:        stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

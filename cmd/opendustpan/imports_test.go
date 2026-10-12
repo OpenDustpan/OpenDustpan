@@ -58,7 +58,9 @@ func checkCommandFile(t *testing.T, entry os.DirEntry) {
 }
 
 // checkCommandImports proves no import of file names a store, a blob
-// adapter, or another offline dependency.
+// adapter, or another offline dependency. pkg/store/schema stays allowed:
+// it is the neutral migration list both dialects and the clients share,
+// with no driver in it (ADR 39 decision 4).
 func checkCommandImports(t *testing.T, name string, file *ast.File) {
 	t.Helper()
 
@@ -68,10 +70,16 @@ func checkCommandImports(t *testing.T, name string, file *ast.File) {
 		"opendustpan.org/opendustpan/pkg/secret",
 	}
 
+	const schemaImport = "opendustpan.org/opendustpan/pkg/store/schema"
+
 	for _, spec := range file.Imports {
 		importPath, err := strconv.Unquote(spec.Path.Value)
 		if err != nil {
 			t.Fatalf("decode import in %s: %v", name, err)
+		}
+
+		if importPath == schemaImport {
+			continue
 		}
 
 		for _, prefix := range prefixes {

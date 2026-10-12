@@ -186,7 +186,9 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 }
 
 // TestStateRoutesDeclareActionsAndObjects proves each state route declares
-// unit:read and resolves the unit opentofu:acme/web.
+// its actions and resolves the unit opentofu:acme/web. Reads need unit:read.
+// The download and the single output route also need unit:read-secrets, as
+// they answer plain secret values.
 func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 	t.Parallel()
 
@@ -229,7 +231,7 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			method:  http.MethodGet,
 			target:  "/api/v2/state-versions/sv-test123/download",
 			body:    "",
-			actions: []identity.Action{identity.ActionUnitRead},
+			actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -249,7 +251,7 @@ func TestStateRoutesDeclareActionsAndObjects(t *testing.T) {
 			method:  http.MethodGet,
 			target:  "/api/v2/state-version-outputs/sv-test123.greeting",
 			body:    "",
-			actions: []identity.Action{identity.ActionUnitRead},
+			actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			object:  "opentofu:acme/web",
 			isUnit:  true,
 		},
@@ -1146,4 +1148,61 @@ func TestOutputsListHidesSensitiveValues(t *testing.T) {
 	handler.ServeHTTP(single, stateRequest(t, "/api/v2/state-version-outputs/sv-test123.secret"))
 
 	checkSingleSecretShown(t, decodeOutputDoc(t, single, http.StatusOK).Data)
+}
+
+// TestStateSecretsNeedReadSecrets proves a caller with unit:read but without
+// unit:read-secrets answers 403 on the download and the single output route,
+// while the outputs list still answers 200 with sensitive values as null.
+func TestStateSecretsNeedReadSecrets(t *testing.T) {
+	t.Parallel()
+
+	handler, err := tfe.NewHandler(tfe.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
+		BaseURL:       baseurl.Resolver{},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for _, target := range []struct {
+		name string
+		path string
+	}{
+		{name: "download", path: "/api/v2/state-versions/sv-test123/download"},
+		{name: "single output", path: "/api/v2/state-version-outputs/sv-test123.secret"},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, stateRequest(t, target.path))
+
+			checkJSONAPIError(t, rec, http.StatusForbidden)
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(
+		rec,
+		stateRequest(t, "/api/v2/workspaces/ws-test123/current-state-version-outputs"),
+	)
+
+	doc := decodeOutputList(t, rec, http.StatusOK)
+
+	if len(doc.Data) != 2 {
+		t.Fatalf("outputs hold %d entries, want the greeting and the secret", len(doc.Data))
+	}
+
+	byName := map[string]stateOutputTestResource{}
+
+	for _, output := range doc.Data {
+		byName[output.Attributes.Name] = output
+	}
+
+	checkListGreeting(t, byName)
+	checkListSecretHidden(t, rec.Body.String(), byName)
 }

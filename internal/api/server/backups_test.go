@@ -146,6 +146,8 @@ func newBackupFixture(
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stores.registry,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -318,7 +320,7 @@ func waitGateEntered(t *testing.T, gate *gateExporter) {
 	}
 }
 
-// TestBackupRoutesDeclareServerBackup proves all three backup routes declare
+// TestBackupRoutesDeclareServerBackup proves all four backup routes declare
 // exactly the action server:backup, with a resolver that returns the
 // installation.
 func TestBackupRoutesDeclareServerBackup(t *testing.T) {
@@ -334,8 +336,8 @@ func TestBackupRoutesDeclareServerBackup(t *testing.T) {
 		}
 	}
 
-	if len(routes) != 3 {
-		t.Fatalf("backup routes = %d, want 3", len(routes))
+	if len(routes) != 4 {
+		t.Fatalf("backup routes = %d, want 4", len(routes))
 	}
 
 	for _, route := range routes {
@@ -450,6 +452,7 @@ func TestBackupNeedsToken(t *testing.T) {
 		{http.MethodPost, "/api/server/backups"},
 		{http.MethodGet, "/api/server/backups"},
 		{http.MethodGet, "/api/server/backups/" + string(testBackupID)},
+		{http.MethodGet, "/api/server/backups/" + string(testBackupID) + "/check"},
 	}
 
 	for _, tc := range paths {
@@ -527,7 +530,7 @@ func TestBackupListNewestFirst(t *testing.T) {
 	}
 }
 
-// TestBackupWithoutTarget proves all three routes answer 503 with a fixed
+// TestBackupWithoutTarget proves all four routes answer 503 with a fixed
 // message when no backup target is configured, never driver text.
 func TestBackupWithoutTarget(t *testing.T) {
 	t.Parallel()
@@ -557,6 +560,8 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -568,6 +573,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		{http.MethodPost, "/api/server/backups"},
 		{http.MethodGet, "/api/server/backups"},
 		{http.MethodGet, "/api/server/backups/bkp-missing000000000001"},
+		{http.MethodGet, "/api/server/backups/bkp-missing000000000001/check"},
 	}
 
 	for _, tc := range paths {

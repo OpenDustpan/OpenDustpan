@@ -63,6 +63,8 @@ func newMetricsHandler(
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       metrics,
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -91,6 +91,8 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Restores:      restores,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -524,6 +526,8 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Restores:    nil,
 		Maintenance: newFakeMaintenance(maintenance.StateNormal),
 		Metrics:     stubMetrics{},
+		Version:     "test",
+		Schema:      stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -710,6 +714,8 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        stubSchema{migrations: nil},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
