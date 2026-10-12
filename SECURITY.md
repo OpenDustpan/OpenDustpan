@@ -45,6 +45,7 @@ OpenTofu goes to that project.
 ## What the server protects
 
 The README section "What the server stores" says which data the server
-encrypts and which data it keeps in plain text. OpenTofu state is plain text
-in the blob store and in backups. The project already documents this
-behavior, so a report of it alone is not a vulnerability.
+encrypts and which data it keeps in plain text. OpenTofu state is sealed
+with the key-encryption key in the blob store and in backups. The project
+already documents this behavior, so a report of it alone is not a
+vulnerability.
