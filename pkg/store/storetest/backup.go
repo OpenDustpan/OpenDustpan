@@ -151,7 +151,11 @@ type backupSeed struct {
 // tags, a finished and a waiting update, one checkpoint, events, secret keys
 // under two wrappers, workspaces with a finalized and a pending state
 // version, and one finished backup row. Inventory rows follow from the tool
-// writes.
+// writes. The finished update carries a creator, the waiting update is a
+// restore with a creator and a restore source, the checkpoint manages one
+// resource, and the pending state version is a restore of the finalized one,
+// so the round trip proves the columns that later migrations added survive
+// an export and an import.
 func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	t.Helper()
 
@@ -174,8 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	dev := mustCreateStack(t, s, acme, "dev")
 	otherProd := mustCreateStack(t, s, other, "prod")
 
-	running := f.run(t, f.ref, "u1", mutating())
-	checkpoint := newCheckpoint(running, 0, `{"v":1}`)
+	running := f.run(t, f.ref, "u1", stack.Plan{
+		Kind:         stack.KindUpdate,
+		DryRun:       false,
+		CreatedBy:    "alice@example.com",
+		RestoredFrom: 0,
+	})
+	checkpoint := newCheckpoint(running, 0, resourcedDeployment)
 
 	if err := s.PutCheckpoint(ctx, checkpoint, f.fence); err != nil {
 		t.Fatalf("put checkpoint: %v", err)
@@ -187,7 +196,12 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 
 	finished := f.end(t, running, stack.StatusSucceeded)
-	waiting := f.create(t, f.ref, "u2", mutating())
+	waiting := f.create(t, f.ref, "u2", stack.Plan{
+		Kind:         stack.KindRestore,
+		DryRun:       false,
+		CreatedBy:    "bob@example.com",
+		RestoredFrom: finished.Version,
+	})
 
 	scopes := []secret.Scope{
 		seedBackupKey(t, s, acme, prod, "kek-1"),
@@ -209,6 +223,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 
 	pending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
+	pending.RestoredFrom = current.ID
 	createPendingVersion(t, s, acme, pending)
 
 	plain := createTestWorkspace(t, s, other, "plain")
