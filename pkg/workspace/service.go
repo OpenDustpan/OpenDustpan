@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 const (
@@ -52,6 +54,14 @@ type Store interface {
 	// not exist, namespace.ErrNotFound if the namespace does not exist, or
 	// namespace.ErrFenced if fence is stale.
 	SaveWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
+	// DeleteWorkspace removes the workspace called ref with its state
+	// versions and its wrapped data key in one fenced transaction. It
+	// removes the inventory entry in the same transaction. It returns
+	// ErrNotFound if the workspace does not exist, namespace.ErrNotFound
+	// if the namespace does not exist, or namespace.ErrFenced if fence is
+	// stale. Old sealed blobs stay for the sweeper: the caller deletes the
+	// content of the deleted versions.
+	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence) error
 }
 
 // StateStore persists state version metadata.
@@ -144,6 +154,10 @@ type Config struct {
 	// Blobs holds state content under "tofu/<workspace id>/<state version id>/<attempt>".
 	Blobs      blob.Store
 	Namespaces *namespace.Service
+	// Sealer seals state blobs and outputs documents with the data key of
+	// the workspace scope. Nil keeps state as before: plain blobs and
+	// outputs for rows without the sealed flag.
+	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
 	Now    func() time.Time
@@ -167,6 +181,7 @@ type Service struct {
 	states     StateStore
 	blobs      blob.Store
 	namespaces *namespace.Service
+	sealer     Sealer
 	logger     *slog.Logger
 	now        func() time.Time
 	maxState   int64
@@ -192,6 +207,7 @@ func NewService(cfg Config) (*Service, error) {
 		states:     cfg.States,
 		blobs:      cfg.Blobs,
 		namespaces: cfg.Namespaces,
+		sealer:     cfg.Sealer,
 		logger:     cfg.Logger,
 		now:        cfg.Now,
 		maxState:   cfg.MaxStateBytes,
@@ -434,7 +450,7 @@ func (s *Service) Upload(
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.store(ctx, key, sv.MD5, content)
+	size, err := s.store(ctx, w.Ref.Namespace, w.ID, sv.Sealed, key, sv.MD5, content)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
 	}
@@ -500,10 +516,15 @@ func (s *Service) DiscardJSONRendering(
 }
 
 // Current returns the workspace's current state version, or ErrNoState.
+// A sealed version carries its outputs opened, so callers read plain outputs.
 func (s *Service) Current(ctx context.Context, id ID) (StateVersion, error) {
 	sv, err := s.states.CurrentStateVersion(ctx, id)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("current state of %s: %w", id, err)
+	}
+
+	if err := s.openOutputs(ctx, &sv); err != nil {
+		return StateVersion{}, err
 	}
 
 	return sv, nil
@@ -511,7 +532,8 @@ func (s *Service) Current(ctx context.Context, id ID) (StateVersion, error) {
 
 // ReadState returns the finalized state version with id, or
 // ErrStateVersionNotFound when it does not exist or is not finalized. A
-// pending version is never readable.
+// pending version is never readable. A sealed version carries its outputs
+// opened, so callers read plain outputs.
 func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersion, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
@@ -522,10 +544,17 @@ func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersio
 		return StateVersion{}, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, id, sv.Status)
 	}
 
+	if err := s.openOutputs(ctx, &sv); err != nil {
+		return StateVersion{}, err
+	}
+
 	return sv, nil
 }
 
 // Open returns the content of a finalized state version. The caller closes it.
+// A sealed version opens its sealed blob, so the caller reads the same bytes
+// the CLI sent. A decryption failure reports the version ID only, never a
+// key, a scope or content.
 func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, error) {
 	if sv.Status != StatusFinalized {
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
@@ -536,15 +565,82 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
 	}
 
-	return r, nil
+	if !sv.Sealed || s.sealer == nil {
+		return r, nil
+	}
+
+	w, err := s.GetByID(ctx, sv.Workspace)
+	if err != nil {
+		_ = r.Close()
+
+		return nil, err
+	}
+
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	if err != nil {
+		_ = r.Close()
+
+		return nil, sanitizeOpenError(sv.ID, err)
+	}
+
+	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
+}
+
+// OpenStateBlob returns the plain content of the sealed blob under key, for
+// the backup copy check. The key names one state version attempt as
+// "tofu/<workspace id>/<state version id>/<attempt>". An unsealed version
+// reads as before. A failure reports the version ID only, never a key, a
+// scope or content. The caller closes the result.
+func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	parts := blobKeyParts(key)
+	if len(parts) != 4 || parts[0] != "tofu" {
+		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
+	}
+
+	sv, err := s.states.GetStateVersion(ctx, StateVersionID(parts[2]))
+	if err != nil {
+		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+	}
+
+	r, err := s.blobs.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
+	}
+
+	if !sv.Sealed || s.sealer == nil {
+		return r, nil
+	}
+
+	w, err := s.GetByID(ctx, sv.Workspace)
+	if err != nil {
+		_ = r.Close()
+
+		return nil, err
+	}
+
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	if err != nil {
+		_ = r.Close()
+
+		return nil, sanitizeOpenError(sv.ID, err)
+	}
+
+	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
-// first, with the total count of finalized versions.
+// first, with the total count of finalized versions. Sealed versions carry
+// their outputs opened, so callers read plain outputs.
 func (s *Service) History(ctx context.Context, id ID, page Page) ([]StateVersion, int, error) {
 	list, total, err := s.states.ListStateVersions(ctx, id, page)
 	if err != nil {
 		return nil, 0, fmt.Errorf("history of %s: %w", id, err)
+	}
+
+	for i := range list {
+		if err := s.openOutputs(ctx, &list[i]); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	return list, total, nil
@@ -690,12 +786,25 @@ func (s *Service) mapRestoreLockError(ctx context.Context, id ID, holder string,
 // copy, and the blob lands before the finalize, so a committed version
 // never names a missing blob.
 func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) (StateVersion, error) {
+	outputs := src.Outputs
+
+	// The stored outputs of a sealed version are sealed: open them so the
+	// new version seals the plain document again, never the ciphertext.
+	if src.Sealed && s.sealer != nil && len(outputs) > 0 {
+		plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), outputs)
+		if err != nil {
+			return StateVersion{}, sanitizeOpenError(src.ID, fmt.Errorf("restore %s: %w", src.ID, err))
+		}
+
+		outputs = plain
+	}
+
 	// The hex MD5 in NewState is display only; createPending stores the
 	// validated sum passed alongside it, which is src.MD5 here.
 	pending, err := s.createPending(ctx, w, NewState{
 		Lineage: src.Lineage,
 		MD5:     hex.EncodeToString(src.MD5[:]),
-		Outputs: src.Outputs,
+		Outputs: outputs,
 		Serial:  src.Serial,
 		Force:   true,
 	}, src.MD5, src.ID)
@@ -719,7 +828,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.copyBlob(ctx, key, src)
+	size, err := s.copyBlob(ctx, w, key, src, pending.Version.Sealed)
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -745,14 +854,30 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 }
 
 // copyBlob copies the content of src under key, checking size and MD5 as it
-// streams. On any mismatch the object is deleted.
-func (s *Service) copyBlob(ctx context.Context, key blob.Key, src StateVersion) (int64, error) {
+// streams. A sealed source opens before the check, so the check runs on the
+// plain bytes; the copy seals again when sealed holds, so a restore of an
+// old unsealed version still lands sealed. On any mismatch the object is
+// deleted.
+func (s *Service) copyBlob(
+	ctx context.Context, w Workspace, key blob.Key, src StateVersion, sealed bool,
+) (int64, error) {
 	r, err := s.blobs.Get(ctx, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
 
-	size, storeErr := s.store(ctx, key, src.MD5, r)
+	if src.Sealed && s.sealer != nil {
+		opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+		if oerr != nil {
+			_ = r.Close()
+
+			return 0, sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr))
+		}
+
+		r = &closeReader{reader: opened, closer: r, id: src.ID}
+	}
+
+	size, storeErr := s.store(ctx, w.Ref.Namespace, w.ID, sealed, key, src.MD5, r)
 	closeErr := r.Close()
 
 	switch {
@@ -1003,6 +1128,22 @@ func (s *Service) createPending(
 	}
 
 	now := s.clock()
+
+	outputs := in.Outputs
+
+	// New rows land sealed when the service seals: the outputs document is
+	// sealed with the data key of the workspace scope.
+	sealed := s.sealer != nil
+
+	if sealed && len(outputs) > 0 {
+		sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), outputs)
+		if err != nil {
+			return PendingState{}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
+		}
+
+		outputs = sealedOutputs
+	}
+
 	sv := StateVersion{
 		CreatedAt:       now,
 		FinalizedAt:     time.Time{},
@@ -1015,11 +1156,12 @@ func (s *Service) createPending(
 		Lineage:         in.Lineage,
 		Status:          StatusPending,
 		Content:         "",
-		Outputs:         in.Outputs,
+		Outputs:         outputs,
 		MD5:             sum,
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
+		Sealed:          sealed,
 		RestoredFrom:    restoredFrom,
 	}
 
@@ -1030,13 +1172,34 @@ func (s *Service) createPending(
 	return PendingState{Upload: tok, Version: sv}, nil
 }
 
-// store writes content under key, checking size and MD5 as it streams. On any
+// store writes content under key, checking size and MD5 as it streams. The
+// MD5 and the size stay those of the plain bytes. When sealed holds, the
+// content seals as it streams into the blob with the data key of the
+// workspace scope, so the blob store never holds plain state. On any
 // mismatch the object is deleted.
-func (s *Service) store(ctx context.Context, key blob.Key, want [md5.Size]byte, content io.Reader) (int64, error) {
+func (s *Service) store(
+	ctx context.Context,
+	ns namespace.Name,
+	id ID,
+	sealed bool,
+	key blob.Key,
+	want [md5.Size]byte,
+	content io.Reader,
+) (int64, error) {
 	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 	counted := &countingReader{r: io.LimitReader(content, s.maxState+1), n: 0}
+	checked := io.TeeReader(counted, hash)
 
-	if err := s.blobs.Put(ctx, key, io.TeeReader(counted, hash)); err != nil {
+	if sealed && s.sealer != nil {
+		sealedReader, err := s.sealer.SealState(ctx, ns, id.String(), checked)
+		if err != nil {
+			return 0, err
+		}
+
+		checked = sealedReader
+	}
+
+	if err := s.blobs.Put(ctx, key, checked); err != nil {
 		return 0, fmt.Errorf("store content: %w", err)
 	}
 
@@ -1052,6 +1215,67 @@ func (s *Service) store(ctx context.Context, key blob.Key, want [md5.Size]byte, 
 	}
 
 	return 0, errors.Join(problem, s.blobs.Delete(ctx, key))
+}
+
+// openOutputs opens the sealed outputs of sv in place, so callers read plain
+// outputs. Rows without the sealed flag, or a service without a sealer, read
+// as before. A failure reports the version ID only, never a key, a scope or
+// content.
+func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
+	if !sv.Sealed || s.sealer == nil || len(sv.Outputs) == 0 {
+		return nil
+	}
+
+	w, err := s.GetByID(ctx, sv.Workspace)
+	if err != nil {
+		return err
+	}
+
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), sv.Outputs)
+	if err != nil {
+		return sanitizeOpenError(sv.ID, err)
+	}
+
+	sv.Outputs = plain
+
+	return nil
+}
+
+// sanitizeOpenError reports a decryption failure with the version ID only,
+// so the error holds no key, scope or content. Anything else passes through
+// unchanged, so operational failures keep their cause.
+func sanitizeOpenError(id StateVersionID, err error) error {
+	if !errors.Is(err, secret.ErrDecrypt) {
+		return err
+	}
+
+	return fmt.Errorf("open state %s: %w", id, ErrSealedContent)
+}
+
+// closeReader reads sealed content and closes the underlying blob object. A
+// decryption failure while streaming maps to ErrSealedContent with the
+// version ID only, so the error holds no key, scope or content; anything
+// else passes through unchanged.
+type closeReader struct {
+	reader io.Reader
+	closer io.Closer
+	id     StateVersionID
+}
+
+// Read returns the next plaintext bytes, mapping a decryption failure to
+// ErrSealedContent.
+func (r *closeReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && errors.Is(err, secret.ErrDecrypt) {
+		return n, fmt.Errorf("open state %s: %w", r.id, ErrSealedContent)
+	}
+
+	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// Close closes the underlying blob object.
+func (r *closeReader) Close() error {
+	return r.closer.Close() //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
 }
 
 // change applies a lock transition to the stored workspace and saves it.
@@ -1104,6 +1328,11 @@ func attemptKey(sv StateVersion) (blob.Key, error) {
 	}
 
 	return key, nil
+}
+
+// blobKeyParts splits a blob key into its slash-separated parts.
+func blobKeyParts(key blob.Key) []string {
+	return strings.Split(key.String(), "/")
 }
 
 type countingReader struct {

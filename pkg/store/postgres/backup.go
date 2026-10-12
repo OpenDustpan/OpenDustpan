@@ -493,7 +493,9 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 }
 
 // backupBlobRef converts one blob row into a manifest reference. The MD5
-// column always holds 16 bytes; anything else is corrupt data.
+// column always holds 16 bytes; anything else is corrupt data. Size and MD5
+// stay those of the plain bytes; sealed versions mark their references
+// sealed, so the backup opens them to check and stores the sealed bytes.
 func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 	if len(row.Md5) != pgMD5Len {
 		return backup.BlobRef{}, fmt.Errorf(
@@ -508,7 +510,7 @@ func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 
 	copy(md5[:], row.Md5)
 
-	return backup.BlobRef{MD5: md5, Key: row.ContentKey, Size: row.Size}, nil
+	return backup.BlobRef{MD5: md5, Key: row.ContentKey, Size: row.Size, Sealed: row.Sealed}, nil
 }
 
 // Import implements backup.Importer: it checks the manifest, then loads the
@@ -935,11 +937,13 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 
 // stagingBlobRefs reads the blob references of the staging schema: the
 // content key, size and MD5 of every state version that names content, ordered
-// by key. A pending version names no content, so only finalized versions appear.
+// by key. Size and MD5 stay those of the plain bytes; sealed versions mark
+// their references sealed. A pending version names no content, so only
+// finalized versions appear.
 func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
-		"SELECT content_key, size, md5 FROM "+stagingTable(staging, "state_versions")+
+		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
 			" WHERE content_key <> '' ORDER BY content_key",
 	)
 	if err != nil {
@@ -952,12 +956,13 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 
 	for rows.Next() {
 		var (
-			key  string
-			size int64
-			raw  []byte
+			key    string
+			size   int64
+			raw    []byte
+			sealed bool
 		)
 
-		if err := rows.Scan(&key, &size, &raw); err != nil {
+		if err := rows.Scan(&key, &size, &raw, &sealed); err != nil {
 			return nil, fmt.Errorf("read staged blob references: %w", err)
 		}
 
@@ -973,7 +978,7 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 		var sum [pgMD5Len]byte
 
 		copy(sum[:], raw)
-		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size})
+		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size, Sealed: sealed})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -984,8 +989,10 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 }
 
 // checkStagedBlobRefs compares the blob references of the staged data with the
-// manifest: the staged data must name exactly the keys of the manifest, each
-// with its size and checksum.
+// manifest: the staged data must name exactly the keys of the manifest with
+// the same sealed flags. Unsealed entries also match in size and checksum;
+// sealed entries name sealed stored bytes in the manifest, so only the key
+// and the flag match.
 func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
 
@@ -996,7 +1003,11 @@ func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	slices.SortFunc(wanted, byKey)
 
 	same := func(a, b backup.BlobRef) bool {
-		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+		if a.Key != b.Key || a.Sealed != b.Sealed {
+			return false
+		}
+
+		return a.Sealed || (a.Size == b.Size && a.MD5 == b.MD5)
 	}
 
 	if !slices.EqualFunc(ordered, wanted, same) {

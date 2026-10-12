@@ -361,7 +361,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	backups, err := newBackupService(cfg)
+	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -603,6 +603,7 @@ func newServices(cfg settings) (services, error) {
 		States:             cfg.stateStore,
 		Blobs:              cfg.blobStore,
 		Namespaces:         namespaces,
+		Sealer:             secrets,
 		Logger:             cfg.logger,
 		Now:                cfg.now,
 		MaxStateBytes:      cfg.maxStateBytes,
@@ -846,7 +847,7 @@ func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
 // database connection. A nil target means no backup target is configured.
-func newBackupService(cfg settings) (*backup.Service, error) {
+func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
@@ -871,6 +872,7 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 		Exporter:    exporter,
 		Registry:    registry,
 		Blobs:       cfg.blobStore,
+		StateOpener: svc.workspaces,
 		Target:      cfg.backupTarget,
 		TargetName:  cfg.backupTargetName,
 		Now:         cfg.now,

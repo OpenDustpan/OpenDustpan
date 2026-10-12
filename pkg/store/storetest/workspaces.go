@@ -143,6 +143,14 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "referenced content keys lists every named blob of one workspace",
 			test: testReferencedContentKeys,
 		},
+		{
+			name: "sealed flag is stored and read back by get, current and list",
+			test: testSealedFlagRoundTrip,
+		},
+		{
+			name: "delete removes the workspace with its versions and entry",
+			test: testDeleteWorkspace,
+		},
 	}
 
 	for _, tc := range cases {
@@ -348,7 +356,8 @@ func sameStateReference(got, want workspace.StateVersion) bool {
 func sameStateContent(got, want workspace.StateVersion) bool {
 	return got.Content == want.Content && bytes.Equal(got.Outputs, want.Outputs) &&
 		got.MD5 == want.MD5 && got.Serial == want.Serial && got.Size == want.Size &&
-		got.Force == want.Force && got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom
+		got.Force == want.Force && got.Sealed == want.Sealed &&
+		got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom
 }
 
 func sameStateTimes(got, want workspace.StateVersion) bool {
@@ -2603,5 +2612,126 @@ func assertReferencedContentKeys(t *testing.T, s WorkspaceStore, id workspace.ID
 
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Fatalf("referenced content keys of %s = %v, want %v", id, gotKeys, wantKeys)
+	}
+}
+
+// testSealedFlagRoundTrip proves the sealed flag of ADR 41 decision 10 is
+// stored and read back: a sealed version reads sealed by get, current and
+// list, and an unsealed version reads unsealed.
+func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	sealed := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
+	sealed.Sealed = true
+	createPendingVersion(t, s, ns, sealed)
+
+	got, err := s.GetStateVersion(t.Context(), sealed.ID)
+	if err != nil {
+		t.Fatalf("get sealed state version: %v", err)
+	}
+
+	if !got.Sealed {
+		t.Fatal("sealed state version reads unsealed, want sealed")
+	}
+
+	plain := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
+	createPendingVersion(t, s, ns, plain)
+
+	gotPlain, err := s.GetStateVersion(t.Context(), plain.ID)
+	if err != nil {
+		t.Fatalf("get unsealed state version: %v", err)
+	}
+
+	if gotPlain.Sealed {
+		t.Fatal("unsealed state version reads sealed, want unsealed")
+	}
+
+	finalized := finalizedVersion(sealed, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize sealed state: %v", err)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	assertStateVersion(t, current, finalized)
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{finalized})
+}
+
+// testDeleteWorkspace proves the final delete removes the workspace with
+// its state versions and its inventory entry, and that a second delete and
+// a delete of a missing workspace report ErrNotFound.
+func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if _, err := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get deleted workspace: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.GetWorkspaceByID(t.Context(), w.ID); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get deleted workspace by ID: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get version of a deleted workspace: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("current state of a deleted workspace: err = %v, want ErrNoState", err)
+	}
+
+	if entries := listWorkspaceInventory(t, s, ns.Name); len(entries) != 0 {
+		t.Fatalf("inventory entries after delete = %+v, want none", entries)
+	}
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("delete a deleted workspace: err = %v, want ErrNotFound", err)
+	}
+
+	ghost := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "ghost")}
+	if err := s.DeleteWorkspace(t.Context(), ghost, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("delete a missing workspace: err = %v, want ErrNotFound", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	other := createTestWorkspace(t, s, ns, "other")
+
+	if err := s.DeleteWorkspace(t.Context(), other.Ref, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("delete with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if _, err := s.GetWorkspace(t.Context(), other.Ref); err != nil {
+		t.Fatalf("get workspace after a fenced delete: %v", err)
 	}
 }

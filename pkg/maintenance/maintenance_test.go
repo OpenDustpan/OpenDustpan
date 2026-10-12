@@ -297,6 +297,11 @@ func (f *fakeWorkspaces) SaveWorkspace(
 	return nil
 }
 
+// DeleteWorkspace implements workspace.Store.
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence) error {
+	return workspace.ErrNotFound
+}
+
 // fakeStates answers no state version. The force-unlock path reads none.
 type fakeStates struct{}
 

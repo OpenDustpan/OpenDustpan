@@ -1,8 +1,12 @@
 package workspace_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5" //nolint:gosec // The protocol under test uses MD5 for integrity.
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -216,6 +222,50 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 
 	m.workspaces[w.ID] = w
 	m.publish(w)
+
+	return nil
+}
+
+// DeleteWorkspace implements workspace.Store: it removes the workspace with
+// its state versions and its inventory entry.
+func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	var id workspace.ID
+
+	found := false
+
+	for wid := range m.workspaces {
+		if m.workspaces[wid].Ref == ref {
+			id, found = wid, true
+
+			break
+		}
+	}
+
+	if !found {
+		return workspace.ErrNotFound
+	}
+
+	for vid := range m.versions {
+		if m.versions[vid].Workspace == id {
+			delete(m.versions, vid)
+		}
+	}
+
+	delete(m.current, id)
+	delete(m.workspaces, id)
+
+	for key := range m.entries {
+		if key.namespace == ref.Namespace && key.tool == memInventoryTool && key.name == ref.Name.String() {
+			delete(m.entries, key)
+		}
+	}
 
 	return nil
 }
@@ -3162,4 +3212,364 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 
 	checkCurrentID(t, f, first.ID)
 	checkHistoryTotal(t, f, 1)
+}
+
+// sealedKeys is a secret.KeyStore in memory for sealed fixtures.
+type sealedKeys struct {
+	keys map[string]secret.WrappedKey
+	mu   sync.Mutex
+}
+
+func newSealedKeys() *sealedKeys {
+	return &sealedKeys{keys: map[string]secret.WrappedKey{}}
+}
+
+func (m *sealedKeys) CreateKey(
+	_ context.Context, k secret.WrappedKey, _ namespace.Fence,
+) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.keys[k.Scope.String()]; ok {
+		return existing, nil
+	}
+
+	m.keys[k.Scope.String()] = k
+
+	return k, nil
+}
+
+func (m *sealedKeys) GetKey(_ context.Context, scope secret.Scope) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k, ok := m.keys[scope.String()]
+	if !ok {
+		return secret.WrappedKey{}, secret.ErrKeyNotFound
+	}
+
+	return k, nil
+}
+
+func (m *sealedKeys) ListWrapperIDs(_ context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[string]bool{}
+
+	for _, k := range m.keys {
+		seen[k.WrapperID] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
+// sealedWrapper wraps data keys with a fresh key-encryption key for one test.
+type sealedWrapper struct {
+	aead cipher.AEAD
+	id   string
+}
+
+func newSealedWrapper(t *testing.T) *sealedWrapper {
+	t.Helper()
+
+	kek := make([]byte, 32)
+	if _, err := rand.Read(kek); err != nil {
+		t.Fatalf("generate key-encryption key: %v", err)
+	}
+
+	block, err := aes.NewCipher(kek)
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("new GCM: %v", err)
+	}
+
+	return &sealedWrapper{aead: aead, id: "kek-test"}
+}
+
+func (w *sealedWrapper) ID() string { return w.id }
+
+func (w *sealedWrapper) Wrap(_ context.Context, key, aad []byte) ([]byte, error) {
+	nonce := make([]byte, w.aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+
+	return w.aead.Seal(nonce, nonce, key, aad), nil
+}
+
+func (w *sealedWrapper) Unwrap(_ context.Context, sealed, aad []byte) ([]byte, error) {
+	n := w.aead.NonceSize()
+	if len(sealed) < n {
+		return nil, secret.ErrDecrypt
+	}
+
+	key, err := w.aead.Open(nil, sealed[:n], sealed[n:], aad)
+	if err != nil {
+		return nil, secret.ErrDecrypt
+	}
+
+	return key, nil
+}
+
+// newSealedFixture returns a fixture whose service seals state with a fresh
+// key-encryption key and holds larger states, so sealing tests prove what an
+// upload leaves behind.
+func newSealedFixture(t *testing.T) fixture {
+	t.Helper()
+
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+	store := newMemStore()
+	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+
+	if err := store.CreateNamespace(t.Context(), acme); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys: newSealedKeys(), Wrapper: newSealedWrapper(t), Namespaces: namespaces, Now: nil,
+	})
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+
+	blobs := openFixtureBlobs(t)
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         store,
+		States:             store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Sealer:             secrets,
+		Logger:             nil,
+		Now:                func() time.Time { return now },
+		MaxStateBytes:      4 << 20,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	name, err := workspace.ParseName("e2e-workspace")
+	if err != nil {
+		t.Fatalf("name: %v", err)
+	}
+
+	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+}
+
+// sealedOutputsDoc is the outputs document of the sealing tests: one
+// sensitive output with a known value.
+func sealedOutputsDoc(value string) []byte {
+	return []byte(`{"greeting":{"sensitive":true,"value":` + strconv.Quote(value) + `,"type":"string"}}`)
+}
+
+// TestSealedUploadLeavesNoPlaintext proves a sealed upload keeps no sensitive
+// byte sequence in the blob store or in the outputs column, while the
+// download and the outputs read back the plain bytes.
+func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
+	t.Parallel()
+
+	f := newSealedFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
+	sensitive := "s3cr3t-state-attribute"
+	outputValue := "s3cr3t-output-value"
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
+		Lineage: "l1",
+		MD5:     sum(content),
+		Outputs: sealedOutputsDoc(outputValue),
+		Serial:  1,
+		Force:   false,
+	})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	if !sv.Sealed {
+		t.Fatal("uploaded version reads unsealed, want sealed")
+	}
+
+	// The blob store holds sealed bytes only.
+	raw, err := f.blobs.Get(ctx, sv.Content)
+	if err != nil {
+		t.Fatalf("get blob: %v", err)
+	}
+
+	sealed, err := io.ReadAll(raw)
+	if err != nil {
+		t.Fatalf("read blob: %v", err)
+	}
+
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close blob: %v", err)
+	}
+
+	if bytes.Contains(sealed, []byte(sensitive)) {
+		t.Fatal("blob store holds the sensitive attribute value, want sealed bytes only")
+	}
+
+	// The outputs column holds sealed bytes only. The mem store returns the
+	// stored version, so its outputs are the sealed document.
+	stored, err := f.store.GetStateVersion(ctx, sv.ID)
+	if err != nil {
+		t.Fatalf("get stored version: %v", err)
+	}
+
+	if bytes.Contains(stored.Outputs, []byte(outputValue)) {
+		t.Fatal("outputs column holds the sensitive output value, want sealed bytes only")
+	}
+
+	// The download answers the same bytes the CLI sent.
+	r, err := f.svc.Open(ctx, sv)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read download: %v", err)
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatalf("close download: %v", err)
+	}
+
+	if string(got) != content {
+		t.Fatalf("download = %q, want %q", got, content)
+	}
+
+	// The current version carries plain outputs.
+	current, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if !bytes.Contains(current.Outputs, []byte(outputValue)) {
+		t.Fatalf("current outputs lack the output value: %q", current.Outputs)
+	}
+}
+
+// TestSealedDownloadTamper proves a changed byte, a dropped tail and an
+// extension of a sealed blob each fail the download with an error that holds
+// no key, scope or content.
+func TestSealedDownloadTamper(t *testing.T) {
+	t.Parallel()
+
+	f := newSealedFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	content := strings.Repeat(`{"sensitive":"s3cr3t-state-attribute"}`, 5000)
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
+		Lineage: "l1",
+		MD5:     sum(content),
+		Serial:  1,
+		Force:   false,
+	})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	raw, err := f.blobs.Get(ctx, sv.Content)
+	if err != nil {
+		t.Fatalf("get blob: %v", err)
+	}
+
+	sealed, err := io.ReadAll(raw)
+	if err != nil {
+		t.Fatalf("read blob: %v", err)
+	}
+
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close blob: %v", err)
+	}
+
+	changed := bytes.Clone(sealed)
+	changed[len(changed)/2] ^= 1
+
+	mutants := map[string][]byte{
+		"changed byte": changed,
+		"dropped tail": bytes.Clone(sealed[:len(sealed)-10]),
+		"extended":     append(bytes.Clone(sealed), 0x00),
+	}
+
+	for name, bad := range mutants {
+		if err := f.blobs.Delete(ctx, sv.Content); err != nil {
+			t.Fatalf("%s: delete blob: %v", name, err)
+		}
+
+		if err := f.blobs.Put(ctx, sv.Content, bytes.NewReader(bad)); err != nil {
+			t.Fatalf("%s: rewrite blob: %v", name, err)
+		}
+
+		r, err := f.svc.Open(ctx, sv)
+		if err != nil {
+			t.Fatalf("%s: open: %v", name, err)
+		}
+
+		_, err = io.ReadAll(r)
+		closeErr := r.Close()
+
+		if err == nil {
+			t.Errorf("%s: tampered download succeeded, want ErrSealedContent", name)
+
+			continue
+		}
+
+		if !errors.Is(err, workspace.ErrSealedContent) {
+			t.Errorf("%s: err = %v, want ErrSealedContent", name, err)
+		}
+
+		for _, leaked := range []string{"s3cr3t", "acme", f.ws.ID.String(), "kek"} {
+			if strings.Contains(err.Error(), leaked) {
+				t.Errorf("%s: error %q holds %q, want no key, scope or content", name, err, leaked)
+			}
+		}
+
+		if closeErr != nil && !errors.Is(closeErr, workspace.ErrSealedContent) {
+			t.Logf("%s: close: %v", name, closeErr)
+		}
+	}
 }

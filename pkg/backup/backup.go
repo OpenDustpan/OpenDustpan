@@ -4,7 +4,8 @@
 //
 // A backup holds wrapped data keys but never the key-encryption key that
 // unwraps them, so a backup alone cannot decrypt secrets. OpenTofu state
-// content travels in plain text, as the server stores it: protect the target.
+// content travels sealed, as the server stores it: protect the target and
+// keep the key apart from it.
 //
 // The package holds no SQL and no HTTP. Each store adapter (SQLite,
 // PostgreSQL) implements these ports in a later change. The conformance suite
@@ -128,12 +129,17 @@ type Record struct {
 }
 
 // BlobRef names one blob that the SQL data references: the content key of a
-// finalized state version with its size and MD5. Key holds a blob key. The
-// backup copies each named blob after the SQL capture.
+// finalized state version with its size and MD5. Key holds a blob key. Size
+// and MD5 stay those of the plain bytes, as the state version stores them.
+// Sealed reports that the stored bytes are sealed with the data key of the
+// workspace scope: the backup opens them to check the plain bytes and stores
+// the sealed bytes. The backup copies each named blob after the SQL capture.
 type BlobRef struct {
 	MD5  [16]byte
 	Key  string
 	Size int64
+	// Sealed reports sealed stored bytes (ADR 41 decision 10).
+	Sealed bool
 }
 
 // Summary is the manifest subset that the SQL data alone determines. The

@@ -16,7 +16,7 @@ Set a backup target on the server. Use the flag or the variable. An empty target
 DUSTPAN_BACKUP_TARGET=dir:/var/backups/dustpan ./bin/opendustpan serve
 ```
 
-The target holds `blobs/<key>`, `backups/<id>/db`, and `backups/<id>/manifest.json`. The server writes the manifest last. A backup holds OpenTofu state in plain text. Protect the target. Use a directory that only the server owner can read.
+The target holds `blobs/<key>`, `backups/<id>/db`, and `backups/<id>/manifest.json`. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
 
 Start a backup with the backup command. It calls the server and waits until the backup leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
@@ -24,9 +24,9 @@ Start a backup with the backup command. It calls the server and waits until the 
 opendustpan backup --server https://dustpan.example --ca-file ca.pem
 ```
 
-The command prints the backup ID, the state, and the SQL size. It then prints two warnings. A backup cannot decrypt secrets without `DUSTPAN_KEY_ENCRYPTION_KEY`. A backup holds OpenTofu state in plain text, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
+The command prints the backup ID, the state, and the SQL size. It then prints two warnings. A backup cannot decrypt secrets without `DUSTPAN_KEY_ENCRYPTION_KEY`. A backup holds sealed OpenTofu state, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
-Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets. Without the key the server cannot open secret values after a restore.
+Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
 The target can also be S3-compatible storage. Set the credentials in `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, for temporary credentials, `AWS_SESSION_TOKEN`. Set `--s3-endpoint` for a server other than AWS.
 

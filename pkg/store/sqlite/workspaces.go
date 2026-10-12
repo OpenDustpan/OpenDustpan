@@ -149,6 +149,56 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	})
 }
 
+// DeleteWorkspace implements workspace.Store: it removes the workspace with
+// its state versions, its wrapped data key and its inventory entry in one
+// fenced transaction. The data key shares the secret_keys table with stack
+// scopes, keyed by the workspace ID, so DeleteSecretKeysOfStack removes it.
+func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		row, err := q.GetWorkspace(ctx, db.GetWorkspaceParams{
+			Namespace: ref.Namespace.String(),
+			Name:      ref.Name.String(),
+		})
+		if errors.Is(err, sql.ErrNoRows) {
+			return workspace.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("select workspace: %w", err)
+		}
+
+		if err := q.DeleteSecretKeysOfStack(ctx, row.ID); err != nil {
+			return fmt.Errorf("delete secret key: %w", err)
+		}
+
+		if err := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); err != nil {
+			return fmt.Errorf("delete state versions: %w", err)
+		}
+
+		n, err := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
+			Namespace: ref.Namespace.String(),
+			Name:      ref.Name.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("delete workspace: %w", err)
+		}
+
+		if n == 0 {
+			return workspace.ErrNotFound
+		}
+
+		if err := q.DeleteInventory(ctx, db.DeleteInventoryParams{
+			Namespace: ref.Namespace.String(),
+			Tool:      workspaceInventoryTool,
+			Name:      ref.Name.String(),
+		}); err != nil {
+			return fmt.Errorf("delete inventory entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // CreateStateVersion implements workspace.StateStore with a fenced insert. A
 // pending version changes no current state, so it writes no inventory entry.
 // The pending count and the insert run in one write transaction, so
@@ -192,6 +242,7 @@ func (s *Store) CreateStateVersion(
 			ContentKey:        row.ContentKey,
 			Outputs:           row.Outputs,
 			Force:             row.Force,
+			Sealed:            row.Sealed,
 			UploadDigest:      row.UploadDigest,
 			UploadExpiresAtMs: row.UploadExpiresAtMs,
 			Holder:            row.Holder,
@@ -623,6 +674,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Serial:            row.Serial,
 		Size:              row.Size,
 		Force:             row.Force,
+		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,

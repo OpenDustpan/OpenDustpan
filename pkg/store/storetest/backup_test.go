@@ -1188,6 +1188,41 @@ func (s *fakeBackupStore) SaveWorkspace(
 	return nil
 }
 
+// DeleteWorkspace implements workspace.Store: it removes the workspace with
+// its state versions, its wrapped data key and its inventory entry.
+func (s *fakeBackupStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return err
+	}
+
+	id, ok := s.data.workspaceIDs[ref.String()]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	delete(s.data.keys, ref.Namespace.String()+"/"+id)
+
+	for key := range s.data.states {
+		if s.data.states[key].Workspace.String() == id {
+			delete(s.data.states, key)
+		}
+	}
+
+	delete(s.data.current, id)
+	delete(s.data.workspaces, id)
+	delete(s.data.workspaceIDs, ref.String())
+	delete(s.data.entries, inventoryKey(ref.Namespace, "opentofu", ref.Name.String()))
+
+	return nil
+}
+
 // CreateStateVersion implements workspace.StateStore.
 func (s *fakeBackupStore) CreateStateVersion(
 	_ context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,

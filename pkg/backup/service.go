@@ -67,6 +67,11 @@ type ManifestBlob struct {
 	Key  string `json:"key"`
 	Size int64  `json:"size"`
 	MD5  string `json:"md5"`
+	// Sealed reports that the stored bytes are sealed with the data key of
+	// the workspace scope (ADR 41 decision 10). Size and MD5 then describe
+	// the sealed bytes. The key is optional, so older manifests without it
+	// read unsealed.
+	Sealed bool `json:"sealed,omitempty"`
 }
 
 // Config holds the dependencies of a Service.
@@ -75,6 +80,11 @@ type Config struct {
 	Registry Registry
 	// Blobs is the live content store the backup copies from.
 	Blobs blob.Store
+	// StateOpener opens sealed OpenTofu state blobs for the copy check: the
+	// backup checks the plain bytes against the SQL data and stores the
+	// sealed bytes. Nil copies every blob as before, for installations
+	// without sealed state.
+	StateOpener StateOpener
 	// Target is the backup target that holds blobs/<key>,
 	// backups/<id>/db and backups/<id>/manifest.json.
 	Target blob.Store
@@ -94,6 +104,7 @@ type Service struct {
 	exporter   Exporter
 	registry   Registry
 	source     blob.Store
+	opener     StateOpener
 	target     blob.Store
 	targetName string
 	now        func() time.Time
@@ -101,6 +112,17 @@ type Service struct {
 	maxSQL     int64
 	mu         sync.Mutex
 	running    bool
+}
+
+// StateOpener opens sealed OpenTofu state blobs of the live store for the
+// backup copy check. The backup checks the plain bytes against the size and
+// MD5 the SQL data names and stores the sealed bytes, so plain state never
+// reaches the backup target.
+type StateOpener interface {
+	// OpenStateBlob returns the plain content of the sealed blob under key.
+	// The caller closes it. A failure wraps ErrCorrupt or reports a missing
+	// blob, never a key, a scope or content.
+	OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error)
 }
 
 // NewService returns a Service. Exporter, Registry, Blobs and Target are
@@ -131,6 +153,7 @@ func NewService(cfg Config) (*Service, error) {
 		exporter:   cfg.Exporter,
 		registry:   cfg.Registry,
 		source:     cfg.Blobs,
+		opener:     cfg.StateOpener,
 		target:     cfg.Target,
 		targetName: cfg.TargetName,
 		now:        now,
@@ -364,17 +387,22 @@ func (s *Service) backup(
 
 	ordered := orderBlobs(exported.sum.Blobs)
 
+	stored := make([]ManifestBlob, 0, len(ordered))
+
 	for _, ref := range ordered {
-		if copyErr := s.copyBlob(ctx, ref); copyErr != nil {
+		blob, copyErr := s.copyBlob(ctx, ref)
+		if copyErr != nil {
 			return copyErr
 		}
+
+		stored = append(stored, blob)
 	}
 
 	return s.writeManifest(ctx, manifestInput{
 		startedAt: startedAt,
 		id:        id,
 		sum:       exported.sum,
-		ordered:   ordered,
+		ordered:   stored,
 		size:      exported.size,
 		sha:       exported.sha,
 		key:       manifestKey,
@@ -473,58 +501,128 @@ func (w *sizeHashWriter) Write(p []byte) (int, error) {
 }
 
 // copyBlob copies one blob the SQL data names from the live store to the
-// target. It checks the bytes against the size and MD5 in the SQL data before
-// it writes, so a mismatch leaves the target unchanged. A blob the target
-// already holds keeps its first copy.
-func (s *Service) copyBlob(ctx context.Context, ref BlobRef) error {
+// target and returns the manifest entry of the stored bytes. It checks the
+// bytes against the size and MD5 in the SQL data before it writes, so a
+// mismatch leaves the target unchanged. A sealed state blob opens first: the
+// check runs on the plain bytes and the target stores the sealed bytes, so
+// the manifest entry of a sealed blob names the sealed size and MD5. A blob
+// the target already holds keeps its first copy.
+func (s *Service) copyBlob(ctx context.Context, ref BlobRef) (ManifestBlob, error) {
 	source, err := blob.ParseKey(ref.Key)
 	if err != nil {
-		return fmt.Errorf("backup blob key %q: %w", ref.Key, err)
+		return ManifestBlob{}, fmt.Errorf("backup blob key %q: %w", ref.Key, err)
 	}
 
 	dest, err := blob.ParseKey("blobs/" + ref.Key)
 	if err != nil {
-		return fmt.Errorf("backup target key of %q: %w", ref.Key, err)
+		return ManifestBlob{}, fmt.Errorf("backup target key of %q: %w", ref.Key, err)
 	}
 
 	reader, err := s.source.Get(ctx, source)
 	if err != nil {
-		return fmt.Errorf("read blob %q: %w", ref.Key, err)
+		return ManifestBlob{}, fmt.Errorf("read blob %q: %w", ref.Key, err)
 	}
 
 	data, readErr := io.ReadAll(reader)
 	closeErr := reader.Close()
 
 	if readErr != nil {
-		return fmt.Errorf("read blob %q: %w", ref.Key, readErr)
+		return ManifestBlob{}, fmt.Errorf("read blob %q: %w", ref.Key, readErr)
 	}
 
 	if closeErr != nil {
-		return fmt.Errorf("close blob %q: %w", ref.Key, closeErr)
+		return ManifestBlob{}, fmt.Errorf("close blob %q: %w", ref.Key, closeErr)
 	}
 
-	switch {
-	case int64(len(data)) != ref.Size:
-		return fmt.Errorf(
-			"%w: blob %q holds %d bytes, the SQL data names %d",
-			ErrCorrupt,
-			ref.Key,
-			len(data),
-			ref.Size,
-		)
-	case md5.Sum(data) != ref.MD5: //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
-		return fmt.Errorf("%w: blob %q does not match the MD5 in the SQL data", ErrCorrupt, ref.Key)
+	if int64(len(data)) == ref.Size && md5.Sum(data) == ref.MD5 { //nolint:gosec // The manifest records MD5, for integrity.
+		if err := s.putCopy(ctx, dest, ref.Key, data); err != nil {
+			return ManifestBlob{}, err
+		}
+
+		return ManifestBlob{Key: ref.Key, Size: ref.Size, MD5: hex.EncodeToString(ref.MD5[:])}, nil
 	}
 
+	if !ref.Sealed || s.opener == nil {
+		return ManifestBlob{}, corruptBlobError(ref.Key, data, ref)
+	}
+
+	plain, err := s.openCopy(ctx, source, ref)
+	if err != nil {
+		return ManifestBlob{}, err
+	}
+
+	if int64(len(plain)) != ref.Size || md5.Sum(plain) != ref.MD5 { //nolint:gosec // The manifest records MD5, for integrity.
+		return ManifestBlob{}, corruptBlobError(ref.Key, plain, ref)
+	}
+
+	if err := s.putCopy(ctx, dest, ref.Key, data); err != nil {
+		return ManifestBlob{}, err
+	}
+
+	sum := md5.Sum(data) //nolint:gosec // The manifest records MD5, for integrity.
+
+	return ManifestBlob{
+		Key:    ref.Key,
+		Size:   int64(len(data)),
+		MD5:    hex.EncodeToString(sum[:]),
+		Sealed: true,
+	}, nil
+}
+
+// openCopy returns the plain content of the sealed blob under key.
+func (s *Service) openCopy(ctx context.Context, key blob.Key, ref BlobRef) ([]byte, error) {
+	reader, err := s.opener.OpenStateBlob(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("open sealed blob %q: %w", ref.Key, err)
+	}
+
+	plain, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+
+	if readErr != nil {
+		return nil, fmt.Errorf("read sealed blob %q: %w", ref.Key, readErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("close sealed blob %q: %w", ref.Key, closeErr)
+	}
+
+	return plain, nil
+}
+
+// putCopy writes data under dest. A blob the target already holds keeps its
+// first copy.
+func (s *Service) putCopy(ctx context.Context, dest blob.Key, key string, data []byte) error {
 	if err := s.target.Put(ctx, dest, bytes.NewReader(data)); err != nil {
 		if errors.Is(err, blob.ErrExists) {
 			return nil
 		}
 
-		return fmt.Errorf("copy blob %q: %w", ref.Key, err)
+		return fmt.Errorf("copy blob %q: %w", key, err)
 	}
 
 	return nil
+}
+
+// corruptBlobError reports stored bytes that differ from the SQL data.
+func corruptBlobError(key string, data []byte, ref BlobRef) error {
+	sum := md5.Sum(data) //nolint:gosec // The manifest records MD5, for integrity.
+
+	if int64(len(data)) != ref.Size {
+		return fmt.Errorf(
+			"%w: blob %q holds %d bytes, the SQL data names %d",
+			ErrCorrupt,
+			key,
+			len(data),
+			ref.Size,
+		)
+	}
+
+	if sum != ref.MD5 {
+		return fmt.Errorf("%w: blob %q does not match the MD5 in the SQL data", ErrCorrupt, key)
+	}
+
+	return fmt.Errorf("%w: blob %q does not match the SQL data", ErrCorrupt, key)
 }
 
 // manifestInput groups the manifest fields writeManifest needs.
@@ -532,7 +630,7 @@ type manifestInput struct {
 	startedAt time.Time
 	id        ID
 	sum       Summary
-	ordered   []BlobRef
+	ordered   []ManifestBlob
 	size      int64
 	sha       [sha256.Size]byte
 	key       blob.Key
@@ -557,11 +655,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 	}
 
 	for _, ref := range in.ordered {
-		manifest.Blobs = append(manifest.Blobs, ManifestBlob{
-			Key:  ref.Key,
-			Size: ref.Size,
-			MD5:  hex.EncodeToString(ref.MD5[:]),
-		})
+		manifest.Blobs = append(manifest.Blobs, ref)
 	}
 
 	data, err := json.Marshal(manifest)

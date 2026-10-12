@@ -202,7 +202,7 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 		var sum [md5.Size]byte
 
 		copy(sum[:], raw)
-		out = append(out, BlobRef{MD5: sum, Key: ref.Key, Size: ref.Size})
+		out = append(out, BlobRef{MD5: sum, Key: ref.Key, Size: ref.Size, Sealed: ref.Sealed})
 	}
 
 	return out, nil

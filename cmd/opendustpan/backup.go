@@ -482,8 +482,8 @@ func backupSizeText(doc backupStatusResponse) string {
 // writeBackupReport prints the ID, the state and, when the manifest is
 // present, the size of the backup. It then prints that a backup cannot
 // decrypt secrets without the key-encryption key and that a backup holds
-// OpenTofu state in plain text, so the operator protects the target
-// (ADR 30 decision 7).
+// sealed OpenTofu state, so the operator protects the target and keeps the
+// key apart from it (ADR 41 decision 10).
 func writeBackupReport(stdout io.Writer, doc backupStatusResponse) error {
 	if _, err := fmt.Fprintf(stdout, "backup %s %s%s\n", doc.ID, doc.State, backupSizeText(doc)); err != nil {
 		return fmt.Errorf("write output: %w", err)
@@ -491,7 +491,7 @@ func writeBackupReport(stdout io.Writer, doc backupStatusResponse) error {
 
 	warnings := []string{
 		"A backup cannot decrypt secrets without " + keyEnvVar + ".",
-		"A backup holds OpenTofu state in plain text: protect the target.",
+		"A backup holds sealed OpenTofu state: protect the target.",
 	}
 
 	for _, line := range warnings {

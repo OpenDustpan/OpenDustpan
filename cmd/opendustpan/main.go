@@ -1228,7 +1228,7 @@ func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (b
 // openBackupTarget opens the backup target in raw as a blob store. Empty
 // means no backup target is configured: it returns nil without an error. A
 // dir:/path target opens the local directory, creating it owner-only, as a
-// backup holds OpenTofu state in plain text. An s3://<bucket>[/<prefix>]
+// backup holds sealed OpenTofu state. An s3://<bucket>[/<prefix>]
 // target opens S3-compatible storage with the same constructor as the live
 // blob store. Anything else is an error that shows the allowed forms.
 //

@@ -249,8 +249,8 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    restored_from, sealed
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateStateVersionParams struct {
@@ -271,6 +271,7 @@ type CreateStateVersionParams struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -292,6 +293,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.CreatedAtMs,
 		arg.FinalizedAtMs,
 		arg.RestoredFrom,
+		arg.Sealed,
 	)
 	return err
 }
@@ -447,6 +449,37 @@ WHERE id = ? AND status = 'pending'
 // concurrent finalize wins over a sweep: the sweep then skips the version.
 func (q *Queries) DeleteStateVersion(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteStateVersion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteStateVersionsOfWorkspace = `-- name: DeleteStateVersionsOfWorkspace :exec
+DELETE FROM state_versions
+WHERE workspace_id = ?
+`
+
+// Removes every state version of one workspace, pending and finalized.
+func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteStateVersionsOfWorkspace, workspaceID)
+	return err
+}
+
+const deleteWorkspace = `-- name: DeleteWorkspace :execrows
+DELETE FROM workspaces
+WHERE namespace = ? AND name = ?
+`
+
+type DeleteWorkspaceParams struct {
+	Namespace string
+	Name      string
+}
+
+// Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+// the data key through DeleteSecretKeysOfStack with the workspace ID.
+func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteWorkspace, arg.Namespace, arg.Name)
 	if err != nil {
 		return 0, err
 	}
@@ -627,7 +660,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?
@@ -656,6 +689,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
 	)
 	return i, err
 }
@@ -877,7 +911,7 @@ func (q *Queries) GetStackVersion(ctx context.Context, arg GetStackVersionParams
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE id = ?
 `
@@ -903,6 +937,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
 	)
 	return i, err
 }
@@ -1245,7 +1280,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -1285,6 +1320,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
 		); err != nil {
 			return nil, err
 		}
@@ -1570,7 +1606,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) 
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1612,6 +1648,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
 		); err != nil {
 			return nil, err
 		}
