@@ -600,3 +600,22 @@ FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
 LIMIT ?;
+
+-- name: JournalSequenceSHA :one
+SELECT sha256 FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ? AND sequence = ?;
+
+-- name: NextJournalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: InsertJournal :exec
+INSERT INTO update_journal (
+    stack_id, update_id, arrival, blob_key, sha256, size,
+    lowest_sequence, sequence_ids, operation_ids
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: InsertJournalSequence :exec
+INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
+VALUES (?, ?, ?, ?, ?);

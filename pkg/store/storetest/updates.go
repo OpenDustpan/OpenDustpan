@@ -28,6 +28,7 @@ type UpdatesStore interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	stack.JournalStore
 }
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
@@ -100,6 +101,9 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "delete races a new update without dropping resources", test: testDeleteRaceWithNewUpdate},
 		{name: "events append, dedupe and page", test: testEvents},
 		{name: "events need the running update's lease", test: testEventsLease},
+		{name: "journal rows get arrivals and retries write nothing", test: testJournalPut},
+		{name: "journal refuses leases, previews, stacks, fences and foreign keys", test: testJournalRefusals},
+		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},
