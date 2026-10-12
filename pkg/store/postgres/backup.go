@@ -190,6 +190,15 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
+			table: "audit_entries",
+			columns: []string{
+				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				"object", "version", "value_path", "at_ms", "source_ip", "user_agent",
+				"channel", "kind", "outcome", "request_id", "prev_hash", "hash",
+			},
+			orderBy: []string{pgColNamespace, pgColSequence},
+		},
+		{
 			table:   "backups",
 			columns: []string{"id", "state", "started_at_ms", "ended_at_ms", "target", "error"},
 			orderBy: []string{"id"},

@@ -185,8 +185,8 @@ func (h *Handler) stackRoutes() []Route {
 // secretRoutes returns the encryption routes of the service secrets
 // provider. Encrypt routes need unit:encrypt; decrypt routes need
 // unit:decrypt, so reading a stack alone never reveals its plaintext secrets
-// (ADR 23). The audit routes always answer 204 and store nothing until the
-// audit log exists.
+// (ADR 23). The audit routes always answer 204 and write one reveal entry
+// each to the audit store (ADR 41 decision 13).
 func (h *Handler) secretRoutes() []Route {
 	return []Route{
 		{

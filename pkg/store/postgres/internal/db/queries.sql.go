@@ -179,6 +179,19 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const countAuditEntries = `-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = $1
+`
+
+func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEntries, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -799,6 +812,23 @@ func (q *Queries) GetFailoverVersionForShare(ctx context.Context, name string) (
 	return failover_version, err
 }
 
+const getFailoverVersionForUpdate = `-- name: GetFailoverVersionForUpdate :one
+SELECT failover_version
+FROM namespaces
+WHERE name = $1
+FOR UPDATE
+`
+
+// Locks the namespace row FOR UPDATE so concurrent audit appends of one
+// namespace wait for each other: the next append reads the new last entry.
+// A promotion still waits the same way, so the fence still holds.
+func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, getFailoverVersionForUpdate, name)
+	var failover_version int64
+	err := row.Scan(&failover_version)
+	return failover_version, err
+}
+
 const getInstallationState = `-- name: GetInstallationState :one
 SELECT state
 FROM installation
@@ -1206,6 +1236,95 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	return column_1, err
 }
 
+const insertAuditEntry = `-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+`
+
+type InsertAuditEntryParams struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+}
+
+func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
+	_, err := q.db.Exec(ctx, insertAuditEntry,
+		arg.Namespace,
+		arg.Sequence,
+		arg.Subject,
+		arg.IdpSubject,
+		arg.TokenID,
+		arg.Action,
+		arg.Object,
+		arg.Version,
+		arg.ValuePath,
+		arg.AtMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.Channel,
+		arg.Kind,
+		arg.Outcome,
+		arg.RequestID,
+		arg.PrevHash,
+		arg.Hash,
+	)
+	return err
+}
+
+const lastAuditEntry = `-- name: LastAuditEntry :one
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT 1
+`
+
+// The entry with the highest sequence of a namespace, for the next append.
+// A namespace with no entries matches no row.
+func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEntry, error) {
+	row := q.db.QueryRow(ctx, lastAuditEntry, namespace)
+	var i AuditEntry
+	err := row.Scan(
+		&i.Namespace,
+		&i.Sequence,
+		&i.Subject,
+		&i.IdpSubject,
+		&i.TokenID,
+		&i.Action,
+		&i.Object,
+		&i.Version,
+		&i.ValuePath,
+		&i.AtMs,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Channel,
+		&i.Kind,
+		&i.Outcome,
+		&i.RequestID,
+		&i.PrevHash,
+		&i.Hash,
+	)
+	return i, err
+}
+
 const latestDeployment = `-- name: LatestDeployment :one
 SELECT c.deployment
 FROM checkpoints AS c
@@ -1244,6 +1363,110 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgty
 	var resource_count pgtype.Int8
 	err := row.Scan(&resource_count)
 	return resource_count, err
+}
+
+const listAuditChain = `-- name: ListAuditChain :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence ASC
+`
+
+// Every entry of a namespace oldest first, for the chain check.
+func (q *Queries) ListAuditChain(ctx context.Context, namespace string) ([]AuditEntry, error) {
+	rows, err := q.db.Query(ctx, listAuditChain, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntries = `-- name: ListAuditEntries :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListAuditEntriesParams struct {
+	Namespace string
+	Limit     int32
+	Offset    int32
+}
+
+// One page of the entries of a namespace, newest first. Ties on time break
+// by sequence, as the port comment promises.
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditEntry, error) {
+	rows, err := q.db.Query(ctx, listAuditEntries, arg.Namespace, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listBackups = `-- name: ListBackups :many

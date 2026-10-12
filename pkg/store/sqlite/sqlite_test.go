@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -37,6 +38,101 @@ func TestConformance(t *testing.T) {
 
 		return open(t)
 	})
+}
+
+// TestAuditConformance runs the audit store suite: append, list order,
+// paging, fencing, isolation, concurrent appends and the chain check. The
+// tamper hooks change or remove a row through SQL: the port has no update
+// or delete path, so only SQL plants a changed field or a deleted entry.
+func TestAuditConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.Run(t, func(t *testing.T) audittest.TestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.TestStore{
+			Store:       s,
+			TamperEntry: func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error {
+				return tamperAuditEntry(ctx, path, ns, seq, field, value)
+			},
+			DeleteEntry: func(ctx context.Context, ns namespace.Name, seq int64) error {
+				return deleteAuditEntry(ctx, path, ns, seq)
+			},
+		}
+	})
+}
+
+// tamperAuditColumns whitelists the columns a tamper hook may change, so the
+// field name never reaches SQL unchecked.
+var tamperAuditColumns = map[string]string{
+	"subject": "subject",
+	"action":  "action",
+	"object":  "object",
+	"outcome": "outcome",
+	"kind":    "kind",
+}
+
+// tamperAuditEntry changes one column of one audit entry through a second
+// database handle: the port has no update path.
+func tamperAuditEntry(
+	ctx context.Context, path string, ns namespace.Name, seq int64, field, value string,
+) error {
+	column, ok := tamperAuditColumns[field]
+	if !ok {
+		return fmt.Errorf("unknown audit field %q", field)
+	}
+
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		return fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	if _, err := conn.ExecContext(
+		ctx, `UPDATE audit_entries SET `+column+` = ? WHERE namespace = ? AND sequence = ?`,
+		value, ns.String(), seq,
+	); err != nil {
+		return fmt.Errorf("change audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// deleteAuditEntry removes one audit entry through a second database handle:
+// the port has no delete path.
+func deleteAuditEntry(ctx context.Context, path string, ns namespace.Name, seq int64) error {
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		return fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	if _, err := conn.ExecContext(
+		ctx, `DELETE FROM audit_entries WHERE namespace = ? AND sequence = ?`, ns.String(), seq,
+	); err != nil {
+		return fmt.Errorf("delete audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // TestPingClosed checks Ping answers on an open store and returns exactly the

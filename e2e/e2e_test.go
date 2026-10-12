@@ -898,6 +898,21 @@ func pulumiChangeSecretsProviderScenario(t *testing.T, env *e2e.Env, org string)
 		Fail:   false,
 		Redact: false,
 	})
+	// With the passphrase provider the CLI decrypts locally and reports
+	// each decryption to the audit routes, so showing secrets leaves reveal
+	// entries: config get calls log-decryption, the output and the export
+	// call log-batch-decryption.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("abc"),
+		Name:   "stack export with secrets after passphrase change",
+		Args:   []string{"stack", "export", "--show-secrets", "--stack", qualified},
+		Env:    passEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+	checkAuditLogCalls(t, env, org)
+	checkAuditLog(ctx, t, env, org)
 	env.Step(ctx, t, e2e.StepSpec{
 		Check:  upHasNoChanges,
 		Name:   "up after passphrase change",
@@ -1474,6 +1489,157 @@ func exportHidesSecrets(r e2e.Result) error {
 	}
 
 	return nil
+}
+
+// auditListItem is one entry of GET /api/audit/entries, with the fields
+// the check below needs.
+type auditListItem struct {
+	Subject   string `json:"subject"`
+	Action    string `json:"action"`
+	Object    string `json:"object"`
+	SourceIP  string `json:"sourceIp"`
+	UserAgent string `json:"userAgent"`
+	Channel   string `json:"channel"`
+	Kind      string `json:"kind"`
+	Outcome   string `json:"outcome"`
+	RequestID string `json:"requestId"`
+	Hash      string `json:"hash"`
+}
+
+// readAuditEntries lists the audit entries of org through the API.
+func readAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env, org string) []auditListItem {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization="+org, "")
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list audit entries answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var got struct {
+		Entries []auditListItem `json:"entries"`
+		Total   int64           `json:"total"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode audit entries: %v (%s)", err, body)
+	}
+
+	if int64(len(got.Entries)) != got.Total {
+		t.Fatalf("entries = %d with total %d: %s", len(got.Entries), got.Total, body)
+	}
+
+	return got.Entries
+}
+
+// checkAuditLog proves that a CLI command that shows secrets called the
+// decrypt audit route (ADR 41 decision 13): the audit list holds an entry of
+// the kind reveal with the action unit:decrypt, carrying the subject, the
+// source IP, the user agent and the request ID, and the chain check answers
+// a valid chain. With the service secrets provider the CLI decrypts on the
+// server, so it never calls the audit routes; with the passphrase provider
+// it decrypts locally and reports each decryption, so this check runs while
+// the secrets stack uses the passphrase provider. It records which commands
+// call the routes: `config get` calls log-decryption, while `stack output
+// key --show-secrets` and `stack export --show-secrets` call
+// log-batch-decryption.
+func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	entries := readAuditEntries(ctx, t, env, org)
+	t.Logf("audit entries of %q: %d", org, len(entries))
+
+	var reveal *auditListItem
+
+	for i := range entries {
+		if e := &entries[i]; e.Kind == "reveal" && e.Action == "unit:decrypt" {
+			reveal = e
+
+			break
+		}
+	}
+
+	if reveal == nil {
+		t.Fatalf("no reveal entry with action unit:decrypt in %d entries", len(entries))
+	}
+
+	switch {
+	case reveal.Subject == "":
+		t.Fatal("reveal entry holds no subject")
+	case reveal.SourceIP == "":
+		t.Fatal("reveal entry holds no source IP")
+	case reveal.UserAgent == "":
+		t.Fatal("reveal entry holds no user agent")
+	case reveal.RequestID == "":
+		t.Fatal("reveal entry holds no request ID")
+	case reveal.Outcome != "success":
+		t.Fatalf("reveal entry outcome = %q, want success", reveal.Outcome)
+	case reveal.Hash == "":
+		t.Fatal("reveal entry holds no hash")
+	}
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/check?organization="+org, "")
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("check audit chain answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var check struct {
+		Valid          bool  `json:"valid"`
+		EntriesChecked int64 `json:"entriesChecked"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &check); err != nil {
+		t.Fatalf("decode audit check: %v (%s)", err, body)
+	}
+
+	if !check.Valid || check.EntriesChecked == 0 {
+		t.Fatalf("audit check = %s, want a valid non-empty chain", body)
+	}
+}
+
+// checkAuditLogCalls records which CLI commands call the decrypt audit
+// routes: `config get` calls log-decryption, while `stack output key
+// --show-secrets` and `stack export --show-secrets` call
+// log-batch-decryption.
+func checkAuditLogCalls(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	base := "/api/stacks/" + org + "/" + e2e.Project + "/secrets/decrypt"
+
+	var calls []string
+
+	for _, entry := range env.Recorder.Entries() {
+		if entry.Method == http.MethodPost && strings.HasPrefix(entry.Path, base+"/log-") {
+			calls = append(calls, entry.Step+" -> "+strings.TrimPrefix(entry.Path, base+"/"))
+		}
+	}
+
+	for _, call := range calls {
+		t.Logf("decrypt audit call: %s", call)
+	}
+
+	// A read of one secret value calls log-decryption; a read of several
+	// values calls log-batch-decryption.
+	if !env.Requested("config get after passphrase change", http.MethodPost, base+"/log-decryption") {
+		t.Fatal("config get called no log-decryption")
+	}
+
+	if !env.Requested("stack output after passphrase change", http.MethodPost, base+"/log-batch-decryption") {
+		t.Fatal("stack output --show-secrets called no log-batch-decryption")
+	}
+
+	if !env.Requested(
+		"stack export with secrets after passphrase change", http.MethodPost, base+"/log-batch-decryption",
+	) {
+		t.Fatal("stack export --show-secrets called no log-batch-decryption")
+	}
 }
 
 // checkForeignDecrypt proves that a ciphertext is bound to its stack: it

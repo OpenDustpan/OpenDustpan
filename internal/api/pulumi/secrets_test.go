@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -249,6 +250,22 @@ type secretFixture struct {
 func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) secretFixture {
 	t.Helper()
 
+	return buildSecretFixture(t, authz, maxBatch, nil, nil, slog.New(slog.DiscardHandler))
+}
+
+// buildSecretFixture builds a Handler as newSecretFixture does, with an
+// audit store, a failure callback and a logger for the audit tests. A nil
+// audit store means no audit store is configured.
+func buildSecretFixture(
+	t *testing.T,
+	authz identity.Authorizer,
+	maxBatch int,
+	entries audit.Store,
+	onFail func(),
+	logger *slog.Logger,
+) secretFixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -295,9 +312,11 @@ func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) sec
 		Namespaces:           namespaces,
 		Authenticator:        tokenAuthenticator{},
 		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
+		Logger:               logger,
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                entries,
+		OnAuditFailure:       onFail,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -906,7 +925,10 @@ func TestSecretsGzipBomb(t *testing.T) {
 	}
 }
 
-// TestSecretsAuditRoutes prove the audit routes answer 204 and store nothing.
+// TestSecretsAuditRoutes proves the audit routes answer 204 with an empty
+// body. With an audit store configured they also write one reveal entry
+// each (see TestLogDecryptionWritesARevealEntry); without one they answer
+// 204 all the same.
 func TestSecretsAuditRoutes(t *testing.T) {
 	t.Parallel()
 

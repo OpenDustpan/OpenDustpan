@@ -463,3 +463,42 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state;
 UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
+
+-- name: LastAuditEntry :one
+-- The entry with the highest sequence of a namespace, for the next append.
+-- A namespace with no entries matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListAuditEntries :many
+-- One page of the entries of a namespace, newest first. Ties on time break
+-- by sequence, as the port comment promises.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT ? OFFSET ?;
+
+-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = ?;
+
+-- name: ListAuditChain :many
+-- Every entry of a namespace oldest first, for the chain check.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence ASC;

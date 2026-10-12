@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -61,12 +63,14 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	pulumi := coveragePulumiRoutes(tb, namespaces)
 	tfe := coverageTFERoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
+	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
-	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(server)+probeRouteCount)
+	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
 	out = append(out, inventory...)
+	out = append(out, auditRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -445,6 +449,44 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
+// coverageAuditRoutes returns the audit adapter's route table.
+func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := auditapi.NewHandler(auditapi.Config{
+		Namespaces:    namespaces,
+		Entries:       coverageAuditStore{},
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("audit handler: %v", err)
+	}
+
+	return auditRefs(handler.Routes())
+}
+
+// coverageAuditStore answers no entry. It exists only to build a Handler
+// for its route table; no request is ever served.
+type coverageAuditStore struct{}
+
+func (coverageAuditStore) Append(
+	_ context.Context, _ namespace.Fence, _ audit.Entry,
+) (audit.Entry, error) {
+	return audit.Entry{}, nil
+}
+
+func (coverageAuditStore) List(
+	_ context.Context, _ namespace.Name, _ audit.Page,
+) (audit.Listing, error) {
+	return audit.Listing{}, nil
+}
+
+func (coverageAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
+	return audit.CheckResult{Valid: true}, nil
+}
+
 // coverageMetrics writes nothing: the route table needs a metrics writer,
 // and the coverage gate never serves a request.
 type coverageMetrics struct{}
@@ -536,6 +578,17 @@ func serverRefs(routes []serverapi.Route) []RouteRef {
 	return out
 }
 
+// auditRefs formats the audit table as method and path pairs.
+func auditRefs(routes []auditapi.Route) []RouteRef {
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // AllowEntry is one route that no CLI version in the matrix calls, with the
 // test that covers it instead. Console-only routes, operator routes and
 // routes the CLI never calls live here, each with a comment naming the
@@ -563,6 +616,20 @@ func CoverageAllowlist() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/inventory/units",
 			CoveringTest: "TestListUnitsBothTools",
 			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/entries",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI reads the audit entries. The " +
+				"harness step lists them after a CLI command that calls the " +
+				"decrypt audit route and checks the chain.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/check",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI checks the audit chain. The " +
+				"harness step checks it after a CLI command that calls the " +
+				"decrypt audit route.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",

@@ -7,11 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
+
+// channelHeader is the request header that declares where a request comes
+// from: "api" or "console". The audit entry records it as declared; unknown
+// values are "api".
+const channelHeader = "Dustpan-Channel"
 
 const (
 	// secretBodySlack covers the base64 and JSON frame around one secrets
@@ -222,19 +231,97 @@ func (h *Handler) batchDecrypt(
 }
 
 // logDecryption answers the audit route for one third-party decryption. It
-// stores nothing until the audit log exists.
+// writes one audit entry of the kind reveal with the action unit:decrypt
+// (ADR 41 decision 13) and still answers 204 when the append fails: the
+// failure is a log line and a metric, never a failed CLI command.
 func (h *Handler) logDecryption(
-	w http.ResponseWriter, _ *http.Request, _ identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
+	h.appendRevealAudit(r, p, obj)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // logBatchDecryption answers the audit route for a batch third-party
-// decryption. It stores nothing until the audit log exists.
+// decryption. It writes one audit entry of the kind reveal with the action
+// unit:decrypt (ADR 41 decision 13) and still answers 204 when the append
+// fails: the failure is a log line and a metric, never a failed CLI command.
 func (h *Handler) logBatchDecryption(
-	w http.ResponseWriter, _ *http.Request, _ identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
+	h.appendRevealAudit(r, p, obj)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// appendRevealAudit writes one audit entry for a third-party decryption that
+// the Pulumi CLI reports: the action unit:decrypt with the kind reveal, so
+// a reader never confuses it with a tool operation. A failed append writes
+// a log line with no secret and no value and counts the failure, and the
+// route still answers 204.
+func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj identity.Object) {
+	if h.audit == nil {
+		return
+	}
+
+	ctx := r.Context()
+
+	ns, err := h.namespaces.Get(ctx, obj.Namespace())
+	if err != nil {
+		h.failAudit(ctx)
+
+		return
+	}
+
+	userAgent := r.UserAgent()
+	if len(userAgent) > audit.MaxUserAgentLen {
+		userAgent = userAgent[:audit.MaxUserAgentLen]
+	}
+
+	entry := audit.Entry{
+		At:         time.Now().UTC(),
+		Namespace:  obj.Namespace(),
+		Subject:    p.Subject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(identity.ActionUnitDecrypt),
+		Object:     obj.String(),
+		Version:    "",
+		ValuePath:  "",
+		SourceIP:   sourceIP(r),
+		UserAgent:  userAgent,
+		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:       audit.KindReveal,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  requestid.FromContext(ctx),
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+
+	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
+		h.failAudit(ctx)
+	}
+}
+
+// failAudit records a lost audit entry: one log line with no secret and no
+// value, and one count on the failure metric through the wired callback. It
+// names no error text: the text may hold driver detail (ADR 32 decision 7).
+func (h *Handler) failAudit(ctx context.Context) {
+	h.logger.ErrorContext(ctx, "audit append failed")
+
+	if h.onAuditFailure != nil {
+		h.onAuditFailure()
+	}
+}
+
+// sourceIP returns the remote address that the server sees, without the
+// port. A value without a port reads back unchanged.
+func sourceIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
 }
 
 // secretScope resolves the stack in the path to the scope its values are

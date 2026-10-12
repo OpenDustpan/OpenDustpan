@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -107,6 +108,102 @@ func TestUpdatesConformance(t *testing.T) {
 
 		return openUncounted(t, base)
 	})
+}
+
+// TestAuditConformance runs the audit store suite: append, list order,
+// paging, fencing, isolation, concurrent appends and the chain check. The
+// tamper hooks change or remove a row through SQL: the port has no update
+// or delete path, so only SQL plants a changed field or a deleted entry.
+func TestAuditConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	audittest.Run(t, func(t *testing.T) audittest.TestStore {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		s, err := postgres.Open(t.Context(), schemaURL)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		return audittest.TestStore{
+			Store: s,
+			TamperEntry: func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error {
+				return tamperAuditEntry(ctx, schemaURL, ns, seq, field, value)
+			},
+			DeleteEntry: func(ctx context.Context, ns namespace.Name, seq int64) error {
+				return deleteAuditEntry(ctx, schemaURL, ns, seq)
+			},
+		}
+	})
+}
+
+// tamperAuditColumns whitelists the columns a tamper hook may change, so the
+// field name never reaches SQL unchecked.
+var tamperAuditColumns = map[string]string{
+	"subject": "subject",
+	"action":  "action",
+	"object":  "object",
+	"outcome": "outcome",
+	"kind":    "kind",
+}
+
+// tamperAuditEntry changes one column of one audit entry through a second
+// database handle: the port has no update path.
+func tamperAuditEntry(
+	ctx context.Context, schemaURL string, ns namespace.Name, seq int64, field, value string,
+) error {
+	column, ok := tamperAuditColumns[field]
+	if !ok {
+		return fmt.Errorf("unknown audit field %q", field)
+	}
+
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	if _, err := conn.Exec(
+		ctx, `UPDATE audit_entries SET `+column+` = $1 WHERE namespace = $2 AND sequence = $3`,
+		value, ns.String(), seq,
+	); err != nil {
+		return fmt.Errorf("change audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// deleteAuditEntry removes one audit entry through a second database handle:
+// the port has no delete path.
+func deleteAuditEntry(ctx context.Context, schemaURL string, ns namespace.Name, seq int64) error {
+	conn, err := pgx.Connect(ctx, schemaURL)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close(ctx) //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	if _, err := conn.Exec(
+		ctx, `DELETE FROM audit_entries WHERE namespace = $1 AND sequence = $2`, ns.String(), seq,
+	); err != nil {
+		return fmt.Errorf("delete audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // TestUpdateHistoryConformance runs the history cases of ADR 28 decision 4

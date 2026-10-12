@@ -8,6 +8,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditEntry struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+}
+
 type Backup struct {
 	ID          string
 	State       string
