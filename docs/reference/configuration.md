@@ -73,6 +73,17 @@ server. They read the server URL from `--server` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
 to the system store.
 
+Each client command takes only the flags in its row:
+
+| Command | Flags |
+| --- | --- |
+| `opendustpan namespace create <name>` | `--server`, `--ca-file` |
+| `opendustpan backup` | `--server`, `--ca-file` |
+| `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
+| `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
+| `opendustpan upgrade check` | `--server`, `--ca-file` |
+| `opendustpan health` | `--listen`, `--tls-cert` |
+
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of

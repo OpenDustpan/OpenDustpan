@@ -115,31 +115,6 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: opendustpan.org/opendustpan/internal/metrics
               desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
-        client:
-          # Client commands take --server and never open the database, a blob
-          # adapter, a backup target or the key-encryption key (ADR 39
-          # decision 4). Only the serve wiring may import them. The globs
-          # match the absolute path of a file. pkg/store/schema stays allowed:
-          # it is the neutral migration list both dialects and the clients
-          # share, with no driver in it.
-          files:
-            - "**/cmd/opendustpan/backup.go"
-            - "**/cmd/opendustpan/backup_check.go"
-            - "**/cmd/opendustpan/upgrade_check.go"
-            - "!**/*_test.go"
-          deny:
-            - pkg: opendustpan.org/opendustpan/pkg/store/sqlite
-              desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/postgres
-              desc: Client commands read schema state through the API, never through a store adapter.
-            - pkg: opendustpan.org/opendustpan/pkg/store/internal
-              desc: Client commands share the neutral pkg/store/schema list, never the adapter internals.
-            - pkg: opendustpan.org/opendustpan/pkg/blob/fs
-              desc: Only the server reads a backup target or blob directory.
-            - pkg: opendustpan.org/opendustpan/pkg/blob/s3
-              desc: Only the server reads a backup target or blob directory.
-            - pkg: opendustpan.org/opendustpan/pkg/secret
-              desc: Only the server holds the key-encryption key.
         clientpkg:
           # Client commands live in internal/cli/client and take --server:
           # they never open the database, a blob adapter, a backup target or

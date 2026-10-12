@@ -113,8 +113,9 @@ upgrade-test: ## Restart the current binary on the same database and check data,
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
 	E2E_SERVER=binary go test -tags e2e -race -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
+generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
+	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan
