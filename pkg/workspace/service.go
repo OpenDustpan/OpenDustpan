@@ -704,9 +704,11 @@ func (s *Service) History(ctx context.Context, id ID, page Page) ([]StateVersion
 // with its value path, never as plain text. A state the client encrypted
 // fails with ErrClientEncrypted: the outputs list still works for it. Size
 // is the page size, or zero for the default page; cursor is "" or the
-// NextCursor of an earlier page.
+// NextCursor of an earlier page. Filter is a substring of the address or of
+// the resource type, or "" for no filter: it never matches attribute values.
+// Paging applies after the filter, so a page holds only matching resources.
 func (s *Service) ReadResources(
-	ctx context.Context, id StateVersionID, cursor string, size int,
+	ctx context.Context, id StateVersionID, cursor string, size int, filter string,
 ) (StatePage, error) {
 	state, sv, err := s.openStateBytes(ctx, id)
 	if err != nil {
@@ -722,7 +724,7 @@ func (s *Service) ReadResources(
 		return StatePage{}, err
 	}
 
-	page, err := ListStateResources(state, previous, cursor, size)
+	page, err := ListStateResources(state, previous, cursor, size, filter)
 	if err != nil {
 		return StatePage{}, fmt.Errorf("read resources of %s: %w", id, err)
 	}
