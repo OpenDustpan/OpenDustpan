@@ -235,10 +235,20 @@ func (s *Service) commitSeal(
 		return true, s.blobs.Delete(ctx, content)
 	}
 
-	return false, errors.Join(
-		fmt.Errorf("seal state %s: %w", id, sealErr),
-		s.blobs.Delete(ctx, content),
-	)
+	// Only a rejection before the commit (a stale fence or a missing
+	// namespace) proves that no row names the new blob, so only then does
+	// the blob go. Any other error may hide a commit with an unknown
+	// outcome: the row may already name the new blob. Keep it then; the
+	// idempotent retry and the orphan sweep of a later run reconcile it,
+	// and the sweep deletes only a blob that no row names.
+	if errors.Is(sealErr, namespace.ErrFenced) || errors.Is(sealErr, namespace.ErrNotFound) {
+		return false, errors.Join(
+			fmt.Errorf("seal state %s: %w", id, sealErr),
+			s.blobs.Delete(ctx, content),
+		)
+	}
+
+	return false, fmt.Errorf("seal state %s: %w", id, sealErr)
 }
 
 // writeSealedBlob writes the sealed content of sv to a new blob key and

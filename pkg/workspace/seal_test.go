@@ -409,6 +409,13 @@ func TestSealUnsealedStatesResumesAfterCrash(t *testing.T) {
 		t.Fatalf("state %s reads sealed after a faulted seal, want unsealed", sv.ID)
 	}
 
+	// The failed SQL change may hide a commit with an unknown outcome, so
+	// the job keeps its new sealed blob next to the old one; the sweep of
+	// the next run removes it once no row names it.
+	if keys := listWorkspaceKeys(t, f.blobs, f.ws.ID); len(keys) != 2 {
+		t.Fatalf("stored blobs after a failed seal = %q, want the old blob and the kept sealed blob", keys)
+	}
+
 	res, err := f.sealed.SealUnsealedStates(ctx)
 	if err != nil {
 		t.Fatalf("reseal: %v", err)
