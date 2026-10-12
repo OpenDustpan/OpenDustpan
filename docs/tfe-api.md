@@ -24,9 +24,10 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/state-versions | Token, `unit:read` | Lists the finalized state versions of the filtered workspace, newest first. Needs `filter[organization][name]` and `filter[workspace][name]`. Supports `page[number]` and `page[size]`. |
 | GET | /api/v2/state-versions/{state_version_id} | Token, `unit:read` | Reads one finalized state version. Other versions answer 404. |
 | GET | /api/v2/state-versions/{state_version_id}/download | Token, `unit:read` and `unit:read-secrets` | Downloads the state document as JSON. |
-| GET | /api/v2/state-versions/{state_version_id}/resources | Token, `unit:read` | Lists the masked resources of one finalized state version with `page[cursor]` and `page[size]`: type `state-version-resources` with `address`, `type`, `provider`, `module` and `changed`. `meta` holds the next cursor and `incomplete`. A state the client encrypted answers 409. |
+| GET | /api/v2/state-versions/{state_version_id}/resources | Token, `unit:read` | Lists the masked resources of one finalized state version with `page[cursor]` and `page[size]` and `filter[q]` as a substring of the address or the type: type `state-version-resources` with `address`, `type`, `provider`, `module` and `changed`. Paging applies after the filter. `meta` holds the next cursor and `incomplete`. A state the client encrypted answers 409. |
 | GET | /api/v2/state-versions/{state_version_id}/resources/{address} | Token, `unit:read` | Reads one masked resource by address (path-escaped): its instances with masked `attributes` and the `masked` value paths. Unknown addresses answer 404. A state the client encrypted answers 409. |
 | POST | /api/v2/state-versions/{state_version_id}/actions/reveal | Token, `unit:read` and `unit:read-secrets` | Reveals the plain value at one value path of a finalized state version: the body is a JSON:API document holding `path`, and the answer holds the plain `value` in a JSON:API document. The path must be in the `masked` set of the version, else the call answers 404. The call answers `Cache-Control: no-store` and writes one audit entry of the kind `reveal` before it answers. A state the client encrypted answers 409. |
+| GET | /api/v2/state-versions/{state_version_id}/diff | Token, `unit:read` | Diffs two finalized state versions of one workspace with `from` and `page[cursor]` and `page[size]`: the path version is the `to` side. Type `state-version-diffs` with `added`, `removed` and `changed` (`address`, `changed-paths`, `changed-secrets`). `meta` holds the next cursor and `incomplete`. A `from` version of another workspace answers 404. A state either side encrypted answers 409. |
 | GET | /api/v2/workspaces/{id}/current-state-version-outputs | Token, `unit:read` | Reads the outputs of the current state. |
 | GET | /api/v2/state-version-outputs/{output_id} | Token, `unit:read` and `unit:read-secrets` | Reads one output by ID. Unknown outputs answer 404. |
 | POST | /api/v2/workspaces/{id}/state-versions | Token, `unit:write` | Declares a state version. The caller must hold the lock. |
@@ -77,6 +78,35 @@ The server keeps remote state and locks for local execution only.
   ciphertext, or sealed bytes.
 - A state that the client encrypted answers 409 with `encrypted-by-client`
   on the resource routes. The outputs list still works for it.
+- The diff answers the added, removed and changed resources by address with
+  the resource-relative value paths of each change. A secret value is never
+  in the diff: a changed, added or removed sensitive value is one path in
+  `changed-secrets`. A path is sensitive when the masked read would mask it
+  on either side. A `from` version of another workspace answers 404 as if it
+  did not exist. A state either side encrypted answers 409.
+
+## One token for each CI job
+
+Give each CI job or runner that writes OpenTofu state its own token. The
+server checks the lock holder by subject, and two clients that use one token
+are one subject. So a client that shares the token of the lock holder can
+write state under that lock, for example with `tofu apply -lock=false`, and
+the server cannot refuse it. With distinct tokens, the server answers 409
+with `is locked by User` and the holder. ADR 25 decided this rule. RFC 63
+holds the open question of a stronger check.
+
+Each token in `DUSTPAN_ADMIN_TOKEN` or in the token file signs in as its own
+subject: `admin`, `admin-2`, and so on. These limits apply today:
+
+- Each token is a full administrator.
+- The server reads the tokens only when it starts. A change to the list
+  needs a restart.
+
+Scoped access tokens are RFC 20. The
+[configuration reference](reference/configuration.md) lists the token
+settings. See [ADR 25](adr/0025-opentofu-through-the-tfe-compatible-api.md),
+[RFC 63](rfc/0063-workspace-lock-holder.md) and
+[RFC 20](rfc/0020-access-tokens.md).
 
 ## State at rest
 

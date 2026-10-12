@@ -739,7 +739,7 @@ func (p pagingWorkspaces) ReadState(
 }
 
 func (p pagingWorkspaces) ReadResources(
-	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
 ) (workspace.StatePage, error) {
 	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
 }
@@ -748,6 +748,12 @@ func (p pagingWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, workspace.ErrStateVersionNotFound
 }
 
 func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {

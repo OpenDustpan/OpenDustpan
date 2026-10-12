@@ -704,9 +704,11 @@ func (s *Service) History(ctx context.Context, id ID, page Page) ([]StateVersion
 // with its value path, never as plain text. A state the client encrypted
 // fails with ErrClientEncrypted: the outputs list still works for it. Size
 // is the page size, or zero for the default page; cursor is "" or the
-// NextCursor of an earlier page.
+// NextCursor of an earlier page. Filter is a substring of the address or of
+// the resource type, or "" for no filter: it never matches attribute values.
+// Paging applies after the filter, so a page holds only matching resources.
 func (s *Service) ReadResources(
-	ctx context.Context, id StateVersionID, cursor string, size int,
+	ctx context.Context, id StateVersionID, cursor string, size int, filter string,
 ) (StatePage, error) {
 	state, sv, err := s.openStateBytes(ctx, id)
 	if err != nil {
@@ -722,7 +724,7 @@ func (s *Service) ReadResources(
 		return StatePage{}, err
 	}
 
-	page, err := ListStateResources(state, previous, cursor, size)
+	page, err := ListStateResources(state, previous, cursor, size, filter)
 	if err != nil {
 		return StatePage{}, fmt.Errorf("read resources of %s: %w", id, err)
 	}
@@ -752,6 +754,58 @@ func (s *Service) ReadResource(
 	}
 
 	return detail, nil
+}
+
+// DiffStates returns the diff of two finalized state versions: to is the
+// newer side, from is the older one. Both versions must belong to the same
+// workspace; a from version of another workspace fails with
+// ErrStateVersionNotFound as if it did not exist, so no workspace leaks. It
+// reads both states through Open, the same path the download uses, so sealed
+// state opens before the diff and the blob store never serves callers
+// directly. It compares the plain values in memory only to compute paths; no
+// value leaves the diff. A state either side encrypted fails with
+// ErrClientEncrypted. Cursor is "" or the NextCursor of an earlier page;
+// size is the page size, or zero for the default page.
+func (s *Service) DiffStates(
+	ctx context.Context, to, from StateVersionID, cursor string, size int,
+) (StateDiff, error) {
+	toState, toVersion, err := s.openStateBytes(ctx, to)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	fromVersion, err := s.ReadState(ctx, from)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	if fromVersion.Workspace != toVersion.Workspace {
+		return StateDiff{}, fmt.Errorf("%w: state version %s", ErrStateVersionNotFound, from)
+	}
+
+	fromState, _, err := s.openStateBytes(ctx, from)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	if encryptedErr := rejectEncryptedState(toState, to); encryptedErr != nil {
+		return StateDiff{}, encryptedErr
+	}
+
+	if encryptedErr := rejectEncryptedState(fromState, from); encryptedErr != nil {
+		return StateDiff{}, encryptedErr
+	}
+
+	diff, err := DiffStates(
+		StateWithMarks{State: fromState, Marks: fromVersion.SensitiveMarks},
+		StateWithMarks{State: toState, Marks: toVersion.SensitiveMarks},
+		cursor, size,
+	)
+	if err != nil {
+		return StateDiff{}, fmt.Errorf("diff states %s from %s: %w", to, from, err)
+	}
+
+	return diff, nil
 }
 
 // Restore makes the finalized state version from current again as a new,

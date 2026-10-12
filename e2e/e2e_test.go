@@ -3682,6 +3682,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// sensitive, and a client-encrypted state.
 	tofuMaskedStateScenario(t, env)
 
+	// The state diff of two versions with one added, one removed and one
+	// changed resource and one changed sensitive value.
+	tofuDiffScenario(t, env)
+
 	// A crashed apply leaves the lock behind, and force-unlock recovers.
 	tofuCrashScenario(t, env)
 
@@ -6353,6 +6357,7 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 
 	versionID := maskedCurrentVersion(ctx, t, env, "masked")
 	maskedResourceChecks(ctx, t, env, "masked", versionID)
+	maskedResourceFilterChecks(ctx, t, env, versionID)
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
 	maskedRevealCheck(ctx, t, env, versionID)
@@ -6573,6 +6578,248 @@ func maskedResourceAddresses(t *testing.T, listBody string) []string {
 	}
 
 	return addresses
+}
+
+// maskedResourceFilterMeta decodes the meta of a filtered masked resource
+// list in e2e checks.
+type maskedResourceFilterMeta struct {
+	//nolint:tagliatelle // The TFE wire name; it must not change.
+	NextCursor string `json:"next-cursor"`
+	Incomplete bool   `json:"incomplete"`
+}
+
+// maskedResourceFilterDoc decodes a filtered masked resource list with its
+// meta in e2e checks.
+type maskedResourceFilterDoc struct {
+	Data []maskedResourceItem     `json:"data"`
+	Meta maskedResourceFilterMeta `json:"meta"`
+}
+
+// maskedResourceFilterChecks proves the resource search of a state version:
+// filter[q] matches by type and by address, never by an attribute value, a
+// sensitive value or an output, paging applies after the filter with
+// page[size]=1, and no body holds a sensitive value.
+func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env, versionID string) {
+	t.Helper()
+
+	base := "/api/v2/state-versions/" + versionID + "/resources"
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterByType,
+		Name:   "masked resource filter by type",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("terraform_data"),
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterByAddress,
+		Name:   "masked resource filter by address",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	for _, q := range []string{maskedSecretV2, "hello"} {
+		// The sensitive input value and the plain greeting output value
+		// never match: the filter reads only the address and the type.
+		query := url.QueryEscape(q)
+
+		env.APIStepA(ctx, t, e2e.APIStepSpec{
+			Check:  checkMaskedResourceFilterEmpty,
+			Name:   "masked resource filter no match " + q,
+			Method: http.MethodGet,
+			Path:   base + "?filter[q]=" + query,
+			Body:   "",
+			Want:   http.StatusOK,
+		})
+	}
+
+	var firstPage maskedResourceFilterPage
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			page, err := checkMaskedResourceFilterFirstPage(body)
+			if err != nil {
+				return err
+			}
+
+			firstPage = page
+
+			return nil
+		},
+		Name:   "masked resource filter first page",
+		Method: http.MethodGet,
+		Path:   base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	if firstPage.cursor == "" {
+		t.Fatal("first filtered page holds no next cursor")
+	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  checkMaskedResourceFilterSecondPage(firstPage.address),
+		Name:   "masked resource filter second page",
+		Method: http.MethodGet,
+		Path: base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1&page[cursor]=" +
+			url.QueryEscape(firstPage.cursor),
+		Body: "",
+		Want: http.StatusOK,
+	})
+}
+
+// decodeMaskedResourceFilterDoc decodes a filtered masked resource list body.
+func decodeMaskedResourceFilterDoc(body string) (maskedResourceFilterDoc, error) {
+	var doc maskedResourceFilterDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return maskedResourceFilterDoc{}, fmt.Errorf("%w: decode filtered resource list: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// checkMaskedResourceFilterBodySecrets fails when body holds a masked secret value.
+func checkMaskedResourceFilterBodySecrets(body string) error {
+	for _, secret := range []string{maskedSecretV1, maskedSecretV2} {
+		if strings.Contains(body, secret) {
+			return fmt.Errorf("%w: filtered resource list holds a secret value", errUnexpected)
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterByType proves filter[q] with a type substring answers only
+// the data resource.
+func checkMaskedResourceFilterByType(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 1 || doc.Data[0].Attributes.Address != "terraform_data.smoke" {
+		return fmt.Errorf("%w: filter by type answers %+v, want only the data resource", errUnexpected, doc.Data)
+	}
+
+	if doc.Meta.NextCursor != "" || doc.Meta.Incomplete {
+		return fmt.Errorf("%w: filter by type meta = %+v, want one complete page", errUnexpected, doc.Meta)
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterByAddress proves filter[q] with an address substring
+// answers only the provider resource.
+func checkMaskedResourceFilterByAddress(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 1 || doc.Data[0].Attributes.Address != "random_password.pw" {
+		return fmt.Errorf(
+			"%w: filter by address answers %+v, want only the provider resource",
+			errUnexpected,
+			doc.Data,
+		)
+	}
+
+	return nil
+}
+
+// checkMaskedResourceFilterEmpty proves a filter on a value answers no resources and
+// no secret value.
+func checkMaskedResourceFilterEmpty(body string) error {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Data) != 0 {
+		return fmt.Errorf("%w: filter on a value matched %+v, want none", errUnexpected, doc.Data)
+	}
+
+	if doc.Meta.NextCursor != "" {
+		return fmt.Errorf("%w: empty filtered list holds a next cursor", errUnexpected)
+	}
+
+	return nil
+}
+
+// maskedResourceFilterPage holds the next cursor and the address of the
+// single resource of a filtered first page in e2e checks.
+type maskedResourceFilterPage struct {
+	cursor  string
+	address string
+}
+
+// checkMaskedResourceFilterFirstPage proves the first filtered page holds one
+// of the two matching resources with a next cursor, and returns both.
+func checkMaskedResourceFilterFirstPage(body string) (maskedResourceFilterPage, error) {
+	if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+		return maskedResourceFilterPage{}, err
+	}
+
+	doc, err := decodeMaskedResourceFilterDoc(body)
+	if err != nil {
+		return maskedResourceFilterPage{}, err
+	}
+
+	if len(doc.Data) != 1 || doc.Meta.NextCursor == "" {
+		return maskedResourceFilterPage{}, fmt.Errorf(
+			"%w: first filtered page = %s, want 1 match with a cursor",
+			errUnexpected,
+			body,
+		)
+	}
+
+	return maskedResourceFilterPage{cursor: doc.Meta.NextCursor, address: doc.Data[0].Attributes.Address}, nil
+}
+
+// checkMaskedResourceFilterSecondPage proves the second filtered page holds the other
+// matching resource with no next cursor.
+func checkMaskedResourceFilterSecondPage(firstAddress string) func(string) error {
+	return func(body string) error {
+		if err := checkMaskedResourceFilterBodySecrets(body); err != nil {
+			return err
+		}
+
+		doc, err := decodeMaskedResourceFilterDoc(body)
+		if err != nil {
+			return err
+		}
+
+		if len(doc.Data) != 1 || doc.Meta.NextCursor != "" {
+			return fmt.Errorf(
+				"%w: second filtered page = %s, want 1 match with no cursor",
+				errUnexpected,
+				body,
+			)
+		}
+
+		if doc.Data[0].Attributes.Address == firstAddress {
+			return fmt.Errorf("%w: filtered pages overlap on %q", errUnexpected, firstAddress)
+		}
+
+		return nil
+	}
 }
 
 // checkMaskedResourceDetail proves one masked resource answers its secrets
@@ -7066,6 +7313,367 @@ func checkEncryptedByClient(body string) error {
 	}
 
 	return nil
+}
+
+// tofuDiffSecretV1 and tofuDiffSecretV2 are the sensitive variable values of
+// the two diff applies. They are test values only; no diff response may ever
+// return them.
+const (
+	tofuDiffSecretV1 = "s3cr3t-tofu-diff-v1"
+	tofuDiffSecretV2 = "s3cr3t-tofu-diff-v2"
+)
+
+// diffCloudConfig returns the diff scenario project with a cloud block on
+// host and the workspace name: two stable resources, and, for the second
+// apply, one added resource, one removed resource, one changed plain input
+// and one changed sensitive input. Variant selects the version.
+func diffCloudConfig(host, workspace, variant string) string {
+	kept := `resource "terraform_data" "keep" {
+  input = "keep"
+}
+`
+	changed := `resource "terraform_data" "change" {
+  input = "before"
+}
+`
+	extra := `resource "terraform_data" "gone" {
+  input = "gone"
+}
+`
+
+	if variant == "v2" {
+		changed = `resource "terraform_data" "change" {
+  input = "after"
+}
+`
+		extra = `resource "terraform_data" "added" {
+  input = "added"
+}
+`
+	}
+
+	return fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+}
+
+variable "secret_input" {
+  type      = string
+  sensitive = true
+}
+
+`, host, e2e.Namespace, workspace) + kept + changed + extra + `resource "terraform_data" "smoke" {
+  input = var.secret_input
+}
+`
+}
+
+// tofuDiffChangedEntry is one changed resource of the TFE diff in e2e checks.
+type tofuDiffChangedEntry struct {
+	Address        string   `json:"address"`
+	ChangedPaths   []string `json:"changed-paths"`   //nolint:tagliatelle // The TFE wire name; it must not change.
+	ChangedSecrets []string `json:"changed-secrets"` //nolint:tagliatelle // The TFE wire name; it must not change.
+}
+
+// tofuDiffAttributes are the attributes of one TFE diff in e2e checks.
+type tofuDiffAttributes struct {
+	Added   []string               `json:"added"`
+	Removed []string               `json:"removed"`
+	Changed []tofuDiffChangedEntry `json:"changed"`
+}
+
+// tofuDiffData is the data of one TFE diff in e2e checks.
+type tofuDiffData struct {
+	ID         string             `json:"id"`
+	Type       string             `json:"type"`
+	Attributes tofuDiffAttributes `json:"attributes"`
+}
+
+// tofuDiffMeta is the meta of one TFE diff in e2e checks.
+type tofuDiffMeta struct {
+	NextCursor string `json:"next-cursor"` //nolint:tagliatelle // The TFE wire name; it must not change.
+	Incomplete bool   `json:"incomplete"`
+}
+
+// tofuDiffDoc is the diff body in e2e checks.
+type tofuDiffDoc struct {
+	Data tofuDiffData `json:"data"`
+	Meta tofuDiffMeta `json:"meta"`
+}
+
+// decodeTofuDiffBody decodes a TFE diff body.
+func decodeTofuDiffBody(body string) (tofuDiffDoc, error) {
+	var doc tofuDiffDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return tofuDiffDoc{}, fmt.Errorf("%w: decode state diff: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// tofuDiffPageURNs returns the addresses of one diff page.
+func tofuDiffPageURNs(doc tofuDiffDoc) []string {
+	attributes := doc.Data.Attributes
+	urns := make([]string, 0, len(attributes.Added)+len(attributes.Removed)+len(attributes.Changed))
+	urns = append(urns, attributes.Added...)
+	urns = append(urns, attributes.Removed...)
+
+	for _, entry := range attributes.Changed {
+		urns = append(urns, entry.Address)
+	}
+
+	return urns
+}
+
+// assertTofuDiffEntries proves the diff holds one added resource, one removed
+// resource, and the changed plain resource with the input path and the
+// changed sensitive resource with the input in changed-secrets.
+func assertTofuDiffEntries(doc tofuDiffDoc) error {
+	if len(doc.Data.Attributes.Added) != 1 || doc.Data.Attributes.Added[0] != "terraform_data.added" {
+		return fmt.Errorf("%w: diff added = %q, want the added resource", errUnexpected, doc.Data.Attributes.Added)
+	}
+
+	if len(doc.Data.Attributes.Removed) != 1 || doc.Data.Attributes.Removed[0] != "terraform_data.gone" {
+		return fmt.Errorf("%w: diff removed = %q, want the gone resource", errUnexpected, doc.Data.Attributes.Removed)
+	}
+
+	if len(doc.Data.Attributes.Changed) != 2 {
+		return fmt.Errorf("%w: diff changed = %+v, want the changed and the sensitive resources",
+			errUnexpected, doc.Data.Attributes.Changed)
+	}
+
+	byAddress := map[string]tofuDiffChangedEntry{}
+	for _, entry := range doc.Data.Attributes.Changed {
+		byAddress[entry.Address] = entry
+	}
+
+	if err := checkTofuDiffPlain(byAddress); err != nil {
+		return err
+	}
+
+	if err := checkTofuDiffSensitive(byAddress); err != nil {
+		return err
+	}
+
+	if doc.Data.Type != "state-version-diffs" {
+		return fmt.Errorf("%w: diff type = %q, want state-version-diffs", errUnexpected, doc.Data.Type)
+	}
+
+	if doc.Meta.NextCursor != "" || doc.Meta.Incomplete {
+		return fmt.Errorf("%w: diff = %+v, want a single complete page", errUnexpected, doc)
+	}
+
+	return nil
+}
+
+// checkTofuDiffPlain proves the changed plain resource holds the input path
+// with no secret.
+func checkTofuDiffPlain(byAddress map[string]tofuDiffChangedEntry) error {
+	plain, ok := byAddress["terraform_data.change"]
+	if !ok {
+		return fmt.Errorf("%w: diff changed holds no terraform_data.change", errUnexpected)
+	}
+
+	if len(plain.ChangedSecrets) != 0 {
+		return fmt.Errorf("%w: plain changed secrets = %q, want none", errUnexpected, plain.ChangedSecrets)
+	}
+
+	if !slices.ContainsFunc(plain.ChangedPaths, func(path string) bool {
+		return strings.Contains(path, "/attributes/input")
+	}) {
+		return fmt.Errorf("%w: plain changed paths = %q, want the input path", errUnexpected, plain.ChangedPaths)
+	}
+
+	return nil
+}
+
+// checkTofuDiffSensitive proves the changed sensitive resource holds the
+// input path in changed-secrets.
+func checkTofuDiffSensitive(byAddress map[string]tofuDiffChangedEntry) error {
+	sensitive, ok := byAddress["terraform_data.smoke"]
+	if !ok {
+		return fmt.Errorf("%w: diff changed holds no terraform_data.smoke", errUnexpected)
+	}
+
+	if !slices.ContainsFunc(sensitive.ChangedSecrets, func(path string) bool {
+		return strings.Contains(path, "/attributes/input")
+	}) {
+		return fmt.Errorf("%w: sensitive changed secrets = %q, want the input path",
+			errUnexpected, sensitive.ChangedSecrets)
+	}
+
+	return nil
+}
+
+// assertTofuDiffHasNoSecrets fails when the diff body holds a secret value.
+func assertTofuDiffHasNoSecrets(body string) error {
+	for _, leaked := range []string{diffSecretV1, tofuDiffSecretV2} {
+		if strings.Contains(body, leaked) {
+			return fmt.Errorf("%w: diff body holds a secret value", errUnexpected)
+		}
+	}
+
+	return nil
+}
+
+// tofuDiffPage fetches one diff page with direct API calls: it runs inside
+// the check of the paged step, so it sends no recorded step of its own.
+func tofuDiffPage(ctx context.Context, env *e2e.Env, path string) (tofuDiffDoc, error) {
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, path, "")
+	if err != nil {
+		return tofuDiffDoc{}, fmt.Errorf("%w: GET %s: %w", errUnexpected, path, err)
+	}
+
+	if status != http.StatusOK {
+		return tofuDiffDoc{}, fmt.Errorf("%w: GET %s answers %d, want %d (%s)",
+			errUnexpected, path, status, http.StatusOK, body)
+	}
+
+	if err := assertTofuDiffHasNoSecrets(body); err != nil {
+		return tofuDiffDoc{}, err
+	}
+
+	return decodeTofuDiffBody(body)
+}
+
+// assertTofuDiffPaged proves a paged read with a size of one lists the same
+// differing addresses as the full diff, with no secret value in any page.
+func assertTofuDiffPaged(ctx context.Context, env *e2e.Env, base string, full tofuDiffDoc) error {
+	want := map[string]bool{}
+	for _, urn := range tofuDiffPageURNs(full) {
+		want[urn] = true
+	}
+
+	seen := map[string]bool{}
+	cursor := ""
+
+	for {
+		path := base + "&page[size]=1"
+		if cursor != "" {
+			path += "&page[cursor]=" + url.QueryEscape(cursor)
+		}
+
+		doc, err := tofuDiffPage(ctx, env, path)
+		if err != nil {
+			return err
+		}
+
+		urns := tofuDiffPageURNs(doc)
+		if len(urns) != 1 {
+			return fmt.Errorf("%w: diff page at %q holds %d entries, want 1", errUnexpected, cursor, len(urns))
+		}
+
+		if seen[urns[0]] {
+			return fmt.Errorf("%w: diff page lists %q twice", errUnexpected, urns[0])
+		}
+
+		seen[urns[0]] = true
+		cursor = doc.Meta.NextCursor
+
+		if cursor == "" {
+			break
+		}
+	}
+
+	if !maps.Equal(seen, want) {
+		return fmt.Errorf("%w: paged diff addresses %v differ from full diff addresses %v", errUnexpected, seen, want)
+	}
+
+	return nil
+}
+
+// tofuDiffScenario proves the state diff in a workspace of its own: two
+// applies with one added, one removed and one changed resource and one
+// changed sensitive value. The diff answers each, with no sensitive value in
+// any body. A from version of another workspace answers 404.
+func tofuDiffScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	writeImportConfig(t, dir, diffCloudConfig(env.Host(), "diffed", "v1"))
+
+	env.StepIn(ctx, t, dir, step("diff init", nil, "init", "-input=false", "-no-color"))
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  nil,
+		Name:   "diff apply 1",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    []string{"TF_VAR_secret_input=" + tofuDiffSecretV1},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	first := maskedCurrentVersion(ctx, t, env, "diffed")
+
+	writeImportConfig(t, dir, diffCloudConfig(env.Host(), "diffed", "v2"))
+	env.StepIn(ctx, t, dir, e2e.StepSpec{
+		Check:  nil,
+		Name:   "diff apply 2",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    []string{"TF_VAR_secret_input=" + tofuDiffSecretV2},
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	second := maskedCurrentVersion(ctx, t, env, "diffed")
+	base := "/api/v2/state-versions/" + second + "/diff?from=" + first
+
+	var full tofuDiffDoc
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(body string) error {
+			if err := assertTofuDiffHasNoSecrets(body); err != nil {
+				return err
+			}
+
+			doc, err := decodeTofuDiffBody(body)
+			if err != nil {
+				return err
+			}
+
+			if err := assertTofuDiffEntries(doc); err != nil {
+				return err
+			}
+
+			full = doc
+
+			return nil
+		},
+		Name:   "tofu state diff",
+		Method: http.MethodGet,
+		Path:   base,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check: func(string) error {
+			return assertTofuDiffPaged(ctx, env, base, full)
+		},
+		Name:   "tofu state diff paged",
+		Method: http.MethodGet,
+		Path:   base + "&page[size]=1",
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	other := maskedCurrentVersion(ctx, t, env, "masked")
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "tofu state diff of another workspace",
+		Method: http.MethodGet,
+		Path:   "/api/v2/state-versions/" + second + "/diff?from=" + other,
+		Body:   "",
+		Want:   http.StatusNotFound,
+	})
 }
 
 func tofuStatePushScenario(t *testing.T, env *e2e.Env) {

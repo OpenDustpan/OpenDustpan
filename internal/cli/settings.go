@@ -214,8 +214,10 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_ADMIN_TOKEN",
 		"Required when you set no token file. At least 32 bytes. Comma-separated tokens sign in as "+
-			"distinct administrators: `admin`, `admin-2`, and so on. The server clears the variable from its "+
-			"environment after the read.",
+			"distinct administrators: `admin`, `admin-2`, and so on. Give each CI job or runner that writes "+
+			"OpenTofu state its own token, because the server checks the lock holder by subject. Each token "+
+			"is a full administrator, and a change to the list needs a restart. The server clears the "+
+			"variable from its environment after the read.",
 	),
 	envSetting(
 		"DUSTPAN_ADMIN_TOKEN_FILE",

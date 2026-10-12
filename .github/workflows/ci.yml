@@ -14,9 +14,11 @@ permissions:
 
 # The project has two self-hosted runners. A new push to a pull request
 # cancels the run for the older head of that pull request. Runs on main
-# are never canceled.
+# are never canceled. The draft state is part of the group, so a run for a
+# draft (all jobs skipped) and a run for a ready pull request never cancel
+# each other.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The repository variable CI_RUNS_ON picks the runners, as a JSON value:

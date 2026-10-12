@@ -406,7 +406,7 @@ func (coverageWorkspaces) ReadState(
 }
 
 func (coverageWorkspaces) ReadResources(
-	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
 ) (workspace.StatePage, error) {
 	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
 }
@@ -415,6 +415,12 @@ func (coverageWorkspaces) ReadResource(
 	_ context.Context, _ workspace.StateVersionID, _ string,
 ) (workspace.StateDetail, error) {
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, workspace.ErrStateVersionNotFound
 }
 
 func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
@@ -810,6 +816,13 @@ func stateAllowEntries() []AllowEntry {
 				"The harness step reveals the sensitive input after two applies, checks the value, " +
 				"no-store and the reveal audit entry, and checks that a path outside the " +
 				"masked set answers 404.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/diff",
+			CoveringTest: "TestCLIs (tofuDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two applies with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
 		},
 	}
 }
