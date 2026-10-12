@@ -243,6 +243,62 @@ func TestCloseDropsStagingSchema(t *testing.T) {
 	}
 }
 
+// TestCloseContextDropsStagingSchemaWithCanceledContext stages a backup,
+// closes the store with a context that is already canceled, and proves that
+// the staging schema is gone: the cleanup runs detached from the context.
+func TestCloseContextDropsStagingSchemaWithCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	s := openStagingTestStore(t)
+	ctx := t.Context()
+
+	var buf bytes.Buffer
+
+	sum, exportErr := s.Export(ctx, &buf)
+	if exportErr != nil {
+		t.Fatalf("export: %v", exportErr)
+	}
+
+	if _, stageErr := s.StageRestore(ctx, bytes.NewReader(buf.Bytes()), sum); stageErr != nil {
+		t.Fatalf("stage backup: %v", stageErr)
+	}
+
+	staging := s.StagingSchemaForTest()
+	if staging == "" {
+		t.Fatal("stage kept no staging schema, want the staging area")
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	// The cleanup of openStagingTestStore closes again: the second Close is a
+	// no-op once the first drops the staging schema.
+	s.CloseContext(canceled)
+
+	conn, connErr := pgx.Connect(ctx, os.Getenv(stagingTestURL))
+	if connErr != nil {
+		t.Fatalf("connect: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var count int
+
+	query := `SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = $1`
+
+	if countErr := conn.QueryRow(ctx, query, staging).Scan(&count); countErr != nil {
+		t.Fatalf("count staging schemas: %v", countErr)
+	}
+
+	if count != 0 {
+		t.Fatalf("staging schemas after CloseContext with a canceled context = %d, want none", count)
+	}
+}
+
 // mustStageNamespace reads the seeded namespace back, failing on error.
 func mustStageNamespace(t *testing.T, s *postgres.Store) namespace.Namespace {
 	t.Helper()

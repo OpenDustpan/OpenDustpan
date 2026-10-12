@@ -4,7 +4,8 @@
 //
 // A backup holds wrapped data keys but never the key-encryption key that
 // unwraps them, so a backup alone cannot decrypt secrets. OpenTofu state
-// content travels in plain text, as the server stores it: protect the target.
+// content travels sealed, as the server stores it: protect the target and
+// keep the key apart from it.
 //
 // The package holds no SQL and no HTTP. Each store adapter (SQLite,
 // PostgreSQL) implements these ports in a later change. The conformance suite
@@ -19,9 +20,13 @@ package backup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Dialect names the SQL dialect that holds the data.
@@ -61,7 +66,9 @@ var Tables = []string{
 	"inventory",
 	"workspaces",
 	"state_versions",
+	"audit_entries",
 	"backups",
+	"restores",
 	"installation",
 }
 
@@ -92,6 +99,24 @@ func (id ID) String() string {
 	return string(id)
 }
 
+// backupIDPrefix prefixes every backup ID the server mints.
+const backupIDPrefix = "bkp-"
+
+// maxBackupIDLength bounds a backup ID: the minted form is far shorter, and
+// longer input is never a real ID.
+const maxBackupIDLength = 128
+
+// ParseID validates s as a backup ID: the bkp- prefix with identifier
+// characters. It returns ErrInvalidID for anything else, so callers answer
+// 400 with a fixed message instead of sending a malformed ID to the target.
+func ParseID(s string) (ID, error) {
+	if !ident.Valid(s, maxBackupIDLength) || !strings.HasPrefix(s, backupIDPrefix) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidID, s)
+	}
+
+	return ID(s), nil
+}
+
 // Record is one row of the backups table: the backups that this installation
 // made, newest first. Target names where the backup went, for example
 // "dir:/var/backups" or "s3://bucket/prefix". Error holds the failure text
@@ -106,12 +131,17 @@ type Record struct {
 }
 
 // BlobRef names one blob that the SQL data references: the content key of a
-// finalized state version with its size and MD5. Key holds a blob key. The
-// backup copies each named blob after the SQL capture.
+// finalized state version with its size and MD5. Key holds a blob key. Size
+// and MD5 stay those of the plain bytes, as the state version stores them.
+// Sealed reports that the stored bytes are sealed with the data key of the
+// workspace scope: the backup opens them to check the plain bytes and stores
+// the sealed bytes. The backup copies each named blob after the SQL capture.
 type BlobRef struct {
 	MD5  [16]byte
 	Key  string
 	Size int64
+	// Sealed reports sealed stored bytes (ADR 41 decision 10).
+	Sealed bool
 }
 
 // Summary is the manifest subset that the SQL data alone determines. The
@@ -151,6 +181,10 @@ var (
 	// ErrCorrupt reports that the stream does not hold a complete export, or
 	// that its row counts differ from the manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
+	// ErrInvalidID reports a backup ID that fails validation: empty,
+	// overlong, without the bkp- prefix, or with characters outside the
+	// identifier set.
+	ErrInvalidID = errors.New("invalid backup ID")
 )
 
 // Exporter captures the SQL data in one read transaction and writes it to w.

@@ -89,7 +89,7 @@ func (m *memStackStore) RenameStack(_ context.Context, _ stack.Ref, _ stack.Name
 	return errNotUsed
 }
 
-func (m *memStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *memStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return errNotUsed
 }
 
@@ -156,21 +156,26 @@ func newUserHandler(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: stStore, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stStore, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              newUnusedUpdates(t, namespaces),
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               newUnusedUpdates(t, namespaces),
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

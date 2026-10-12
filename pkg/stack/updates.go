@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -535,7 +536,13 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 	return done, errors.Join(saveErr, err)
 }
 
-// Export returns the stack's latest checkpoint, or ErrNoState.
+// Export returns the stack's latest checkpoint, or ErrNoState. A sequenced
+// save keeps the versioned bytes the CLI sent, so the export serves the
+// inner deployment they wrap, while the digest still names the stored row.
+// A checkpoint whose blob cannot be read fails with ErrCheckpointUnavailable
+// and one whose bytes do not match its record with ErrCheckpointMismatch;
+// both still return the stored row identity (Update and Digest) with no
+// deployment, so the caller can name the checkpoint it could not read.
 func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 	cp, err := s.checkpoints.LatestCheckpoint(ctx, ref)
 	if err != nil {
@@ -544,15 +551,17 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 
 	resolved, err := s.resolveCheckpoint(ctx, cp)
 	if err != nil {
-		return Checkpoint{}, fmt.Errorf("export %s: %w", ref, err)
+		return cp, fmt.Errorf("export %s: %w", ref, err)
 	}
 
-	return resolved, nil
+	return innerDeployment(resolved), nil
 }
 
 // ExportVersion returns the checkpoint of the stack's update with the given
 // version, or ErrNoState when no such update exists or it has no checkpoint.
-// It never falls back to an older version.
+// It never falls back to an older version. A sequenced save keeps the
+// versioned bytes the CLI sent, so the export serves the inner deployment
+// they wrap.
 func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Checkpoint, error) {
 	cp, err := s.checkpoints.CheckpointByVersion(ctx, ref, version)
 	if err != nil {
@@ -564,7 +573,43 @@ func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Ch
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
 	}
 
-	return resolved, nil
+	return innerDeployment(resolved), nil
+}
+
+// verbatimEnvelope is the versioned shape the CLI sends on verbatim saves:
+// the inner deployment with its schema version. Sequenced saves keep these
+// bytes exactly, because later deltas apply to that text and hash it.
+type verbatimEnvelope struct {
+	Deployment json.RawMessage `json:"deployment"`
+}
+
+// innerDeployment returns the checkpoint to serve for cp: the inner
+// deployment of a sequenced save, or cp unchanged. A sequenced save keeps
+// the versioned bytes, so reads unwrap them without decoding and encoding
+// them again: the inner bytes stay exactly as the CLI sent them. Anything
+// else, including a save that carries no envelope, serves as stored.
+func innerDeployment(cp Checkpoint) Checkpoint {
+	cp.Deployment = innerDeploymentBytes(cp.Deployment, cp.Sequence)
+
+	return cp
+}
+
+// innerDeploymentBytes returns the inner deployment of a sequenced save:
+// the deployment a versioned envelope wraps. Anything else, including a
+// save that carries no envelope, serves as stored. The delete guard counts
+// through this same path, so a sequenced save counts its resources, not
+// the envelope, which holds no resources array.
+func innerDeploymentBytes(deployment []byte, seq int64) []byte {
+	if seq <= 0 || len(deployment) == 0 {
+		return deployment
+	}
+
+	var env verbatimEnvelope
+	if err := json.Unmarshal(deployment, &env); err != nil || len(env.Deployment) == 0 {
+		return deployment
+	}
+
+	return []byte(env.Deployment)
 }
 
 // MaxCheckpointBytes returns the largest checkpoint SaveCheckpoint accepts.
@@ -1124,7 +1169,9 @@ func (s *Updates) validate(in CheckpointInput) error {
 
 // restoreInput returns the checkpoint input that restores version of ref: a
 // copy of that version's checkpoint. It returns ErrNoState when the version
-// has no checkpoint, before any update exists.
+// has no checkpoint, before any update exists. A sequenced save keeps the
+// versioned bytes the CLI sent, so the copy holds the inner deployment they
+// wrap, as a new unsequenced save.
 func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (CheckpointInput, error) {
 	src, err := s.checkpoints.CheckpointByVersion(ctx, ref, version)
 	if err != nil {
@@ -1136,12 +1183,14 @@ func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (Che
 		return CheckpointInput{}, fmt.Errorf("restore %s version %d: %w", ref, version, err)
 	}
 
+	inner := innerDeployment(resolved)
+
 	in := CheckpointInput{
-		Features:      resolved.Features,
-		Deployment:    resolved.Deployment,
-		SchemaVersion: resolved.SchemaVersion,
+		Features:      inner.Features,
+		Deployment:    inner.Deployment,
+		SchemaVersion: inner.SchemaVersion,
 		Sequence:      0,
-		Invalid:       resolved.Invalid,
+		Invalid:       inner.Invalid,
 	}
 
 	return in, s.validate(in)

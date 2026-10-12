@@ -13,12 +13,14 @@ import (
 	"testing"
 	"time"
 
+	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -26,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -61,12 +64,14 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	pulumi := coveragePulumiRoutes(tb, namespaces)
 	tfe := coverageTFERoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
+	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
-	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(server)+probeRouteCount)
+	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
 	out = append(out, inventory...)
+	out = append(out, auditRoutes...)
 	out = append(out, server...)
 
 	// The probes live on the root mux, not in any adapter table.
@@ -154,7 +159,9 @@ func (coverageAuthorizer) Authorize(
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
-	stacks, err := stack.NewService(stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
 	}
@@ -184,16 +191,19 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	handler, err := pulumiapi.NewHandler(pulumiapi.Config{
-		Stacks:        stacks,
-		Updates:       updates,
-		Secrets:       secrets,
-		Namespaces:    namespaces,
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		BaseURL:       baseurl.Resolver{},
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               secrets,
+		Namespaces:            namespaces,
+		Authenticator:         coverageAuthenticator{},
+		Authorizer:            coverageAuthorizer{},
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		CheckpointDeltaCutoff: 0,
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		tb.Fatalf("pulumi handler: %v", err)
@@ -216,7 +226,7 @@ func (coverageStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack,
 	return none, stack.ErrNotFound
 }
 
-func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return stack.ErrNotFound
 }
 
@@ -303,12 +313,14 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	tb.Helper()
 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Workspaces:    coverageWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Workspaces:     coverageWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		tb.Fatalf("tfe handler: %v", err)
@@ -393,6 +405,24 @@ func (coverageWorkspaces) ReadState(
 	return none, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) ReadResources(
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int, _ string,
+) (workspace.StatePage, error) {
+	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) ReadResource(
+	_ context.Context, _ workspace.StateVersionID, _ string,
+) (workspace.StateDetail, error) {
+	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) DiffStates(
+	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StateDiff, error) {
+	return workspace.StateDiff{}, workspace.ErrStateVersionNotFound
+}
+
 func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, workspace.ErrStateVersionNotFound
 }
@@ -445,6 +475,48 @@ func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinve
 	return nil, nil
 }
 
+// coverageAuditRoutes returns the audit adapter's route table.
+func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := auditapi.NewHandler(auditapi.Config{
+		Namespaces:    namespaces,
+		Entries:       coverageAuditStore{},
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+	})
+	if err != nil {
+		tb.Fatalf("audit handler: %v", err)
+	}
+
+	return auditRefs(handler.Routes())
+}
+
+// coverageAuditStore answers no entry. It exists only to build a Handler
+// for its route table; no request is ever served.
+type coverageAuditStore struct{}
+
+func (coverageAuditStore) Append(
+	_ context.Context, _ namespace.Fence, _ audit.Entry,
+) (audit.Entry, error) {
+	var zero audit.Entry
+
+	return zero, nil
+}
+
+func (coverageAuditStore) List(
+	_ context.Context, _ namespace.Name, _ audit.Page,
+) (audit.Listing, error) {
+	var zero audit.Listing
+
+	return zero, nil
+}
+
+func (coverageAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
+}
+
 // coverageMetrics writes nothing: the route table needs a metrics writer,
 // and the coverage gate never serves a request.
 type coverageMetrics struct{}
@@ -468,9 +540,18 @@ func (coverageMaintenance) Enter(_ context.Context, _ bool) (maintenance.EnterRe
 
 func (coverageMaintenance) Leave(context.Context) error { return nil }
 
+// coverageSchema reports no applied migration: the route table needs a
+// schema reporter, and the coverage gate never serves a request.
+type coverageSchema struct{}
+
+func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigration, error) {
+	return nil, nil
+}
+
 // coverageServerRoutes returns the installation adapter's route table: the
-// namespace route (ADR 39), the backup routes (ADR 30), the metrics route
-// (ADR 32) and the maintenance routes (ADR 38).
+// namespace route (ADR 39), the backup routes (ADR 30), the restore routes
+// (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
+// the check routes (ADR 39 decisions 3): backup check and upgrade check.
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
@@ -480,8 +561,11 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    coverageNamespaces(tb),
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   coverageMaintenance{},
 		Metrics:       coverageMetrics{},
+		Version:       "test",
+		Schema:        coverageSchema{},
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -536,6 +620,17 @@ func serverRefs(routes []serverapi.Route) []RouteRef {
 	return out
 }
 
+// auditRefs formats the audit table as method and path pairs.
+func auditRefs(routes []auditapi.Route) []RouteRef {
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
 // AllowEntry is one route that no CLI version in the matrix calls, with the
 // test that covers it instead. Console-only routes, operator routes and
 // routes the CLI never calls live here, each with a comment naming the
@@ -558,11 +653,39 @@ type AllowEntry struct {
 // CLI version in the matrix can reach it; when the CLI gains a caller, the
 // entry goes and an e2e step proves the route.
 func CoverageAllowlist() []AllowEntry {
-	allowed := []AllowEntry{
+	return slices.Concat(
+		consoleAllowEntries(),
+		backupAllowEntries(),
+		namespaceAllowEntries(),
+		maintenanceAllowEntries(),
+		operatorAllowEntries(),
+		stateAllowEntries(),
+		restoreAllowEntries(),
+	)
+}
+
+// consoleAllowEntries returns the allowlist rows for console-only routes and
+// routes the CLI never calls.
+func consoleAllowEntries() []AllowEntry {
+	return []AllowEntry{
 		{
 			Method: http.MethodGet, Path: "/api/inventory/units",
 			CoveringTest: "TestListUnitsBothTools",
 			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/entries",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI reads the audit entries. The " +
+				"harness step lists them after a CLI command that calls the " +
+				"decrypt audit route and checks the chain.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/check",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI checks the audit chain. The " +
+				"harness step checks it after a CLI command that calls the " +
+				"decrypt audit route.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",
@@ -607,6 +730,13 @@ func CoverageAllowlist() []AllowEntry {
 			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
 				"The harness step restores a version and checks it with state pull.",
 		},
+	}
+}
+
+// operatorAllowEntries returns the operator routes and probes that no CLI
+// calls.
+func operatorAllowEntries() []AllowEntry {
+	return []AllowEntry{
 		{
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
@@ -623,8 +753,61 @@ func CoverageAllowlist() []AllowEntry {
 			Reason:       "Operator probe: no CLI calls it.",
 		},
 	}
+}
 
-	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries(), maintenanceAllowEntries())
+// stateCoveringTest names the test that proves the masked state routes
+// instead of a CLI: no CLI version in the matrix calls them.
+const stateCoveringTest = "TestCLIs (pulumiMaskedStateScenario)"
+
+// stateAllowEntries returns the console state routes that no CLI calls. The
+// harness steps of stateCoveringTest drive them directly after two ups.
+func stateAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/resources",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never lists masked resources. " +
+				"The harness step reads the list after two ups and checks masking and changed markers.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/resources/{urn}",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
+				"The harness step reads it after two ups and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/outputs",
+			CoveringTest: stateCoveringTest,
+			Reason: "Console route (ADR 41): the CLI never reads masked outputs. " +
+				"The harness step reads them after two ups and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/diff",
+			CoveringTest: "TestCLIs (pulumiDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two ups with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/resources",
+			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
+			Reason: "Console route (ADR 41): the CLI never lists masked resources. " +
+				"The harness step reads the list after two applies and checks masking and changed markers.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/resources/{address}",
+			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
+			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
+				"The harness step reads it after two applies and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/diff",
+			CoveringTest: "TestCLIs (tofuDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two applies with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
+		},
+	}
 }
 
 // namespaceCoveringTest names the test that proves the namespace create route
@@ -673,6 +856,22 @@ func backupAllowEntries() []AllowEntry {
 			Reason: "Operator route: no CLI reads a backup. The harness step " +
 				"polls it until it succeeds and checks the manifest.",
 		},
+		{
+			Method: http.MethodGet, Path: "/api/server/backups/{id}/check",
+			CoveringTest: "TestBackupCheck",
+			Reason: "Operator route: no CLI in the matrix calls it. The " +
+				"opendustpan backup check binary calls it with Go-http-client, " +
+				"which never counts as CLI traffic, and TestBackupCheck proves " +
+				"it with the check handler tests in check_test.go.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/upgrade-check",
+			CoveringTest: "TestUpgradeCheck",
+			Reason: "Operator route: no CLI in the matrix calls it. The " +
+				"opendustpan upgrade check binary calls it with Go-http-client, " +
+				"which never counts as CLI traffic, and TestUpgradeCheck proves " +
+				"it with the upgrade handler tests in upgrade_test.go.",
+		},
 	}
 }
 
@@ -702,6 +901,38 @@ func maintenanceAllowEntries() []AllowEntry {
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",
+		},
+	}
+}
+
+// restoreCoveringTest names the test that proves the restore routes instead
+// of a CLI: the restore command calls them with the Go User-Agent, which
+// never counts toward route coverage.
+const restoreCoveringTest = "TestBackupRestore"
+
+// restoreAllowEntries returns the operator restore routes that only the
+// restore command calls. The steps of restoreCoveringTest drive them through
+// the new command: restore into an empty installation, restore over live
+// data, check-only, a failed check, a fenced lease, and an undo.
+func restoreAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/server/restores",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command starts a restore. " +
+				"The harness step starts one through it and checks the second start conflicts.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/restores",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command lists restores. " +
+				"The harness step lists them to find the backup taken before the restore.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/restores/{id}",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command reads a restore. " +
+				"The harness step polls it until it succeeds and checks the manifest.",
 		},
 	}
 }

@@ -20,14 +20,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // Store is every persistence port the suite exercises: namespaces and stacks
-// for fixtures, secret.KeyStore under test, and stack.Store.DeleteStack for
-// the delete rule.
+// for fixtures, secret.KeyStore under test, stack.Store.DeleteStack and
+// workspace.Store.DeleteWorkspace for the delete rules.
 type Store interface {
 	namespace.Store
 	stack.Store
+	workspace.Store
 	secret.KeyStore
 }
 
@@ -48,6 +50,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "create with a stale fence is ErrFenced", test: testStaleFence},
 		{name: "wrapper IDs are listed", test: testWrapperIDs},
 		{name: "delete of the stack deletes its key", test: testDeleteStackDeletesKey},
+		{name: "delete of the workspace deletes its key", test: testDeleteWorkspaceDeletesKey},
+		{name: "seal stream round trips across chunk borders", test: testSealStreamRoundTrip},
+		{name: "seal stream binds the scope", test: testSealStreamBindsScope},
+		{name: "tampered sealed streams fail without a leak", test: testSealStreamTamper},
 	}
 
 	for _, tc := range cases {
@@ -334,7 +340,7 @@ func testDeleteStackDeletesKey(t *testing.T, s Store) {
 		t.Fatalf("create key: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -353,5 +359,52 @@ func testDeleteStackDeletesKey(t *testing.T, s Store) {
 
 	if _, err := s.GetStack(t.Context(), st.Ref); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testDeleteWorkspaceDeletesKey proves the final delete of a workspace
+// removes its data key with its rows (ADR 41 decision 10, ADR 23 decision 5).
+func testDeleteWorkspaceDeletesKey(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s)
+
+	name, nameErr := workspace.ParseName("network")
+	if nameErr != nil {
+		t.Fatalf("parse workspace name: %v", nameErr)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: now(),
+		UpdatedAt: now(),
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
+		ID:        workspace.ID(ident.NewID("ws-")),
+		Revision:  1,
+	}
+
+	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	scope, err := secret.NewScope(ns.Name, w.ID.String())
+	if err != nil {
+		t.Fatalf("new scope: %v", err)
+	}
+
+	if _, err := s.CreateKey(t.Context(), newKey(scope, "kek-1", "wrapped-1"), ns.Fence()); err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if _, err := s.GetKey(t.Context(), scope); !errors.Is(err, secret.ErrKeyNotFound) {
+		t.Fatalf("get key after delete: err = %v, want ErrKeyNotFound", err)
+	}
+
+	if _, err := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get deleted workspace: err = %v, want ErrNotFound", err)
 	}
 }

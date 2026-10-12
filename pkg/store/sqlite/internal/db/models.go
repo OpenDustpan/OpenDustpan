@@ -8,6 +8,28 @@ import (
 	"database/sql"
 )
 
+type AuditEntry struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+	ValueCount sql.NullInt64
+}
+
 type Backup struct {
 	ID          string
 	State       string
@@ -49,6 +71,9 @@ type Inventory struct {
 	LastChangedMs int64
 	Status        string
 	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
 }
 
 type Namespace struct {
@@ -56,6 +81,17 @@ type Namespace struct {
 	HomeRegion      string
 	FailoverVersion int64
 	CreatedAtMs     int64
+}
+
+type Restore struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Error       string
 }
 
 type SecretKey struct {
@@ -100,6 +136,8 @@ type StateVersion struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
+	SensitiveMarks    []byte
 }
 
 type Update struct {

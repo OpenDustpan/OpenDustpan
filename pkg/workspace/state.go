@@ -33,6 +33,22 @@ var (
 	ErrTooManyPending = errors.New("too many pending state versions")
 	// ErrTooLarge reports state over the size limit.
 	ErrTooLarge = errors.New("state too large")
+	// ErrSealedContent reports sealed content that does not open: cut,
+	// reordered, extended or tampered. It deliberately says no more: the
+	// error holds no key, scope or content.
+	ErrSealedContent = errors.New("cannot open sealed state")
+	// ErrSealerNotConfigured reports a sealed write or a sealed read on a
+	// service without a sealer. Storing plain bytes under a sealed flag would
+	// lie about the content, and serving sealed bytes as state would hand
+	// ciphertext to the CLI, so both fail instead.
+	ErrSealerNotConfigured = errors.New("sealed state without a sealer")
+	// ErrClientEncrypted reports a state version the client encrypted: the
+	// server keeps the envelope but cannot read the resources inside it. The
+	// resource routes answer 409, while the outputs list still works.
+	ErrClientEncrypted = errors.New("state is encrypted-by-client")
+	// ErrResourceNotFound reports that a state holds no resource with the
+	// given address.
+	ErrResourceNotFound = errors.New("resource not found")
 )
 
 const (
@@ -106,6 +122,17 @@ type StateVersion struct {
 	// Force skips the lineage and serial checks, as `tofu state push -force`
 	// does. It never skips the lock.
 	Force bool
+	// Sealed reports that the content blob and the outputs document are
+	// sealed with the data key of the workspace scope (ADR 41 decision 10).
+	// Rows without it are read as before.
+	Sealed bool
+	// SensitiveMarks holds the secret paths of the version, by resource
+	// instance address: each entry names the JSON Pointer paths, relative to
+	// the attributes of that instance, that the json-state rendering of the
+	// version marked sensitive (ADR 41 decisions 8 and 9). It holds no value,
+	// only paths. It is nil for versions stored before the server kept
+	// marks, and for versions whose rendering marked nothing.
+	SensitiveMarks SensitiveMarks
 	// RestoredFrom is the state version this version was restored from. It is
 	// empty when the version is not a restore.
 	RestoredFrom StateVersionID

@@ -69,6 +69,13 @@ func newFixture(t *testing.T) fixture {
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	// The fixture server seals OpenTofu state, so it holds a
+	// key-encryption key like a server with a key set does.
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -77,6 +84,7 @@ func newFixture(t *testing.T) fixture {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
@@ -544,7 +552,7 @@ func TestNewServerRequiresPorts(t *testing.T) {
 	}
 
 	st, blobs, authn := requireServerPorts(t)
-	full := fullServerOptions(st, blobs, authn)
+	full := fullServerOptions(t, st, blobs, authn)
 
 	cases := []struct {
 		name string
@@ -572,7 +580,7 @@ func TestNewServerRequiresWorkspacePorts(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	full := fullServerOptions(st, blobs, authn)
+	full := fullServerOptions(t, st, blobs, authn)
 
 	cases := []struct {
 		name string
@@ -582,6 +590,7 @@ func TestNewServerRequiresWorkspacePorts(t *testing.T) {
 		{name: "state store", drop: 9},
 		{name: "blob store", drop: 10},
 		{name: "inventory reader", drop: 11},
+		{name: "secret wrapper", drop: 12},
 	}
 
 	for _, tc := range cases {
@@ -600,6 +609,35 @@ func TestNewServerRequiresWorkspacePorts(t *testing.T) {
 				t.Fatalf("NewServer without %s: err = %v, want ErrMissingOption", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestNewServerRequiresSecretWrapper proves NewServer refuses to build a
+// server without a key-encryption key: the error names WithSecretWrapper and
+// matches ErrMissingOption (issue 367). The server never starts and fails
+// only at the first sealed write.
+func TestNewServerRequiresSecretWrapper(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	full := fullServerOptions(t, st, blobs, authn)
+
+	_, err := dustpan.NewServer(full[:len(full)-1]...)
+	if !errors.Is(err, dustpan.ErrMissingOption) {
+		t.Fatalf("NewServer without a wrapper: err = %v, want ErrMissingOption", err)
+	}
+
+	if !strings.Contains(err.Error(), "WithSecretWrapper") {
+		t.Fatalf("NewServer without a wrapper: err = %v, want it to name WithSecretWrapper", err)
+	}
+
+	srv, err := dustpan.NewServer(full...)
+	if err != nil {
+		t.Fatalf("NewServer with a wrapper: %v", err)
+	}
+
+	if srv == nil {
+		t.Fatal("NewServer with a wrapper answered no server")
 	}
 }
 
@@ -637,8 +675,25 @@ func requireServerPorts(t *testing.T) (*sqlite.Store, *fs.Store, *identity.Stati
 	return st, blobs, authn
 }
 
+// testWrapper answers a built-in key-encryption key wrapper over a fixed
+// 32-byte test key. NewServer refuses to build without a wrapper.
+func testWrapper(t *testing.T) *secret.BuiltinWrapper {
+	t.Helper()
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
+	return wrapper
+}
+
 // fullServerOptions returns every required NewServer option in a fixed order.
-func fullServerOptions(st *sqlite.Store, blobs *fs.Store, authn *identity.StaticToken) []dustpan.Option {
+func fullServerOptions(
+	t *testing.T, st *sqlite.Store, blobs *fs.Store, authn *identity.StaticToken,
+) []dustpan.Option {
+	t.Helper()
+
 	return []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -652,6 +707,7 @@ func fullServerOptions(st *sqlite.Store, blobs *fs.Store, authn *identity.Static
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 	}
 }
 
@@ -842,6 +898,7 @@ func TestConsoleDir(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
@@ -883,10 +940,10 @@ func TestConsoleDir(t *testing.T) {
 
 // openBackupTarget opens a file-system backup target under a temporary
 // directory, for the backup wiring tests.
-func openBackupTarget(t *testing.T, name string) *fs.Store {
+func openBackupTarget(t *testing.T) *fs.Store {
 	t.Helper()
 
-	target, err := fs.Open(filepath.Join(t.TempDir(), name))
+	target, err := fs.Open(filepath.Join(t.TempDir(), "backup-target"))
 	if err != nil {
 		t.Fatalf("open backup target: %v", err)
 	}
@@ -905,7 +962,7 @@ func TestNewServerWithoutBackupTargetBuildsNoBackupService(t *testing.T) {
 
 	st, blobs, authn := requireServerPorts(t)
 
-	srv, err := dustpan.NewServer(fullServerOptions(st, blobs, authn)...)
+	srv, err := dustpan.NewServer(fullServerOptions(t, st, blobs, authn)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -933,10 +990,10 @@ func TestBackupTargetS3SetsObjectLimit(t *testing.T) {
 			t.Parallel()
 
 			st, blobs, authn := requireServerPorts(t)
-			target := openBackupTarget(t, "backup-target")
+			target := openBackupTarget(t)
 
 			srv, err := dustpan.NewServer(append(
-				fullServerOptions(st, blobs, authn),
+				fullServerOptions(t, st, blobs, authn),
 				dustpan.WithBackupTarget(target, tc.targetName),
 			)...)
 			if err != nil {
@@ -962,10 +1019,10 @@ func TestBackupTargetComesOnlyFromTheOption(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	target := openBackupTarget(t, "backup-target")
+	target := openBackupTarget(t)
 
 	srv, err := dustpan.NewServer(append(
-		fullServerOptions(st, blobs, authn),
+		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 	)...)
 	if err != nil {
@@ -1031,13 +1088,13 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	target := openBackupTarget(t, "backup-target")
+	target := openBackupTarget(t)
 
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	seedRunningBackup(t, st, now)
 
 	srv, err := dustpan.NewServer(append(
-		fullServerOptions(st, blobs, authn),
+		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 		dustpan.WithClock(func() time.Time { return now }),
 		dustpan.WithListenAddr("127.0.0.1:0"),
@@ -1061,6 +1118,37 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Fatalf("run server: %v", err)
+	}
+}
+
+// TestRunReturnsNilWhenCanceledBeforeStart proves Run treats a done ctx as a
+// stop, not a failure: with ctx canceled before Run starts, the start-up
+// steps (key check, running backups) see the canceled ctx and Run returns
+// nil.
+func TestRunReturnsNilWhenCanceledBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	target := openBackupTarget(t)
+
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	seedRunningBackup(t, st, now)
+
+	srv, err := dustpan.NewServer(append(
+		fullServerOptions(t, st, blobs, authn),
+		dustpan.WithBackupTarget(target, "dir:/var/backups"),
+		dustpan.WithClock(func() time.Time { return now }),
+		dustpan.WithListenAddr("127.0.0.1:0"),
+	)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := srv.Run(ctx); err != nil {
+		t.Fatalf("run server with a canceled context: %v, want nil", err)
 	}
 }
 

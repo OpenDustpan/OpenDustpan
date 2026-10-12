@@ -2,6 +2,7 @@ package codec
 
 import (
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -31,7 +32,8 @@ type WorkspaceRow struct {
 // StateVersionRow is the column representation of a state version. The upload
 // capability is a digest only. Unset times are 0 and a pending version keeps
 // an empty content key and size 0. RestoredFrom is empty unless the version
-// restores another one.
+// restores another one. SensitiveMarks holds the kept secret paths as JSON,
+// or nil when the version keeps none.
 type StateVersionRow struct {
 	ID                string
 	WorkspaceID       string
@@ -46,7 +48,9 @@ type StateVersionRow struct {
 	Serial            int64
 	Size              int64
 	Force             bool
+	Sealed            bool
 	RestoredFrom      string
+	SensitiveMarks    []byte
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	UploadExpiresAtMs int64
@@ -104,6 +108,13 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		outputs = nil
 	}
 
+	marks, err := MarshalSensitiveMarks(sv.SensitiveMarks)
+	if err != nil {
+		// The marks come from the server itself, so they always encode.
+		// Still, never fail a write for them: no marks masks everything.
+		marks = nil
+	}
+
 	return StateVersionRow{
 		ID:                sv.ID.String(),
 		WorkspaceID:       sv.Workspace.String(),
@@ -118,11 +129,45 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		Serial:            sv.Serial,
 		Size:              sv.Size,
 		Force:             sv.Force,
+		Sealed:            sv.Sealed,
 		RestoredFrom:      sv.RestoredFrom.String(),
+		SensitiveMarks:    marks,
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
 		UploadExpiresAtMs: Millis(sv.UploadExpiresAt),
 	}
+}
+
+// MarshalSensitiveMarks renders marks as JSON for the column, or nil when
+// the version keeps none, so an empty and a missing set read the same.
+func MarshalSensitiveMarks(marks workspace.SensitiveMarks) ([]byte, error) {
+	if len(marks) == 0 {
+		return nil, nil
+	}
+
+	raw, err := json.Marshal(marks)
+	if err != nil {
+		return nil, fmt.Errorf("encode sensitive marks: %w", err)
+	}
+
+	return raw, nil
+}
+
+// decodeSensitiveMarks reads the kept secret paths of a state version. A
+// NULL column reads as no marks. Corrupt JSON fails with ErrCorruptRow, as
+// the stored data is corrupt.
+func decodeSensitiveMarks(id string, raw []byte) (workspace.SensitiveMarks, error) {
+	if len(raw) == 0 {
+		return nil, nil //nolint:nilnil // Nil without an error means the version keeps no marks.
+	}
+
+	var marks workspace.SensitiveMarks
+
+	if err := json.Unmarshal(raw, &marks); err != nil {
+		return nil, fmt.Errorf("%w: state version %s sensitive marks: %w", ErrCorruptRow, id, err)
+	}
+
+	return marks, nil
 }
 
 // FromStateVersionRow converts a row into a domain state version.
@@ -170,6 +215,11 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		finalizedAt = FromMillis(row.FinalizedAtMs)
 	}
 
+	marks, err := decodeSensitiveMarks(row.ID, row.SensitiveMarks)
+	if err != nil {
+		return workspace.StateVersion{}, err
+	}
+
 	return workspace.StateVersion{
 		CreatedAt:       FromMillis(row.CreatedAtMs),
 		FinalizedAt:     finalizedAt,
@@ -187,6 +237,8 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Serial:          row.Serial,
 		Size:            row.Size,
 		Force:           row.Force,
+		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
+		SensitiveMarks:  marks,
 	}, nil
 }

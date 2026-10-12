@@ -68,6 +68,7 @@ internal/              code that is not part of the SDK
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   metrics/, token/...  helpers shared across packages
+load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
 docs/adr/              architecture decision records: accepted decisions only
 docs/rfc/              RFCs: open questions, options and proposals (ADR 15)
@@ -160,6 +161,9 @@ skill (ADR 14):
   Never turn a hedge into a fact to make a sentence shorter.
 - `make docs-lint` checks README, `CLAUDE.md`, `GLOSSARY.md` and ADRs from 14
   on. ADRs accepted before ADR 14 are exempt, because ADR 1 forbids edits.
+- Do not use words that claim quality without proof. Give the measurement or
+  the fact. Do not use emoji. `scripts/docs-banned-words.py` holds the list of
+  banned words, and `make docs-lint` runs it on the same files.
 
 ## Working in this repo
 

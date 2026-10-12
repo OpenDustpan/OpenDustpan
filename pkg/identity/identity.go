@@ -50,11 +50,17 @@ type Action string
 const (
 	ActionNamespaceRead  Action = "namespace:read"
 	ActionNamespaceAdmin Action = "namespace:admin"
-	ActionUnitRead       Action = "unit:read"
-	ActionUnitWrite      Action = "unit:write"
-	ActionUnitManage     Action = "unit:manage"
-	ActionUnitEncrypt    Action = "unit:encrypt"
-	ActionUnitDecrypt    Action = "unit:decrypt"
+	// ActionNamespaceReadAudit allows reading the audit entries of a
+	// namespace. Its object is a namespace.
+	ActionNamespaceReadAudit Action = "namespace:read-audit"
+	ActionUnitRead           Action = "unit:read"
+	ActionUnitWrite          Action = "unit:write"
+	ActionUnitManage         Action = "unit:manage"
+	ActionUnitEncrypt        Action = "unit:encrypt"
+	ActionUnitDecrypt        Action = "unit:decrypt"
+	// ActionUnitReadSecrets allows reading secret values in plain text. Its
+	// object is a unit.
+	ActionUnitReadSecrets Action = "unit:read-secrets"
 	// ActionCallerRead allows reading the caller's own record, for example
 	// the current-user endpoint of a tool API. Its object is CallerObject.
 	ActionCallerRead Action = "caller:read"
@@ -68,6 +74,9 @@ const (
 	// state between normal operation and maintenance mode. Its object is
 	// ServerObject.
 	ActionServerMaintenance Action = "server:maintenance"
+	// ActionServerRestore allows starting and reading installation restores.
+	// Its object is ServerObject.
+	ActionServerRestore Action = "server:restore"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

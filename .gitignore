@@ -15,3 +15,6 @@
 # End-to-end request logs and reports
 /e2e/report/
 /opendustpan
+
+# Load harness report (make load writes it next to the Makefile)
+load-report.json

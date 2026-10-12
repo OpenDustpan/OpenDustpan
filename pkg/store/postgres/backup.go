@@ -45,12 +45,16 @@ const pgMD5Len = 16
 // COPY column names shared by several backup tables.
 const (
 	pgColCreatedAtMs = "created_at_ms"
+	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
 	pgColSequence    = "sequence"
 	pgColStackID     = "stack_id"
+	pgColStartedAtMs = "started_at_ms"
+	pgColState       = "state"
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
+	pgColVersion     = "version"
 )
 
 // pgTableDump is one table of the export stream: the raw COPY text of its
@@ -111,7 +115,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", "version", pgColCreatedAtMs, "updated_at_ms",
+				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
@@ -123,8 +127,9 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", "kind", "dry_run", pgColStatus, "version", "revision",
-				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, "started_at_ms", "ended_at_ms",
+				pgColStackID, "id", "kind", "dry_run", pgColStatus, pgColVersion, "revision",
+				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
+				"created_by", "restored_from",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -133,7 +138,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
 				"digest", "invalid", "features", "deployment", "saved_at_ms",
-				"blob_key", "size", "blob_size", "blob_md5",
+				"resource_count", "blob_key", "size", "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -161,6 +166,7 @@ func pgCopyScopeTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, "tool", pgColName, "unit_id", "display_name",
 				"last_changed_ms", pgColStatus, "resource_count",
+				"lock_holder", "lock_since_ms", "lock_operation",
 			},
 			orderBy: []string{pgColNamespace, "tool", pgColName},
 		},
@@ -185,18 +191,36 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", "size",
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
-				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms",
+				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
+				"sensitive_marks",
 			},
 			orderBy: []string{"id"},
 		},
 		{
+			table: "audit_entries",
+			columns: []string{
+				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
+				"channel", "kind", "outcome", "request_id", "prev_hash", "hash", "value_count",
+			},
+			orderBy: []string{pgColNamespace, pgColSequence},
+		},
+		{
 			table:   "backups",
-			columns: []string{"id", "state", "started_at_ms", "ended_at_ms", "target", "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
 		},
 		{
+			table: "restores",
+			columns: []string{
+				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
+				pgColStartedAtMs, pgColEndedAtMs, "error",
+			},
+			orderBy: []string{pgColStartedAtMs, "id"},
+		},
+		{
 			table:   "installation",
-			columns: []string{"id", "state"},
+			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
 		},
 	}
@@ -212,6 +236,38 @@ func pgCopySpec(table string) (pgCopyTable, error) {
 	}
 
 	return pgCopyTable{}, fmt.Errorf("backup table %q: %w", table, backup.ErrCorrupt)
+}
+
+// checkCopyColumns compares the COPY column list of table with the live
+// columns of the table. It reports the first column the list omits or names
+// without a live column, naming the table and the column, so a migration
+// that adds a column fails the coverage test until its author extends
+// pgCopyTables. Column order does not matter: the dump and the load name
+// every column on both COPY statements.
+func checkCopyColumns(table string, listed, live []string) error {
+	for _, column := range listed {
+		if !slices.Contains(live, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q name unknown column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	for _, column := range live {
+		if !slices.Contains(listed, column) {
+			return fmt.Errorf(
+				"backup COPY columns of table %q miss column %q: %w",
+				table,
+				column,
+				backup.ErrCorrupt,
+			)
+		}
+	}
+
+	return nil
 }
 
 // pgIdent quotes one identifier. Table and column names come from the
@@ -459,7 +515,9 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 }
 
 // backupBlobRef converts one blob row into a manifest reference. The MD5
-// column always holds 16 bytes; anything else is corrupt data.
+// column always holds 16 bytes; anything else is corrupt data. Size and MD5
+// stay those of the plain bytes; sealed versions mark their references
+// sealed, so the backup opens them to check and stores the sealed bytes.
 func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 	if len(row.Md5) != pgMD5Len {
 		return backup.BlobRef{}, fmt.Errorf(
@@ -474,7 +532,7 @@ func backupBlobRef(row db.BackupBlobsRow) (backup.BlobRef, error) {
 
 	copy(md5[:], row.Md5)
 
-	return backup.BlobRef{MD5: md5, Key: row.ContentKey, Size: row.Size}, nil
+	return backup.BlobRef{MD5: md5, Key: row.ContentKey, Size: row.Size, Sealed: row.Sealed}, nil
 }
 
 // Import implements backup.Importer: it checks the manifest, then loads the
@@ -899,14 +957,19 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 	return count, nil
 }
 
-// stagingBlobRefs reads the blob references of the staging schema: the
-// content key, size and MD5 of every state version that names content, ordered
-// by key. A pending version names no content, so only finalized versions appear.
+// stagingBlobRefs reads the blob references of the staging schema: every blob
+// key the staged state versions and the staged checkpoints name, with the
+// size and MD5 of the plain bytes, ordered by key. Sealed state versions mark
+// their references sealed; checkpoint blobs are never sealed. A pending
+// version names no content, so only finalized versions appear. It matches
+// BackupBlobs, so the staged summary compares equal with the manifest.
 func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
-		"SELECT content_key, size, md5 FROM "+stagingTable(staging, "state_versions")+
-			" WHERE content_key <> '' ORDER BY content_key",
+		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
+			" WHERE content_key <> '' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
+			"blob_md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "checkpoints")+
+			" WHERE blob_key IS NOT NULL AND blob_key <> '' ORDER BY content_key",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("read staged blob references: %w", err)
@@ -918,12 +981,13 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 
 	for rows.Next() {
 		var (
-			key  string
-			size int64
-			raw  []byte
+			key    string
+			size   int64
+			raw    []byte
+			sealed bool
 		)
 
-		if err := rows.Scan(&key, &size, &raw); err != nil {
+		if err := rows.Scan(&key, &size, &raw, &sealed); err != nil {
 			return nil, fmt.Errorf("read staged blob references: %w", err)
 		}
 
@@ -939,7 +1003,7 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 		var sum [pgMD5Len]byte
 
 		copy(sum[:], raw)
-		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size})
+		out = append(out, backup.BlobRef{MD5: sum, Key: key, Size: size, Sealed: sealed})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -950,8 +1014,10 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 }
 
 // checkStagedBlobRefs compares the blob references of the staged data with the
-// manifest: the staged data must name exactly the keys of the manifest, each
-// with its size and checksum.
+// manifest: the staged data must name exactly the keys of the manifest with
+// the same sealed flags. Unsealed entries also match in size and checksum;
+// sealed entries name sealed stored bytes in the manifest, so only the key
+// and the flag match.
 func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	byKey := func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) }
 
@@ -962,7 +1028,11 @@ func checkStagedBlobRefs(staged, want []backup.BlobRef) error {
 	slices.SortFunc(wanted, byKey)
 
 	same := func(a, b backup.BlobRef) bool {
-		return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
+		if a.Key != b.Key || a.Sealed != b.Sealed {
+			return false
+		}
+
+		return a.Sealed || (a.Size == b.Size && a.MD5 == b.MD5)
 	}
 
 	if !slices.EqualFunc(ordered, wanted, same) {
@@ -1344,6 +1414,8 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 // a finished state with the error text and end time, and returns the
 // finished row. Any state but succeeded or failed reports ErrNotRunning, as
 // do a missing row (ErrNotFound) and a row that is not running.
+//
+//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishBackup(
 	ctx context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {

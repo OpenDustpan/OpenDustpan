@@ -22,15 +22,17 @@
 //		dustpan.WithAuthenticator(myAuthenticator),
 //	)
 //
+// WithSecretWrapper is required: NewServer answers ErrMissingOption without
+// it, because the server seals OpenTofu state and Pulumi secret values with
+// data keys that the key-encryption key wraps (ADR 41).
+//
 // Custom stores should pass the store/storetest conformance suite. The SDK is
 // pre-1.0: ports may still change between minor versions.
 package dustpan
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,12 +41,15 @@ import (
 	"strings"
 	"time"
 
+	auditapi "opendustpan.org/opendustpan/internal/api/audit"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -59,6 +64,10 @@ import (
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
 
+// The secret service seals OpenTofu state blobs and outputs documents behind
+// the workspace Sealer port.
+var _ workspace.Sealer = (*secret.Service)(nil)
+
 var (
 	// errBackupNeedsExporter reports a backup target with a namespace store
 	// that cannot capture exports.
@@ -66,6 +75,12 @@ var (
 	// errBackupNeedsRegistry reports a backup target with a namespace store
 	// that cannot track backups.
 	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+	// errRestoreNeedsLive reports a backup target with a namespace store
+	// that cannot check, apply or fence a restore.
+	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
+	// errRestoreNeedsRegistry reports a backup target with a namespace store
+	// that cannot track restores.
+	errRestoreNeedsRegistry = errors.New("backup target needs a namespace store that tracks restores")
 	// errMaintenanceNeedsStore reports a namespace store that cannot keep
 	// the installation state. Every SQL adapter serves it from the same
 	// database connection; a custom store must serve it too, so every
@@ -83,6 +98,11 @@ const (
 // backupStoppedText marks a backup that was running when the server stopped.
 // FailRunningBackups writes it at the next start (ADR 30 decision 9).
 const backupStoppedText = "server stopped during backup"
+
+// restoreStoppedText marks a restore that was running when the server
+// stopped. FailRunningRestores writes it at the next start (ADR 38 decision
+// 9).
+const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
@@ -103,6 +123,7 @@ type settings struct {
 	now                  func() time.Time
 	region               namespace.Region
 	listenAddr           string
+	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
 	tlsCertFile          string
@@ -113,8 +134,11 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	maxBodyBytesInFlight int64
-	backupTarget         blob.Store
-	backupTargetName     string
+	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
+	// CLI sends delta uploads. Zero hides the delta capability.
+	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
 }
 
 // Option configures a Server.
@@ -150,10 +174,11 @@ func WithSecretKeyStore(s secret.KeyStore) Option {
 	return func(o *settings) { o.secretKeys = s }
 }
 
-// WithSecretWrapper sets the key-encryption key holder. Optional: nil means
-// no key-encryption key is configured. Run runs secret.CheckWrapper at
-// start: the server starts without a key only while the database holds no
-// wrapped key (ADR 23).
+// WithSecretWrapper sets the key-encryption key holder. Required: the server
+// seals OpenTofu state and Pulumi secret values with data keys that this key
+// wraps (ADR 41 decisions 10 and 12). NewServer refuses to build without it.
+// Run runs secret.CheckWrapper at start, so a key that does not open the
+// wrapped keys in the database stops the start (ADR 23).
 func WithSecretWrapper(w secret.Wrapper) Option {
 	return func(o *settings) { o.secretWrapper = w }
 }
@@ -199,8 +224,17 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithListenAddr sets the address Run listens on. Defaults to ":8080".
+// It is ignored when WithListener is set: the passed listener wins.
 func WithListenAddr(addr string) Option {
 	return func(o *settings) { o.listenAddr = addr }
+}
+
+// WithListener sets the listener Run serves on. The listener must already
+// be bound, for example on 127.0.0.1:0, and stay open until Run starts.
+// Run serves plain HTTP or TLS on it and closes it on shutdown. When set,
+// it wins over WithListenAddr: Run never dials or binds another address.
+func WithListener(l net.Listener) Option {
+	return func(o *settings) { o.listener = l }
 }
 
 // WithConsoleDir serves a built web console from dir at "/". The console is a
@@ -262,6 +296,14 @@ func WithMaxBodyBytesInFlight(n int64) Option {
 	return func(o *settings) { o.maxBodyBytesInFlight = n }
 }
 
+// WithCheckpointDeltaCutoff sets the checkpoint size in bytes from which
+// the CLI sends delta uploads. Zero hides the delta capability, so the CLI
+// sends whole checkpoints. A negative value fails NewServer. Without this
+// option the server advertises the default cutoff.
+func WithCheckpointDeltaCutoff(n int) Option {
+	return func(o *settings) { o.checkpointDeltaCutoff = n }
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -276,20 +318,23 @@ func WithBackupTarget(target blob.Store, name string) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler        http.Handler
-	logger         *slog.Logger
-	listenAddr     string
-	secrets        *secret.Service
-	secretKeys     secret.KeyStore
-	secretWrapper  secret.Wrapper
-	workspaces     *workspace.Service
-	backups        *backup.Service
-	backupRegistry backup.Registry
-	now            func() time.Time
-	registry       *metrics.Registry
-	tlsCertFile    string
-	tlsKeyFile     string
-	observed       *metrics.ServerMetrics
+	handler         http.Handler
+	logger          *slog.Logger
+	listenAddr      string
+	listener        net.Listener
+	secrets         *secret.Service
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
+	workspaces      *workspace.Service
+	backups         *backup.Service
+	backupRegistry  backup.Registry
+	restores        *backup.RestoreService
+	restoreRegistry backup.RestoreRegistry
+	now             func() time.Time
+	registry        *metrics.Registry
+	tlsCertFile     string
+	tlsKeyFile      string
+	observed        *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -304,35 +349,37 @@ type services struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore:       nil,
-		stackStore:           nil,
-		updateStore:          nil,
-		checkpointStore:      nil,
-		eventStore:           nil,
-		secretKeys:           nil,
-		secretWrapper:        nil,
-		workspaceStore:       nil,
-		stateStore:           nil,
-		blobStore:            nil,
-		inventoryReader:      nil,
-		authenticator:        nil,
-		authorizer:           identity.AdminOnly{},
-		logger:               slog.New(slog.DiscardHandler),
-		now:                  time.Now,
-		region:               "",
-		listenAddr:           defaultListenAddr,
-		consoleDir:           "",
-		allowedOrigins:       nil,
-		tlsCertFile:          "",
-		tlsKeyFile:           "",
-		publicURL:            "",
-		version:              "",
-		maxCheckpointBytes:   0,
-		maxSecretBatchBytes:  0,
-		maxStateBytes:        0,
-		maxBodyBytesInFlight: 0,
-		backupTarget:         nil,
-		backupTargetName:     "",
+		namespaceStore:        nil,
+		stackStore:            nil,
+		updateStore:           nil,
+		checkpointStore:       nil,
+		eventStore:            nil,
+		secretKeys:            nil,
+		secretWrapper:         nil,
+		workspaceStore:        nil,
+		stateStore:            nil,
+		blobStore:             nil,
+		inventoryReader:       nil,
+		authenticator:         nil,
+		authorizer:            identity.AdminOnly{},
+		logger:                slog.New(slog.DiscardHandler),
+		now:                   time.Now,
+		region:                "",
+		listenAddr:            defaultListenAddr,
+		listener:              nil,
+		consoleDir:            "",
+		allowedOrigins:        nil,
+		tlsCertFile:           "",
+		tlsKeyFile:            "",
+		publicURL:             "",
+		version:               "",
+		maxCheckpointBytes:    0,
+		maxSecretBatchBytes:   0,
+		maxStateBytes:         0,
+		maxBodyBytesInFlight:  0,
+		backupTarget:          nil,
+		backupTargetName:      "",
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
 	}
 
 	for _, opt := range opts {
@@ -349,7 +396,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	backups, err := newBackupService(cfg)
+	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -381,21 +428,29 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		backupRegistry = reg
 	}
 
+	var restoreRegistry backup.RestoreRegistry
+	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
+		restoreRegistry = reg
+	}
+
 	return &Server{
-		handler:        handler,
-		logger:         cfg.logger,
-		listenAddr:     cfg.listenAddr,
-		secrets:        svc.secrets,
-		secretKeys:     cfg.secretKeys,
-		secretWrapper:  cfg.secretWrapper,
-		workspaces:     svc.workspaces,
-		backups:        backups,
-		backupRegistry: backupRegistry,
-		now:            cfg.now,
-		registry:       registry,
-		tlsCertFile:    cfg.tlsCertFile,
-		tlsKeyFile:     cfg.tlsKeyFile,
-		observed:       observed,
+		handler:         handler,
+		logger:          cfg.logger,
+		listenAddr:      cfg.listenAddr,
+		listener:        cfg.listener,
+		secrets:         svc.secrets,
+		secretKeys:      cfg.secretKeys,
+		secretWrapper:   cfg.secretWrapper,
+		workspaces:      svc.workspaces,
+		backups:         backups,
+		backupRegistry:  backupRegistry,
+		restores:        adapters.restores,
+		restoreRegistry: restoreRegistry,
+		now:             cfg.now,
+		registry:        registry,
+		tlsCertFile:     cfg.tlsCertFile,
+		tlsKeyFile:      cfg.tlsKeyFile,
+		observed:        observed,
 	}, nil
 }
 
@@ -403,10 +458,12 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 type adapters struct {
 	pulumi      http.Handler
 	inventory   http.Handler
+	audit       http.Handler
 	tfe         http.Handler
 	server      http.Handler
 	ready       http.Handler
 	maintenance *maintenance.Watcher
+	restores    *backup.RestoreService
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -419,28 +476,12 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
-	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
-	if !ok {
-		return adapters{}, errMaintenanceNeedsStore
-	}
-
-	maint, err := maintenance.NewService(maintenance.Config{
-		Store:      maintenanceStore,
-		Namespaces: svc.namespaces,
-		Stacks:     svc.stacks,
-		Updates:    svc.updates,
-		Workspaces: svc.workspaces,
-	})
+	maint, watcher, err := newMaintenance(svc, cfg)
 	if err != nil {
-		return adapters{}, fmt.Errorf("maintenance service: %w", err)
+		return adapters{}, err
 	}
 
-	// The watcher measures its cache limit in wall-clock time, not the
-	// injected domain clock: tests freeze the domain clock, and the limit
-	// must still expire.
-	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
-
-	api, err := newPulumiHandler(svc, cfg, base)
+	api, err := newPulumiHandler(svc, cfg, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -450,12 +491,22 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	entries, err := newAuditHandler(svc, cfg)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, svc, backups, maint, observed)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
+		services: svc,
+		backups:  backups,
+		maint:    maint,
+		observed: observed,
+	})
 	if err != nil {
 		return adapters{}, err
 	}
@@ -471,16 +522,55 @@ func newAdapters(
 	return adapters{
 		pulumi:      api,
 		inventory:   units,
+		audit:       entries,
 		tfe:         tfeAPI,
 		server:      serverAPI,
 		ready:       ready,
 		maintenance: watcher,
+		restores:    restores,
 	}, nil
 }
 
+// newMaintenance builds the maintenance service and the watcher that reads
+// the maintenance state for every request.
+func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintenance.Watcher, error) {
+	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
+	if !ok {
+		return nil, nil, errMaintenanceNeedsStore
+	}
+
+	maint, err := maintenance.NewService(maintenance.Config{
+		Store:      maintenanceStore,
+		Namespaces: svc.namespaces,
+		Stacks:     svc.stacks,
+		Updates:    svc.updates,
+		Workspaces: svc.workspaces,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("maintenance service: %w", err)
+	}
+
+	// The watcher measures its cache limit in wall-clock time, not the
+	// injected domain clock: tests freeze the domain clock, and the limit
+	// must still expire.
+	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
+
+	return maint, watcher, nil
+}
+
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. base reports the external base URL for absolute URLs.
-func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs. observed counts
+// failed audit appends: the state download and the single output route fail
+// closed with a 500 when the append fails, so the counter is the alert for
+// lost entries.
+func newTFEHandler(
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (*tfe.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -488,6 +578,10 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
+		Audit:         entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -527,6 +621,14 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("%w: WithInventoryReader", ErrMissingOption)
 	}
 
+	if cfg.secretWrapper == nil {
+		return baseurl.Resolver{}, fmt.Errorf(
+			"%w: WithSecretWrapper: the server needs a key-encryption key to seal OpenTofu state and "+
+				"Pulumi secrets (ADR 41)",
+			ErrMissingOption,
+		)
+	}
+
 	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
 		missing := "WithTLS certificate file"
 		if cfg.tlsCertFile != "" {
@@ -555,17 +657,12 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("namespace service: %w", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now})
-	if err != nil {
-		return services{}, fmt.Errorf("stack service: %w", err)
-	}
-
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
 		Events:             cfg.eventStore,
 		Namespaces:         namespaces,
-		Stacks:             stacks,
+		Stacks:             cfg.stackStore,
 		Blobs:              cfg.blobStore,
 		Now:                cfg.now,
 		Logger:             cfg.logger,
@@ -573,6 +670,14 @@ func newServices(cfg settings) (services, error) {
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("update service: %w", err)
+	}
+
+	stacks, err := stack.NewService(stack.Config{
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
+		State: updates,
+	})
+	if err != nil {
+		return services{}, fmt.Errorf("stack service: %w", err)
 	}
 
 	secrets, err := secret.NewService(secret.Config{
@@ -591,6 +696,7 @@ func newServices(cfg settings) (services, error) {
 		States:             cfg.stateStore,
 		Blobs:              cfg.blobStore,
 		Namespaces:         namespaces,
+		Sealer:             secrets,
 		Logger:             cfg.logger,
 		Now:                cfg.now,
 		MaxStateBytes:      cfg.maxStateBytes,
@@ -625,6 +731,12 @@ func (s *Server) Backups() *backup.Service {
 	return s.backups
 }
 
+// Restores returns the restore service the server was wired with, or nil
+// when no backup target is configured.
+func (s *Server) Restores() *backup.RestoreService {
+	return s.restores
+}
+
 // Metrics returns the request, build, process, runtime and readiness
 // metrics the middleware records. The metrics route of issue #165 reads
 // through it.
@@ -634,53 +746,117 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
 // WithTLS it serves HTTPS; without it, it warns when the listen address is
-// not loopback and serves plain HTTP anyway. Run first runs the start-up
-// check that refuses a key-encryption key that opens less than every wrapped
-// key in the database (ADR 23), so a program that embeds the server cannot
-// start with the wrong key. It then marks every running backup failed: the
-// server stopped during it (ADR 30 decision 9).
+// not loopback and serves plain HTTP anyway. With WithListener it serves on
+// the passed listener, which wins over WithListenAddr. Without it, Run binds
+// WithListenAddr itself. Either way it logs the bound address in the
+// listening line, so a server on :0 reports the port it holds. Run first
+// runs the start-up check that refuses a key-encryption key that opens less
+// than every wrapped key in the database (ADR 23), so a program that embeds
+// the server cannot start with the wrong key. It then marks every running
+// backup and every running restore failed: the server stopped during them
+// (ADR 30 decision 9, ADR 38 decision 9). When ctx
+// is done before these start-up steps end, Run returns nil: the caller asked
+// it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
+	if err := s.runStartUp(ctx); err != nil {
+		return startUpResult(ctx, err)
+	}
+
+	tlsCfg, err := s.tlsConfig()
+	if err != nil {
 		return err
 	}
 
-	if s.backupRegistry != nil {
-		if err := s.backupRegistry.FailRunningBackups(ctx, s.now().UTC(), backupStoppedText); err != nil {
-			return fmt.Errorf("fail running backups: %w", err)
-		}
+	ln, err := s.listen(ctx)
+	if err != nil {
+		return err
 	}
 
 	srv := &http.Server{
-		Addr:              s.listenAddr,
+		Addr:              ln.Addr().String(),
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		TLSConfig:         tlsCfg,
 	}
 
-	if s.tlsCertFile != "" {
-		cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
-		if err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
+	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
-		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
-	} else if !isLoopbackListenAddr(s.listenAddr) {
-		s.logger.WarnContext(
-			ctx,
-			"serving plain HTTP on a non-loopback address",
-			slog.String("addr", s.listenAddr),
-		)
+	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// startUpResult answers the result of Run when a start-up step fails with
+// err: nil when ctx is done, because the caller asked Run to stop and an
+// error caused by that stop is not a failure, else err.
+func startUpResult(ctx context.Context, err error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		return err
+	}
+}
+
+// tlsConfig loads the TLS configuration when a certificate is set, else
+// returns nil without an error for plain HTTP.
+func (s *Server) tlsConfig() (*tls.Config, error) {
+	if s.tlsCertFile == "" {
+		//nolint:nilnil // No certificate without an error means plain HTTP.
+		return nil, nil
 	}
 
+	cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate: %w", err)
+	}
+
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, nil
+}
+
+// listen answers the listener Run serves on: the passed listener when
+// WithListener is set, else a new binding of the listen address.
+func (s *Server) listen(ctx context.Context) (net.Listener, error) {
+	if s.listener != nil {
+		return s.listener, nil
+	}
+
+	//nolint:exhaustruct_v5 // The server listens with defaults; only the network and address matter.
+	lc := &net.ListenConfig{}
+
+	ln, err := lc.Listen(ctx, "tcp", s.listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	return ln, nil
+}
+
+// warnPlainHTTP logs a warning when addr serves plain HTTP off loopback.
+func warnPlainHTTP(ctx context.Context, logger *slog.Logger, addr string, tlsCfg *tls.Config) {
+	if tlsCfg != nil || isLoopbackListenAddr(addr) {
+		return
+	}
+
+	logger.WarnContext(ctx, "serving plain HTTP on a non-loopback address", slog.String("addr", addr))
+}
+
+// serveUntilDone serves srv on ln until ctx is done, then shuts down
+// gracefully. It logs the bound address, so a server on :0 reports the
+// port it holds.
+func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	boundAddr := ln.Addr().String()
 	serveErr := make(chan error, 1)
 
 	go func() {
-		s.logger.InfoContext(ctx, "listening", slog.String("addr", s.listenAddr))
+		s.logger.InfoContext(ctx, "listening", slog.String("addr", boundAddr))
 
 		if srv.TLSConfig != nil {
-			serveErr <- srv.ListenAndServeTLS("", "")
+			// ServeTLS, not Serve on a tls listener, so the server keeps
+			// HTTP/2. The certificate is already in TLSConfig, so the file
+			// arguments stay empty.
+			serveErr <- srv.ServeTLS(ln, "", "")
 		} else {
-			serveErr <- srv.ListenAndServe()
+			serveErr <- srv.Serve(ln)
 		}
 	}()
 
@@ -690,6 +866,12 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
+	return shutdownServer(ctx, srv, serveErr)
+}
+
+// shutdownServer shuts down srv after ctx is done and reports the serve
+// result: a clean close reads ErrServerClosed.
+func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
@@ -699,6 +881,110 @@ func (s *Server) Run(ctx context.Context) error {
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
+	}
+
+	return nil
+}
+
+// runStartUp runs the start-up steps of Run in order: the key check and the
+// running backups of startUp (ADR 23, ADR 30 decision 9), then the running
+// restores of failStoppedRestores (ADR 38 decision 9), then the seal of
+// unsealed OpenTofu state (ADR 41 decision 11). A done context during
+// the steps is a stop, not a failure, so it answers nil: the caller asked
+// the server to stop.
+func (s *Server) runStartUp(ctx context.Context) error {
+	startErr := s.startUp(ctx)
+	if startErr == nil {
+		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.sealUnsealedStates(ctx)
+	}
+
+	if startErr != nil && ctx.Err() == nil {
+		return startErr
+	}
+
+	return nil
+}
+
+// failStoppedRestores marks every running restore failed: the server stopped
+// during it (ADR 38 decision 9). When a restore was running, it fences every
+// namespace again before serving tool APIs: a stop during the checks or the
+// apply may leave live data that a later restore cannot fence, so leases
+// from before the restore still stop working (ADR 38 decision 7). Both
+// adapters fence with the swap (PostgreSQL in the same transaction, SQLite in
+// the staged file before the rename), so a crash after the swap already lands
+// fenced; this is the crash recovery for a stop before it.
+func (s *Server) failStoppedRestores(ctx context.Context) error {
+	if s.restoreRegistry == nil {
+		return nil
+	}
+
+	running, err := s.restoreRegistry.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list running restores: %w", err)
+	}
+
+	crashed := false
+
+	for i := range running {
+		state := running[i].State
+		if state == backup.RestoreChecking || state == backup.RestoreApplying {
+			crashed = true
+
+			break
+		}
+	}
+
+	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
+		return fmt.Errorf("fail running restores: %w", err)
+	}
+
+	if !crashed {
+		return nil
+	}
+
+	fencer, ok := s.restoreRegistry.(backup.Fencer)
+	if !ok {
+		return nil
+	}
+
+	if _, err := fencer.BumpFailoverVersions(ctx); err != nil {
+		return fmt.Errorf("fence namespaces after a killed restore: %w", err)
+	}
+
+	return nil
+}
+
+// startUp runs the start-up steps of Run in order: the key check of ADR 23,
+// then marking every running backup failed (ADR 30 decision 9). The store
+// adapters already name the backup step in their error text, so startUp
+// adds no second prefix.
+func (s *Server) startUp(ctx context.Context) error {
+	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
+		return err
+	}
+
+	if s.backupRegistry == nil {
+		return nil
+	}
+
+	return s.backupRegistry.FailRunningBackups(
+		ctx,
+		s.now().UTC(),
+		backupStoppedText,
+	)
+}
+
+// sealUnsealedStates seals the OpenTofu state versions that still hold plain
+// content (ADR 41 decision 11). It runs after the fencing recovery of
+// failStoppedRestores, so its writes carry current fences. NewServer refuses
+// to build without a key-encryption key (#367), so the server always seals.
+func (s *Server) sealUnsealedStates(ctx context.Context) error {
+	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
+		return fmt.Errorf("seal unsealed state: %w", err)
 	}
 
 	return nil
@@ -726,7 +1012,17 @@ func isLoopbackListenAddr(addr string) bool {
 }
 
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
-func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
+// observed counts failed audit appends: the decrypt audit routes still
+// answer 204 when the append fails, so the counter is the alert for lost
+// entries.
+func newPulumiHandler(
+	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (http.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:               svc.stacks,
 		Updates:              svc.updates,
@@ -737,9 +1033,38 @@ func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.H
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Audit:                entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
+		CheckpointDeltaCutoff: cfg.checkpointDeltaCutoff,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
+	}
+
+	return handler, nil
+}
+
+// newAuditHandler builds the tool-neutral audit API from the namespace
+// service and the audit store. The store comes from the namespace store:
+// every SQL adapter serves all ports from one database connection. A custom
+// store that keeps no audit entries fails here with a clear error.
+func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
+	entries, ok := cfg.namespaceStore.(audit.Store)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
+	}
+
+	handler, err := auditapi.NewHandler(auditapi.Config{
+		Namespaces:    svc.namespaces,
+		Entries:       entries,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("audit api: %w", err)
 	}
 
 	return handler, nil
@@ -762,25 +1087,52 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// installationDeps carries the services of the installation API.
+type installationDeps struct {
+	services services
+	backups  *backup.Service
+	maint    *maintenance.Service
+	observed *metrics.ServerMetrics
+}
+
+// newInstallationAPI builds the restore service and the tool-neutral
+// installation API from the backup service and the maintenance service.
+func newInstallationAPI(
+	cfg settings, deps installationDeps,
+) (http.Handler, *backup.RestoreService, error) {
+	restores, err := newRestoreService(cfg, deps, deps.maint)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serverAPI, err := newServerHandler(cfg, deps, restores)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return serverAPI, restores, nil
+}
+
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
-// backup target is configured, else nil, the maintenance service, and the
-// registry that the metrics route writes.
+// backup target is configured, else nil, the restore service when a backup
+// target is configured, else nil, the maintenance service, the registry
+// that the metrics route writes, the server version and the schema store
+// that the upgrade check reads.
 func newServerHandler(
-	cfg settings,
-	svc services,
-	backups *backup.Service,
-	maint *maintenance.Service,
-	observed *metrics.ServerMetrics,
+	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
-		Namespaces:    svc.namespaces,
-		Backups:       backups,
-		Maintenance:   maint,
-		Metrics:       observed,
+		Namespaces:    deps.services.namespaces,
+		Backups:       deps.backups,
+		Restores:      restores,
+		Maintenance:   deps.maint,
+		Metrics:       deps.observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -789,11 +1141,27 @@ func newServerHandler(
 	return handler, nil
 }
 
+// schemaReporterOf returns the schema reporter of the namespace store, or
+// nil when the store does not report applied migrations. Both SQL adapters
+// report them.
+//
+// caller keeps the interface the installation API consumes.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
+	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
+}
+
 // newBackupService builds the installation backup service when a backup
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
 // database connection. A nil target means no backup target is configured.
-func newBackupService(cfg settings) (*backup.Service, error) {
+func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
@@ -818,6 +1186,7 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 		Exporter:    exporter,
 		Registry:    registry,
 		Blobs:       cfg.blobStore,
+		StateOpener: svc.workspaces,
 		Target:      cfg.backupTarget,
 		TargetName:  cfg.backupTargetName,
 		Now:         cfg.now,
@@ -831,41 +1200,91 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 	return service, nil
 }
 
+// newRestoreService builds the installation restore service when a backup
+// target is configured, else returns nil. The live store, the registry and
+// the check ports come from the namespace store: every SQL adapter serves
+// all ports from one database connection. The backup service takes the
+// backup of the live data before the apply. A nil target means no backup
+// target is configured.
+func newRestoreService(
+	cfg settings, deps installationDeps, maint *maintenance.Service,
+) (*backup.RestoreService, error) {
+	if cfg.backupTarget == nil {
+		//nolint:nilnil // Nil without an error means no backup target is configured.
+		return nil, nil
+	}
+
+	if deps.backups == nil {
+		return nil, errBackupNeedsRegistry
+	}
+
+	live, ok := cfg.namespaceStore.(backup.RestoreLive)
+	if !ok {
+		return nil, errRestoreNeedsLive
+	}
+
+	registry, ok := cfg.namespaceStore.(backup.RestoreRegistry)
+	if !ok {
+		return nil, errRestoreNeedsRegistry
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        live,
+		Registry:    registry,
+		Backups:     deps.backups,
+		Maintenance: maint,
+		Blobs:       cfg.blobStore,
+		Target:      cfg.backupTarget,
+		Key:         cfg.secretWrapper,
+		Region:      cfg.region.String(),
+		AfterApply:  sealAfterRestore(deps),
+		Now:         cfg.now,
+		Logger:      cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("restore service: %w", err)
+	}
+
+	return service, nil
+}
+
+// sealAfterRestore returns the after-apply step of a restore: it seals the
+// OpenTofu state versions that the restored backup holds unsealed (ADR 41
+// decision 11), with the same job the server runs at start-up. NewServer
+// refuses to build without a key-encryption key (#367), so the step is
+// always set.
+func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
+			return fmt.Errorf("seal unsealed state: %w", err)
+		}
+
+		return nil
+	}
+}
+
 // requestIDHeader carries the request ID in each response. The server mints
 // a new ID for each request and ignores any ID the client sends.
-const requestIDHeader = "X-Request-Id"
+const requestIDHeader = requestid.Header
 
 // unmatchedRoute is the route label for a request that matches no pattern.
 // It holds no path, so it cannot leak a capability token.
 const unmatchedRoute = "unmatched"
 
-// requestIDBytes is the entropy of one request ID in bytes, as hex.
-const requestIDBytes = 16
-
-// requestIDKey holds the request ID in the request context.
-type requestIDKey struct{}
+// adapterServer is the adapter label for the installation and audit APIs.
+const adapterServer = "server"
 
 // RequestID returns the request ID in ctx, or "" when ctx holds none. The
 // middleware sets it for each request, so handlers and later issues can log
 // it without reading headers.
 func RequestID(ctx context.Context) string {
-	id, ok := ctx.Value(requestIDKey{}).(string)
-	if !ok {
-		return ""
-	}
-
-	return id
+	return requestid.FromContext(ctx)
 }
 
 // newRequestID mints one request ID: 128 bits from crypto/rand as hex. It
 // falls back to the time when the reader fails, so it never returns "".
 func newRequestID() string {
-	buf := make([]byte, requestIDBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
-	}
-
-	return hex.EncodeToString(buf)
+	return requestid.New()
 }
 
 // statusWriter records the status and the body size of one response.
@@ -905,14 +1324,16 @@ func adapterForRequest(pattern, path string) string {
 	switch {
 	case strings.HasPrefix(name, "/api/inventory/"):
 		return "inventory"
+	case strings.HasPrefix(name, "/api/audit/"):
+		return adapterServer
 	case strings.HasPrefix(name, "/api/server/"):
-		return "server"
+		return adapterServer
 	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"):
 		return "opentofu"
 	case strings.HasPrefix(name, "/api/"):
 		return "pulumi"
 	default:
-		return "server"
+		return adapterServer
 	}
 }
 
@@ -987,7 +1408,7 @@ func withRequestLog(
 		// in canonical form, so http.Header reads it with Get.
 		w.Header()[requestIDHeader] = []string{id}
 
-		ctx := context.WithValue(r.Context(), requestIDKey{}, id)
+		ctx := requestid.WithContext(r.Context(), id)
 
 		r = r.WithContext(ctx)
 
@@ -1061,6 +1482,10 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		"/api/inventory/",
 		withCORS(withMaintenance(a.inventory, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins),
 	)
+	// The audit API is read-only, so it stays available in maintenance mode
+	// like the installation API: an operator reads the log while the
+	// installation is down for a restore.
+	mux.Handle("/api/audit/", withCORS(a.audit, cfg.allowedOrigins))
 	mux.Handle(
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),

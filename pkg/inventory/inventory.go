@@ -1,6 +1,6 @@
 // Package inventory is the cross-tool read model of every unit in a
 // namespace: its tool, its reference, its display name, its last change,
-// its status and its resource count.
+// its status, its resource count and its lock.
 //
 // It is a projection: each tool package publishes its own writes to it
 // through this package, in the same transaction as the tool's own write,
@@ -23,7 +23,9 @@ import (
 // opaque identifier, for example "stk-...". It lets a consumer follow a unit
 // through a rename. DisplayName is the name the console shows. LastChanged
 // is the time of the unit's last change. Status is empty when unknown.
-// ResourceCount is nil when unknown.
+// ResourceCount is nil when unknown. Lock is nil when the unit is not
+// locked: a lock is a flag, not a status, so a unit can hold a lock in any
+// status.
 type Entry struct {
 	LastChanged   time.Time
 	Namespace     namespace.Name
@@ -33,6 +35,18 @@ type Entry struct {
 	DisplayName   string
 	Status        string
 	ResourceCount *int64
+	Lock          *Lock
+}
+
+// Lock is who holds a unit and why. Holder is the subject of the principal
+// that holds the lock, never a token, a secret or a capability path. Since
+// is when the holder took it. Operation is the tool's own word for what
+// holds it: the update kind for the Pulumi CLI, the lock reason for
+// OpenTofu, or "lock" when the tool names none.
+type Lock struct {
+	Since     time.Time
+	Holder    string
+	Operation string
 }
 
 // Reference returns the unit reference in the form <tool>:<namespace>/<name>.

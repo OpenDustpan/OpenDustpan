@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -122,7 +123,19 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 		}
 
 		if n > 0 {
-			return publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs)
+			if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+				return pubErr
+			}
+
+			// The lock moves with the write in the same transaction: lock,
+			// unlock and force-unlock all save here.
+			return writeInventoryLock(
+				ctx, q, inventoryLockKey{
+					namespace: w.Ref.Namespace.String(),
+					tool:      inventoryToolOpenTofu,
+					name:      w.Ref.Name.String(),
+				}, workspaceLock(w.Lock),
+			)
 		}
 
 		exists, err := q.WorkspaceExists(ctx, row.ID)
@@ -135,6 +148,57 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 		}
 
 		return workspace.ErrConcurrentModification
+	})
+}
+
+// DeleteWorkspace implements workspace.Store: it removes the workspace with
+// its state versions, its wrapped data key and its inventory entry in one
+// fenced transaction. The data key shares the secret_keys table with stack
+// scopes, keyed by the workspace ID, so DeleteSecretKeysOfStack removes it.
+func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
+			Namespace: ref.Namespace.String(),
+			Name:      ref.Name.String(),
+		})
+		if errors.Is(getErr, pgx.ErrNoRows) {
+			return workspace.ErrNotFound
+		}
+
+		if getErr != nil {
+			return fmt.Errorf("select workspace: %w", getErr)
+		}
+
+		if keyErr := q.DeleteSecretKeysOfStack(ctx, row.ID); keyErr != nil {
+			return fmt.Errorf("delete secret key: %w", keyErr)
+		}
+
+		if versionsErr := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); versionsErr != nil {
+			return fmt.Errorf("delete state versions: %w", versionsErr)
+		}
+
+		n, deleteErr := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
+			Namespace: ref.Namespace.String(),
+			Name:      ref.Name.String(),
+		})
+		if deleteErr != nil {
+			return fmt.Errorf("delete workspace: %w", deleteErr)
+		}
+
+		if n == 0 {
+			return workspace.ErrNotFound
+		}
+
+		entry := db.DeleteInventoryParams{
+			Namespace: ref.Namespace.String(),
+			Tool:      inventoryToolOpenTofu,
+			Name:      ref.Name.String(),
+		}
+		if inventoryErr := q.DeleteInventory(ctx, entry); inventoryErr != nil {
+			return fmt.Errorf("delete inventory entry: %w", inventoryErr)
+		}
+
+		return nil
 	})
 }
 
@@ -181,6 +245,8 @@ func (s *Store) CreateStateVersion(
 			ContentKey:        row.ContentKey,
 			Outputs:           row.Outputs,
 			Force:             row.Force,
+			Sealed:            row.Sealed,
+			SensitiveMarks:    row.SensitiveMarks,
 			UploadDigest:      row.UploadDigest,
 			UploadExpiresAtMs: row.UploadExpiresAtMs,
 			Holder:            row.Holder,
@@ -368,6 +434,35 @@ func (s *Store) RecordUploadAttempt(
 	return superseded, nil
 }
 
+// SaveSensitiveMarks implements workspace.StateStore: it stores the secret
+// paths of the json-state rendering of id. It works on a pending and on a
+// finalized version: the rendering may land after the state upload
+// finalizes. A missing version reports ErrStateVersionNotFound.
+func (s *Store) SaveSensitiveMarks(
+	ctx context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	raw, err := codec.MarshalSensitiveMarks(marks)
+	if err != nil {
+		return fmt.Errorf("encode sensitive marks: %w", err)
+	}
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		n, err := q.SaveSensitiveMarks(ctx, db.SaveSensitiveMarksParams{
+			SensitiveMarks: raw,
+			ID:             id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("save sensitive marks: %w", err)
+		}
+
+		if n == 0 {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		return nil
+	})
+}
+
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the expired pending versions of the workspace in one fenced
 // transaction and returns them, oldest expiry first, with their attempted
@@ -430,6 +525,66 @@ func (s *Store) FinalizeStateVersion(
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		return finalizeInTx(ctx, q, sv, row)
+	})
+}
+
+// ListUnsealedStateVersions implements workspace.StateStore: the finalized
+// versions that still hold plain content, ordered by version ID.
+func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
+	rows, err := s.queries.ListUnsealedStateVersions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select unsealed state versions: %w", err)
+	}
+
+	out := make([]workspace.StateVersion, 0, len(rows))
+
+	for i := range rows {
+		sv, err := stateFromRow(rows[i])
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, sv)
+	}
+
+	return out, nil
+}
+
+// SealStateVersion implements workspace.StateStore: it moves one unsealed
+// version to its sealed blob with its sealed outputs and marks it sealed in
+// one fenced transaction. A version that is already sealed succeeds and
+// changes nothing.
+func (s *Store) SealStateVersion(
+	ctx context.Context,
+	id workspace.StateVersionID,
+	content blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		n, err := q.SealStateVersion(ctx, db.SealStateVersionParams{
+			ContentKey: content.String(),
+			Outputs:    outputs,
+			ID:         id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("seal state version: %w", err)
+		}
+
+		if n > 0 {
+			return nil
+		}
+
+		_, getErr := q.GetStateVersion(ctx, id.String())
+		if errors.Is(getErr, pgx.ErrNoRows) {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		if getErr != nil {
+			return fmt.Errorf("read sealed state version: %w", getErr)
+		}
+
+		return nil
 	})
 }
 
@@ -611,7 +766,9 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Serial:            row.Serial,
 		Size:              row.Size,
 		Force:             row.Force,
+		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
+		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
 		UploadExpiresAtMs: row.UploadExpiresAtMs,
@@ -629,4 +786,26 @@ func workspaceRef(row db.Workspace) workspace.Ref {
 		Namespace: namespace.Name(row.Namespace),
 		Name:      workspace.Name(row.Name),
 	}
+}
+
+// workspaceLock returns the inventory lock a workspace holds, or nil when it
+// is unlocked. The holder is the subject of the principal that took the
+// lock, never a token or a secret.
+func workspaceLock(lock workspace.Lock) *inventory.Lock {
+	if !lock.Locked() {
+		return nil
+	}
+
+	return &inventory.Lock{Since: lock.LockedAt, Holder: lock.Holder, Operation: lockOperation(lock.Reason)}
+}
+
+// lockOperation maps a workspace lock reason to the inventory operation: the
+// CLI's own word when it locked with one, else "lock". The TFE protocol
+// carries only the reason, so the reason is the operation word.
+func lockOperation(reason string) string {
+	if reason == "" {
+		return "lock"
+	}
+
+	return reason
 }

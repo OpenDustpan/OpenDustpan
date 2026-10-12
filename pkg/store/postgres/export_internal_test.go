@@ -14,6 +14,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"maps"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -61,6 +62,25 @@ func EmptyNamespacesForStagingTest(
 	sum.RowCounts["namespaces"] = 0
 
 	return tampered.Bytes(), sum
+}
+
+// CopyColumnsForTest returns the COPY column list of every table of
+// pgCopyTables, by table name.
+func CopyColumnsForTest() map[string][]string {
+	out := make(map[string][]string, len(backup.Tables))
+
+	for _, spec := range pgCopyTables() {
+		out[spec.table] = slices.Clone(spec.columns)
+	}
+
+	return out
+}
+
+// CheckCopyColumnsForTest compares the COPY column list of table with the
+// live columns of the table. It names the table and the column of a
+// mismatch, so the coverage test fails loudly.
+func CheckCopyColumnsForTest(table string, listed, live []string) error {
+	return checkCopyColumns(table, listed, live)
 }
 
 // NewStagingSchemaForTest returns a fresh staging schema name.

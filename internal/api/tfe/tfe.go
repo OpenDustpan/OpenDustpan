@@ -22,6 +22,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -87,6 +88,33 @@ type StateReader interface {
 	// History returns the finalized state versions of the workspace, newest
 	// first, with the total count of finalized versions.
 	History(ctx context.Context, id workspace.ID, page workspace.Page) ([]workspace.StateVersion, int, error)
+	// ReadResources returns one page of the masked resource list of the
+	// finalized state version id. A state the client encrypted fails with
+	// workspace.ErrClientEncrypted. Size is the page size, or zero for the
+	// default page; cursor is "" or the NextCursor of an earlier page.
+	// Filter is a substring of the address or of the resource type, or ""
+	// for no filter: it never matches attribute values. Paging applies after
+	// the filter, so a page holds only matching resources.
+	ReadResources(
+		ctx context.Context, id workspace.StateVersionID, cursor string, size int, filter string,
+	) (workspace.StatePage, error)
+	// ReadResource returns one resource of the finalized state version id
+	// with its instances masked. The address matches verbatim. A state the
+	// client encrypted fails with workspace.ErrClientEncrypted; an unknown
+	// address fails with workspace.ErrResourceNotFound.
+	ReadResource(
+		ctx context.Context, id workspace.StateVersionID, address string,
+	) (workspace.StateDetail, error)
+	// DiffStates returns the diff of two finalized state versions: to is the
+	// newer side, from is the older one. Both versions must belong to the
+	// same workspace; a from version of another workspace fails with
+	// workspace.ErrStateVersionNotFound as if it did not exist. A state
+	// either side encrypted fails with workspace.ErrClientEncrypted.
+	// Cursor is "" or the NextCursor of an earlier page; size is the page
+	// size, or zero for the default page.
+	DiffStates(
+		ctx context.Context, to, from workspace.StateVersionID, cursor string, size int,
+	) (workspace.StateDiff, error)
 }
 
 // StateWriter is what the state write routes need: declare a version,
@@ -141,19 +169,29 @@ type Config struct {
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
+	// Audit is the audit store that the state download and the single
+	// output route append tool-operation entries to. Nil means no audit
+	// store is configured: the routes answer without an entry.
+	Audit audit.Store
+	// OnAuditFailure runs when an audit append fails. The server wires it
+	// to the dustpan_audit_append_failures_total counter. Nil means no
+	// counter: the routes still fail closed with a 500.
+	OnAuditFailure func()
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
 // discovery at /.well-known/terraform.json.
 type Handler struct {
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	logger     *slog.Logger
-	namespaces *namespace.Service
-	workspaces WorkspaceService
-	baseURL    baseurl.Resolver
-	mux        *patternMux
-	routes     []Route
+	authn          identity.Authenticator
+	authz          identity.Authorizer
+	logger         *slog.Logger
+	namespaces     *namespace.Service
+	workspaces     WorkspaceService
+	baseURL        baseurl.Resolver
+	audit          audit.Store
+	onAuditFailure func()
+	mux            *patternMux
+	routes         []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -172,14 +210,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		authn:      cfg.Authenticator,
-		authz:      cfg.Authorizer,
-		logger:     cfg.Logger,
-		namespaces: cfg.Namespaces,
-		workspaces: cfg.Workspaces,
-		baseURL:    cfg.BaseURL,
-		mux:        newPatternMux(),
-		routes:     nil,
+		authn:          cfg.Authenticator,
+		authz:          cfg.Authorizer,
+		logger:         cfg.Logger,
+		namespaces:     cfg.Namespaces,
+		workspaces:     cfg.Workspaces,
+		baseURL:        cfg.BaseURL,
+		audit:          cfg.Audit,
+		onAuditFailure: cfg.OnAuditFailure,
+		mux:            newPatternMux(),
+		routes:         nil,
 	}
 
 	h.routes = h.buildRoutes()

@@ -273,6 +273,9 @@ DELETE FROM secret_keys
 WHERE stack_id = ?;
 
 -- name: UpsertInventory :exec
+-- The lock columns stay out of the upsert: other writes keep the lock a
+-- running update or a held workspace published, and only UpdateInventoryLock
+-- changes it.
 INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (namespace, tool, name) DO UPDATE SET
@@ -282,12 +285,21 @@ ON CONFLICT (namespace, tool, name) DO UPDATE SET
     status = excluded.status,
     resource_count = excluded.resource_count;
 
+-- name: UpdateInventoryLock :exec
+-- Publishes a lock change of one unit: holder with take time and operation
+-- to set it, all NULL to clear it. The caller writes it in the same
+-- transaction as the lock itself.
+UPDATE inventory
+SET lock_holder = ?, lock_since_ms = ?, lock_operation = ?
+WHERE namespace = ? AND tool = ? AND name = ?;
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = ?
 ORDER BY tool, name;
@@ -326,17 +338,28 @@ SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
     lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms
 WHERE id = @id AND revision = @expected_revision;
 
+-- name: DeleteWorkspace :execrows
+-- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+-- the data key through DeleteSecretKeysOfStack with the workspace ID.
+DELETE FROM workspaces
+WHERE namespace = ? AND name = ?;
+
+-- name: DeleteStateVersionsOfWorkspace :exec
+-- Removes every state version of one workspace, pending and finalized.
+DELETE FROM state_versions
+WHERE workspace_id = ?;
+
 -- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    restored_from, sealed, sensitive_marks
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE id = ?;
 
@@ -345,7 +368,7 @@ WHERE id = ?;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -372,7 +395,7 @@ WHERE workspace_id = ? AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -389,6 +412,33 @@ WHERE id = ? AND status = 'pending';
 UPDATE state_versions
 SET content_key = ?
 WHERE id = ? AND status = 'pending';
+
+-- name: ListUnsealedStateVersions :many
+-- Finalized versions that still hold plain content, ordered by ID, so the
+-- seal job seals them in a stable order. A version without content stays
+-- out: a pending row names no content yet.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC;
+
+-- name: SealStateVersion :execrows
+-- Moves one unsealed version to its sealed blob with its sealed outputs and
+-- marks it sealed. The write matches only an unsealed row, so a retry after
+-- a crash succeeds and changes nothing.
+UPDATE state_versions
+SET content_key = @content_key, outputs = @outputs, sealed = 1
+WHERE id = @id AND sealed = 0;
+
+-- name: SaveSensitiveMarks :execrows
+-- Stores the secret paths of the json-state rendering of one version. It
+-- works on a pending and on a finalized version: the rendering may land
+-- after the state upload finalizes. A missing version matches no row.
+UPDATE state_versions
+SET sensitive_marks = ?
+WHERE id = ?;
 
 -- name: FinalizeStateVersion :execrows
 -- Marks one pending version finalized with its recorded attempt. The write
@@ -409,7 +459,8 @@ WHERE id = ?;
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
+       sv.sensitive_marks
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?;
@@ -463,3 +514,88 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state;
 UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
+
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = ?;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+-- Moves one running restore to its end state. A finished restore matches no
+-- row, so a retry reports no change.
+UPDATE restores
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = ?
+WHERE id = ? AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+-- Marks every running restore failed. The server calls it at start, after a
+-- stop during a restore.
+UPDATE restores
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;
+
+-- name: LastAuditEntry :one
+-- The entry with the highest sequence of a namespace, for the next append.
+-- A namespace with no entries matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListAuditEntries :many
+-- One page of the entries of a namespace, newest first. Ties on time break
+-- by sequence, as the port comment promises.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT ? OFFSET ?;
+
+-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = ?;
+
+-- name: ListAuditChainPage :many
+-- One bounded page of the chain of a namespace oldest first, for the chain
+-- check. The check reads the chain with this query in pages of
+-- audit.CheckPageSize entries after the last sequence it saw, so a namespace
+-- with a large log never grows the check without a bound.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = ? AND sequence > ?
+ORDER BY sequence ASC
+LIMIT ?;

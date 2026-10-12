@@ -200,15 +200,18 @@ func testActions() []identity.Action {
 	return []identity.Action{
 		identity.ActionNamespaceRead,
 		identity.ActionNamespaceAdmin,
+		identity.ActionNamespaceReadAudit,
 		identity.ActionUnitRead,
 		identity.ActionUnitWrite,
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionUnitReadSecrets,
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
+		identity.ActionServerRestore,
 	}
 }
 
