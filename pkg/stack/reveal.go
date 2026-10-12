@@ -410,6 +410,12 @@ func resourceBodyAt(
 		return nil, notFoundCipher(path)
 	}
 
+	// An element that is not an object has no masked path. The scan below
+	// would otherwise find the brace of a later resource.
+	if dec.PeekKind() != jsontext.KindBeginObject {
+		return nil, notFoundCipher(path)
+	}
+
 	// Only white space and one comma stand between two array elements, so
 	// the next brace opens the resource.
 	start := int(dec.InputOffset())

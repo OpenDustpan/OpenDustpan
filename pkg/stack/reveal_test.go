@@ -459,3 +459,23 @@ func TestSecretCiphertextOfBoundsLargeStringToken(t *testing.T) {
 			growth, bound, len(deployment), largeBytes)
 	}
 }
+
+// TestSecretCiphertextOfRejectsNonObjectElement proves a path at an array
+// element that is not an object answers not-found, even when a later resource
+// holds a secret. The lookup must not bind to the later resource's brace.
+func TestSecretCiphertextOfRejectsNonObjectElement(t *testing.T) {
+	t.Parallel()
+
+	secret := `{"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` +
+		base64.StdEncoding.EncodeToString([]byte("later-cipher")) + `"}`
+
+	for _, element := range []string{`null`, `1`, `"text"`, `[{"k":1}]`} {
+		deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` + element + `,` +
+			`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},"outputs":{"k":` +
+			secret + `}}]}`)
+
+		if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/k"); err == nil {
+			t.Fatalf("element %s: reveal answered a later resource's secret, want not-found", element)
+		}
+	}
+}
