@@ -26,10 +26,19 @@ client-only, 7 additive, 3 semantic and 4 wire-break. Three of the
 wire-breaks added data under the unchanged version 1 (entry kinds 8 and 9,
 the `requiresByteString` flag). The fourth changed the version 2 shape
 before a release negotiated version 2. Server-relevant changes did not slow
-down: 2026-06 to 2026-09 has 9 of the 14 rows that are not client-only. In
-a measured run with real CLIs (section 6), v3.250.0 and v3.268.0 do not
-retry a 400 or a 409, retry a 500 4 times in total, never fall back to
-checkpoints, and end the update as `failed`.
+down: 2026-06 to 2026-09 has 9 of the 14 rows that are not client-only.
+
+In measured runs with real CLIs (section 6), no failed update lost the base
+state of an existing stack, on the journal path or on the checkpoint path.
+The journal path kept the base plus the entries that the server accepted.
+The checkpoint path kept the base plus 1 pending operation. A second
+`pulumi up` with no fault succeeded. Both paths make 4 attempts for a 500
+and do not retry a 400, and the CLI never falls back from the journal to
+checkpoints. In 3 runs the CLI ignored a 400 on the last journal batch: it
+exited 0, sent `complete` with `succeeded`, and the stored state did not
+hold the refused entry. When the server refused `complete`, the CLI exited
+with an error and the update stayed `in-progress`, so the next `pulumi up`
+failed with 409.
 
 ### Scope
 
@@ -537,7 +546,9 @@ Source: `sdk/go/common/apitype/journal.go:89-147,228-230`. Evidence: source.
 - The update then ends with `complete` status `failed` (`backend.go`, end of
   `runEngineAction`). Evidence: source, and observed on the wire: after 400,
   409 and 500 the CLI sends `POST .../complete` with `{"status":"failed"}`
-  and exits with code 1 (measured, see section 6).
+  and exits with code 1 (measured, see section 6). One exception was
+  observed: a refused last batch that holds only an elided entry does not
+  fail the update (section 5.8).
 - Error text: `error: pre-step event returned an error: [<status>] <message>`
   for a fault at request 2, and `post-step event` and `resource complete
   event` errors for a fault at request 5, then `error: update failed`.
@@ -579,7 +590,10 @@ Source: `sdk/go/common/apitype/journal.go:89-147,228-230`. Evidence: source.
   journal entry marks the end. Evidence: source.
 - An elided entry in the last batch that fails is not reported: its result
   goes only to a promise that nothing reads, and `Close` returns nil
-  (`snapshot.go:134-143,146-160`). Evidence: source.
+  (`snapshot.go:134-143,146-160`). Evidence: source, and observed on the
+  wire: in 3 runs the CLI got a 400 for a last batch that held only entry
+  16 (kind 4, outputs), exited 0 and sent `complete` with `succeeded`
+  (measured, see section 6).
 - Ctrl-C in the running CLI: the engine cancels through the cancellation
   scope. The journal still closes and `complete` follows
   (`backend.go:2245-2354`). Evidence: source. Not measured.
@@ -604,8 +618,12 @@ Source: `sdk/go/common/apitype/journal.go:89-147,228-230`. Evidence: source.
 
 - Base: the spike branch `spike/pulumi-journaling` at commit `8ba6721`
   (`8ba6721a9c99911cc2ae5acdd8590077bc6e9325`).
-- Fault switch: commit `c580877` on the local branch
-  `spike/pulumi-journal-errors`. The branch is not merged and not pushed.
+- Fault switch: commits on the local branch `spike/pulumi-journal-errors`.
+  The branch is not merged and not pushed. Commit `c580877` adds the journal
+  fault matrix. Commit `b300d4c`, on top of it, adds the existing-stack runs
+  and the checkpoint baseline (test `TestPulumiStateSaveErrors` in
+  `e2e/state_save_errors_test.go`). Commit `e75159d`, on top of `b300d4c`,
+  adds faults on the `complete` call to the same test.
 - CLI versions (`pulumi version`): `v3.200.0`, `v3.250.0` and `v3.268.0`
   (`latest` on 2026-10-12, from `https://www.pulumi.com/latest-version`).
   All three archives came from the e2e cache.
@@ -615,9 +633,27 @@ Source: `sdk/go/common/apitype/journal.go:89-147,228-230`. Evidence: source.
 - Program: Pulumi YAML with 5 `pulumi:pulumi:StackReference` resources. The
   state after a good `pulumi up` has 7 resources (1 `pulumi:pulumi:Stack`,
   1 `pulumi:providers:pulumi`, 5 `pulumi:pulumi:StackReference`).
-- Each case: a new server and a new stack, then one
+- Each case of `c580877`: a new server and a new stack, then one
   `pulumi up --yes --non-interactive`, then `pulumi stack history --json`
   and `pulumi stack export`.
+- Cases of `b300d4c`:
+  - Existing stack: a `pulumi up` with no fault creates the 7-resource
+    stack. All 5 references point at stack `other`. Then the program points
+    `ref-0000` and `ref-0001` at stack `other2` (the 2-resource change), and
+    `pulumi up` runs with the fault.
+  - Fresh stack: `pulumi up` with the fault on a stack with no state.
+  - Journal cases: journaling on, fault 400 from journal request 2, 3, 4
+    and 5.
+  - Checkpoint cases: `PULUMI_DISABLE_JOURNALING=true` on each CLI call,
+    fault 400 and 500 from checkpoint request 2.
+  - After the faulted update: `pulumi stack history --json`,
+    `pulumi stack export`, then a second `pulumi up` with no fault and a
+    second export. "Refs" is the referenced stack in `inputs.name` of
+    `ref-0000` and `ref-0001`. "Equals base" compares the normalized export
+    with the export after the base update (the normalization of
+    `TestPulumiJournaling`: manifest, metadata, times and ids removed).
+  - The request log records the `kind` of each journal entry (4 outputs,
+    6 secrets manager, 0 begin, 1 success).
 - Fault point: `internal/api/pulumi/journal_fault.go` runs at the start of
   the `PATCH .../update/{id}/journalentries` handler, after the lease and
   target checks. It reads environment variables at request time:
@@ -632,6 +668,20 @@ Source: `sdk/go/common/apitype/journal.go:89-147,228-230`. Evidence: source.
     `DUSTPAN_SPIKE_JOURNAL_FAULT_TIMEOUT_MAX` (CLI bound plus 2 min). The
     harness stops the CLI at its bound: 5 min in the matrix, 20 min in one
     extra run.
+- Checkpoint fault (`b300d4c`): the same switch also fails
+  `PATCH .../update/{id}/checkpoint` through
+  `DUSTPAN_SPIKE_CHECKPOINT_FAULT=400|500` and
+  `DUSTPAN_SPIKE_CHECKPOINT_FAULT_AFTER=<n>`. The answer is
+  `{"code": <status>, "message": "spike fault: checkpoint refused"}`. Each
+  route has its own counter. A counter counts only while its fault is set,
+  so the base `pulumi up` is not counted.
+- `complete` fault (`e75159d`): the switch also fails
+  `POST .../update/{id}/complete` through
+  `DUSTPAN_SPIKE_COMPLETE_FAULT=400|409|500` and
+  `DUSTPAN_SPIKE_COMPLETE_FAULT_AFTER=<n>`, with its own counter. The
+  `complete` call of the preview is request 1, so the fault starts at
+  request 2, the `complete` call of the real update. The answer text is
+  "spike fault: complete refused".
 - `e2e/recorder.go` records the start and end time of each request.
   `e2e/journal_errors_test.go` (`TestPulumiJournalErrors`) runs the cases.
   A retry is a request with the same gunzipped body (SHA-256) and the same
@@ -658,6 +708,23 @@ DUSTPAN_EXPERIMENTAL_PULUMI_JOURNALING=1 E2E_PULUMI_VERSIONS=latest \
   DUSTPAN_JOURNAL_ERR_CASES=timeout DUSTPAN_JOURNAL_ERR_CLI_TIMEOUT=20m \
   DUSTPAN_JOURNAL_ERR_OUT=../.loop/journal-errors-long \
   go test -tags e2e -count=1 -v -run TestPulumiJournalErrors -timeout 24m ./e2e/
+# Existing stack and checkpoint baseline (b300d4c), one go test per version
+# (each under 2 min):
+for v in latest 3.250.0 3.200.0; do
+  DUSTPAN_EXPERIMENTAL_PULUMI_JOURNALING=1 E2E_PULUMI_VERSIONS=$v \
+    go test -tags e2e -count=1 -v -run TestPulumiStateSaveErrors -timeout 24m ./e2e/
+done
+# Repeat of the fault at journal request 4, with entry kinds:
+DUSTPAN_EXPERIMENTAL_PULUMI_JOURNALING=1 E2E_PULUMI_VERSIONS=latest,3.250.0 \
+  DUSTPAN_STATE_ERR_PART=journal DUSTPAN_STATE_ERR_JOURNAL_AFTER=4 \
+  DUSTPAN_JOURNAL_ERR_OUT=../.loop/state-errors-kinds \
+  go test -tags e2e -count=1 -v -run TestPulumiStateSaveErrors -timeout 24m ./e2e/
+# Faults on the complete call (e75159d):
+for v in latest,3.250.0 3.200.0; do
+  DUSTPAN_EXPERIMENTAL_PULUMI_JOURNALING=1 E2E_PULUMI_VERSIONS=$v DUSTPAN_STATE_ERR_PART=complete \
+    DUSTPAN_JOURNAL_ERR_OUT=../.loop/complete-errors \
+    go test -tags e2e -count=1 -v -run TestPulumiStateSaveErrors -timeout 24m ./e2e/
+done
 ```
 
 ### Results: main matrix (fault from journal request 2)
@@ -747,17 +814,160 @@ means a `PATCH .../checkpoint`, `.../checkpointverbatim` or
   and GET reads. No journal request and no delta request (the server hides
   the delta capability in these runs).
 - The journal session of the spike server for the update stays in memory
-  after a refused batch. The runs did not test a second update after the
-  failure.
+  after a refused batch. The runs of `c580877` did not test a second update
+  after the failure. The runs of `b300d4c` did (below).
+
+### Results: existing stack, 2-resource change, fault 400 (`b300d4c`)
+
+Base for each row: 7 resources, refs `other`/`other`, 0 pending operations.
+Target: refs `other2`/`other2`. Journal requests give the statuses with the
+`sequenceID`s of each batch. For each version, the checkpoint rows follow
+the journal rows. "Checkpoint" without a status means fault 400. All journal
+rows use fault 400.
+
+| Version | Save path | Fault at | State save requests (statuses) | Retries | Exit | `complete` | Export after the failed update | Second `up`, no fault |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| v3.250.0 | journal | request 2 | 200 [1], 400 [2-10] | 0 | 1 | failed | 7 resources, refs other/other, 0 pending, equals base | exit 0, 7, other2/other2 |
+| v3.250.0 | journal | request 3 | 200 [1], 200 [2-10], 400 [11-15], 400 [16] | 0 | 1 | failed | 7 resources, refs other/other, 5 pending operations: base plus the accepted entries | exit 0, 7, other2/other2 |
+| v3.250.0 | journal | request 4 | 200 [1], 200 [2-10], 200 [11-15], 400 [16, kind 4] | 0 | 0 | succeeded | 7 resources, refs other2/other2, 0 pending; entry 16 not stored | exit 0, 7, other2/other2 |
+| v3.250.0 | journal | request 5 | 4 requests, all 200 (fault not reached) | 0 | 0 | succeeded | 7, other2/other2 | exit 0, 7, other2/other2 |
+| v3.250.0 | checkpoint | request 2 | 200, 400 x6 (6 different bodies, 2 to 14 ms apart) | 0 | 1 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+| v3.250.0 | checkpoint 500 | request 2 | 200, 500 x24 (6 saves x 4 attempts) | 3 per save, 1 s / 2 s / 4 s; 42 s in total | 1 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+| v3.268.0 | journal | request 2 | 200 [1-7], 400 [8-12], 400 [13] | 0 | 1 | failed | 7 resources, refs other/other, 2 pending operations: base plus the accepted entries | exit 0, 7, other2/other2 |
+| v3.268.0 | journal | request 3 | 200 [1], 200 [2-10], 400 [11-15], 400 [16] | 0 | 1 | failed | 7 resources, refs other/other, 5 pending operations: base plus the accepted entries | exit 0, 7, other2/other2 |
+| v3.268.0 | journal | request 4 | 200 [1-4], 200 [5-10], 200 [11-15], 400 [16] | 0 | 0 | succeeded | 7 resources, refs other2/other2, 0 pending; entry 16 not stored | exit 0, 7, other2/other2 |
+| v3.268.0 | journal | request 5 | 4 requests, all 200 (fault not reached) | 0 | 0 | succeeded | 7, other2/other2 | exit 0, 7, other2/other2 |
+| v3.268.0 | checkpoint | request 2 | 200, 400 x6 (6 different bodies) | 0 | 1 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+| v3.268.0 | checkpoint 500 | request 2 | 200, 500 x24 (6 saves x 4 attempts) | 3 per save, 1 s / 2 s / 4 s; 42 s in total | 1 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+| v3.200.0 | checkpoint | request 2 | 200, 400 x6 (6 different bodies) | 0 | 255 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+| v3.200.0 | checkpoint 500 | request 2 | 200, 500 x24 (6 saves x 4 attempts) | 3 per save, 1 s / 2 s / 4 s; 42 s in total | 255 | failed | 7 resources, refs other/other, 1 pending operation | exit 0, 7, other2/other2, 0 pending |
+
+v3.200.0 has no journal rows, because it does not journal (section 4).
+
+### Results: fresh stack, fault at the 2nd state save request
+
+The journal rows come from the main matrix above (`c580877`). The
+checkpoint rows come from `b300d4c`. For each version and fault, the
+checkpoint row follows the journal row. Expected: 7 resources.
+
+| Version | Save path | Fault | State save requests (statuses) | Retries | Exit | `complete` | Export after the failed update | Second `up`, no fault |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| v3.250.0 | journal | 400 | 200, 400 | 0 | 1 | failed | 0 resources, 0 pending | not run |
+| v3.250.0 | checkpoint | 400 | 200, 400 | 0 | 1 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+| v3.250.0 | journal | 500 | 200, 500 x4 | 3, 1 s / 2 s / 4 s | 1 | failed | 0 resources, 0 pending | not run |
+| v3.250.0 | checkpoint | 500 | 200, 500 x4 | 3, 1 s / 2 s / 4 s | 1 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+| v3.268.0 | journal | 400 | 200, 400 | 0 | 1 | failed | 0 resources, 0 pending | not run |
+| v3.268.0 | checkpoint | 400 | 200, 400 | 0 | 1 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+| v3.268.0 | journal | 500 | 200, 500 x4 | 3, 1 s / 2 s / 4 s | 1 | failed | 0 resources, 0 pending | not run |
+| v3.268.0 | checkpoint | 500 | 200, 500 x4 | 3, 1 s / 2 s / 4 s | 1 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+| v3.200.0 | checkpoint | 400 | 200, 400 | 0 | 255 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+| v3.200.0 | checkpoint | 500 | 200, 500 x4 | 3, 1 s / 2 s / 4 s | 255 | failed | 0 resources, 1 pending operation | exit 0, 7 resources, 1 pending operation stays |
+
+### Facts from the existing-stack and checkpoint runs
+
+- No failed update on an existing stack lost resources. Each export after a
+  failed update holds 7 resources. With journaling it holds the base plus
+  the entries that the server accepted: the changed references keep the
+  base value `other`, and pending operations from accepted begin entries
+  appear (0, 2 or 5). With checkpoints it holds the base values plus 1
+  pending operation.
+- A second `pulumi up` with no fault succeeded in each case on the existing
+  stack (exit 0, 7 resources, refs `other2`/`other2`).
+- The CLI ignored a 400 on the last journal batch. This occurred in 3 runs
+  (v3.250.0 twice, v3.268.0 once). Each time the refused batch held only
+  entry 16. The repeat run of v3.250.0 recorded its kind: 4 (outputs). The
+  CLI exited 0 and sent `complete` with `succeeded`. The stored state does
+  not hold entry 16. This silent success is CLI behavior, on the
+  `ElideWrite` path. For an entry marked `ElideWrite`, `AddJournalEntry`
+  returns nil at once and puts the send result only into a promise, which
+  only a later entry that depends on it reads. `Close` returns nil. Source:
+  `pkg/backend/httpstate/journal/snapshot.go@7549635909:128-137` and
+  `:141-156` (v3.250.0). The same code is at
+  `pkg/backend/httpstate/journal/snapshot.go@128d3f2ec9:133-142` and
+  `:146-161` (v3.268.0).
+- The fault from journal request 5 did not fire: the 2-resource change sent
+  4 journal requests in both versions. The fault from request 4 did not
+  fire in the second run of v3.268.0, which sent 3 requests.
+- Checkpoint path, 400: the CLI does not retry. The engine continues, and
+  each later step tries a new checkpoint: 6 refused saves on the existing
+  stack. Checkpoint path, 500: each save gets 4 attempts, 1 s, 2 s and 4 s
+  apart, the same spacing as journal batches.
+- Error text on the checkpoint path:
+  `error: post-step event returned an error: failed to save snapshot: [<status>] spike fault: checkpoint refused`
+  (also `pre-step event`), then `error: update failed`. v3.200.0 exits 255.
+  v3.250.0 and v3.268.0 exit 1.
+- After a failed checkpoint update on a fresh stack, the second
+  `pulumi up` succeeded, but its export still holds 1 pending operation.
+- The resources of the test program are local. With real cloud resources,
+  a failed update can leave resources that exist but are not in the state.
+  The checkpoint baseline behaves the same way: after a refused checkpoint
+  the engine continued with later steps (6 more save attempts on the
+  existing stack), and the export kept the base values `other`/`other`, not
+  the target values `other2`/`other2`. A journal refusal at request 2 or 3
+  also kept the base values.
+
+### Results: errors on the `complete` call (`e75159d`)
+
+All cases use the existing 7-resource stack with the 2-resource change
+(refs `other` to `other2`) and no state save fault. "Checkpoint" means
+`PULUMI_DISABLE_JOURNALING=true`. For each version and fault, the checkpoint
+row follows the journal row.
+
+| Version | Save path | Fault | `complete` requests (statuses) | Retries | Exit | CLI error text | History of that update | Export after | Next `up`, no fault |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| v3.250.0 | journal | 400 | 400 | 0 | 1 | `error: failed to complete update: [400] spike fault: complete refused` | in-progress | 7 resources, other2/other2, 0 pending | exit 1, `[409] ... another update of this stack is in progress` |
+| v3.250.0 | checkpoint | 400 | 400 | 0 | 1 | same, `[400]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.250.0 | journal | 409 | 409 | 0 | 1 | same, `[409]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.250.0 | checkpoint | 409 | 409 | 0 | 1 | same, `[409]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.250.0 | journal | 500 | 500 x4 | 3, 1 s / 2 s / 4 s | 1 | same, `[500]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.250.0 | checkpoint | 500 | 500 x4 | 3, 1 s / 2 s / 4 s | 1 | same, `[500]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | journal | 400 | 400 | 0 | 1 | same, `[400]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | checkpoint | 400 | 400 | 0 | 1 | same, `[400]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | journal | 409 | 409 | 0 | 1 | same, `[409]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | checkpoint | 409 | 409 | 0 | 1 | same, `[409]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | journal | 500 | 500 x4 | 3, 1 s / 2 s / 4 s | 1 | same, `[500]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.268.0 | checkpoint | 500 | 500 x4 | 3, 1 s / 2 s / 4 s | 1 | same, `[500]` | in-progress | 7, other2/other2, 0 pending | exit 1, same 409 |
+| v3.200.0 | checkpoint | 400 | 400 | 0 | 255 | same, `[400]` | in-progress | 7, other2/other2, 0 pending | exit 255, same 409 |
+| v3.200.0 | checkpoint | 409 | 409 | 0 | 255 | same, `[409]` | in-progress | 7, other2/other2, 0 pending | exit 255, same 409 |
+| v3.200.0 | checkpoint | 500 | 500 x4 | 3, 1 s / 2 s / 4 s | 255 | same, `[500]` | in-progress | 7, other2/other2, 0 pending | exit 255, same 409 |
+
+The full 409 text of the next `up` is
+`error: [409] start update <update id> of acme/e2e-project/dev: another update of this stack is in progress`.
+
+### Facts from the `complete` runs
+
+- The CLI retries `complete` only on 500: 4 attempts, 1 s, 2 s and 4 s
+  apart. It does not retry 400 or 409. Journaling on or off makes no
+  difference.
+- All state saves succeeded before `complete`. The export holds the target
+  state (7 resources, `other2`/`other2`, 0 pending operations).
+- The CLI exits with an error (1, or 255 for v3.200.0), although the
+  resources and the state are complete.
+- The update stays `in-progress` in `pulumi stack history`. The next
+  `pulumi up` fails at once with the 409 "another update of this stack is
+  in progress" of the server. The runs did not test `pulumi cancel` or
+  lease expiry after this state.
+- Link to R37: if the server refuses a `complete` with `succeeded` on an
+  update that has a sequence gap, the stack stays blocked until the update
+  is canceled or its lease expires. Thus R37 needs a defined way out
+  (cancel or lease expiry). This run did not test either one.
 
 ### Limits
 
-- One run per case. Each timing gap is from one run.
+- One run per case, except one repeat of the fault at journal request 4
+  on the existing stack (v3.250.0 and v3.268.0). Each timing gap is from
+  one run.
 - One program with 5 resources. The batch count and the point where the
   fault hits depend on the program.
+- The CLI batches by time, so the batch split changes between runs of the
+  same case.
+- On the existing stack, the fault from journal request 5 never fired: the
+  2-resource change sends only 4 journal requests. The fault from request
+  4 did not fire in the repeat run of v3.268.0, which sent 3 requests.
 - The delta capability was off (`DeltaCutoff` 0) in all runs. No run had
   the delta capability on.
-- No follow-up update after a failed update.
+- No follow-up update after a journal fault on a fresh stack, or after a
+  timeout. The `b300d4c` runs made a second update in all other cases.
 - The longest timeout bound was 20 min. The timeout cases did not reach a
   CLI-side timeout. A bound longer than 20 min was not tested.
 - The server answered `journalVersion` 1 only. Version 2 was not measured.
@@ -909,6 +1119,12 @@ Lease, end and failure:
   measured, see section 6.
 - **R36** (not needed). An end-of-journal marker. The CLI sends none. The
   end is `complete`. Source: section 5.8.
+- **R37** (must). Record each refused or unstored batch of an update. A
+  `complete` with status `succeeded` on an update that has a sequence gap
+  or a refused batch must not end as `succeeded`. The CLI can ignore a
+  refusal of its last batch when that batch holds only elided entries: it
+  exits 0 and sends `succeeded`, and the state does not hold the refused
+  entries. Source: measured, section 6.
 
 ### Version 1 only
 
@@ -975,22 +1191,36 @@ From the source:
     whether the loss has no effect because elided entries carry no
     meaningful change (#21576 body), is not settled for each elided kind.
     The secrets-manager entry is also elided (`journal_snapshot.go:325-330`).
+    The measurement saw one such loss: entry 16, kind 4 (outputs), was not
+    stored (section 6). What that entry would have changed in the state was
+    not measured.
 12. Kind count: future kinds may again arrive under version 1, as kinds 8
     and 9 did. The source has no rule that a new kind needs a new version.
     Only kind 10 got one.
 
 From the limits of the measurement (section 6):
 
-13. Timing spread: each case ran once. The retry gaps and the batch spacing
-    can be different in other runs.
+13. Timing spread: each case ran once, except one repeat. The retry gaps,
+    the batch spacing and the batch split can be different in other runs.
 14. Other programs: the batch count and the point where the fault hits
     depend on the program. Only one 5-resource program was measured.
 15. Client timeout: does the CLI time out a held journal request after more
     than 20 min? The run did not reach a CLI-side timeout.
 16. Delta capability: does the CLI behave the same on a journal error when
     the server also offers delta checkpoints? All runs had it off.
-17. Follow-up update: what does the next `pulumi up` do after a failed or
-    stopped journaled update? The spike server keeps the journal session in
-    memory after a refused batch, and no run tested a second update.
+17. Follow-up update: on an existing stack, a second `pulumi up` succeeded
+    after each failed update (section 6). What does the next `pulumi up` do
+    after a journal fault on a fresh stack, or after a stopped (timeout)
+    update? No run tested these.
 18. Version 2 errors: the run measured version 1 only. The error behavior
     with version 2 negotiated is not measured.
+19. `complete` refused, then `pulumi cancel` and lease expiry: after the
+    server refuses `complete`, the update stays `in-progress` and the next
+    `pulumi up` fails with 409 (section 6). Does `pulumi cancel` end such an
+    update, and does lease expiry free the stack? No run tested these. R37
+    depends on this way out. How Pulumi Cloud handles a refused batch
+    followed by `complete` with `succeeded` is unknown.
+20. Pending operation after a checkpoint fault on a fresh stack: after the
+    failed update, the second `pulumi up` succeeded, but its export still
+    held 1 pending operation (section 6). The measurement does not show why
+    the pending operation stays.
