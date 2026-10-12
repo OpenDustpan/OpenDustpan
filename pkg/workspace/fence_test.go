@@ -290,7 +290,7 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 		t.Fatalf("force unlock of an encrypted state: err = %v, want ErrClientEncrypted", err)
 	}
 
-	if !strings.Contains(err.Error(), "tofu force-unlock from the client that holds the lock") {
+	if !strings.Contains(err.Error(), "Let the run that holds the lock finish; it releases the lock") {
 		t.Fatalf("refusal does not name the way out: %v", err)
 	}
 

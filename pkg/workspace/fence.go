@@ -149,7 +149,8 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 
 	if encrypted {
 		return nil, fmt.Errorf(
-			"%w. The server cannot fence it. Run tofu force-unlock from the client that holds the lock",
+			"%w: The state is encrypted by the client, so the server cannot fence it. "+
+				"Let the run that holds the lock finish; it releases the lock",
 			ErrClientEncrypted,
 		)
 	}
