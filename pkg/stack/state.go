@@ -244,12 +244,26 @@ func fingerprintOf(obj map[string]any) string {
 	return string(raw)
 }
 
+// matchStateFilter reports whether a resource matches the list filter: an
+// empty filter matches every resource, otherwise the filter is a substring
+// of the URN or of the resource type. It never matches attribute values.
+func matchStateFilter(urn, typ, filter string) bool {
+	if filter == "" {
+		return true
+	}
+
+	return strings.Contains(urn, filter) || strings.Contains(typ, filter)
+}
+
 // ListStateResources returns one page of the masked resource list of the
 // current deployment. Previous is the deployment of the previous version,
 // or nil when there is none: every resource then counts as new. Cursor is
-// "" or the NextCursor of an earlier page; limit is 1 to 500. Resources
-// keep the order of the deployment; matching across versions uses the URN.
-func ListStateResources(current, previous []byte, cursor string, limit int) (StatePage, error) {
+// "" or the NextCursor of an earlier page; limit is 1 to 500. Filter is a
+// substring of the URN or of the resource type, or "" for no filter: it
+// never matches attribute values. Resources keep the order of the
+// deployment; matching across versions uses the URN. Paging applies after
+// the filter, so a page holds only matching resources.
+func ListStateResources(current, previous []byte, cursor string, limit int, filter string) (StatePage, error) {
 	offset, err := stateOffset(cursor)
 	if err != nil {
 		return StatePage{}, err
@@ -276,20 +290,7 @@ func ListStateResources(current, previous []byte, cursor string, limit int) (Sta
 
 	marks := previousFingerprints(previous)
 
-	summaries := make([]StateResource, 0, len(entries))
-
-	for _, obj := range entries {
-		urn := resourceField(obj, "urn")
-		mark, ok := marks[urn]
-
-		summaries = append(summaries, StateResource{
-			URN:      urn,
-			Type:     resourceField(obj, "type"),
-			Provider: resourceField(obj, "provider"),
-			Parent:   resourceField(obj, "parent"),
-			Changed:  !ok || mark != fingerprintOf(obj),
-		})
-	}
+	summaries := stateSummaries(entries, marks, filter)
 
 	page := StatePage{Resources: []StateResource{}, NextCursor: "", Incomplete: skipped > 0, Reason: ""}
 	if skipped > 0 {
@@ -308,6 +309,35 @@ func ListStateResources(current, previous []byte, cursor string, limit int) (Sta
 	}
 
 	return page, nil
+}
+
+// stateSummaries returns the resource entries as summaries in deployment
+// order, with only the entries that match the filter. Matching across
+// versions uses the URN: a resource is new when marks holds no fingerprint
+// for it, or when the fingerprint differs.
+func stateSummaries(entries []map[string]any, marks map[string]string, filter string) []StateResource {
+	summaries := make([]StateResource, 0, len(entries))
+
+	for _, obj := range entries {
+		urn := resourceField(obj, "urn")
+		typ := resourceField(obj, "type")
+
+		if !matchStateFilter(urn, typ, filter) {
+			continue
+		}
+
+		mark, ok := marks[urn]
+
+		summaries = append(summaries, StateResource{
+			URN:      urn,
+			Type:     typ,
+			Provider: resourceField(obj, "provider"),
+			Parent:   resourceField(obj, "parent"),
+			Changed:  !ok || mark != fingerprintOf(obj),
+		})
+	}
+
+	return summaries
 }
 
 // previousFingerprints maps each URN of previous to its fingerprint, or

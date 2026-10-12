@@ -1506,6 +1506,11 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		checkMaskedState(ctx, env, org, maskedStateSecret),
 		"stack", "--show-name", "--stack", qualified,
 	))
+	env.Step(ctx, t, step(
+		"masked state resource search",
+		checkMaskedStateFilter(ctx, env, org, maskedStateSecret),
+		"stack", "--show-name", "--stack", qualified,
+	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
 }
 
@@ -1576,6 +1581,228 @@ func checkMaskedState(
 
 		return assertMaskedBodies(ctx, env, base, bodies, secret)
 	}
+}
+
+// checkMaskedStateFilter proves the resource search of the masked stack:
+// filter[q] matches by type and by URN, never by an attribute value or a
+// secret value, and paging applies after the filter. It runs after an apply
+// with resources, on the masked stack.
+func checkMaskedStateFilter(
+	ctx context.Context, env *e2e.Env, org, secret string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/masked", org, e2e.Project)
+
+		latest, err := maskedStateGet(ctx, env, base+"/state/latest/resources")
+		if err != nil {
+			return err
+		}
+
+		var full maskedStateList
+
+		if decodeErr := json.Unmarshal([]byte(latest), &full); decodeErr != nil {
+			return fmt.Errorf("%w: decode latest list: %w", errUnexpected, decodeErr)
+		}
+
+		if len(full.Resources) < 2 {
+			return fmt.Errorf(
+				"%w: latest list holds %d resources, want at least the stack and a reference",
+				errUnexpected,
+				len(full.Resources),
+			)
+		}
+
+		stackURN, refURNs, err := maskedStateURNs(latest)
+		if err != nil {
+			return err
+		}
+
+		if err := checkMaskedFilterByType(ctx, env, base, full); err != nil {
+			return err
+		}
+
+		if err := checkMaskedFilterByURN(ctx, env, base, stackURN, refURNs[0]); err != nil {
+			return err
+		}
+
+		return checkMaskedFilterPaging(ctx, env, base, secret)
+	}
+}
+
+// maskedFilterList fetches the resource list with filter q.
+func maskedFilterList(ctx context.Context, env *e2e.Env, base, q string) (maskedStateList, string, error) {
+	path := base + "/state/latest/resources?filter[q]=" + url.QueryEscape(q)
+
+	body, err := maskedStateGet(ctx, env, path)
+	if err != nil {
+		return maskedStateList{}, "", err
+	}
+
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		return maskedStateList{}, "", fmt.Errorf("%w: decode filtered list: %w", errUnexpected, err)
+	}
+
+	return list, body, nil
+}
+
+// maskedFilterTypeItem is one entry of a filtered resource list when only
+// the type matters.
+type maskedFilterTypeItem struct {
+	Type string `json:"type"`
+}
+
+// maskedFilterTypeList is a filtered resource list with only the types
+// decoded.
+type maskedFilterTypeList struct {
+	Resources []maskedFilterTypeItem `json:"resources"`
+}
+
+// checkMaskedFilterByType proves filter[q] with a type substring answers
+// only reference resources, fewer than the full list.
+func checkMaskedFilterByType(
+	ctx context.Context, env *e2e.Env, base string, full maskedStateList,
+) error {
+	list, body, err := maskedFilterList(ctx, env, base, "StackReference")
+	if err != nil {
+		return err
+	}
+
+	if len(list.Resources) == 0 {
+		return fmt.Errorf("%w: filter by type matched no resources", errUnexpected)
+	}
+
+	if len(list.Resources) >= len(full.Resources) {
+		return fmt.Errorf(
+			"%w: filter by type holds %d resources, want fewer than the full %d",
+			errUnexpected,
+			len(list.Resources),
+			len(full.Resources),
+		)
+	}
+
+	var raw maskedFilterTypeList
+
+	if decodeErr := json.Unmarshal([]byte(body), &raw); decodeErr != nil {
+		return fmt.Errorf("%w: decode filtered list types: %w", errUnexpected, decodeErr)
+	}
+
+	for _, res := range raw.Resources {
+		if !strings.Contains(res.Type, "StackReference") {
+			return fmt.Errorf("%w: filter by type answers resource of type %q", errUnexpected, res.Type)
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedFilterByURN proves filter[q] with a URN substring answers the
+// named resource, while an attribute value and the secret value answer none.
+func checkMaskedFilterByURN(
+	ctx context.Context, env *e2e.Env, base, stackURN, refURN string,
+) error {
+	list, _, err := maskedFilterList(ctx, env, base, stackURN)
+	if err != nil {
+		return err
+	}
+
+	if len(list.Resources) != 1 || list.Resources[0].URN != stackURN {
+		return fmt.Errorf("%w: filter by URN answers %+v, want only the stack", errUnexpected, list.Resources)
+	}
+
+	refList, _, err := maskedFilterList(ctx, env, base, refURN)
+	if err != nil {
+		return err
+	}
+
+	if len(refList.Resources) != 1 || refList.Resources[0].URN != refURN {
+		return fmt.Errorf("%w: filter by URN answers %+v, want only the reference", errUnexpected, refList.Resources)
+	}
+
+	for _, q := range []string{"hello-again", maskedStateSecret, "acme"} {
+		// "hello-again" is the plain greeting output of version 2,
+		// "acme" starts the plain reference input, and the secret is the
+		// secret value: none may match, because the filter never reads
+		// attribute values. The URNs hold no "acme": a Pulumi URN names
+		// the stack and the project, never the organization.
+		got, body, err := maskedFilterList(ctx, env, base, q)
+		if err != nil {
+			return err
+		}
+
+		if len(got.Resources) != 0 {
+			return fmt.Errorf("%w: filter %q matched %d resources, want none", errUnexpected, q, len(got.Resources))
+		}
+
+		if strings.Contains(body, maskedStateSecret) {
+			return fmt.Errorf("%w: filtered body leaks the secret", errUnexpected)
+		}
+	}
+
+	return nil
+}
+
+// checkMaskedFilterPaging proves paging applies after the filter: with a
+// filter that matches the stack and the references, pages of one hold only
+// matching resources without overlap.
+func checkMaskedFilterPaging(ctx context.Context, env *e2e.Env, base, secret string) error {
+	firstBody, err := maskedStateGet(
+		ctx,
+		env,
+		base+"/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:pulumi:Stack")+"&limit=1",
+	)
+	if err != nil {
+		return err
+	}
+
+	var first struct {
+		Resources  []maskedStateItem `json:"resources"`
+		NextCursor string            `json:"nextCursor"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(firstBody), &first); decodeErr != nil {
+		return fmt.Errorf("%w: decode first filtered page: %w", errUnexpected, decodeErr)
+	}
+
+	if len(first.Resources) != 1 || first.NextCursor == "" {
+		return fmt.Errorf("%w: first filtered page = %s, want 1 match with a cursor", errUnexpected, firstBody)
+	}
+
+	if strings.Contains(firstBody, secret) {
+		return fmt.Errorf("%w: filtered page leaks the secret", errUnexpected)
+	}
+
+	secondBody, err := maskedStateGet(
+		ctx,
+		env,
+		base+"/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:pulumi:Stack")+
+			"&limit=1&cursor="+url.QueryEscape(first.NextCursor),
+	)
+	if err != nil {
+		return err
+	}
+
+	var second struct {
+		Resources  []maskedStateItem `json:"resources"`
+		NextCursor string            `json:"nextCursor"`
+	}
+
+	if decodeErr := json.Unmarshal([]byte(secondBody), &second); decodeErr != nil {
+		return fmt.Errorf("%w: decode second filtered page: %w", errUnexpected, decodeErr)
+	}
+
+	if len(second.Resources) == 0 {
+		return fmt.Errorf("%w: second filtered page holds no resources: %s", errUnexpected, secondBody)
+	}
+
+	for _, res := range second.Resources {
+		if res.URN == first.Resources[0].URN {
+			return fmt.Errorf("%w: filtered pages overlap on %q", errUnexpected, res.URN)
+		}
+	}
+
+	return nil
 }
 
 // maskedStateLists are the three resource list bodies the masked check

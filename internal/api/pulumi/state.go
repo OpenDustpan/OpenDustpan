@@ -238,13 +238,15 @@ func invalidStateCursor(raw string) error {
 }
 
 // listStateResources answers one page of the masked resource list of one
-// checkpoint version.
+// checkpoint version. The filter[q] query value is a substring of the URN
+// or of the resource type, or absent for no filter: it never matches
+// attribute values. Paging applies after the filter, so a page holds only
+// matching resources.
 func (h *Handler) listStateResources(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
 	ctx := r.Context()
 	target, ok := h.stateTargetOf(w, r)
-
 	if !ok {
 		return
 	}
@@ -253,6 +255,8 @@ func (h *Handler) listStateResources(
 	if !ok {
 		return
 	}
+
+	filter := r.URL.Query().Get("filter[q]")
 
 	current, ok := h.stateCurrent(w, r, target)
 	if !ok {
@@ -264,7 +268,7 @@ func (h *Handler) listStateResources(
 		return
 	}
 
-	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit)
+	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit, filter)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
