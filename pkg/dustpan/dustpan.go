@@ -1114,17 +1114,16 @@ func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:    cfg.authenticator,
-		Authorizer:       cfg.authorizer,
-		Logger:           cfg.logger,
-		Namespaces:       deps.services.namespaces,
-		Backups:          deps.backups,
-		Restores:         restores,
-		Maintenance:      deps.maint,
-		Metrics:          deps.observed,
-		Version:          cfg.version,
-		Schema:           schemaReporterOf(cfg.namespaceStore),
-		KeyEncryptionKey: cfg.secretWrapper != nil,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		Namespaces:    deps.services.namespaces,
+		Backups:       deps.backups,
+		Restores:      restores,
+		Maintenance:   deps.maint,
+		Metrics:       deps.observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
