@@ -332,15 +332,28 @@ func tofuChanged(base string, instances []map[string]any, marks map[string][]str
 	return !slices.Equal(got, sorted)
 }
 
+// matchTofuFilter reports whether a resource matches the list filter: an
+// empty filter matches every resource, otherwise the filter is a substring
+// of the address or of the resource type. It never matches attribute values.
+func matchTofuFilter(address, typ, filter string) bool {
+	if filter == "" {
+		return true
+	}
+
+	return strings.Contains(address, filter) || strings.Contains(typ, filter)
+}
+
 // ListStateResources returns one page of the masked resource list of the
 // current state. Previous is the state of the previous version, or nil when
 // there is none: every resource then counts as new. The list answers the
 // structure with no attribute value, so it needs no marks. Cursor is "" or
 // the NextCursor of an earlier page; size is the page size, or zero for the
-// default page. Resources keep the order of the state; matching across
-// versions uses the address.
+// default page. Filter is a substring of the address or of the resource
+// type, or "" for no filter: it never matches attribute values. Resources
+// keep the order of the state; matching across versions uses the address.
+// Paging applies after the filter, so a page holds only matching resources.
 func ListStateResources(
-	current, previous []byte, cursor string, size int,
+	current, previous []byte, cursor string, size int, filter string,
 ) (StatePage, error) {
 	offset, err := tofuOffset(cursor)
 	if err != nil {
@@ -367,13 +380,20 @@ func ListStateResources(
 	summaries := make([]StateResource, 0, len(entries))
 
 	for _, entry := range entries {
+		address := tofuResourceBase(entry.obj)
+		typ := tofuField(entry.obj, "type")
+
+		if !matchTofuFilter(address, typ, filter) {
+			continue
+		}
+
 		instances := tofuInstances(entry.obj)
 		summaries = append(summaries, StateResource{
-			Address:  tofuResourceBase(entry.obj),
-			Type:     tofuField(entry.obj, "type"),
+			Address:  address,
+			Type:     typ,
 			Provider: tofuField(entry.obj, "provider"),
 			Module:   tofuField(entry.obj, "module"),
-			Changed:  tofuChanged(tofuResourceBase(entry.obj), instances, fingerprints),
+			Changed:  tofuChanged(address, instances, fingerprints),
 		})
 	}
 

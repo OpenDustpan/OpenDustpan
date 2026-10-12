@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -200,6 +201,132 @@ func TestListStateResourcesPaging(t *testing.T) {
 		rec := resourceResponse(t, target, http.StatusUnprocessableEntity)
 		checkJSONAPIError(t, rec, http.StatusUnprocessableEntity)
 	}
+}
+
+// resourceFilterList serves the masked resource list with filter q and
+// returns its decoded document, failing the test otherwise.
+func resourceFilterList(t *testing.T, q string) (resourceTestList, string) {
+	t.Helper()
+
+	target := "/api/v2/state-versions/sv-test123/resources?filter[q]=" + url.QueryEscape(q)
+	body := resourceBody(t, target, http.StatusOK)
+
+	return decodeResourceList(t, body), body
+}
+
+// TestListStateResourcesFilterMatchesType proves filter[q] with a type
+// substring answers only resources of that type, on one complete page.
+func TestListStateResourcesFilterMatchesType(t *testing.T) {
+	t.Parallel()
+
+	doc, body := resourceFilterList(t, "terraform_data")
+
+	if len(doc.Data) != 1 || doc.Data[0].ID != "terraform_data.smoke" {
+		t.Fatalf("filtered list = %+v, want only the data resource", doc.Data)
+	}
+
+	if doc.Meta.NextCursor != "" || doc.Meta.Incomplete {
+		t.Fatalf("filtered meta = %+v, want one complete page", doc.Meta)
+	}
+
+	checkNoSecret(t, body)
+}
+
+// TestListStateResourcesFilterMatchesAddress proves filter[q] with an address
+// substring answers the named resource.
+func TestListStateResourcesFilterMatchesAddress(t *testing.T) {
+	t.Parallel()
+
+	doc, body := resourceFilterList(t, "random_password.pw")
+
+	if len(doc.Data) != 1 || doc.Data[0].ID != "random_password.pw" {
+		t.Fatalf("filtered list = %+v, want only the provider resource", doc.Data)
+	}
+
+	checkNoSecret(t, body)
+}
+
+// TestListStateResourcesFilterIgnoresValues proves filter[q] never matches
+// attribute values or sensitive values: an id and each secret answer no
+// resources.
+func TestListStateResourcesFilterIgnoresValues(t *testing.T) {
+	t.Parallel()
+
+	for _, q := range []string{"smoke-id", "s3cr3t", "pw-s3cr3t"} {
+		doc, body := resourceFilterList(t, q)
+
+		if len(doc.Data) != 0 {
+			t.Fatalf("filter %q matched %+v, want none", q, doc.Data)
+		}
+
+		if doc.Meta.NextCursor != "" {
+			t.Fatalf("filter %q next cursor = %q, want empty", q, doc.Meta.NextCursor)
+		}
+
+		checkNoSecret(t, body)
+	}
+}
+
+// TestListStateResourcesFilterPaging proves paging applies after the filter:
+// with a filter that matches both stub resources, pages of one hold only
+// matching resources without overlap.
+func TestListStateResourcesFilterPaging(t *testing.T) {
+	t.Parallel()
+
+	first, _ := resourceFilterList(t, "_")
+
+	if len(first.Data) != 2 {
+		t.Fatalf("filter %q holds %d resources, want both stub resources", "_", len(first.Data))
+	}
+
+	paged := decodeResourceList(t, resourceBody(
+		t,
+		"/api/v2/state-versions/sv-test123/resources?filter[q]="+url.QueryEscape("_")+"&page[size]=1",
+		http.StatusOK,
+	))
+
+	if len(paged.Data) != 1 || paged.Meta.NextCursor == "" {
+		t.Fatalf("first filtered page = %+v, want one resource with a next cursor", paged)
+	}
+
+	second := decodeResourceList(t, resourceBody(
+		t,
+		"/api/v2/state-versions/sv-test123/resources?filter[q]="+url.QueryEscape("_")+
+			"&page[size]=1&page[cursor]="+url.QueryEscape(paged.Meta.NextCursor),
+		http.StatusOK,
+	))
+
+	if len(second.Data) != 1 || second.Meta.NextCursor != "" {
+		t.Fatalf("second filtered page = %+v, want the other resource with no next cursor", second)
+	}
+
+	if second.Data[0].ID == paged.Data[0].ID {
+		t.Fatalf("filtered pages overlap on %q", second.Data[0].ID)
+	}
+}
+
+// TestListStateResourcesFilterKeepsIncomplete proves the filter keeps the
+// incomplete marker: skipped entries the server cuts still mark the page,
+// which holds only matching resources.
+func TestListStateResourcesFilterKeepsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	body := resourceBody(
+		t,
+		"/api/v2/state-versions/sv-skipped123/resources?filter[q]="+url.QueryEscape("terraform_data"),
+		http.StatusOK,
+	)
+	doc := decodeResourceList(t, body)
+
+	if !doc.Meta.Incomplete {
+		t.Fatalf("filtered list = %+v, want incomplete with skipped entries", doc.Meta)
+	}
+
+	if len(doc.Data) != 1 || doc.Data[0].ID != "terraform_data.smoke" {
+		t.Fatalf("filtered list = %+v, want only the data resource", doc.Data)
+	}
+
+	checkNoSecret(t, body)
 }
 
 // decodeResourceDetail decodes one masked resource body, failing the test
