@@ -25,7 +25,19 @@ an external service.
 
 ## Open questions
 
-- Is this a kind of policy (RFC 13), or a kind of job step (RFC 6)?
+None. The owner answered the one question. See "Owner direction (2026-10-12)".
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Is this a kind of policy (RFC 13), or a kind of job step (RFC 6)?":
+  "This is a policy steps. As a rule, jobs do not run anything except IaC code
+  (and their dependencies) and die. We should never shoehorn other tasks into
+  job runners."
 
 ## Outcome
 

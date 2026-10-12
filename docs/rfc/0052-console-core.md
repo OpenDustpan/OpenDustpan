@@ -30,7 +30,23 @@ OpenDustpan's console has early views only.
 
 ## Open questions
 
-- Which of these is the first milestone of the console?
+- (spike) Which of these is the first milestone of the console?
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Which of these is the first milestone of the console?": "Spike all of
+  them and iterate from there until the fog is clear and we have enough
+  information to make a decision." The question stays in "Open questions".
+- On the first idea "Extension points for scanner and cost output (Terrakube),
+  without running stored code in the browser.": "I'm not sure about [it]. This is
+  too tool specific, and we should probably do a deeper dive in a separate RFC
+  first for integrating spend/cost OPS tools." The owner asks for a separate
+  RFC on spend and cost tools.
 
 ## Outcome
 

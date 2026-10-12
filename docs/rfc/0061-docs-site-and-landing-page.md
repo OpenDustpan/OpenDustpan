@@ -308,12 +308,20 @@ sections, the URL policy and the landing page rules.
 
 ## Open questions
 
-- Do the pages stay in `docs/` or move to `website/docs/`? `docs/` keeps all
-  links working with no redirect. A move separates user docs from ADRs and
-  RFCs.
-- Do ADRs and RFCs appear on the site, or stay on GitHub only?
-- Does the terminal recording on the landing page come from a committed VHS
-  script that CI runs? VHS is a new dependency too.
+None. The owner answered every question. See "Owner direction (2026-10-12)".
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "Do the pages stay in `docs/` or move to `website/docs/`?": "Yes."
+- Question "Do ADRs and RFCs appear on the site, or stay on GitHub only?":
+  "GitHub only for now."
+- Question "Does the terminal recording on the landing page come from a committed
+  VHS script that CI runs?": "Sure."
 
 ## Outcome
 

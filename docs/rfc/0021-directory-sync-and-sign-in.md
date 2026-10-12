@@ -46,7 +46,7 @@ without an identity provider.
   an expiry (RFC 20).
 - An administrator can reset the MFA of a user. Each reset writes an audit
   entry (ADR 41).
-- With an OIDC identity provider (ADR 6), MFA is the job of the identity
+- With an SSO identity provider (ADR 6), MFA is the job of the identity
   provider. OpenDustpan does not add its own MFA step on top.
 - Each MFA operation has a REST API and an action (ADR 17).
 
@@ -63,17 +63,35 @@ without an identity provider.
 ## Owner direction (2026-10-11)
 
 The project owner chose built-in MFA for installs that have no identity
-provider. WebAuthn comes first: passkeys, Touch ID, Windows Hello and hardware
-keys. TOTP is the fallback. Recovery codes are shown once at enrollment. An
+provider (e.g. username+password, ldap, etc). WebAuthn: passkeys, Touch ID, Windows Hello and hardware
+keys and TOTP are the options. Recovery codes are shown once at enrollment. An
 administrator can reset the MFA of a user. Each reset writes an audit entry
 (ADR 41). MFA covers console sign-in, the creation of access tokens, and the
 reveal of a secret value (ADR 41). CLI and CI access tokens stay bearer
 tokens, with no MFA step on each use. A CLI access token of a person is
 created after an MFA sign-in, and it has an expiry. MFA is off by default, for
 any number of users. An administrator turns it on. Then the administrator can
-require it for all users. With an OIDC identity provider (ADR 6), MFA is the
+require it for all users. With an SSO identity provider (ADR 6), MFA is the
 job of the identity provider. OpenDustpan does not add its own MFA step on
 top. The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Proposal, bullet "MFA covers console sign-in, the creation of access tokens,
+  and the reveal of a secret value": "Edit: requiring MFA to reveal secrets
+  should be a separate admin toggle."
+
+In the same commit the owner also edited the text of "Owner direction
+(2026-10-11)" above. The edits name username and password and LDAP as examples of
+installs with no identity provider. They make WebAuthn and TOTP options, and
+they name the identity provider an "SSO identity provider". The Proposal above
+has the "SSO" edit. It still says "WebAuthn comes first" and "TOTP is the
+fallback". The two texts differ on this point until the RFC is accepted.
 
 ## Outcome
 

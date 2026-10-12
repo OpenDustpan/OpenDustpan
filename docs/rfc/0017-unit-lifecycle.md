@@ -34,8 +34,30 @@ HCP Terraform cannot undo a workspace delete.
 
 - Answered by ADR 19 for stacks: a rename keeps the stable ID, so the scope
   (secrets) and the references (RFC 15) survive.
-- How long does soft delete keep state, and who can restore?
-- Is moving a unit between namespaces allowed, given home regions (ADR 4)?
+
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Question "How long does soft delete keep state, and who can restore?":
+  "Configurable, default to 30 days or something reasonable." And: "As with
+  most questions - `who can` is usually answered with \"a user with permission
+  by our FGA model\"."
+- Question "Is moving a unit between namespaces allowed, given home regions
+  (ADR 4)?": "No. Namespaces can obviously be moved between instances for
+  failover or DR, but they own their contents."
+  - The owner says that users can export their units and import them again
+    where they want. The owner says that a unit is too bound to its namespace
+    for an automated move. The owner asks: "What happens to their access
+    grants in the target namespace?" and "What happens to their bound profiles
+    in the target namespace?"
+  - "I think a migration guide and at a later stage CLI tooling might be a
+    better fit here, with checks for things that will inevitably break
+    import/export." The owner says that the scope of this tooling is not clear
+    yet. The owner asks for a separate RFC for it.
 
 ## Outcome
 

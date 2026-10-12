@@ -31,6 +31,17 @@ OpenTofu refuses plain HTTP, and no decision says where TLS ends.
 
 - Is built-in TLS worth its code, given that most installs sit behind a proxy?
 
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Comment on the question "Is built-in TLS worth its code": "Built-in TLS is fine
+  but including ACME seems like a stretch." The question stays in "Open
+  questions".
+
 ## Outcome
 
 The TLS, binary and container image part is accepted as ADR 27 on

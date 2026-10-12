@@ -53,8 +53,12 @@ One OpenDustpan deployment: its SQL store, its blob store and its key-encryption
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Backup**:
-The copy of the SQL data of a whole installation with the blob references that the data names. A restore accepts only a backup of the same dialect and schema version (ADR 38).
+The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
+
+**Portable format**:
+The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
+_Avoid_: Export format, dump format
 
 **Restore**:
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28).

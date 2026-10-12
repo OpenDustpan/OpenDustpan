@@ -78,6 +78,20 @@ operation has a REST API and an action (ADR 17), and writes an audit entry
 (ADR 41).
 The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 
+## Owner direction (2026-10-12)
+
+The project owner answered questions in this RFC on 2026-10-12. Words in
+quotation marks are the words of the owner. A question that the owner sent to
+research or to a spike stays in "Open questions", with a mark. This section
+decides nothing. An ADR records a decision (ADR 15).
+
+- Comment, with no question named: "We should also support arbitrary OIDC and
+  JWT issuers and mTLS certificates (SPIFFE or otherwise) and discourage the
+  use of static tokens for machines and workloads."
+- Comment, with no question named: "The maximum token lifetime and which ones
+  users can issue must be configurable by the admin (I guess the latter just
+  becomes part of the FGA model)"
+
 ## Outcome
 
 None yet.
