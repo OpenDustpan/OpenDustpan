@@ -978,24 +978,42 @@ func compareBackupAudit(t *testing.T, dst, want BackupStore, seed *backupSeed) {
 
 // sameAuditEntry compares two audit entries field by field.
 func sameAuditEntry(a, b audit.Entry) bool {
+	return sameAuditWho(a, b) && sameAuditWhat(a, b) && sameAuditWhere(a, b) && sameAuditChain(a, b)
+}
+
+// sameAuditWho compares the identity, time and sequence of two entries.
+func sameAuditWho(a, b audit.Entry) bool {
 	return a.AtMs() == b.AtMs() &&
 		a.Namespace == b.Namespace &&
 		a.Sequence == b.Sequence &&
 		a.Subject == b.Subject &&
 		a.IDPSubject == b.IDPSubject &&
-		a.TokenID == b.TokenID &&
-		a.Action == b.Action &&
+		a.TokenID == b.TokenID
+}
+
+// sameAuditWhat compares the action, object, version and value path of two
+// entries.
+func sameAuditWhat(a, b audit.Entry) bool {
+	return a.Action == b.Action &&
 		a.Object == b.Object &&
 		a.Version == b.Version &&
-		a.ValuePath == b.ValuePath &&
-		a.SourceIP == b.SourceIP &&
+		a.ValuePath == b.ValuePath
+}
+
+// sameAuditWhere compares the source, channel, kind, outcome and request of
+// two entries.
+func sameAuditWhere(a, b audit.Entry) bool {
+	return a.SourceIP == b.SourceIP &&
 		a.UserAgent == b.UserAgent &&
 		a.Channel == b.Channel &&
 		a.Kind == b.Kind &&
 		a.Outcome == b.Outcome &&
-		a.RequestID == b.RequestID &&
-		a.PrevHash == b.PrevHash &&
-		a.Hash == b.Hash
+		a.RequestID == b.RequestID
+}
+
+// sameAuditChain compares the chain fields of two entries.
+func sameAuditChain(a, b audit.Entry) bool {
+	return a.PrevHash == b.PrevHash && a.Hash == b.Hash
 }
 
 // compareBackupNamespaces compares the namespaces after import.

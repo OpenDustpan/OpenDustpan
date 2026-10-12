@@ -31,7 +31,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 
 	var stored audit.Entry
 
-	if err := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+	txErr := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		var prevHash string
 
 		var seq int64 = 1
@@ -50,7 +50,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 		e.PrevHash = prevHash
 		e.Hash = audit.ComputeHash(e, prevHash)
 
-		if err := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
+		insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
 			Namespace:  e.Namespace.String(),
 			Sequence:   e.Sequence,
 			Subject:    e.Subject,
@@ -69,15 +69,17 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 			RequestID:  e.RequestID,
 			PrevHash:   e.PrevHash,
 			Hash:       e.Hash,
-		}); err != nil {
-			return fmt.Errorf("insert audit entry: %w", err)
+		})
+		if insertErr != nil {
+			return fmt.Errorf("insert audit entry: %w", insertErr)
 		}
 
 		stored = e
 
 		return nil
-	}); err != nil {
-		return audit.Entry{}, err
+	})
+	if txErr != nil {
+		return audit.Entry{}, txErr
 	}
 
 	return stored, nil
@@ -131,8 +133,8 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	}
 
 	entries := make([]audit.Entry, 0, len(rows))
-	for _, row := range rows {
-		entries = append(entries, fromAuditRow(row))
+	for i := range rows {
+		entries = append(entries, fromAuditRow(rows[i]))
 	}
 
 	return audit.Listing{Entries: entries, Total: total}, nil
@@ -152,8 +154,8 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 	var wantSeq int64 = 1
 
-	for _, row := range rows {
-		e := fromAuditRow(row)
+	for i := range rows {
+		e := fromAuditRow(rows[i])
 
 		if e.Sequence != wantSeq || e.PrevHash != prevHash {
 			return audit.CheckResult{Checked: int64(len(rows)), BadSequence: e.Sequence, Valid: false}, nil
@@ -170,9 +172,10 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 	return audit.CheckResult{Checked: int64(len(rows)), BadSequence: 0, Valid: true}, nil
 }
 
-// fromAuditRow converts a row into a domain entry.
+// fromAuditRow converts a row into a domain entry. The namespace reads back
+// without validation: it was validated on write and the foreign key holds.
 func fromAuditRow(row db.AuditEntry) audit.Entry {
-	ns, _ := namespace.ParseName(row.Namespace)
+	ns := namespace.Name(row.Namespace)
 
 	return audit.Entry{
 		At:         codec.FromMillis(row.AtMs),

@@ -59,21 +59,6 @@ func (m *memNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-// seedNamespace creates one namespace homed in the test region.
-func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
-	t.Helper()
-
-	n, err := namespace.ParseName(name)
-	if err != nil {
-		t.Fatalf("parse namespace: %v", err)
-	}
-
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: n, HomeRegion: "test-region", FailoverVersion: 1}
-	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-}
-
 // memAuditStore is an in-memory audit.Store. It chains appends of one
 // namespace exactly as the port requires, so handler tests read realistic
 // entries. Failures are injected through err.
@@ -144,8 +129,9 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 
 	var wantSeq int64 = 1
 
-	for _, e := range chain {
-		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(e, e.PrevHash) != e.Hash {
+	for i := range chain {
+		e := &chain[i]
+		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
 			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
 		}
 
@@ -159,8 +145,8 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 // changeEntrySubject rewrites the subject of one stored entry behind the
 // back of the store, so the check test reads a broken chain.
 func (m *memAuditStore) changeEntrySubject(ns namespace.Name, seq int64, subject string) {
-	for i, e := range m.entries[ns] {
-		if e.Sequence == seq {
+	for i := range m.entries[ns] {
+		if m.entries[ns][i].Sequence == seq {
 			m.entries[ns][i].Subject = subject
 		}
 	}
@@ -246,11 +232,11 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 
 // newTestHandler builds a Handler over empty stores that denies every
 // action, so behavior tests replace what they need.
-func newTestHandler(t *testing.T) (*apitaudit.Handler, *memNamespaceStore, *memAuditStore) {
+func newTestHandler(t *testing.T) *apitaudit.Handler {
 	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
@@ -270,18 +256,17 @@ func newTestHandler(t *testing.T) (*apitaudit.Handler, *memNamespaceStore, *memA
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler, nsStore, entries
+	return handler
 }
 
 // newEnforcingHandler builds a Handler whose namespace reads succeed, so
 // the enforcement tests can tell authorization apart from backend failures.
 func newEnforcingHandler(
 	t *testing.T, authz identity.Authorizer,
-) (*apitaudit.Handler, *memNamespaceStore, *memAuditStore) {
+) (*apitaudit.Handler, *memAuditStore) {
 	t.Helper()
 
-	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: &homedNamespaceStore{}, Now: nil, Region: "test-region"},
@@ -301,7 +286,7 @@ func newEnforcingHandler(
 		t.Fatalf("handler: %v", err)
 	}
 
-	return handler, nsStore, entries
+	return handler, entries
 }
 
 // homedNamespaceStore answers every namespace homed in the test region, so
@@ -337,14 +322,42 @@ func (homedNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-// authedRequest builds a signed-in request for target.
-func authedRequest(t *testing.T, method, target string) *http.Request {
+// authedRequest builds a signed-in GET request for target.
+func authedRequest(t *testing.T, target string) *http.Request {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), method, target, http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
 	req.Header.Set("Authorization", "token test-token")
 
 	return req
+}
+
+// listEntriesItem is one decoded entry of the entry list test.
+type listEntriesItem struct {
+	Subject   string `json:"subject"`
+	Sequence  int64  `json:"sequence"`
+	Kind      string `json:"kind"`
+	AtMs      int64  `json:"atMs"`
+	SourceIP  string `json:"sourceIP"`
+	RequestID string `json:"requestID"`
+	Hash      string `json:"hash"`
+}
+
+// listEntriesDoc is the decoded entry list of the entry list test.
+type listEntriesDoc struct {
+	Entries []listEntriesItem `json:"entries"`
+	Total   int64             `json:"total"`
+}
+
+// listPageItem is one decoded entry of the paging test.
+type listPageItem struct {
+	Subject string `json:"subject"`
+}
+
+// listPageDoc is the decoded entry list of the paging test.
+type listPageDoc struct {
+	Entries []listPageItem `json:"entries"`
+	Total   int64          `json:"total"`
 }
 
 // TestListEntriesAnswersNewestFirstWithTotal proves the list answers the
@@ -353,7 +366,7 @@ func authedRequest(t *testing.T, method, target string) *http.Request {
 func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
 	t.Parallel()
 
-	handler, _, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	ns, err := namespace.ParseName("acme")
 	if err != nil {
@@ -364,28 +377,26 @@ func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
 	seedEntry(t, entries, ns, "second")
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, authedRequest(t, http.MethodGet, "/api/audit/entries?organization=acme"))
+	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/entries?organization=acme"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var got struct {
-		Entries []struct {
-			Subject   string `json:"subject"`
-			Sequence  int64  `json:"sequence"`
-			Kind      string `json:"kind"`
-			AtMs      int64  `json:"atMs"`
-			SourceIP  string `json:"sourceIp"`
-			RequestID string `json:"requestId"`
-			Hash      string `json:"hash"`
-		} `json:"entries"`
-		Total int64 `json:"total"`
-	}
+	var got listEntriesDoc
 
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
+
+	checkEntriesNewestFirst(t, got)
+	checkListedFirstEntry(t, got.Entries[1])
+}
+
+// checkEntriesNewestFirst fails the test unless got holds two entries with
+// the total, newest first.
+func checkEntriesNewestFirst(t *testing.T, got listEntriesDoc) {
+	t.Helper()
 
 	if got.Total != 2 || len(got.Entries) != 2 {
 		t.Fatalf("entries/total = %d/%d, want 2/2", len(got.Entries), got.Total)
@@ -394,8 +405,13 @@ func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
 	if got.Entries[0].Subject != "second" || got.Entries[1].Subject != "first" {
 		t.Fatalf("order = %q, %q, want second then first", got.Entries[0].Subject, got.Entries[1].Subject)
 	}
+}
 
-	first := got.Entries[1]
+// checkListedFirstEntry fails the test unless first carries the sequence,
+// kind, time, source, request and hash of a stored entry.
+func checkListedFirstEntry(t *testing.T, first listEntriesItem) {
+	t.Helper()
+
 	if first.Sequence != 1 || first.Kind != "reveal" || first.AtMs == 0 ||
 		first.SourceIP == "" || first.RequestID == "" || first.Hash == "" {
 		t.Fatalf("entry = %+v, want sequence, kind, time, source, request and hash", first)
@@ -406,7 +422,7 @@ func TestListEntriesAnswersNewestFirstWithTotal(t *testing.T) {
 func TestListEntriesPages(t *testing.T) {
 	t.Parallel()
 
-	handler, _, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	ns, err := namespace.ParseName("acme")
 	if err != nil {
@@ -419,19 +435,14 @@ func TestListEntriesPages(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(
 		rec,
-		authedRequest(t, http.MethodGet, "/api/audit/entries?organization=acme&page[number]=2&page[size]=1"),
+		authedRequest(t, "/api/audit/entries?organization=acme&page[number]=2&page[size]=1"),
 	)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var got struct {
-		Entries []struct {
-			Subject string `json:"subject"`
-		} `json:"entries"`
-		Total int64 `json:"total"`
-	}
+	var got listPageDoc
 
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode body: %v", err)
@@ -446,12 +457,12 @@ func TestListEntriesPages(t *testing.T) {
 func TestListEntriesRejectsAnInvalidPage(t *testing.T) {
 	t.Parallel()
 
-	handler, _, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	handler, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(
 		rec,
-		authedRequest(t, http.MethodGet, "/api/audit/entries?organization=acme&page[size]=nope"),
+		authedRequest(t, "/api/audit/entries?organization=acme&page[size]=nope"),
 	)
 
 	if rec.Code != http.StatusBadRequest {
@@ -465,7 +476,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	t.Parallel()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}}
+	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
@@ -486,7 +497,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, authedRequest(t, http.MethodGet, "/api/audit/entries?organization=ghost"))
+	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/entries?organization=ghost"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
@@ -497,7 +508,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 func TestCheckChainAnswersValid(t *testing.T) {
 	t.Parallel()
 
-	handler, _, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	ns, err := namespace.ParseName("acme")
 	if err != nil {
@@ -508,7 +519,7 @@ func TestCheckChainAnswersValid(t *testing.T) {
 	seedEntry(t, entries, ns, "second")
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, authedRequest(t, http.MethodGet, "/api/audit/check?organization=acme"))
+	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/check?organization=acme"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
@@ -533,7 +544,7 @@ func TestCheckChainAnswersValid(t *testing.T) {
 func TestCheckChainFindsAChangedEntry(t *testing.T) {
 	t.Parallel()
 
-	handler, _, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	handler, entries := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	ns, err := namespace.ParseName("acme")
 	if err != nil {
@@ -545,7 +556,7 @@ func TestCheckChainFindsAChangedEntry(t *testing.T) {
 	entries.changeEntrySubject(ns, 1, "mallory")
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, authedRequest(t, http.MethodGet, "/api/audit/check?organization=acme"))
+	handler.ServeHTTP(rec, authedRequest(t, "/api/audit/check?organization=acme"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())

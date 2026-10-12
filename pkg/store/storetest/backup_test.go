@@ -1105,8 +1105,9 @@ func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.Che
 
 	var wantSeq int64 = 1
 
-	for _, e := range chain {
-		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(e, e.PrevHash) != e.Hash {
+	for i := range chain {
+		e := &chain[i]
+		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
 			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
 		}
 

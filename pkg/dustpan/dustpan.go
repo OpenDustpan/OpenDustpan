@@ -885,8 +885,8 @@ const requestIDHeader = requestid.Header
 // It holds no path, so it cannot leak a capability token.
 const unmatchedRoute = "unmatched"
 
-// requestIDKey holds the request ID in the request context.
-type requestIDKey struct{}
+// adapterServer is the adapter label for the installation and audit APIs.
+const adapterServer = "server"
 
 // RequestID returns the request ID in ctx, or "" when ctx holds none. The
 // middleware sets it for each request, so handlers and later issues can log
@@ -939,15 +939,15 @@ func adapterForRequest(pattern, path string) string {
 	case strings.HasPrefix(name, "/api/inventory/"):
 		return "inventory"
 	case strings.HasPrefix(name, "/api/audit/"):
-		return "server"
+		return adapterServer
 	case strings.HasPrefix(name, "/api/server/"):
-		return "server"
+		return adapterServer
 	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"):
 		return "opentofu"
 	case strings.HasPrefix(name, "/api/"):
 		return "pulumi"
 	default:
-		return "server"
+		return adapterServer
 	}
 }
 

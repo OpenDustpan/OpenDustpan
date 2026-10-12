@@ -64,9 +64,9 @@ func TestAuditConformance(t *testing.T) {
 		})
 
 		return audittest.TestStore{
-			Store:       s,
+			Store: s,
 			TamperEntry: func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error {
-				return tamperAuditEntry(ctx, path, ns, seq, field, value)
+				return tamperAuditEntry(ctx, path, ns, seq, auditFieldChange{field: field, value: value})
 			},
 			DeleteEntry: func(ctx context.Context, ns namespace.Name, seq int64) error {
 				return deleteAuditEntry(ctx, path, ns, seq)
@@ -75,24 +75,35 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
-// tamperAuditColumns whitelists the columns a tamper hook may change, so the
-// field name never reaches SQL unchecked.
-var tamperAuditColumns = map[string]string{
-	"subject": "subject",
-	"action":  "action",
-	"object":  "object",
-	"outcome": "outcome",
-	"kind":    "kind",
+// errUnknownAuditField reports a tamper hook field outside the whitelist.
+var errUnknownAuditField = errors.New("unknown audit field")
+
+// tamperAuditColumn maps a tamper hook field to its column. The column
+// equals the field; the switch keeps the field name out of SQL unless it
+// names one of the five whitelisted columns.
+func tamperAuditColumn(field string) (string, bool) {
+	switch field {
+	case "subject", "action", "object", "outcome", "kind":
+		return field, true
+	default:
+		return "", false
+	}
+}
+
+// auditFieldChange names one column change of the tamper hook.
+type auditFieldChange struct {
+	field string
+	value string
 }
 
 // tamperAuditEntry changes one column of one audit entry through a second
 // database handle: the port has no update path.
 func tamperAuditEntry(
-	ctx context.Context, path string, ns namespace.Name, seq int64, field, value string,
+	ctx context.Context, path string, ns namespace.Name, seq int64, change auditFieldChange,
 ) error {
-	column, ok := tamperAuditColumns[field]
+	column, ok := tamperAuditColumn(change.field)
 	if !ok {
-		return fmt.Errorf("unknown audit field %q", field)
+		return fmt.Errorf("%w: %q", errUnknownAuditField, change.field)
 	}
 
 	conn, err := sql.Open("sqlite", path)
@@ -104,11 +115,15 @@ func tamperAuditEntry(
 		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
 	}()
 
-	if _, err := conn.ExecContext(
-		ctx, `UPDATE audit_entries SET `+column+` = ? WHERE namespace = ? AND sequence = ?`,
-		value, ns.String(), seq,
-	); err != nil {
-		return fmt.Errorf("change audit entry: %w", err)
+	_, execErr := conn.ExecContext(
+		ctx,
+		`UPDATE audit_entries SET `+column+` = ? WHERE namespace = ? AND sequence = ?`, //nolint:gosec // Column comes from the tamperAuditColumn allowlist, never from the caller.
+		change.value,
+		ns.String(),
+		seq,
+	)
+	if execErr != nil {
+		return fmt.Errorf("change audit entry: %w", execErr)
 	}
 
 	return nil
@@ -126,10 +141,11 @@ func deleteAuditEntry(ctx context.Context, path string, ns namespace.Name, seq i
 		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
 	}()
 
-	if _, err := conn.ExecContext(
+	_, execErr := conn.ExecContext(
 		ctx, `DELETE FROM audit_entries WHERE namespace = ? AND sequence = ?`, ns.String(), seq,
-	); err != nil {
-		return fmt.Errorf("delete audit entry: %w", err)
+	)
+	if execErr != nil {
+		return fmt.Errorf("delete audit entry: %w", execErr)
 	}
 
 	return nil

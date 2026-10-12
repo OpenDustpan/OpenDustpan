@@ -91,24 +91,29 @@ func (m *memAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckR
 // errAuditBoom is the injected store failure of the failure test.
 var errAuditBoom = errors.New("audit store boom")
 
+// auditCall describes one log-decryption request of a CLI that shows
+// secrets.
+type auditCall struct {
+	target    string
+	userAgent string
+	channel   string
+	requestID string
+}
+
 // auditRequest sends one log-decryption request with the request ID, source
 // address, user agent and channel of a CLI that shows secrets.
-func auditRequest(
-	t *testing.T,
-	f secretFixture,
-	target, userAgent, channel, requestID string,
-) (int, string) {
+func auditRequest(t *testing.T, f secretFixture, call auditCall) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(
-		requestid.WithContext(t.Context(), requestID),
+		requestid.WithContext(t.Context(), call.requestID),
 		http.MethodPost,
-		target,
+		call.target,
 		strings.NewReader(`{"secretName":"apiKey"}`),
 	)
 	req.Header.Set("Authorization", "token test-token")
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Dustpan-Channel", channel)
+	req.Header.Set("User-Agent", call.userAgent)
+	req.Header.Set("Dustpan-Channel", call.channel)
 	req.RemoteAddr = "192.0.2.10:4321"
 
 	rec := httptest.NewRecorder()
@@ -124,15 +129,22 @@ func auditRequest(
 func TestLogDecryptionWritesARevealEntry(t *testing.T) {
 	t.Parallel()
 
-	entries := &memAuditStore{}
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
 
-	f := buildSecretFixture(t, allowAll(), 0, entries, nil, slog.New(slog.DiscardHandler))
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
 
 	for _, target := range []string{
 		"/api/stacks/acme/web/prod/decrypt/log-decryption",
 		"/api/stacks/acme/web/prod/decrypt/log-batch-decryption",
 	} {
-		status, body := auditRequest(t, f, target, "pulumi-cli/3.200.0", "console", "req-7")
+		call := auditCall{target: target, userAgent: "pulumi-cli/3.200.0", channel: "console", requestID: "req-7"}
+
+		status, body := auditRequest(t, f, call)
 		if status != http.StatusNoContent {
 			t.Fatalf("%s answers %d, want %d (%s)", target, status, http.StatusNoContent, body)
 		}
@@ -145,29 +157,109 @@ func TestLogDecryptionWritesARevealEntry(t *testing.T) {
 		t.Fatalf("entries = %d, want 2", len(entries.entries))
 	}
 
-	for _, e := range entries.entries {
-		switch {
-		case e.Action != string(identity.ActionUnitDecrypt):
-			t.Fatalf("action = %q, want unit:decrypt", e.Action)
-		case e.Kind != audit.KindReveal:
-			t.Fatalf("kind = %q, want reveal", e.Kind)
-		case e.Subject != "tester":
-			t.Fatalf("subject = %q, want tester", e.Subject)
-		case e.Object != "pulumi:acme/web/prod":
-			t.Fatalf("object = %q, want the unit reference", e.Object)
-		case e.SourceIP != "192.0.2.10":
-			t.Fatalf("source IP = %q, want 192.0.2.10", e.SourceIP)
-		case e.UserAgent != "pulumi-cli/3.200.0":
-			t.Fatalf("user agent = %q, want the CLI agent", e.UserAgent)
-		case e.Channel != audit.ChannelConsole:
-			t.Fatalf("channel = %q, want console", e.Channel)
-		case e.RequestID != "req-7":
-			t.Fatalf("request ID = %q, want req-7", e.RequestID)
-		case e.Outcome != audit.OutcomeSuccess:
-			t.Fatalf("outcome = %q, want success", e.Outcome)
-		case e.Hash == "":
-			t.Fatal("hash is empty")
-		}
+	for i := range entries.entries {
+		checkRevealEntry(t, entries.entries[i])
+	}
+}
+
+// checkRevealEntry fails the test unless e is the reveal entry of a CLI that
+// shows secrets: the action unit:decrypt with the kind reveal, carrying the
+// subject, source IP, user agent, channel and request ID.
+func checkRevealEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Action != string(identity.ActionUnitDecrypt) {
+		t.Fatalf("action = %q, want unit:decrypt", e.Action)
+	}
+
+	if e.Kind != audit.KindReveal {
+		t.Fatalf("kind = %q, want reveal", e.Kind)
+	}
+
+	if e.Subject != "tester" {
+		t.Fatalf("subject = %q, want tester", e.Subject)
+	}
+
+	if e.Object != "pulumi:acme/web/prod" {
+		t.Fatalf("object = %q, want the unit reference", e.Object)
+	}
+
+	if e.SourceIP != "192.0.2.10" {
+		t.Fatalf("source IP = %q, want 192.0.2.10", e.SourceIP)
+	}
+
+	if e.UserAgent != "pulumi-cli/3.200.0" {
+		t.Fatalf("user agent = %q, want the CLI agent", e.UserAgent)
+	}
+
+	if e.Channel != audit.ChannelConsole {
+		t.Fatalf("channel = %q, want console", e.Channel)
+	}
+
+	if e.RequestID != "req-7" {
+		t.Fatalf("request ID = %q, want req-7", e.RequestID)
+	}
+
+	if e.Outcome != audit.OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success", e.Outcome)
+	}
+
+	if e.Hash == "" {
+		t.Fatal("hash is empty")
+	}
+}
+
+// TestLogDecryptionRejectsLargeBody proves a body over the audit limit
+// answers 413 without an entry: the route bounds the body, so a large body
+// cannot grow memory without bound, and the next small report still answers
+// 204 as the CLI expects.
+func TestLogDecryptionRejectsLargeBody(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	target := "/api/stacks/acme/web/prod/decrypt/log-decryption"
+	big := `{"secretName":"` + strings.Repeat("x", 32<<10) + `"}`
+
+	req := httptest.NewRequestWithContext(
+		requestid.WithContext(t.Context(), "req-big"),
+		http.MethodPost,
+		target,
+		strings.NewReader(big),
+	)
+	req.Header.Set("Authorization", "token test-token")
+	req.RemoteAddr = "192.0.2.10:4321"
+
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large body answers %d, want %d (%s)", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+	}
+
+	entries.mu.Lock()
+	n := len(entries.entries)
+	entries.mu.Unlock()
+
+	if n != 0 {
+		t.Fatalf("entries = %d, want 0 after a rejected body", n)
+	}
+
+	status, body := auditRequest(t, f, auditCall{
+		target:    target,
+		userAgent: "pulumi-cli/3.200.0",
+		channel:   "api",
+		requestID: "req-after",
+	})
+	if status != http.StatusNoContent {
+		t.Fatalf("small body after a large one answers %d, want %d (%s)", status, http.StatusNoContent, body)
 	}
 }
 
@@ -183,11 +275,21 @@ func TestLogDecryptionFailureStillAnswers204(t *testing.T) {
 
 	var failures int
 
-	entries := &memAuditStore{err: errAuditBoom}
+	entries := &memAuditStore{entries: nil, err: errAuditBoom, mu: sync.Mutex{}}
 
-	f := buildSecretFixture(t, allowAll(), 0, entries, func() { failures++ }, logger)
+	f := buildSecretFixture(
+		t,
+		allowAll(),
+		0,
+		fixtureAudit{store: entries, onFail: func() { failures++ }, logger: logger},
+	)
 
-	status, body := auditRequest(t, f, "/api/stacks/acme/web/prod/decrypt/log-decryption", "agent", "api", "req-9")
+	status, body := auditRequest(t, f, auditCall{
+		target:    "/api/stacks/acme/web/prod/decrypt/log-decryption",
+		userAgent: "agent",
+		channel:   "api",
+		requestID: "req-9",
+	})
 	if status != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d (%s)", status, http.StatusNoContent, body)
 	}

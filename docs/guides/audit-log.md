@@ -16,17 +16,17 @@ The Pulumi CLI calls them when a person asks it to show secrets, for example
 An entry holds these fields:
 
 - Who: `subject`, `idpSubject` (empty until an identity provider exists),
-  `tokenId` (empty until tokens have IDs).
+  `tokenID` (empty until tokens have IDs).
 - What: `action`, `object` (a unit reference or a namespace), `version` and
   `valuePath` (for a state read, else empty).
 - When: `atMs` (UTC, Unix milliseconds).
-- Where: `sourceIp` (the remote address the server sees), `userAgent`
+- Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
   declares it in the `Dustpan-Channel` header; unknown values are `api`).
 - Kind: `tool-operation` or `reveal`, never anything else, so a reader never
   confuses a tool that needed secrets with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
-- `requestId`: the `X-Request-Id` of the request (ADR 32).
+- `requestID`: the `X-Request-Id` of the request (ADR 32).
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   The first entry of a namespace has an empty `prevHash`.

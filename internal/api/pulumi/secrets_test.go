@@ -250,19 +250,27 @@ type secretFixture struct {
 func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) secretFixture {
 	t.Helper()
 
-	return buildSecretFixture(t, authz, maxBatch, nil, nil, slog.New(slog.DiscardHandler))
+	return buildSecretFixture(
+		t,
+		authz,
+		maxBatch,
+		fixtureAudit{store: nil, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
 }
 
-// buildSecretFixture builds a Handler as newSecretFixture does, with an
-// audit store, a failure callback and a logger for the audit tests. A nil
-// audit store means no audit store is configured.
+// fixtureAudit carries the audit wiring of buildSecretFixture: the store,
+// the failure callback and the logger. A nil store means no audit store is
+// configured.
+type fixtureAudit struct {
+	store  audit.Store
+	onFail func()
+	logger *slog.Logger
+}
+
+// buildSecretFixture builds a Handler as newSecretFixture does, with the
+// audit wiring of cfg for the audit tests.
 func buildSecretFixture(
-	t *testing.T,
-	authz identity.Authorizer,
-	maxBatch int,
-	entries audit.Store,
-	onFail func(),
-	logger *slog.Logger,
+	t *testing.T, authz identity.Authorizer, maxBatch int, cfg fixtureAudit,
 ) secretFixture {
 	t.Helper()
 
@@ -312,11 +320,11 @@ func buildSecretFixture(
 		Namespaces:           namespaces,
 		Authenticator:        tokenAuthenticator{},
 		Authorizer:           authz,
-		Logger:               logger,
+		Logger:               cfg.logger,
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
-		Audit:                entries,
-		OnAuditFailure:       onFail,
+		Audit:                cfg.store,
+		OnAuditFailure:       cfg.onFail,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1075,6 +1083,8 @@ func TestSecretsMissingKey(t *testing.T) {
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1459,6 +1469,8 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1652,6 +1664,8 @@ func newLoggedSecretsHandler(
 		Logger:               logger,
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)
@@ -1814,6 +1828,8 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		Logger:               slog.New(slog.NewJSONHandler(logged, nil)),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1851,6 +1867,8 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

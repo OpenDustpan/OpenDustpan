@@ -66,6 +66,8 @@ func newUpdateFixtureWithGate(
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: inFlight,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -133,6 +135,8 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: inFlight,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

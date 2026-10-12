@@ -244,7 +244,16 @@ func testListPaging(t *testing.T, ts TestStore) {
 		appendEntry(t, s, ns.Fence(), newEntry(ns.Name, fmt.Sprintf("user-%d", i), fmt.Sprintf("req-%d", i), now()))
 	}
 
-	first, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: 2})
+	checkPagingFirst(t, s, ns.Name)
+	checkPagingRest(t, s, ns.Name)
+}
+
+// checkPagingFirst proves the first page holds the two newest entries with
+// the total.
+func checkPagingFirst(t *testing.T, s Store, ns namespace.Name) {
+	t.Helper()
+
+	first, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: 2})
 	if err != nil {
 		t.Fatalf("list page 1: %v", err)
 	}
@@ -256,8 +265,14 @@ func testListPaging(t *testing.T, ts TestStore) {
 	if len(first.Entries) != 2 || first.Entries[0].Subject != "user-5" || first.Entries[1].Subject != "user-4" {
 		t.Fatalf("page 1 = %+v, want user-5 then user-4", first.Entries)
 	}
+}
 
-	second, err := s.List(t.Context(), ns.Name, audit.Page{Number: 2, Size: 2})
+// checkPagingRest proves the second page holds the next two entries and the
+// third page holds the oldest one.
+func checkPagingRest(t *testing.T, s Store, ns namespace.Name) {
+	t.Helper()
+
+	second, err := s.List(t.Context(), ns, audit.Page{Number: 2, Size: 2})
 	if err != nil {
 		t.Fatalf("list page 2: %v", err)
 	}
@@ -266,7 +281,7 @@ func testListPaging(t *testing.T, ts TestStore) {
 		t.Fatalf("page 2 = %+v, want user-3 then user-2", second.Entries)
 	}
 
-	third, err := s.List(t.Context(), ns.Name, audit.Page{Number: 3, Size: 2})
+	third, err := s.List(t.Context(), ns, audit.Page{Number: 3, Size: 2})
 	if err != nil {
 		t.Fatalf("list page 3: %v", err)
 	}
@@ -290,7 +305,7 @@ func testStaleFence(t *testing.T, ts TestStore) {
 		t.Fatal("append with a stale fence succeeded, want a fence error")
 	}
 
-	listing, err := s.List(t.Context(), ns.Name, audit.Page{})
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
@@ -321,7 +336,7 @@ func testIsolation(t *testing.T, ts TestStore) {
 
 	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
 
-	listing, err := s.List(t.Context(), other.Name, audit.Page{})
+	listing, err := s.List(t.Context(), other.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
 	if err != nil {
 		t.Fatalf("list audit entries of the other namespace: %v", err)
 	}
@@ -355,18 +370,14 @@ func testConcurrentAppends(t *testing.T, ts TestStore) {
 	errs := make(chan error, n)
 
 	for i := range n {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			_, err := s.Append(
 				context.Background(),
 				ns.Fence(),
 				newEntry(ns.Name, fmt.Sprintf("user-%d", i), fmt.Sprintf("req-%d", i), now()),
 			)
 			errs <- err
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -392,15 +403,38 @@ func testConcurrentAppends(t *testing.T, ts TestStore) {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
+	checkSequencesUnique(t, listing, n)
+	checkStoredChain(t, listing)
+}
+
+// checkSequencesUnique fails the test unless listing holds each sequence
+// from 1 to n exactly once.
+func checkSequencesUnique(t *testing.T, listing audit.Listing, n int) {
+	t.Helper()
+
 	seen := make(map[int64]bool, n)
 
-	for _, e := range listing.Entries {
-		if e.Sequence < 1 || e.Sequence > n || seen[e.Sequence] {
-			t.Fatalf("duplicate or out-of-range sequence %d in %+v", e.Sequence, listing.Entries)
+	for i := range listing.Entries {
+		seq := listing.Entries[i].Sequence
+		if seq < 1 || seq > int64(n) || seen[seq] {
+			t.Fatalf("duplicate or out-of-range sequence %d in %+v", seq, listing.Entries)
 		}
 
-		seen[e.Sequence] = true
+		seen[seq] = true
 	}
+}
+
+// checkStoredChain fails the test unless the listed entries form one valid
+// chain: it orders them oldest first and checks every link.
+func checkStoredChain(t *testing.T, listing audit.Listing) {
+	t.Helper()
+
+	ordered := make([]audit.Entry, len(listing.Entries))
+	for i := range listing.Entries {
+		ordered[i] = listing.Entries[len(listing.Entries)-1-i]
+	}
+
+	checkValidChain(t, ordered)
 }
 
 // testCheckChangedField proves that Check reports the sequence of an entry

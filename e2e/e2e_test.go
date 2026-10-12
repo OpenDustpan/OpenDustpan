@@ -1497,12 +1497,12 @@ type auditListItem struct {
 	Subject   string `json:"subject"`
 	Action    string `json:"action"`
 	Object    string `json:"object"`
-	SourceIP  string `json:"sourceIp"`
+	SourceIP  string `json:"sourceIP"`
 	UserAgent string `json:"userAgent"`
 	Channel   string `json:"channel"`
 	Kind      string `json:"kind"`
 	Outcome   string `json:"outcome"`
-	RequestID string `json:"requestId"`
+	RequestID string `json:"requestID"`
 	Hash      string `json:"hash"`
 }
 
@@ -1552,34 +1552,61 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string) 
 	entries := readAuditEntries(ctx, t, env, org)
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
-	var reveal *auditListItem
+	checkRevealFields(t, findRevealEntry(t, entries))
+	checkAuditChain(ctx, t, env, org)
+}
+
+// findRevealEntry returns the first entry of the kind reveal with the action
+// unit:decrypt, and fails the test when no entry matches.
+func findRevealEntry(t *testing.T, entries []auditListItem) *auditListItem {
+	t.Helper()
 
 	for i := range entries {
 		if e := &entries[i]; e.Kind == "reveal" && e.Action == "unit:decrypt" {
-			reveal = e
-
-			break
+			return e
 		}
 	}
 
-	if reveal == nil {
-		t.Fatalf("no reveal entry with action unit:decrypt in %d entries", len(entries))
+	t.Fatalf("no reveal entry with action unit:decrypt in %d entries", len(entries))
+
+	return nil
+}
+
+// checkRevealFields fails the test unless reveal carries the subject, the
+// source IP, the user agent, the request ID, the success outcome and the
+// hash of a CLI that shows secrets.
+func checkRevealFields(t *testing.T, reveal *auditListItem) {
+	t.Helper()
+
+	if reveal.Subject == "" {
+		t.Fatal("reveal entry holds no subject")
 	}
 
-	switch {
-	case reveal.Subject == "":
-		t.Fatal("reveal entry holds no subject")
-	case reveal.SourceIP == "":
+	if reveal.SourceIP == "" {
 		t.Fatal("reveal entry holds no source IP")
-	case reveal.UserAgent == "":
+	}
+
+	if reveal.UserAgent == "" {
 		t.Fatal("reveal entry holds no user agent")
-	case reveal.RequestID == "":
+	}
+
+	if reveal.RequestID == "" {
 		t.Fatal("reveal entry holds no request ID")
-	case reveal.Outcome != "success":
+	}
+
+	if reveal.Outcome != "success" {
 		t.Fatalf("reveal entry outcome = %q, want success", reveal.Outcome)
-	case reveal.Hash == "":
+	}
+
+	if reveal.Hash == "" {
 		t.Fatal("reveal entry holds no hash")
 	}
+}
+
+// checkAuditChain fails the test unless the chain check of org answers a
+// valid non-empty chain.
+func checkAuditChain(ctx context.Context, t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/check?organization="+org, "")
 	if err != nil {
@@ -1615,7 +1642,9 @@ func checkAuditLogCalls(t *testing.T, env *e2e.Env, org string) {
 
 	var calls []string
 
-	for _, entry := range env.Recorder.Entries() {
+	recorded := env.Recorder.Entries()
+	for i := range recorded {
+		entry := &recorded[i]
 		if entry.Method == http.MethodPost && strings.HasPrefix(entry.Path, base+"/log-") {
 			calls = append(calls, entry.Step+" -> "+strings.TrimPrefix(entry.Path, base+"/"))
 		}

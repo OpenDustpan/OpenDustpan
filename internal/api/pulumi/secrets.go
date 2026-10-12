@@ -26,6 +26,10 @@ const (
 	// secretBodySlack covers the base64 and JSON frame around one secrets
 	// batch on the wire, above the batch size the domain accepts.
 	secretBodySlack = 1 << 20
+	// auditBodyLimit bounds one decrypt audit report on the wire. The CLI
+	// sends a small JSON document with the secret or command name, so 8 KiB
+	// leaves ample room while a large body cannot grow memory without bound.
+	auditBodyLimit = 8 << 10
 )
 
 // secretBodyLimit bounds one secrets request body on the wire. Values travel
@@ -233,10 +237,15 @@ func (h *Handler) batchDecrypt(
 // logDecryption answers the audit route for one third-party decryption. It
 // writes one audit entry of the kind reveal with the action unit:decrypt
 // (ADR 41 decision 13) and still answers 204 when the append fails: the
-// failure is a log line and a metric, never a failed CLI command.
+// failure is a log line and a metric, never a failed CLI command. A body
+// over auditBodyLimit answers 413 without an entry.
 func (h *Handler) logDecryption(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
+	if !h.drainAuditBody(w, r) {
+		return
+	}
+
 	h.appendRevealAudit(r, p, obj)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -245,11 +254,54 @@ func (h *Handler) logDecryption(
 // decryption. It writes one audit entry of the kind reveal with the action
 // unit:decrypt (ADR 41 decision 13) and still answers 204 when the append
 // fails: the failure is a log line and a metric, never a failed CLI command.
+// A body over auditBodyLimit answers 413 without an entry.
 func (h *Handler) logBatchDecryption(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
+	if !h.drainAuditBody(w, r) {
+		return
+	}
+
 	h.appendRevealAudit(r, p, obj)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// drainAuditBody bounds and drains one decrypt audit report. The body is
+// advisory: any document within the limit is discarded and the route writes
+// its entry. An oversized body answers 413 and writes no entry, so a large
+// body cannot grow memory without bound.
+func (h *Handler) drainAuditBody(w http.ResponseWriter, r *http.Request) bool {
+	releaseHold, ok := h.hold(w, r, auditBodyLimit)
+	if !ok {
+		return false
+	}
+
+	defer releaseHold()
+
+	counted, release, ok := h.largeReader(w, r, auditBodyLimit)
+	if !ok {
+		return false
+	}
+
+	defer release()
+
+	if _, err := io.Copy(io.Discard, counted); err != nil {
+		if isMaxBytes(err) {
+			h.writeTooLarge(w, r, auditBodyLimit)
+		} else {
+			h.writeInvalidBody(r.Context(), w)
+		}
+
+		return false
+	}
+
+	if counted.n > auditBodyLimit {
+		h.writeTooLarge(w, r, auditBodyLimit)
+
+		return false
+	}
+
+	return true
 }
 
 // appendRevealAudit writes one audit entry for a third-party decryption that
@@ -271,10 +323,7 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 		return
 	}
 
-	userAgent := r.UserAgent()
-	if len(userAgent) > audit.MaxUserAgentLen {
-		userAgent = userAgent[:audit.MaxUserAgentLen]
-	}
+	userAgent := truncateUserAgent(r.UserAgent())
 
 	entry := audit.Entry{
 		At:         time.Now().UTC(),
@@ -300,6 +349,21 @@ func (h *Handler) appendRevealAudit(r *http.Request, p identity.Principal, obj i
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
 		h.failAudit(ctx)
 	}
+}
+
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
+// boundary, so a multi-byte rune is never split.
+func truncateUserAgent(s string) string {
+	if len(s) <= audit.MaxUserAgentLen {
+		return s
+	}
+
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // failAudit records a lost audit entry: one log line with no secret and no

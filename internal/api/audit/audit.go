@@ -101,17 +101,17 @@ type auditEntry struct {
 	Sequence   int64  `json:"sequence"`
 	Subject    string `json:"subject"`
 	IDPSubject string `json:"idpSubject"`
-	TokenID    string `json:"tokenId"`
+	TokenID    string `json:"tokenID"`
 	Action     string `json:"action"`
 	Object     string `json:"object"`
 	Version    string `json:"version"`
 	ValuePath  string `json:"valuePath"`
-	SourceIP   string `json:"sourceIp"`
+	SourceIP   string `json:"sourceIP"`
 	UserAgent  string `json:"userAgent"`
 	Channel    string `json:"channel"`
 	Kind       string `json:"kind"`
 	Outcome    string `json:"outcome"`
-	RequestID  string `json:"requestId"`
+	RequestID  string `json:"requestID"`
 	PrevHash   string `json:"prevHash"`
 	Hash       string `json:"hash"`
 }
@@ -187,8 +187,8 @@ func (h *Handler) listEntries(
 	}
 
 	entries := make([]auditEntry, 0, len(listing.Entries))
-	for _, e := range listing.Entries {
-		entries = append(entries, toAuditEntry(e))
+	for i := range listing.Entries {
+		entries = append(entries, toAuditEntry(listing.Entries[i]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})

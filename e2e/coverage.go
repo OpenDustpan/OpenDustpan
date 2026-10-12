@@ -198,6 +198,8 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		BaseURL:       baseurl.Resolver{},
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		tb.Fatalf("pulumi handler: %v", err)
@@ -474,17 +476,21 @@ type coverageAuditStore struct{}
 func (coverageAuditStore) Append(
 	_ context.Context, _ namespace.Fence, _ audit.Entry,
 ) (audit.Entry, error) {
-	return audit.Entry{}, nil
+	var zero audit.Entry
+
+	return zero, nil
 }
 
 func (coverageAuditStore) List(
 	_ context.Context, _ namespace.Name, _ audit.Page,
 ) (audit.Listing, error) {
-	return audit.Listing{}, nil
+	var zero audit.Listing
+
+	return zero, nil
 }
 
 func (coverageAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Valid: true}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
 }
 
 // coverageMetrics writes nothing: the route table needs a metrics writer,
@@ -611,38 +617,20 @@ type AllowEntry struct {
 // CLI version in the matrix can reach it; when the CLI gains a caller, the
 // entry goes and an e2e step proves the route.
 func CoverageAllowlist() []AllowEntry {
-	allowed := []AllowEntry{
-		{
-			Method: http.MethodGet, Path: "/api/inventory/units",
-			CoveringTest: "TestListUnitsBothTools",
-			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/audit/entries",
-			CoveringTest: "TestCLIs (checkAuditLog)",
-			Reason: "Console-only: no CLI reads the audit entries. The " +
-				"harness step lists them after a CLI command that calls the " +
-				"decrypt audit route and checks the chain.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/audit/check",
-			CoveringTest: "TestCLIs (checkAuditLog)",
-			Reason: "Console-only: no CLI checks the audit chain. The " +
-				"harness step checks it after a CLI command that calls the " +
-				"decrypt audit route.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",
-			CoveringTest: "TestReadWorkspaceByID",
-			Reason:       "Console-only: the CLI reads workspaces by name, never by ID.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/v2/state-version-outputs/{output_id}",
-			CoveringTest: "TestTofuSeededStateRead",
-			Reason: "The CLI reads one output only for a sensitive value, so the " +
-				"main scenario without one never reaches it. The seeded e2e run " +
-				"proves it, but it writes no matrix report.",
-		},
+	return slices.Concat(
+		consoleAllowEntries(),
+		operatorAllowEntries(),
+		backupAllowEntries(),
+		namespaceAllowEntries(),
+		maintenanceAllowEntries(),
+	)
+}
+
+// operatorAllowEntries returns the operator and CLI-unreached routes that no
+// matrix version calls: batch encrypt, lease renewal, restore, state
+// version reads and the probes.
+func operatorAllowEntries() []AllowEntry {
+	return []AllowEntry{
 		{
 			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
 			CoveringTest: "TestSecretsBatchRoundTrip",
@@ -690,8 +678,45 @@ func CoverageAllowlist() []AllowEntry {
 			Reason:       "Operator probe: no CLI calls it.",
 		},
 	}
+}
 
-	return slices.Concat(allowed, backupAllowEntries(), namespaceAllowEntries(), maintenanceAllowEntries())
+// consoleAllowEntries returns the console-only read routes that no CLI
+// calls: the cross-tool unit list, the audit reads and the workspace reads
+// by ID or for a single output.
+func consoleAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/inventory/units",
+			CoveringTest: "TestListUnitsBothTools",
+			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/entries",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI reads the audit entries. The " +
+				"harness step lists them after a CLI command that calls the " +
+				"decrypt audit route and checks the chain.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/audit/check",
+			CoveringTest: "TestCLIs (checkAuditLog)",
+			Reason: "Console-only: no CLI checks the audit chain. The " +
+				"harness step checks it after a CLI command that calls the " +
+				"decrypt audit route.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",
+			CoveringTest: "TestReadWorkspaceByID",
+			Reason:       "Console-only: the CLI reads workspaces by name, never by ID.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-version-outputs/{output_id}",
+			CoveringTest: "TestTofuSeededStateRead",
+			Reason: "The CLI reads one output only for a sensitive value, so the " +
+				"main scenario without one never reaches it. The seeded e2e run " +
+				"proves it, but it writes no matrix report.",
+		},
+	}
 }
 
 // namespaceCoveringTest names the test that proves the namespace create route

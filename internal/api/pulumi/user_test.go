@@ -171,6 +171,8 @@ func newUserHandler(
 		Logger:               slog.New(slog.DiscardHandler),
 		BaseURL:              baseurl.Resolver{},
 		MaxBodyBytesInFlight: 0,
+		Audit:                nil,
+		OnAuditFailure:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

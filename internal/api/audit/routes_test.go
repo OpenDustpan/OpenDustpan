@@ -31,7 +31,7 @@ func publicPatterns() []string {
 func TestAuditRoutes(t *testing.T) {
 	t.Parallel()
 
-	handler, _, _ := newTestHandler(t)
+	handler := newTestHandler(t)
 
 	want := map[string][]identity.Action{
 		"GET /api/audit/entries": {identity.ActionNamespaceReadAudit},
@@ -78,7 +78,7 @@ func TestAuditRoutes(t *testing.T) {
 func TestRoutesDeclareActions(t *testing.T) {
 	t.Parallel()
 
-	handler, _, _ := newTestHandler(t)
+	handler := newTestHandler(t)
 
 	public := map[string]bool{}
 	for _, pattern := range publicPatterns() {
@@ -234,7 +234,7 @@ func routeRequest(t *testing.T, route apitaudit.Route, token string) *http.Reque
 func TestRoutesEnforceAuthorization(t *testing.T) {
 	t.Parallel()
 
-	handler, _, _ := newTestHandler(t)
+	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
@@ -251,7 +251,7 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 	t.Helper()
 
 	if route.Scope == apitaudit.ScopePublic {
-		allowed, _, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+		allowed, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 		rec := httptest.NewRecorder()
 		allowed.ServeHTTP(rec, routeRequest(t, route, ""))
@@ -263,7 +263,7 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 		return
 	}
 
-	allowed, _, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	allowed, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -277,7 +277,7 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 		deny[action] = true
 	}
 
-	denied, _, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
+	denied, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -292,7 +292,7 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 func TestResolveAuditNamespace(t *testing.T) {
 	t.Parallel()
 
-	handler, _, _ := newTestHandler(t)
+	handler := newTestHandler(t)
 
 	var resolve apitaudit.ObjectResolver
 
@@ -349,8 +349,8 @@ func TestRoutesAuthorizeTheNamespace(t *testing.T) {
 	t.Parallel()
 
 	for _, route := range auditRoutes(t) {
-		recorder := &recordingAuthorizer{}
-		handler, _, _ := newEnforcingHandler(t, recorder)
+		recorder := &recordingAuthorizer{calls: nil}
+		handler, _ := newEnforcingHandler(t, recorder)
 
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -383,7 +383,7 @@ func TestRoutesAuthorizeTheNamespace(t *testing.T) {
 func auditRoutes(t *testing.T) []apitaudit.Route {
 	t.Helper()
 
-	handler, _, _ := newTestHandler(t)
+	handler := newTestHandler(t)
 
 	return handler.Routes()
 }
