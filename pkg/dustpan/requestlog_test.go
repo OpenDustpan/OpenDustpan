@@ -214,6 +214,7 @@ func seedNamespace(t *testing.T, st *sqlite.Store, name string) {
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(region),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -433,7 +434,7 @@ func TestStateUploadLogsPatternNotToken(t *testing.T) {
 		Outputs: nil,
 		Serial:  1,
 		Force:   false,
-	})
+	}, namespace.Overrides{Forced: false, Unlocked: false})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)
 	}

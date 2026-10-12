@@ -30,9 +30,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Kind names the kind of access that an entry records. Only the two values
-// below exist, so a reader never confuses a tool that needed secrets with a
-// person who asked to see one.
+// Kind names the kind of access that an entry records. Only the values below
+// exist, so a reader never confuses a tool that needed secrets with a person
+// who asked to see one, or with a person who used an override.
 type Kind string
 
 // Kinds known to the audit log.
@@ -43,6 +43,9 @@ const (
 	// KindReveal records that a person asked to see a secret value, through
 	// the console, a CLI or the API.
 	KindReveal Kind = "reveal"
+	// KindOverride records that a person used an override of ADR 44: a forced
+	// write, a write without the lock, or an unfenced force-unlock.
+	KindOverride Kind = "override"
 )
 
 // Channel names where the request came from, as the client declares it.
@@ -183,7 +186,7 @@ func (e Entry) validateHow() error {
 	switch {
 	case e.Channel != ChannelAPI && e.Channel != ChannelConsole:
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
-	case e.Kind != KindToolOperation && e.Kind != KindReveal:
+	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)

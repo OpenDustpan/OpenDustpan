@@ -413,9 +413,9 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks, fenced_by
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 )
 `
 
@@ -440,6 +440,7 @@ type CreateStateVersionParams struct {
 	Sealed            bool
 	SensitiveMarks    []byte
 	FencedBy          string
+	UnlockedWrite     bool
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -464,6 +465,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.Sealed,
 		arg.SensitiveMarks,
 		arg.FencedBy,
+		arg.UnlockedWrite,
 	)
 	return err
 }
@@ -516,8 +518,9 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 const createWorkspace = `-- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
+    allow_forced_writes, allow_unlocked_writes
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT DO NOTHING
 `
 
@@ -533,6 +536,8 @@ type CreateWorkspaceParams struct {
 	CurrentStateVersionID string
 	CreatedAtMs           int64
 	UpdatedAtMs           int64
+	AllowForcedWrites     bool
+	AllowUnlockedWrites   bool
 }
 
 func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (int64, error) {
@@ -548,6 +553,8 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		arg.CurrentStateVersionID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.AllowForcedWrites,
+		arg.AllowUnlockedWrites,
 	)
 	if err != nil {
 		return 0, err
@@ -903,7 +910,7 @@ const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by
+       sv.sensitive_marks, sv.fenced_by, unlocked_write
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -935,6 +942,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.Sealed,
 		&i.SensitiveMarks,
 		&i.FencedBy,
+		&i.UnlockedWrite,
 	)
 	return i, err
 }
@@ -1039,7 +1047,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 }
 
 const getNamespace = `-- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 WHERE name = $1
 `
@@ -1052,6 +1060,8 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 		&i.HomeRegion,
 		&i.FailoverVersion,
 		&i.CreatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
 	)
 	return i, err
 }
@@ -1193,7 +1203,7 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE id = $1
 `
@@ -1222,6 +1232,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.Sealed,
 		&i.SensitiveMarks,
 		&i.FencedBy,
+		&i.UnlockedWrite,
 	)
 	return i, err
 }
@@ -1336,7 +1347,7 @@ func (q *Queries) GetUpdateLeaseForShare(ctx context.Context, arg GetUpdateLease
 
 const getWorkspace = `-- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = $1 AND name = $2
 `
@@ -1361,13 +1372,15 @@ func (q *Queries) GetWorkspace(ctx context.Context, arg GetWorkspaceParams) (Wor
 		&i.CurrentStateVersionID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
 	)
 	return i, err
 }
 
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1
 `
@@ -1387,6 +1400,8 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.CurrentStateVersionID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
 	)
 	return i, err
 }
@@ -1765,7 +1780,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -1808,6 +1823,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.Sealed,
 			&i.SensitiveMarks,
 			&i.FencedBy,
+			&i.UnlockedWrite,
 		); err != nil {
 			return nil, err
 		}
@@ -1860,7 +1876,7 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 }
 
 const listNamespaces = `-- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 ORDER BY name
 `
@@ -1879,6 +1895,8 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 			&i.HomeRegion,
 			&i.FailoverVersion,
 			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
 		); err != nil {
 			return nil, err
 		}
@@ -2104,7 +2122,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) 
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -2149,6 +2167,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.Sealed,
 			&i.SensitiveMarks,
 			&i.FencedBy,
+			&i.UnlockedWrite,
 		); err != nil {
 			return nil, err
 		}
@@ -2163,7 +2182,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
 ORDER BY id ASC
@@ -2202,6 +2221,7 @@ func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion
 			&i.Sealed,
 			&i.SensitiveMarks,
 			&i.FencedBy,
+			&i.UnlockedWrite,
 		); err != nil {
 			return nil, err
 		}
@@ -2290,7 +2310,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 
 const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = $1
 ORDER BY name
@@ -2317,6 +2337,8 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 			&i.CurrentStateVersionID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
 		); err != nil {
 			return nil, err
 		}
@@ -2357,7 +2379,7 @@ func (q *Queries) LockStackForUpdates(ctx context.Context, arg LockStackForUpdat
 
 const lockWorkspaceForDeclare = `-- name: LockWorkspaceForDeclare :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1
 FOR UPDATE
@@ -2380,13 +2402,15 @@ func (q *Queries) LockWorkspaceForDeclare(ctx context.Context, id string) (Works
 		&i.CurrentStateVersionID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
 	)
 	return i, err
 }
 
 const lockWorkspaceForFinalize = `-- name: LockWorkspaceForFinalize :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1
 FOR UPDATE
@@ -2409,6 +2433,8 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 		&i.CurrentStateVersionID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
 	)
 	return i, err
 }
@@ -2604,19 +2630,22 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 const saveWorkspace = `-- name: SaveWorkspace :execrows
 UPDATE workspaces
 SET revision = $1, lock_id = $2, lock_holder = $3,
-    lock_reason = $4, locked_at_ms = $5, updated_at_ms = $6
-WHERE id = $7 AND revision = $8
+    lock_reason = $4, locked_at_ms = $5, updated_at_ms = $6,
+    allow_forced_writes = $7, allow_unlocked_writes = $8
+WHERE id = $9 AND revision = $10
 `
 
 type SaveWorkspaceParams struct {
-	Revision         int64
-	LockID           string
-	LockHolder       string
-	LockReason       string
-	LockedAtMs       int64
-	UpdatedAtMs      int64
-	ID               string
-	ExpectedRevision int64
+	Revision            int64
+	LockID              string
+	LockHolder          string
+	LockReason          string
+	LockedAtMs          int64
+	UpdatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+	ID                  string
+	ExpectedRevision    int64
 }
 
 // A compare-and-swap: it changes nothing unless the stored revision is the
@@ -2629,6 +2658,8 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.LockReason,
 		arg.LockedAtMs,
 		arg.UpdatedAtMs,
+		arg.AllowForcedWrites,
+		arg.AllowUnlockedWrites,
 		arg.ID,
 		arg.ExpectedRevision,
 	)
@@ -2677,6 +2708,27 @@ type SetInstallationStateIfParams struct {
 // nothing when the stored state differs or the row is missing.
 func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallationStateIfParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setInstallationStateIf, arg.State, arg.State_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setNamespaceOverrides = `-- name: SetNamespaceOverrides :execrows
+UPDATE namespaces
+SET allow_forced_writes = $1, allow_unlocked_writes = $2
+WHERE name = $3
+`
+
+type SetNamespaceOverridesParams struct {
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+	Name                string
+}
+
+// Replaces the override switches of one namespace (ADR 44, decision 6).
+func (q *Queries) SetNamespaceOverrides(ctx context.Context, arg SetNamespaceOverridesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setNamespaceOverrides, arg.AllowForcedWrites, arg.AllowUnlockedWrites, arg.Name)
 	if err != nil {
 		return 0, err
 	}

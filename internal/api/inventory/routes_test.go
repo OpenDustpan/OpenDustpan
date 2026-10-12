@@ -53,6 +53,7 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 		Name:            "acme",
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -516,4 +517,9 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 // containsCall reports whether calls holds want.
 func containsCall(calls []recordedCall, want recordedCall) bool {
 	return slices.Contains(calls, want)
+}
+
+// SetOverrides is not used by this fake.
+func (homedNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
 }

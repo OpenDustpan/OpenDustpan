@@ -129,6 +129,7 @@ func seedCanaryNamespace(t *testing.T, st *sqlite.Store) {
 		Name:            namespace.Name("acme"),
 		HomeRegion:      namespace.Region(region),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)

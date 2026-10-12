@@ -1,0 +1,192 @@
+package tfe
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+// errOverrideBody names the body that a switch change needs. Its text is the
+// detail of the 400 answer.
+var errOverrideBody = errors.New("the body must set allow-forced-writes and allow-unlocked-writes")
+
+// overrideSwitchesBody is the JSON body of the override switches of a unit
+// (ADR 44, decision 6). The unit switch narrows the namespace switch: an
+// override needs both.
+type overrideSwitchesBody struct {
+	AllowForcedWrites   bool `json:"allow-forced-writes"`   //nolint:tagliatelle // The TFE-style wire name; it must not change.
+	AllowUnlockedWrites bool `json:"allow-unlocked-writes"` //nolint:tagliatelle // The TFE-style wire name; it must not change.
+}
+
+// overrideSwitchesOf returns the body that shows ov.
+func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
+	return overrideSwitchesBody{
+		AllowForcedWrites:   ov.Forced,
+		AllowUnlockedWrites: ov.Unlocked,
+	}
+}
+
+// allowance returns the overrides that the caller may use on the unit for one
+// request: the switch of the namespace narrowed by the switch of the unit, and
+// the action of the override. It also reports whether the unit is locked. It
+// refuses nothing: the domain refuses an override that the result does not
+// allow (ADR 44, decisions 4, 5 and 8).
+func (h *Handler) allowance(
+	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
+) (namespace.Overrides, bool, error) {
+	w, err := h.workspaces.GetByID(ctx, id)
+	if err != nil {
+		return namespace.Overrides{}, false, err
+	}
+
+	ns, err := h.namespaces.Get(ctx, w.Ref.Namespace)
+	if err != nil {
+		return namespace.Overrides{}, false, err
+	}
+
+	switches := ns.Overrides.And(w.Overrides)
+
+	return namespace.Overrides{
+		Forced:   switches.Forced && h.permits(ctx, p, identity.ActionUnitWriteForced, obj),
+		Unlocked: switches.Unlocked && h.permits(ctx, p, identity.ActionUnitWriteUnlocked, obj),
+	}, w.Lock.Locked(), nil
+}
+
+// permits reports whether the principal may do action on obj.
+func (h *Handler) permits(ctx context.Context, p identity.Principal, action identity.Action, obj identity.Object) bool {
+	return h.authz.Authorize(ctx, p, action, obj) == nil
+}
+
+// appendOverrideAudit writes the audit entry of one allowed override: the
+// action, the unit, and the version it wrote (ADR 44, decision 7). A nil audit
+// store writes no entry. It returns the append error, so the route answers
+// 500 when the entry is lost.
+func (h *Handler) appendOverrideAudit(
+	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
+) error {
+	if h.audit == nil {
+		return nil
+	}
+
+	ctx := r.Context()
+
+	entry := audit.Entry{
+		At:         time.Now().UTC(),
+		Namespace:  obj.Namespace(),
+		Subject:    p.Subject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(action),
+		Object:     obj.String(),
+		Version:    version,
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   sourceIP(r),
+		UserAgent:  truncateUserAgent(r.UserAgent()),
+		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:       audit.KindOverride,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  requestid.FromContext(ctx),
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+
+	ns, err := h.namespaces.Get(ctx, entry.Namespace)
+	if err != nil {
+		return err
+	}
+
+	_, err = h.audit.Append(ctx, ns.Fence(), entry)
+
+	return err
+}
+
+// overrideRoutes returns the override switch rows of the route table: a read
+// and a change of the switches of one unit (ADR 17, ADR 44 decision 6).
+func (h *Handler) overrideRoutes() []Route {
+	return []Route{
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/workspaces/{id}/override-switches",
+			// Reading the switches needs unit:read. The body shows the
+			// switches of the unit, not of its namespace.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.readOverrideSwitches,
+		},
+		{
+			Method: http.MethodPut,
+			Path:   "/api/v2/workspaces/{id}/override-switches",
+			// Changing the switches needs unit:set-overrides. A switch set on
+			// a unit only narrows its namespace switch.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitSetOverrides},
+			Resolve: h.resolveWorkspaceID,
+			Serve:   h.writeOverrideSwitches,
+		},
+	}
+}
+
+// readOverrideSwitches serves GET /api/v2/workspaces/{id}/override-switches.
+func (h *Handler) readOverrideSwitches(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	ws, err := h.workspaces.GetByID(ctx, workspace.ID(r.PathValue("id")))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, overrideSwitchesOf(ws.Overrides))
+}
+
+// writeOverrideSwitches serves PUT /api/v2/workspaces/{id}/override-switches.
+// It answers 200 with the switches as stored. An empty or malformed body answers
+// 400 and changes no switch.
+func (h *Handler) writeOverrideSwitches(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		h.writeError(ctx, w, errInvalidBody)
+
+		return
+	}
+
+	var in overrideSwitchesBody
+	if decodeErr := json.NewDecoder(bytes.NewReader(body)).Decode(&in); decodeErr != nil {
+		h.writeJSONAPIError(ctx, w, http.StatusBadRequest, "bad request", errOverrideBody.Error())
+
+		return
+	}
+
+	ws, err := h.workspaces.SetOverrides(
+		ctx,
+		workspace.ID(r.PathValue("id")),
+		namespace.Overrides{Forced: in.AllowForcedWrites, Unlocked: in.AllowUnlockedWrites},
+	)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, overrideSwitchesOf(ws.Overrides))
+}

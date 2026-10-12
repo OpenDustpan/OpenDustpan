@@ -42,6 +42,8 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 			LockReason:            row.LockReason,
 			LockedAtMs:            row.LockedAtMs,
 			CurrentStateVersionID: row.CurrentStateVersion,
+			AllowForcedWrites:     row.AllowForcedWrites,
+			AllowUnlockedWrites:   row.AllowUnlockedWrites,
 			CreatedAtMs:           row.CreatedAtMs,
 			UpdatedAtMs:           row.UpdatedAtMs,
 		})
@@ -122,14 +124,16 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
-			Revision:         row.Revision,
-			LockID:           row.LockID,
-			LockHolder:       row.LockHolder,
-			LockReason:       row.LockReason,
-			LockedAtMs:       row.LockedAtMs,
-			UpdatedAtMs:      row.UpdatedAtMs,
-			ID:               row.ID,
-			ExpectedRevision: row.Revision - 1,
+			Revision:            row.Revision,
+			LockID:              row.LockID,
+			LockHolder:          row.LockHolder,
+			LockReason:          row.LockReason,
+			LockedAtMs:          row.LockedAtMs,
+			UpdatedAtMs:         row.UpdatedAtMs,
+			ID:                  row.ID,
+			AllowForcedWrites:   row.AllowForcedWrites,
+			AllowUnlockedWrites: row.AllowUnlockedWrites,
+			ExpectedRevision:    row.Revision - 1,
 		})
 		if err != nil {
 			return fmt.Errorf("update workspace: %w", err)
@@ -228,12 +232,19 @@ func (s *Store) CreateStateVersion(
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if _, err := q.GetWorkspaceByID(ctx, row.WorkspaceID); err != nil {
+		wrow, err := q.GetWorkspaceByID(ctx, row.WorkspaceID)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return workspace.ErrNotFound
 			}
 
 			return fmt.Errorf("read workspace: %w", err)
+		}
+
+		if sv.UnlockedWrite {
+			if switchErr := checkUnlockedSwitches(ctx, q, wrow); switchErr != nil {
+				return switchErr
+			}
 		}
 
 		pending, err := q.CountPendingStateVersions(ctx, row.WorkspaceID)
@@ -585,14 +596,16 @@ func fenceAndUnlockInTx(
 	released := codec.ToWorkspaceRow(w)
 
 	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
-		Revision:         released.Revision,
-		LockID:           released.LockID,
-		LockHolder:       released.LockHolder,
-		LockReason:       released.LockReason,
-		LockedAtMs:       released.LockedAtMs,
-		UpdatedAtMs:      released.UpdatedAtMs,
-		ID:               released.ID,
-		ExpectedRevision: released.Revision - 1,
+		Revision:            released.Revision,
+		LockID:              released.LockID,
+		LockHolder:          released.LockHolder,
+		LockReason:          released.LockReason,
+		LockedAtMs:          released.LockedAtMs,
+		UpdatedAtMs:         released.UpdatedAtMs,
+		ID:                  released.ID,
+		ExpectedRevision:    released.Revision - 1,
+		AllowForcedWrites:   false,
+		AllowUnlockedWrites: false,
 	})
 	if err != nil {
 		return fmt.Errorf("release workspace lock: %w", err)
@@ -718,8 +731,14 @@ func checkFinalizeGuards(
 		return db.Workspace{}, err
 	}
 
-	if lockErr := checkFinalizeLock(wrow, row.LockID); lockErr != nil {
-		return db.Workspace{}, lockErr
+	// A version declared without the lock (ADR 44, decision 5) has no lock to
+	// keep: its finalize skips the lock check.
+	if !row.UnlockedWrite {
+		if lockErr := checkFinalizeLock(wrow, row.LockID); lockErr != nil {
+			return db.Workspace{}, lockErr
+		}
+	} else if switchErr := checkUnlockedSwitches(ctx, q, wrow); switchErr != nil {
+		return db.Workspace{}, switchErr
 	}
 
 	if !sv.Force {
@@ -800,6 +819,30 @@ func workspaceForFinalize(ctx context.Context, q *db.Queries, workspaceID string
 	return wrow, nil
 }
 
+// checkUnlockedSwitches refuses an unlocked write when the namespace or the
+// unit does not allow it. It reads both switches in the caller's transaction,
+// so a switch that is turned off before the write commits stops the write
+// (ADR 44, decisions 5 and 6).
+func checkUnlockedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) error {
+	ns, err := q.GetNamespace(ctx, wrow.Namespace)
+	if errors.Is(err, sql.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read namespace: %w", err)
+	}
+
+	if !ns.AllowUnlockedWrites || !wrow.AllowUnlockedWrites {
+		return fmt.Errorf(
+			"%w: the unlocked-write switch of the namespace or the unit is off",
+			workspace.ErrOverrideRefused,
+		)
+	}
+
+	return nil
+}
+
 // checkFinalizeLock checks that the workspace is still held by the lock the
 // version was declared under.
 func checkFinalizeLock(wrow db.Workspace, lockID string) error {
@@ -848,6 +891,8 @@ func workspaceFromRow(row db.Workspace) workspace.Workspace {
 		LockHolder:          row.LockHolder,
 		LockReason:          row.LockReason,
 		CurrentStateVersion: row.CurrentStateVersionID,
+		AllowForcedWrites:   row.AllowForcedWrites,
+		AllowUnlockedWrites: row.AllowUnlockedWrites,
 		Revision:            row.Revision,
 		LockedAtMs:          row.LockedAtMs,
 		CreatedAtMs:         row.CreatedAtMs,
@@ -874,6 +919,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
 		FencedBy:          row.FencedBy,
+		UnlockedWrite:     row.UnlockedWrite,
 		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
@@ -966,6 +1012,7 @@ func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersi
 		FinalizedAtMs:     row.FinalizedAtMs,
 		RestoredFrom:      row.RestoredFrom,
 		FencedBy:          row.FencedBy,
+		UnlockedWrite:     row.UnlockedWrite,
 	})
 	if err != nil {
 		return fmt.Errorf("insert state version: %w", err)

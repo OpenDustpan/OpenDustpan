@@ -21,7 +21,13 @@ func (f maskedFixture) pushMaskedOther(
 
 	ctx := t.Context()
 
-	pending, err := f.svc.BeginState(ctx, ws.ID, "alice", newState("l1", serial, content))
+	pending, err := f.svc.BeginState(
+		ctx,
+		ws.ID,
+		"alice",
+		newState("l1", serial, content),
+		noOverrides(),
+	)
 	if err != nil {
 		t.Fatalf("begin serial %d: %v", serial, err)
 	}

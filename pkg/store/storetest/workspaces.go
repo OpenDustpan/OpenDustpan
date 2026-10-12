@@ -192,6 +192,34 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "a fence whose read of the current version is stale is ErrConcurrentModification",
 			test: testFenceStaleCurrent,
 		},
+		{
+			name: "a new namespace and a new unit allow no override",
+			test: testOverridesDefaultOff,
+		},
+		{
+			name: "a namespace override switch round-trips, and a missing namespace is ErrNotFound",
+			test: testNamespaceOverridesRoundTrip,
+		},
+		{
+			name: "a unit override switch round-trips by ID and by name",
+			test: testUnitOverridesRoundTrip,
+		},
+		{
+			name: "an unlocked write finalizes on an unlocked unit and keeps its flag",
+			test: testUnlockedWriteFinalizes,
+		},
+		{
+			name: "a version without the unlocked-write flag does not finalize on an unlocked unit",
+			test: testUnlockedFinalizeNeedsTheFlag,
+		},
+		{
+			name: "a declare of an unlocked write is ErrOverrideRefused unless both switches are on",
+			test: testUnlockedDeclareNeedsSwitches,
+		},
+		{
+			name: "a switch turned off before an unlocked write finalizes stops the finalize",
+			test: testUnlockedFinalizeNeedsSwitches,
+		},
 	}
 
 	for _, tc := range cases {
@@ -210,6 +238,7 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -238,6 +267,7 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 
@@ -334,6 +364,7 @@ func newPendingVersion(
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		UnlockedWrite:   false,
 	}
 }
 
@@ -537,7 +568,13 @@ func testDuplicateWorkspace(t *testing.T, s WorkspaceStore) {
 func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
-	ghost := namespace.Namespace{CreatedAt: now(), Name: "ghost", HomeRegion: "eu-west", FailoverVersion: 1}
+	ghost := namespace.Namespace{
+		CreatedAt:       now(),
+		Name:            "ghost",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	w := newTestWorkspace(ghost, mustWorkspaceName(t, "network"))
 
 	if err := s.CreateWorkspace(t.Context(), w, ghost.Fence()); !errors.Is(err, namespace.ErrNotFound) {
@@ -3117,6 +3154,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
+		UnlockedWrite:   false,
 	}
 }
 

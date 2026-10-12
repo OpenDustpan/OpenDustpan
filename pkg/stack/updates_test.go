@@ -455,47 +455,6 @@ func (m *memUpdates) ListEvents(
 	return out, nil
 }
 
-// addStack registers a stack with a stable ID under ref. Callers hold no lock.
-func (m *memUpdates) addStack(ref stack.Ref, id stack.ID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.stacks[ref] = stack.Stack{CreatedAt: time.Time{}, UpdatedAt: time.Time{}, Tags: nil, Ref: ref, ID: id, Version: 0}
-}
-
-// runningUnder reports whether update id is running under lease; callers hold mu.
-func (m *memUpdates) runningUnder(id stack.UpdateID, lease token.Digest) bool {
-	u := m.updates[id]
-
-	return u.Status == stack.StatusRunning && u.Lease.Digest == lease
-}
-
-// checkFence reports whether fence authorizes a write to ref. Namespaces the
-// store does not know stay lenient: the service tests drive this store
-// without creating any, so their writes skip the check. Callers hold mu.
-func (m *memUpdates) checkFence(ref stack.Ref, fence namespace.Fence) error {
-	ns, ok := m.namespaces[ref.Namespace]
-	if !ok {
-		return nil
-	}
-
-	if fence != ns.Fence() {
-		return namespace.ErrFenced
-	}
-
-	return nil
-}
-
-// withSize fills the CheckpointBytes of u from its checkpoint row, or 0 when
-// it saved none. Callers hold mu.
-func (m *memUpdates) withSize(u stack.Update) stack.Update {
-	if cp, ok := m.checkpoints[u.ID]; ok {
-		u.CheckpointBytes = int64(len(cp.Deployment))
-	}
-
-	return u
-}
-
 // clock is a settable time source.
 type clock struct {
 	now time.Time
@@ -630,7 +589,13 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
-	ns := namespace.Namespace{CreatedAt: clk.now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       clk.now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
@@ -1869,4 +1834,50 @@ func (m *failBlob) Delete(ctx context.Context, key blob.Key) error {
 	}
 
 	return m.memBlob.Delete(ctx, key)
+}
+
+// SetOverrides is not used by this fake.
+func (*memUpdates) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
+}
+
+// addStack registers a stack with a stable ID under ref. Callers hold no lock.
+func (m *memUpdates) addStack(ref stack.Ref, id stack.ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.stacks[ref] = stack.Stack{CreatedAt: time.Time{}, UpdatedAt: time.Time{}, Tags: nil, Ref: ref, ID: id, Version: 0}
+}
+
+// runningUnder reports whether update id is running under lease; callers hold mu.
+func (m *memUpdates) runningUnder(id stack.UpdateID, lease token.Digest) bool {
+	u := m.updates[id]
+
+	return u.Status == stack.StatusRunning && u.Lease.Digest == lease
+}
+
+// checkFence reports whether fence authorizes a write to ref. Namespaces the
+// store does not know stay lenient: the service tests drive this store
+// without creating any, so their writes skip the check. Callers hold mu.
+func (m *memUpdates) checkFence(ref stack.Ref, fence namespace.Fence) error {
+	ns, ok := m.namespaces[ref.Namespace]
+	if !ok {
+		return nil
+	}
+
+	if fence != ns.Fence() {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// withSize fills the CheckpointBytes of u from its checkpoint row, or 0 when
+// it saved none. Callers hold mu.
+func (m *memUpdates) withSize(u stack.Update) stack.Update {
+	if cp, ok := m.checkpoints[u.ID]; ok {
+		u.CheckpointBytes = int64(len(cp.Deployment))
+	}
+
+	return u
 }

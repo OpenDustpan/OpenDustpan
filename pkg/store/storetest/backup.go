@@ -173,6 +173,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		Name:            "other",
 		HomeRegion:      "us-east",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, other); err != nil {

@@ -734,7 +734,13 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
-	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	acme := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       noOverrides(),
+	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -785,7 +791,13 @@ func (f maskedFixture) pushMasked(
 
 	ctx := t.Context()
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", serial, content))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", serial, content),
+		noOverrides(),
+	)
 	if err != nil {
 		t.Fatalf("begin serial %d: %v", serial, err)
 	}

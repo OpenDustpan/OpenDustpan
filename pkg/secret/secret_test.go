@@ -131,7 +131,13 @@ func (oneNamespace) CreateNamespace(context.Context, namespace.Namespace) error 
 }
 
 func (oneNamespace) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
-	return namespace.Namespace{CreatedAt: time.Time{}, Name: name, HomeRegion: "local", FailoverVersion: 1}, nil
+	return namespace.Namespace{
+		CreatedAt:       time.Time{},
+		Name:            name,
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}, nil
 }
 
 func (oneNamespace) ListNamespaces(_ context.Context) ([]namespace.Namespace, error) {

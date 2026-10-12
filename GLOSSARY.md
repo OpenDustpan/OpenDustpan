@@ -156,6 +156,18 @@ _Avoid_: Project (without a qualifier), folder
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
 
+**Override switch**:
+A setting of a namespace or of a unit that allows an override (ADR 44, decision 6). Both settings are off by default. A unit setting only narrows the setting of its namespace.
+_Avoid_: Flag, toggle
+
+**Forced write**:
+A state write that skips the lineage and serial checks, as `tofu state push -force` does. It needs the action `unit:write-forced` and both override switches on.
+_Avoid_: Force push, override (alone)
+
+**Unlocked write**:
+A state write to a workspace that no principal holds, as `tofu apply -lock=false` does. It needs the action `unit:write-unlocked` and both override switches on.
+_Avoid_: Lockless write
+
 **State version**:
 One immutable copy of the state of a workspace, with a lineage and a serial.
 _Avoid_: Snapshot, revision, checkpoint

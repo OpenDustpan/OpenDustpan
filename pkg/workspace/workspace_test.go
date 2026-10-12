@@ -87,6 +87,21 @@ func (m *memStore) CreateNamespace(_ context.Context, ns namespace.Namespace) er
 	return nil
 }
 
+func (m *memStore) SetOverrides(_ context.Context, name namespace.Name, ov namespace.Overrides) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ns, ok := m.namespaces[name]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	ns.Overrides = ov
+	m.namespaces[name] = ns
+
+	return nil
+}
+
 func (m *memStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -283,8 +298,15 @@ func (m *memStore) CreateStateVersion(
 		return err
 	}
 
-	if _, ok := m.workspaces[sv.Workspace]; !ok {
+	w, ok := m.workspaces[sv.Workspace]
+	if !ok {
 		return workspace.ErrNotFound
+	}
+
+	if sv.UnlockedWrite {
+		if err := m.checkUnlockedSwitches(w); err != nil {
+			return err
+		}
 	}
 
 	pending := 0
@@ -432,11 +454,21 @@ func (m *memStore) FinalizeStateVersion(
 // checkMemFinalize runs the lock, lineage and serial checks of a finalize.
 // The caller holds mu.
 func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVersion) error {
-	switch {
-	case !w.Lock.Locked():
-		return workspace.ErrNotLocked
-	case w.Lock.ID != sv.LockID:
-		return workspace.ErrLockedByOther
+	// A version declared without the lock (ADR 44, decision 5) has no lock to keep,
+	// but its switches must still be on when it finalizes (ADR 44, decision 6).
+	if sv.UnlockedWrite {
+		if err := m.checkUnlockedSwitches(w); err != nil {
+			return err
+		}
+	}
+
+	if !sv.UnlockedWrite {
+		switch {
+		case !w.Lock.Locked():
+			return workspace.ErrNotLocked
+		case w.Lock.ID != sv.LockID:
+			return workspace.ErrLockedByOther
+		}
 	}
 
 	if cur, ok := m.current[sv.Workspace]; ok && !sv.Force {
@@ -773,7 +805,13 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
-	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	acme := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       noOverrides(),
+	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -849,7 +887,13 @@ func newState(lineage string, serial int64, content string) workspace.NewState {
 func (f fixture) push(t *testing.T, in workspace.NewState, content string) error {
 	t.Helper()
 
-	pending, err := f.svc.BeginState(t.Context(), f.ws.ID, "alice", in)
+	pending, err := f.svc.BeginState(
+		t.Context(),
+		f.ws.ID,
+		"alice",
+		in,
+		forcedOnly(),
+	)
 	if err != nil {
 		return err
 	}
@@ -893,7 +937,7 @@ func TestLocking(t *testing.T) {
 		t.Errorf("unlock by another: %v, want ErrLockedByOther", err)
 	}
 
-	if _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Errorf("force unlock: %v", err)
 	}
 
@@ -962,7 +1006,8 @@ func TestStateVersions(t *testing.T) {
 		Force:   false,
 	}
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized); !errors.Is(err, workspace.ErrTooLarge) {
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized, forcedOnly())
+	if !errors.Is(err, workspace.ErrTooLarge) {
 		t.Errorf("oversized outputs: %v, want ErrTooLarge", err)
 	}
 
@@ -981,20 +1026,21 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 
 	forced := workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true}
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced); !errors.Is(err, workspace.ErrNotLocked) {
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
+	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("forced begin without the lock: %v, want ErrNotLocked", err)
 	}
 
-	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
+	if _, lockErr := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); lockErr != nil {
+		t.Fatalf("lock: %v", lockErr)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced)
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
 	if err != nil {
 		t.Fatalf("forced begin: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1049,7 +1095,13 @@ func TestUploadCapability(t *testing.T) {
 		return uploadErr
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1076,7 +1128,13 @@ func TestUploadCapability(t *testing.T) {
 		t.Errorf("retried upload with other content: %v, want ErrUploadDenied", err)
 	}
 
-	late, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	late, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1106,12 +1164,18 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("push v1: %v", err)
 	}
 
-	stale, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 5, "v5"))
+	stale, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 5, "v5"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin v5: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1149,12 +1213,18 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	stale, err := f.svc.BeginState(ctx, f.ws.ID, "ci", newState("l1", 1, "v1"))
+	stale, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"ci",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err = f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -1216,7 +1286,13 @@ func TestReadState(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, beginErr := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
 	}
@@ -1303,7 +1379,13 @@ func TestChecksumMismatchDeletesBlob(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1410,7 +1492,13 @@ func TestTooLargeUploadDeletesBlob(t *testing.T) {
 
 	content := strings.Repeat("x", 65)
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, content))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, content),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1448,7 +1536,13 @@ func TestDiscardJSONRendering(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1492,7 +1586,13 @@ func TestDiscardJSONRendering(t *testing.T) {
 		t.Errorf("discard after finalize: %v", discardErr)
 	}
 
-	late, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	late, beginErr := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		forcedOnly(),
+	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
 	}
@@ -1525,20 +1625,20 @@ func TestPendingCap(t *testing.T) {
 	}
 
 	for _, serial := range []int64{1, 2} {
-		if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", serial, "v1")); err != nil {
-			t.Fatalf("begin serial %d: %v", serial, err)
+		in := newState("l1", serial, "v1")
+		if _, beginErr := svc.BeginState(ctx, f.ws.ID, "alice", in, forcedOnly()); beginErr != nil {
+			t.Fatalf("begin serial %d: %v", serial, beginErr)
 		}
 	}
 
-	if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); !errors.Is(
-		err, workspace.ErrTooManyPending,
-	) {
+	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly())
+	if !errors.Is(err, workspace.ErrTooManyPending) {
 		t.Fatalf("begin past the cap: %v, want ErrTooManyPending", err)
 	}
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+	if _, err = svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
 		t.Fatalf("begin after expiry: %v", err)
 	}
 
@@ -1581,7 +1681,7 @@ func unknownUpload(t *testing.T, f fixture, in workspace.NewState) workspace.Pen
 
 	ctx := t.Context()
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in)
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, forcedOnly())
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1646,7 +1746,7 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
 		t.Fatalf("begin within grace: %v", err)
 	}
 
@@ -1660,7 +1760,7 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.SweepGracePeriod)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1731,7 +1831,7 @@ func TestRetryAfterUnknownDeletesSupersededBlob(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1833,7 +1933,7 @@ func assertSweepCollectsOrphan(
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1940,7 +2040,7 @@ func TestSweepRetriesBlobDeletes(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1969,7 +2069,13 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 	}
 
 	// A finalized version names its blob for ever.
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -2001,7 +2107,7 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 	chtimesBlob(t, dir, stray, old)
 	chtimesBlob(t, dir, fresh, *f.now)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
@@ -2034,7 +2140,13 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	next, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"))
+	next, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin past grace with failing blobs: %v", err)
 	}
@@ -2069,7 +2181,7 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
 		t.Fatalf("begin after healing: %v", err)
 	}
 
@@ -2100,7 +2212,13 @@ func TestConcurrentBeginStateKeepsCap(t *testing.T) {
 
 	for i := range declares {
 		wg.Go(func() {
-			_, errs[i] = svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", int64(i+1), "v1"))
+			_, errs[i] = svc.BeginState(
+				ctx,
+				f.ws.ID,
+				"alice",
+				newState("l1", int64(i+1), "v1"),
+				forcedOnly(),
+			)
 		})
 	}
 
@@ -2152,7 +2270,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 
 	// One pending of the two the cap allows, so the two racing declares
 	// contend for the last slot.
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1")); err != nil {
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"), forcedOnly()); err != nil {
 		t.Fatalf("prefill: %v", err)
 	}
 
@@ -2161,10 +2279,22 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		_, errs[0] = first.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v1"))
+		_, errs[0] = first.BeginState(
+			ctx,
+			f.ws.ID,
+			"alice",
+			newState("l1", 2, "v1"),
+			forcedOnly(),
+		)
 	})
 	wg.Go(func() {
-		_, errs[1] = second.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v1"))
+		_, errs[1] = second.BeginState(
+			ctx,
+			f.ws.ID,
+			"alice",
+			newState("l1", 3, "v1"),
+			forcedOnly(),
+		)
 	})
 
 	gated.awaitCounts(t)
@@ -2339,7 +2469,13 @@ func concurrentUploadAcrossServicesOnce(t *testing.T) {
 		t.Fatalf("lock: %v", lockErr)
 	}
 
-	pending, beginErr := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, beginErr := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
 	}
@@ -2482,7 +2618,13 @@ func checkRejectedFinalizeDeletesBlob(t *testing.T, sentinel error) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -2515,7 +2657,13 @@ func TestDiscardJSONRenderingTooLarge(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -2555,7 +2703,13 @@ func TestDiscardJSONRenderingExpiryAfterFinalize(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -3025,7 +3179,13 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		t.Errorf("restore of a missing version: %v, want ErrStateVersionNotFound", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"))
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -3049,7 +3209,13 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		t.Fatalf("lock other: %v", err)
 	}
 
-	otherPending, err := f.svc.BeginState(ctx, other.ID, "alice", newState("l1", 1, "v1"))
+	otherPending, err := f.svc.BeginState(
+		ctx,
+		other.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		forcedOnly(),
+	)
 	if err != nil {
 		t.Fatalf("begin other: %v", err)
 	}
@@ -3487,7 +3653,13 @@ func newSealedFixture(t *testing.T) fixture {
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
-	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	acme := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       noOverrides(),
+	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -3624,7 +3796,7 @@ func uploadSealedState(t *testing.T, f fixture, content, outputValue string) wor
 		Outputs: sealedOutputsDoc(outputValue),
 		Serial:  1,
 		Force:   false,
-	})
+	}, forcedOnly())
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -3748,7 +3920,7 @@ func TestSealedDownloadTamper(t *testing.T) {
 		Outputs: nil,
 		Serial:  1,
 		Force:   false,
-	})
+	}, forcedOnly())
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -4040,4 +4212,19 @@ func readSealedBlobBytes(t *testing.T, f fixture, sv workspace.StateVersion) ([]
 	}
 
 	return data, nil
+}
+
+// checkUnlockedSwitches refuses an unlocked write when the namespace or the unit
+// switch is off. The caller holds mu.
+func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
+	ns, ok := m.namespaces[w.Ref.Namespace]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if !ns.Overrides.Unlocked || !w.Overrides.Unlocked {
+		return fmt.Errorf("%w: the unlocked-write switch is off", workspace.ErrOverrideRefused)
+	}
+
+	return nil
 }

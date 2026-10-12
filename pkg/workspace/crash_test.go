@@ -243,7 +243,7 @@ func beginCrash(
 ) workspace.PendingState {
 	t.Helper()
 
-	pending, err := service.BeginState(t.Context(), id, holder, in)
+	pending, err := service.BeginState(t.Context(), id, holder, in, noOverrides())
 	if err != nil {
 		t.Fatalf("begin state: %v", err)
 	}

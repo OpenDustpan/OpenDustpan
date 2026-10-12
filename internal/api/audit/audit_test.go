@@ -314,6 +314,7 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 		Name:            "acme",
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -575,4 +576,14 @@ func TestCheckChainFindsAChangedEntry(t *testing.T) {
 	if got.Valid || got.BadSequence != 1 {
 		t.Fatalf("check = %+v, want invalid with bad sequence 1", got)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (*memNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
+}
+
+// SetOverrides is not used by this fake.
+func (homedNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
 }

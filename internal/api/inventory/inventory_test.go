@@ -68,7 +68,13 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 		t.Fatalf("parse namespace: %v", err)
 	}
 
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: n, HomeRegion: "test-region", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            n,
+		HomeRegion:      "test-region",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -267,6 +273,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 		Name:            ns,
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	var count int64 = 3
@@ -862,4 +869,9 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (*memNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
 }

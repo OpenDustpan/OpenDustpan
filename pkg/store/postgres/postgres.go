@@ -144,6 +144,25 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
 }
 
+// SetOverrides implements namespace.Store. It replaces the override switches
+// of the namespace (ADR 44, decision 6).
+func (s *Store) SetOverrides(ctx context.Context, name namespace.Name, ov namespace.Overrides) error {
+	n, err := s.queries.SetNamespaceOverrides(ctx, db.SetNamespaceOverridesParams{
+		AllowForcedWrites:   ov.Forced,
+		AllowUnlockedWrites: ov.Unlocked,
+		Name:                name.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("update namespace overrides: %w", err)
+	}
+
+	if n == 0 {
+		return namespace.ErrNotFound
+	}
+
+	return nil
+}
+
 // ListNamespaces implements namespace.Store.
 func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
 	rows, err := s.queries.ListNamespaces(ctx)

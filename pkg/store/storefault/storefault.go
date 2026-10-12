@@ -163,6 +163,16 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	return s.inner.GetNamespace(ctx, name)
 }
 
+// SetOverrides replaces the override switches of a namespace, unless a fault
+// fires first.
+func (s *Store) SetOverrides(ctx context.Context, name namespace.Name, ov namespace.Overrides) error {
+	if err := s.before(ctx, "SetOverrides"); err != nil {
+		return err
+	}
+
+	return s.inner.SetOverrides(ctx, name, ov)
+}
+
 // ListNamespaces returns every namespace, unless a fault fires first.
 func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
 	if err := s.before(ctx, "ListNamespaces"); err != nil {

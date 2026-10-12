@@ -3865,6 +3865,7 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The stale job's declare after a force-unlock. It runs after the list, which
 	// counts the versions this scenario has written so far.
 	tofuForceUnlockFenceScenario(t, env)
+	tofuOverrideSwitchesScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
@@ -6019,8 +6020,10 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 
 	// The restore adds one version, and the apply after it adds one more: the
 	// restored version has the first greeting, so the apply changes the output.
-	if len(doc.Data) != 6 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 6", len(doc.Data))
+	// The override scenario before it wrote one version, so the list holds
+	// seven here.
+	if len(doc.Data) != 7 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 7", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
@@ -6058,8 +6061,10 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("decode state versions for restore: %v", err)
 	}
 
-	if len(doc.Data) != 4 {
-		t.Fatalf("list holds %d versions, want 4 before the restore", len(doc.Data))
+	// The override scenario wrote one version before the restore, so the list
+	// holds five here.
+	if len(doc.Data) != 5 {
+		t.Fatalf("list holds %d versions, want 5 before the restore", len(doc.Data))
 	}
 
 	// The first version is the oldest. The fence of the maintenance enter and

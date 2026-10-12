@@ -97,6 +97,7 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 		Name:            name,
 		HomeRegion:      testRegion,
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -570,9 +571,10 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Holder:   "admin",
 			Reason:   "apply",
 		},
-		ID:       "ws-1",
-		Ref:      workspace.Ref{Namespace: testNamespace, Name: parsed},
-		Revision: 2,
+		ID:        "ws-1",
+		Ref:       workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision:  2,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }
@@ -814,6 +816,7 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
 			FenceBy:         "",
+			UnlockedWrite:   false,
 		},
 	}
 
@@ -1278,4 +1281,9 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 	if u := f.updates.updates["u2"]; u.Status != stack.StatusRunning {
 		t.Fatalf("second raced update status = %q, want running: no rollback canceled it", u.Status)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+	return nil
 }

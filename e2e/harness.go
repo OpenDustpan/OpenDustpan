@@ -738,7 +738,7 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateV
 		Outputs: []byte(seedStateOutputs),
 		Serial:  serial,
 		Force:   false,
-	})
+	}, namespace.Overrides{Forced: false, Unlocked: false})
 	if beginErr != nil {
 		tb.Fatalf("begin seed state: %v", beginErr)
 	}
@@ -933,6 +933,12 @@ func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
+	return e.tfeStatusAs(ctx, token, method, path, body, "")
+}
+
+// tfeStatusAs is TFEStatus with a User-Agent of its own. An empty agent keeps the
+// client default, which the route coverage check counts as harness traffic.
+func (e *Env) tfeStatusAs(ctx context.Context, token, method, path, body, userAgent string) (int, string, error) {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
@@ -946,6 +952,10 @@ func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/vnd.api+json")
+	}
+
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
 	}
 
 	resp, err := e.client.Do(req)
@@ -1090,6 +1100,9 @@ func (e *Env) WorkspaceID(ctx context.Context, tb testing.TB) string {
 
 // APIStepSpec describes one TFE API step.
 type APIStepSpec struct {
+	// UserAgent sets the User-Agent of the request. Empty keeps the client
+	// default. A step that counts for route coverage names its own agent.
+	UserAgent string
 	// Check inspects the response body; nil means the status is enough.
 	Check func(body string) error
 	// Name labels the subtest, the report row and the requests the step makes.
@@ -1117,7 +1130,7 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 
 		var exitCode int
 
-		status, respBody, err := e.TFEStatus(ctx, token, spec.Method, spec.Path, spec.Body)
+		status, respBody, err := e.tfeStatusAs(ctx, token, spec.Method, spec.Path, spec.Body, spec.UserAgent)
 
 		switch {
 		case err != nil:

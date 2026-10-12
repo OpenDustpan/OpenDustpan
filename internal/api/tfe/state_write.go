@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -150,7 +151,7 @@ func (h *Handler) readCreateBody(w http.ResponseWriter, r *http.Request) ([]byte
 // the state version document holding the absolute upload URLs. A caller
 // without the lock gets 409.
 func (h *Handler) createStateVersion(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -166,7 +167,28 @@ func (h *Handler) createStateVersion(
 		return
 	}
 
-	pending, err := h.workspaces.BeginState(ctx, workspace.ID(r.PathValue("id")), p.Subject, in)
+	id := workspace.ID(r.PathValue("id"))
+
+	allow, locked, err := h.allowance(ctx, p, id, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// An unlocked write is an override: its audit entry is written before the
+	// declare, and a failed entry stops the declare (ADR 41, decision 5).
+	if allow.Unlocked && !locked {
+		version := strconv.FormatInt(in.Serial, 10)
+
+		if auditErr := h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteUnlocked, version); auditErr != nil {
+			h.writeError(ctx, w, auditErr)
+
+			return
+		}
+	}
+
+	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, allow)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

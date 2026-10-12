@@ -14,10 +14,12 @@ import (
 
 // NamespaceRow is the column representation of a namespace.
 type NamespaceRow struct {
-	Name            string
-	HomeRegion      string
-	FailoverVersion int64
-	CreatedAtMs     int64
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
 }
 
 // StackRow is the column representation of a stack. Tags live in the
@@ -83,6 +85,7 @@ func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 		CreatedAt:       FromMillis(row.CreatedAtMs),
 		Name:            namespace.Name(row.Name),
 		HomeRegion:      namespace.Region(row.HomeRegion),
+		Overrides:       namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
 		FailoverVersion: row.FailoverVersion,
 	}
 }
@@ -90,10 +93,12 @@ func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 // ToNamespaceRow converts a domain namespace into a row.
 func ToNamespaceRow(ns namespace.Namespace) NamespaceRow {
 	return NamespaceRow{
-		Name:            ns.Name.String(),
-		HomeRegion:      ns.HomeRegion.String(),
-		FailoverVersion: ns.FailoverVersion,
-		CreatedAtMs:     Millis(ns.CreatedAt),
+		Name:                ns.Name.String(),
+		HomeRegion:          ns.HomeRegion.String(),
+		FailoverVersion:     ns.FailoverVersion,
+		CreatedAtMs:         Millis(ns.CreatedAt),
+		AllowForcedWrites:   ns.Overrides.Forced,
+		AllowUnlockedWrites: ns.Overrides.Unlocked,
 	}
 }
 

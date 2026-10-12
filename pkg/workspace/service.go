@@ -290,6 +290,7 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 		ID:        ID(ident.NewID("ws-")),
 		Ref:       ref,
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
@@ -352,28 +353,75 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 // next serial and by as the principal that forced the unlock (ADR 44, decision
 // 1). A workspace without a state only releases its lock. by is the subject of
 // the principal that asks.
-func (s *Service) ForceUnlock(ctx context.Context, id ID, by string) (Workspace, error) {
+//
+// The bool result reports an unfenced release: the caller's forced-write
+// override let the release go through for a client-encrypted state, which
+// has no fence (ADR 44, decision 4). Without the override that state is
+// refused with ErrClientEncrypted and the lock stays held. record runs before
+// an unfenced release and writes its audit entry; a failure stops the release
+// (ADR 41 decision 5). A nil record writes nothing.
+func (s *Service) ForceUnlock(
+	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
+) (Workspace, bool, error) {
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
-		return Workspace{}, err
+		return Workspace{}, false, err
 	}
 
 	if !w.Lock.Locked() {
-		return Workspace{}, ErrNotLocked
+		return Workspace{}, false, ErrNotLocked
 	}
 
 	cur, err := s.states.CurrentStateVersion(ctx, id)
 
 	switch {
 	case errors.Is(err, ErrNoState):
-		return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-			return w.forceUnlock(now)
-		})
+		unfenced, changeErr := s.releaseUnfenced(ctx, id)
+
+		return unfenced, false, changeErr
 	case err != nil:
-		return Workspace{}, fmt.Errorf("current state of %s: %w", w.Ref, err)
-	default:
-		return s.releaseWithFence(ctx, w, cur, by)
+		return Workspace{}, false, fmt.Errorf("current state of %s: %w", w.Ref, err)
 	}
+
+	released, err := s.releaseWithFence(ctx, w, cur, by)
+	if errors.Is(err, ErrClientEncrypted) && allow.Forced {
+		if record != nil {
+			if recordErr := record(); recordErr != nil {
+				return Workspace{}, false, fmt.Errorf("record override of %s: %w", w.Ref, recordErr)
+			}
+		}
+
+		unfenced, changeErr := s.releaseUnfenced(ctx, id)
+
+		return unfenced, true, changeErr
+	}
+
+	return released, false, err
+}
+
+// Overrides returns the overrides that the unit allows: the switch of its
+// namespace narrowed by the switch of the unit (ADR 44, decision 6).
+func (s *Service) Overrides(ctx context.Context, id ID) (namespace.Overrides, error) {
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return namespace.Overrides{}, err
+	}
+
+	ns, err := s.namespaces.Get(ctx, w.Ref.Namespace)
+	if err != nil {
+		return namespace.Overrides{}, fmt.Errorf("namespace of %s: %w", w.Ref, err)
+	}
+
+	return ns.Overrides.And(w.Overrides), nil
+}
+
+// SetOverrides replaces the override switch of the unit.
+func (s *Service) SetOverrides(ctx context.Context, id ID, ov namespace.Overrides) (Workspace, error) {
+	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		w.Overrides = ov
+
+		return w.bump(now), nil
+	})
 }
 
 // PendingState is a state version waiting for its content, and the
@@ -394,7 +442,14 @@ type PendingState struct {
 // declare sweeps them. The store enforces the cap where concurrent declares
 // serialize, so it holds across services; the stripe below only trims
 // contention between declares of one workspace in this service.
-func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewState) (PendingState, error) {
+//
+// allow holds the overrides the caller may use for this declare. A forced
+// declare needs allow.Forced, and a declare without the lock needs
+// allow.Unlocked. Without them the declare is refused with the way out in
+// the error text (ADR 44, decisions 4, 5 and 8).
+func (s *Service) BeginState(
+	ctx context.Context, id ID, holder string, in NewState, allow namespace.Overrides,
+) (PendingState, error) {
 	sum, err := in.parse()
 	if err != nil {
 		return PendingState{}, err
@@ -405,8 +460,9 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 		return PendingState{}, err
 	}
 
-	if lockErr := w.heldBy(holder); lockErr != nil {
-		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, lockErr)
+	unlocked, err := declareAllowed(w, holder, allow)
+	if err != nil {
+		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
 	current, err := s.states.CurrentStateVersion(ctx, id)
@@ -455,7 +511,43 @@ func (s *Service) BeginState(ctx context.Context, id ID, holder string, in NewSt
 		)
 	}
 
-	return s.createPending(ctx, w, in, sum, "")
+	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
+}
+
+// declareAllowed checks the lock of one declare. It returns whether the declare
+// is an unlocked write, which the override allows (ADR 44, decisions 5 and 8).
+func declareAllowed(w Workspace, holder string, allow namespace.Overrides) (bool, error) {
+	lockErr := w.heldBy(holder)
+	if lockErr == nil {
+		return false, nil
+	}
+
+	if !errors.Is(lockErr, ErrNotLocked) || !allow.Unlocked {
+		return false, unlockedRefusal(lockErr)
+	}
+
+	return true, nil
+}
+
+// pendingDeclare holds the optional parts of a declare: the version it restores
+// and whether it is an unlocked write.
+type pendingDeclare struct {
+	restoredFrom StateVersionID
+	unlocked     bool
+}
+
+// unlockedRefusal keeps the status of a refused declare on an unlocked unit
+// and adds the way out: the switch and the action of an unlocked write.
+func unlockedRefusal(lockErr error) error {
+	if !errors.Is(lockErr, ErrNotLocked) {
+		return lockErr
+	}
+
+	return fmt.Errorf(
+		"%w: a write without the lock is refused; turn on the unlocked-write switch of the namespace and of the unit, "+
+			"and grant unit:write-unlocked",
+		lockErr,
+	)
 }
 
 // Upload stores the content of a pending state version and makes it current.
@@ -1175,7 +1267,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		Outputs: outputs,
 		Serial:  src.Serial,
 		Force:   true,
-	}, src.MD5, src.ID)
+	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false})
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -1541,8 +1633,10 @@ func (s *Service) createPending(
 	w Workspace,
 	in NewState,
 	sum [md5.Size]byte,
-	restoredFrom StateVersionID,
+	decl pendingDeclare,
 ) (PendingState, error) {
+	restoredFrom, unlocked := decl.restoredFrom, decl.unlocked
+
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return PendingState{}, err
@@ -1591,6 +1685,7 @@ func (s *Service) createPending(
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
+		UnlockedWrite:   unlocked,
 		Sealed:          sealed,
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
@@ -1765,6 +1860,13 @@ func (s *Service) fence(ctx context.Context, ns namespace.Name) (namespace.Fence
 
 func (s *Service) clock() time.Time {
 	return s.now().UTC()
+}
+
+// releaseUnfenced releases the lock of the unit without writing a version.
+func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error) {
+	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		return w.forceUnlock(now)
+	})
 }
 
 // attemptKey is a fresh blob key for one upload attempt of sv. IDs are
