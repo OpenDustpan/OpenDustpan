@@ -3151,13 +3151,14 @@ func testFenceAndUnlock(t *testing.T, s WorkspaceStore) {
 	released := releasedWorkspace(locked, now().Add(2*time.Hour))
 	fence := newFenceVersion(t, locked, 2, now().Add(2*time.Hour))
 
-	if err := s.FenceAndUnlock(
+	err := s.FenceAndUnlock(
 		t.Context(),
 		released,
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("fence and unlock: %v", err)
 	}
 
@@ -3227,16 +3228,14 @@ func testFenceNotLocked(t *testing.T, s WorkspaceStore) {
 	released := releasedWorkspace(w, now().Add(time.Hour))
 	fence := newFenceVersion(t, w, 1, now().Add(time.Hour))
 
-	if err := s.FenceAndUnlock(
+	err := s.FenceAndUnlock(
 		t.Context(),
 		released,
 		fence,
 		currentVersionID(t, s, w.ID),
 		ns.Fence(),
-	); !errors.Is(
-		err,
-		workspace.ErrNotLocked,
-	) {
+	)
+	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Fatalf("fence an unlocked workspace: err = %v, want ErrNotLocked", err)
 	}
 
@@ -3290,16 +3289,14 @@ func testFenceFencedWrite(t *testing.T, s WorkspaceStore) {
 	fence := newFenceVersion(t, locked, 2, now().Add(2*time.Hour))
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
-	if err := s.FenceAndUnlock(
+	err := s.FenceAndUnlock(
 		t.Context(),
 		released,
 		fence,
 		currentVersionID(t, s, locked.ID),
 		stale,
-	); !errors.Is(
-		err,
-		namespace.ErrFenced,
-	) {
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("fence with a stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -3325,13 +3322,14 @@ func testFenceSealedRoundTrip(t *testing.T, s WorkspaceStore) {
 	fence.Sealed = true
 	fence.Outputs = []byte("sealed-outputs")
 
-	if err := s.FenceAndUnlock(
+	err := s.FenceAndUnlock(
 		t.Context(),
 		released,
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("fence and unlock of a sealed version: %v", err)
 	}
 
@@ -3370,13 +3368,14 @@ func testFenceSerialMustFollow(t *testing.T, s WorkspaceStore) {
 	assertWorkspace(t, got, locked)
 
 	fence := newFenceVersion(t, locked, 2, now().Add(2*time.Hour))
-	if err := s.FenceAndUnlock(
+	err = s.FenceAndUnlock(
 		t.Context(),
 		released,
 		fence,
 		currentVersionID(t, s, locked.ID),
 		ns.Fence(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("fence at serial 2: %v", err)
 	}
 }

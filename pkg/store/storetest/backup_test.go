@@ -1397,7 +1397,7 @@ func (s *fakeBackupStore) GetStateVersion(
 // lineage and serial checks.
 func (s *fakeBackupStore) FenceAndUnlock(
 	_ context.Context, w workspace.Workspace, sv workspace.StateVersion,
-	expect workspace.StateVersionID, fence namespace.Fence,
+	_ workspace.StateVersionID, fence namespace.Fence,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

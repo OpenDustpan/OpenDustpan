@@ -794,16 +794,30 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 	states := encryptedStates{
 		fakeStates: fakeStates{},
 		version: workspace.StateVersion{
-			ID:        "sv-1",
-			Workspace: "ws-1",
-			Status:    workspace.StatusFinalized,
-			Content:   "tofu/ws-1/sv-1/a1",
-			Lineage:   "l1",
-			Serial:    1,
+			CreatedAt:       time.Time{},
+			FinalizedAt:     time.Time{},
+			UploadExpiresAt: time.Time{},
+			Upload:          token.Digest{},
+			ID:              "sv-1",
+			Workspace:       "ws-1",
+			Holder:          "",
+			LockID:          "",
+			Lineage:         "l1",
+			Status:          workspace.StatusFinalized,
+			Content:         "tofu/ws-1/sv-1/a1",
+			Outputs:         nil,
+			MD5:             [16]byte{},
+			Serial:          1,
+			Size:            0,
+			Force:           false,
+			Sealed:          false,
+			RestoredFrom:    "",
+			SensitiveMarks:  nil,
+			FenceBy:         "",
 		},
 	}
 
-	f := newFixtureWith(t, fakeNamespaces{}, states, encryptedBlobs{})
+	f := newFixtureWith(t, fakeNamespaces{}, states, encryptedBlobs{fakeBlobs: fakeBlobs{}})
 	ctx := t.Context()
 	seedLockedWorkspace(t, f, "network")
 

@@ -62,6 +62,7 @@ var _ storetest.WorkspaceStore = (*memStore)(nil)
 
 func newMemStore() *memStore {
 	return &memStore{
+		beforeFence:  nil,
 		namespaces:   map[namespace.Name]namespace.Namespace{},
 		workspaces:   map[workspace.ID]workspace.Workspace{},
 		versions:     map[workspace.StateVersionID]workspace.StateVersion{},
@@ -324,7 +325,7 @@ func (m *memStore) GetStateVersion(_ context.Context, id workspace.StateVersionI
 // and makes the fence version current, checking the same guards as the
 // adapters: the fence, a held lock and the revision.
 func (m *memStore) FenceAndUnlock(
-	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	_ context.Context, w workspace.Workspace, sv workspace.StateVersion,
 	expect workspace.StateVersionID, fence namespace.Fence,
 ) error {
 	// The hook runs before the store takes its lock, so a test can land a

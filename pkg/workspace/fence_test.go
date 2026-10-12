@@ -259,7 +259,9 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 	}
 
 	if r, blobErr := f.blobs.Get(ctx, fenceKey); blobErr == nil {
-		_ = r.Close()
+		if closeErr := r.Close(); closeErr != nil {
+			t.Errorf("close the blob: %v", closeErr)
+		}
 
 		t.Fatal("the blob of the refused fence was kept")
 	}
