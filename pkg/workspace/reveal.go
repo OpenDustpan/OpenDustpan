@@ -141,18 +141,7 @@ func notFoundState(path string) error {
 	return fmt.Errorf("%w: %q", ErrResourceNotFound, path)
 }
 
-// openStreamedObject reads the streamed value that dec streams and reports
-// whether it opens an object. Any other value is consumed.
-func openStreamedObject(dec *jsontext.Decoder) (bool, error) {
-	tok, err := dec.ReadToken()
-	if err != nil {
-		return false, decodeStateFailed(err)
-	}
-
-	return tok.Kind() == jsontext.KindBeginObject, nil
-}
-
-// openStreamedArray reads the streamed value that dec streams and reports
+// endOfStreamedArray reports whether the streamed array that dec streams
 // whether it opens an array. Any other value is consumed.
 func openStreamedArray(dec *jsontext.Decoder) (bool, error) {
 	tok, err := dec.ReadToken()
@@ -234,6 +223,11 @@ func revealStream(
 ) (any, []string, error) {
 	target, shapeOK := parseRevealTarget(path, marks)
 
+	var want *revealTarget
+	if shapeOK {
+		want = &target
+	}
+
 	tok, err := dec.ReadToken()
 	if err != nil {
 		return nil, nil, decodeStateFailed(err)
@@ -258,7 +252,7 @@ func revealStream(
 			break
 		}
 
-		value, ok, err := revealStreamedMember(dec, target, shapeOK, name)
+		value, ok, err := revealStreamedMember(dec, want, name)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -277,21 +271,23 @@ func revealStream(
 }
 
 // revealStreamedMember reads the streamed top-level member name of the state
-// and returns the reveal value when the member holds it. The encrypted
-// envelope fails the lookup, so no value of a client-encrypted state ever
-// answers.
+// and returns the reveal value when the member holds it. A nil target means
+// the path has another shape than a reveal path: the resources array is then
+// skipped like every other member, so a client-encrypted state still answers
+// 409 whatever the path is. The encrypted envelope fails the lookup, so no
+// value of a client-encrypted state ever answers.
 func revealStreamedMember(
-	dec *jsontext.Decoder, target revealTarget, shapeOK bool, name string,
+	dec *jsontext.Decoder, target *revealTarget, name string,
 ) (any, bool, error) {
 	switch name {
 	case encryptedStateKey:
 		return nil, false, fmt.Errorf("reveal of a client-encrypted state: %w", ErrClientEncrypted)
 	case "resources":
-		if !shapeOK {
+		if target == nil {
 			return nil, false, skipStreamed(dec)
 		}
 
-		return revealFromResources(dec, target)
+		return revealFromResources(dec, *target)
 	default:
 		return nil, false, skipStreamed(dec)
 	}
@@ -370,6 +366,12 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, nil
 	}
 
+	// Entries that are not objects with a string type and name have no
+	// masked path in the read, so they never answer here either.
+	if fieldText(side.fields, typeFieldName) == "" || fieldText(side.fields, nameFieldName) == "" {
+		return nil, false, nil
+	}
+
 	address := tofuInstanceAddress(side.fields, side.instance)
 
 	attributes, _ := side.instance["attributes"]
@@ -408,6 +410,18 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 	return out, true, nil
 }
 
+// fieldText reads one identity field of a streamed resource, or "" when the
+// field is missing. Only strings land in fields, so this matches the read,
+// which skips entries without a string type and name.
+func fieldText(fields map[string]any, key string) string {
+	text, ok := fields[key].(string)
+	if !ok {
+		return ""
+	}
+
+	return text
+}
+
 // resourceSide is one streamed resource: its identity fields with the
 // decoded instance at the wanted position. A missing instance reads as no
 // instance.
@@ -424,14 +438,14 @@ func streamedResource(
 ) (resourceSide, error) {
 	if dec.PeekKind() != jsontext.KindBeginObject {
 		if skipErr := skipStreamed(dec); skipErr != nil {
-			return resourceSide{}, skipErr
+			return resourceSide{fields: map[string]any{}, instance: nil}, skipErr
 		}
 
-		return resourceSide{}, nil
+		return resourceSide{fields: map[string]any{}, instance: nil}, nil
 	}
 
 	if _, err := dec.ReadToken(); err != nil {
-		return resourceSide{}, decodeStateFailed(err)
+		return resourceSide{fields: map[string]any{}, instance: nil}, decodeStateFailed(err)
 	}
 
 	side := resourceSide{fields: map[string]any{}, instance: nil}
@@ -439,7 +453,7 @@ func streamedResource(
 	for {
 		name, end, err := streamedMember(dec)
 		if err != nil {
-			return resourceSide{}, err
+			return resourceSide{fields: map[string]any{}, instance: nil}, err
 		}
 
 		if end {
@@ -448,7 +462,7 @@ func streamedResource(
 
 		instance, ok, err := streamedResourceValue(dec, side.fields, name, position)
 		if err != nil {
-			return resourceSide{}, err
+			return resourceSide{fields: map[string]any{}, instance: nil}, err
 		}
 
 		if ok {
@@ -530,39 +544,66 @@ func revealFromInstances(
 			return nil, false, nil
 		}
 
-		if dec.PeekKind() != jsontext.KindBeginObject {
-			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, false, skipErr
-			}
-
-			continue
-		}
-
-		if count != position {
-			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, false, skipErr
-			}
-
-			count++
-
-			continue
-		}
-
-		instance, err := readStreamedInstance(dec)
+		step, err := streamedInstanceAt(dec, position, count)
 		if err != nil {
 			return nil, false, err
 		}
 
-		if skipErr := drainStreamedArray(dec); skipErr != nil {
-			return nil, false, skipErr
+		count = step.next
+
+		if !step.found {
+			continue
 		}
 
-		if instance == nil {
+		if drainErr := drainStreamedArray(dec); drainErr != nil {
+			return nil, false, drainErr
+		}
+
+		if step.instance == nil {
 			return nil, false, nil
 		}
 
-		return instance, true, nil
+		return step.instance, true, nil
 	}
+}
+
+// instanceStep is the result of reading one element of the streamed
+// instances array: the decoded instance with the next object count and
+// whether the element is the wanted one.
+type instanceStep struct {
+	instance map[string]any
+	next     int
+	found    bool
+}
+
+// streamedInstanceAt reads one element of the streamed instances array that
+// dec streams. Non-object entries never count toward position, as in the
+// masked read. Every other element is skipped.
+func streamedInstanceAt(
+	dec *jsontext.Decoder, position, count int,
+) (instanceStep, error) {
+	if dec.PeekKind() != jsontext.KindBeginObject {
+		if skipErr := skipStreamed(dec); skipErr != nil {
+			return instanceStep{instance: nil, next: count, found: false}, skipErr
+		}
+
+		return instanceStep{instance: nil, next: count, found: false}, nil
+	}
+
+	if count != position {
+		if skipErr := skipStreamed(dec); skipErr != nil {
+			return instanceStep{instance: nil, next: count, found: false}, skipErr
+		}
+
+		return instanceStep{instance: nil, next: count + 1, found: false}, nil
+	}
+
+	instance, err := readStreamedInstance(dec)
+	if err != nil {
+		return instanceStep{instance: nil, next: count, found: false}, err
+	}
+
+	return instanceStep{instance: instance, next: count, found: true}, nil
 }
 
 // readStreamedInstance reads the streamed instance object that dec streams

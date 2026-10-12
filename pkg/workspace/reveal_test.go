@@ -217,6 +217,7 @@ func (s *largeStateStream) advance() bool {
 // much larger than the decoder buffer finds the value while the heap
 // allocated by the lookup stays far below the state size. The state is read
 // from a stream that generates it, never from a byte slice.
+//
 //nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
 func TestRevealValueStreamsLargeState(t *testing.T) {
 	// No t.Parallel: the heap measurement needs a quiet runtime.
@@ -295,5 +296,36 @@ func TestRevealValueStreamsLargeState(t *testing.T) {
 			growth,
 			stream.total,
 		)
+	}
+}
+
+// TestRevealValueRejectsResourceWithoutIdentity proves a value in a resource
+// without a string type and name answers not-found: the masked read holds no
+// path for such a resource, so the reveal lookup must not answer it either.
+func TestRevealValueRejectsResourceWithoutIdentity(t *testing.T) {
+	t.Parallel()
+
+	state := []byte(`{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":{"id":"orphan-id","input":"s3cr3t"},` +
+		`"sensitive_attributes":[[{"type":"get_attr","value":"input"}]] }]}]}`)
+
+	marks := workspace.SensitiveMarks{"other.none": {"/id"}}
+	path := "/resources/0/instances/0/attributes/input"
+
+	if _, _, err := workspace.RevealValue(state, marks, path); err == nil {
+		t.Fatal("identity-less resource succeeded, want a not-found error")
+	} else if !errors.Is(err, workspace.ErrResourceNotFound) {
+		t.Fatalf("identity-less resource error = %v, want a not-found error", err)
+	}
+
+	plain := []byte(`{"version":4,"outputs":{},"resources":[null]}`)
+
+	if _, _, err := workspace.RevealValue(plain, marks, path); err == nil {
+		t.Fatal("non-object resource succeeded, want a not-found error")
+	} else if !errors.Is(err, workspace.ErrResourceNotFound) {
+		t.Fatalf("non-object resource error = %v, want a not-found error", err)
 	}
 }

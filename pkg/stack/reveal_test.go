@@ -160,6 +160,7 @@ func TestSecretCiphertextOfEscapedKeys(t *testing.T) {
 // TestSecretCiphertextOfStreamsLargeDeployment proves a reveal near the end
 // of a deployment much larger than the decoder buffer finds the secret while
 // the heap allocated by the lookup stays far below the deployment size.
+//
 //nolint:paralleltest // The heap measurement needs a quiet runtime, so this test never runs in parallel.
 func TestSecretCiphertextOfStreamsLargeDeployment(t *testing.T) {
 	// No t.Parallel: the heap measurement needs a quiet runtime.
@@ -232,5 +233,55 @@ func TestSecretCiphertextOfStreamsLargeDeployment(t *testing.T) {
 			growth,
 			len(deployment),
 		)
+	}
+}
+
+// TestSecretCiphertextOfRejectsResourceWithoutURN proves a secret in a
+// resource without a URN answers not-found: the masked read holds no path
+// for such a resource, so the reveal lookup must not answer it either.
+func TestSecretCiphertextOfRejectsResourceWithoutURN(t *testing.T) {
+	t.Parallel()
+
+	cipher := base64.StdEncoding.EncodeToString([]byte("orphan-cipher"))
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[{` +
+		`"type":"pkg:index:Res",` +
+		`"inputs":{"password":{"4dabf18193072939515e22adb298388d":` +
+		`"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` + cipher + `"}},` +
+		`"outputs":{}}]}`)
+
+	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/password"); err == nil {
+		t.Fatal("URN-less resource succeeded, want a not-found error")
+	} else if !isNotFound(err) {
+		t.Fatalf("URN-less resource error = %v, want a not-found error", err)
+	}
+
+	plain := []byte(`{"secrets_providers":{"type":"service"},"resources":[null]}`)
+
+	if _, _, err := stack.SecretCiphertextOf(plain, "/resources/0/inputs/password"); err == nil {
+		t.Fatal("non-object resource succeeded, want a not-found error")
+	} else if !isNotFound(err) {
+		t.Fatalf("non-object resource error = %v, want a not-found error", err)
+	}
+}
+
+// TestSecretCiphertextOfURNLast proves the streaming lookup finds the secret
+// when the URN streams after the section holding it.
+func TestSecretCiphertextOfURNLast(t *testing.T) {
+	t.Parallel()
+
+	cipher := base64.StdEncoding.EncodeToString([]byte("late-cipher"))
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[{` +
+		`"type":"pkg:index:Res","inputs":{},` +
+		`"outputs":{"password":{"4dabf18193072939515e22adb298388d":` +
+		`"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` + cipher + `"}},` +
+		`"urn":"urn:pulumi:dev::web::pkg:index:Res::res"}]}`)
+
+	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/password")
+	if err != nil {
+		t.Fatalf("ciphertext: %v", err)
+	}
+
+	if string(got) != "late-cipher" {
+		t.Fatalf("ciphertext = %q, want late-cipher", got)
 	}
 }

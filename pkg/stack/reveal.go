@@ -401,8 +401,23 @@ func streamResourceAt(
 	return streamResourceSecret(dec, section, rest, path)
 }
 
+// resourceScan is the streamed state of one resource while the lookup
+// walks it: whether a string URN was seen, with the section value kept when
+// it streams before the URN. The section value is kept because the lookup
+// cannot rewind the stream to read it again after the URN.
+type resourceScan struct {
+	section string
+	rest    []string
+	path    string
+	haveURN bool
+	raw     jsontext.Value
+	haveRaw bool
+}
+
 // streamResourceSecret walks the streamed resource object that dec streams
-// to the secret at section/rest and returns its ciphertext bytes.
+// to the secret at section/rest and returns its ciphertext bytes. The
+// resource answers only with a string URN, as in the masked read, so a
+// resource without one has no masked path and answers not-found here too.
 func streamResourceSecret(
 	dec *jsontext.Decoder, section string, rest []string, path string,
 ) ([]byte, error) {
@@ -415,26 +430,121 @@ func streamResourceSecret(
 		return nil, notFoundCipher(path)
 	}
 
+	scan := resourceScan{section: section, rest: rest, path: path, haveURN: false, raw: nil, haveRaw: false}
+
 	for {
-		name, end, err := streamedMember(dec)
-		if err != nil {
-			return nil, err
+		name, end, memberErr := streamedMember(dec)
+		if memberErr != nil {
+			return nil, memberErr
 		}
 
 		if end {
-			return nil, notFoundCipher(path)
+			return scan.finish()
 		}
 
-		if name != section {
-			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, skipErr
-			}
-
-			continue
+		cipher, done, visitErr := scan.visit(dec, name)
+		if visitErr != nil {
+			return nil, visitErr
 		}
 
-		return streamDescend(dec, rest, path)
+		if done {
+			return cipher, nil
+		}
 	}
+}
+
+// finish returns the secret of the walked resource: it decodes the kept
+// section value only when the resource carried a string URN.
+func (s *resourceScan) finish() ([]byte, error) {
+	if !s.haveURN || !s.haveRaw {
+		return nil, notFoundCipher(s.path)
+	}
+
+	cipher, err := streamDescend(jsontext.NewDecoder(bytes.NewReader(s.raw)), s.rest, s.path)
+	if err != nil {
+		return nil, err
+	}
+
+	return cipher, nil
+}
+
+// visit reads the streamed value of one resource member named name. It
+// returns a cipher with done when the member holds the answer and the URN
+// is already verified; otherwise it keeps its state and the caller goes on.
+func (s *resourceScan) visit(dec *jsontext.Decoder, name string) ([]byte, bool, error) {
+	if name == "urn" {
+		return nil, false, s.trackURN(dec)
+	}
+
+	if name != s.section {
+		return nil, false, skipStreamed(dec)
+	}
+
+	return s.trackSection(dec)
+}
+
+// trackURN reads the streamed URN value that dec streams and records whether
+// it is a non-empty string.
+func (s *resourceScan) trackURN(dec *jsontext.Decoder) error {
+	present, err := streamedURNPresent(dec)
+	if err != nil {
+		return err
+	}
+
+	s.haveURN = s.haveURN || present
+
+	return nil
+}
+
+// trackSection reads the streamed section value that dec streams. When the
+// URN is already verified it walks the value to the secret at once, so
+// nothing off the path is kept. Otherwise it keeps the section value while
+// the rest of the object streams for the URN.
+func (s *resourceScan) trackSection(dec *jsontext.Decoder) ([]byte, bool, error) {
+	if s.haveRaw {
+		return nil, false, skipStreamed(dec)
+	}
+
+	if s.haveURN {
+		cipher, err := streamDescend(dec, s.rest, s.path)
+		if err != nil {
+			return nil, false, err
+		}
+
+		return cipher, true, nil
+	}
+
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return nil, false, decodeDeploymentFailed(err)
+	}
+
+	// ReadValue may reuse the decoder buffer on later reads, so the kept
+	// value is a copy.
+	s.raw = append(jsontext.Value(nil), raw...)
+	s.haveRaw = true
+
+	return nil, false, nil
+}
+
+// streamedURNPresent reads the streamed URN value that dec streams and
+// reports whether it is a non-empty string. Any other value is skipped, so
+// the resource reads as one without a URN, as in the masked read.
+func streamedURNPresent(dec *jsontext.Decoder) (bool, error) {
+	if dec.PeekKind() != jsontext.KindString {
+		if skipErr := skipStreamed(dec); skipErr != nil {
+			return false, skipErr
+		}
+
+		return false, nil
+	}
+
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return false, decodeDeploymentFailed(err)
+	}
+
+	return tok.String() != "", nil
 }
 
 // streamDescend walks the streamed value that dec streams to the value at
