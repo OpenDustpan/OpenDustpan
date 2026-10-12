@@ -165,54 +165,33 @@ func splitRevealPath(path string) ([]string, bool) {
 	}
 
 	tokens := strings.Split(path[1:], "/")
-	for i := range tokens {
-		tokens[i] = strings.ReplaceAll(strings.ReplaceAll(tokens[i], "~1", "/"), "~0", "~")
+	for i, token := range tokens {
+		if !validEscapes(token) {
+			return nil, false
+		}
+
+		tokens[i] = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
 	}
 
 	return tokens, true
 }
 
-// secretCiphertext returns the ciphertext bytes of the secret object v. A
-// value that is not a secret fails with ErrResourceNotFound, so a caller
-// cannot probe paths: only a masked path names a secret.
-func secretCiphertext(v any) ([]byte, error) {
-	if !isSecret(v) {
-		return nil, fmt.Errorf("%w: value is not a secret", ErrResourceNotFound)
-	}
-
-	obj, ok := v.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("%w: value is not a secret", ErrResourceNotFound)
-	}
-
-	raw, ok := secretCiphertextField(obj)
-	if !ok {
-		return nil, fmt.Errorf("secret holds no ciphertext: %w", ErrInvalidUpdate)
-	}
-
-	cipher, err := base64.StdEncoding.DecodeString(raw)
-	if err != nil {
-		return nil, fmt.Errorf("secret holds no decodable ciphertext: %w", ErrInvalidUpdate)
-	}
-
-	return cipher, nil
-}
-
-// secretCiphertextField reads the ciphertext string of a secret object: the
-// ciphertext field, or the ciphertext field of the value object of newer
-// checkpoints.
-func secretCiphertextField(obj map[string]any) (string, bool) {
-	if raw, ok := obj[ciphertextField].(string); ok && raw != "" {
-		return raw, true
-	}
-
-	if inner, ok := obj["value"].(map[string]any); ok {
-		if raw, ok := inner[ciphertextField].(string); ok && raw != "" {
-			return raw, true
+// validEscapes reports whether every "~" in token starts an RFC 6901 escape,
+// "~0" or "~1". Any other "~" is not a canonical path.
+func validEscapes(token string) bool {
+	for i := 0; i < len(token); i++ {
+		if token[i] != '~' {
+			continue
 		}
+
+		if i+1 >= len(token) || (token[i+1] != '0' && token[i+1] != '1') {
+			return false
+		}
+
+		i++
 	}
 
-	return "", false
+	return true
 }
 
 // SecretCiphertextOf returns the ciphertext bytes at path of deployment, and
@@ -230,8 +209,8 @@ func SecretCiphertextOf(deployment []byte, path string) ([]byte, []string, error
 		return nil, nil, notFoundCipher(path)
 	}
 
-	index, err := strconv.Atoi(tokens[1])
-	if err != nil || index < 0 {
+	index, ok := parseIndex(tokens[1])
+	if !ok {
 		return nil, nil, notFoundCipher(path)
 	}
 
@@ -351,7 +330,9 @@ func streamArrayAt(dec *jsontext.Decoder, index int) (bool, error) {
 
 // streamSecretCipher walks the streamed deployment to the secret at
 // /resources/index/section/rest and returns its ciphertext bytes. Values off
-// the path are skipped without building them.
+// the path are skipped without building them. An answer is given only after
+// every member of the deployment has streamed, so a duplicate key anywhere
+// fails the lookup, as it fails the masked read's decoder in pkg/workspace.
 func streamSecretCipher(
 	deployment []byte, index int, section string, rest []string, path string,
 ) ([]byte, error) {
@@ -366,38 +347,108 @@ func streamSecretCipher(
 		return nil, notFoundCipher(path)
 	}
 
+	cipher, found, err := seekMember(dec, "resources", func() ([]byte, error) {
+		body, bodyErr := resourceBodyAt(dec, deployment, index, path)
+		if bodyErr != nil {
+			return nil, bodyErr
+		}
+
+		return streamResourceSecret(body, section, rest, path)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return nil, notFoundCipher(path)
+	}
+
+	// The resource element and the rest of the document stream after the
+	// answer, so the decoder checks every member.
+	if err := drainAfterElement(dec); err != nil {
+		return nil, err
+	}
+
+	return cipher, nil
+}
+
+// seekMember streams the members of the object that dec streams until the
+// member named name. Every other member is skipped. It calls visit at the
+// value of that member and returns its result. found is false when the object
+// has no such member. The caller drains the rest of the object after an
+// answer.
+func seekMember(
+	dec *jsontext.Decoder, name string, visit func() ([]byte, error),
+) ([]byte, bool, error) {
 	for {
-		name, end, err := streamedMember(dec)
-		if err != nil {
-			return nil, err
+		member, end, err := streamedMember(dec)
+		if err != nil || end {
+			return nil, false, err
 		}
 
-		if end {
-			return nil, notFoundCipher(path)
-		}
-
-		if name != "resources" {
+		if member != name {
 			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, skipErr
+				return nil, false, skipErr
 			}
 
 			continue
 		}
 
-		body, err := resourceBodyAt(dec, deployment, index, path)
-		if err != nil {
-			return nil, err
+		cipher, err := visit()
+
+		return cipher, true, err
+	}
+}
+
+// drainAfterElement skips the resource element at the decoder position, the
+// rest of the resources array and the rest of the top-level object. It keeps
+// nothing.
+func drainAfterElement(dec *jsontext.Decoder) error {
+	if err := skipStreamed(dec); err != nil {
+		return err
+	}
+
+	if err := drainStreamedArray(dec); err != nil {
+		return err
+	}
+
+	return drainStreamedObject(dec)
+}
+
+// drainStreamedArray skips the rest of the streamed array that dec streams.
+func drainStreamedArray(dec *jsontext.Decoder) error {
+	for {
+		end, err := endOfStreamedArray(dec)
+		if err != nil || end {
+			return err
 		}
 
-		return streamResourceSecret(body, section, rest, path)
+		if err := skipStreamed(dec); err != nil {
+			return err
+		}
+	}
+}
+
+// drainStreamedObject skips the rest of the streamed object that dec streams.
+func drainStreamedObject(dec *jsontext.Decoder) error {
+	for {
+		_, end, err := streamedMember(dec)
+		if err != nil || end {
+			return err
+		}
+
+		if err := skipStreamed(dec); err != nil {
+			return err
+		}
 	}
 }
 
 // resourceBodyAt walks the streamed resources array that dec streams to
 // element index and returns the bytes of that resource, from its opening brace
 // to the end of deployment. The bytes let the caller read the resource in two
-// passes, so nothing of it is kept between the passes. An element that does
-// not exist fails with not-found for path.
+// passes, so nothing of it is kept between the passes. An element that is not
+// an object has no masked path, so it fails with not-found for path before the
+// brace scan could reach a later resource.
 func resourceBodyAt(
 	dec *jsontext.Decoder, deployment []byte, index int, path string,
 ) ([]byte, error) {
@@ -406,32 +457,35 @@ func resourceBodyAt(
 		return nil, err
 	}
 
-	if !at {
+	if !at || dec.PeekKind() != jsontext.KindBeginObject {
 		return nil, notFoundCipher(path)
 	}
 
-	// An element that is not an object has no masked path. The scan below
-	// would otherwise find the brace of a later resource.
-	if dec.PeekKind() != jsontext.KindBeginObject {
-		return nil, notFoundCipher(path)
+	obj, err := objectAt(dec, deployment)
+	if err != nil {
+		return nil, err
 	}
 
-	// Only white space and one comma stand between two array elements, so
-	// the next brace opens the resource.
-	start := int(dec.InputOffset())
-
-	open := bytes.IndexByte(deployment[start:], '{')
-	if open < 0 {
-		return nil, notFoundCipher(path)
-	}
-
-	return deployment[start+open:], nil
+	return deployment[obj:], nil
 }
 
-// streamResourceSecret walks the resource in body to the secret at
-// section/rest. The resource answers only with a string URN, as in the masked
-// read, so a resource without one has no masked path and answers not-found
-// here too. The URN is found in a first pass; the secret is walked in a second.
+// objectAt returns the offset in data of the object that dec streams next.
+// Only white space and one separator stand between the last token dec read
+// and that object, so the first brace is its opening brace.
+func objectAt(dec *jsontext.Decoder, data []byte) (int, error) {
+	start := int(dec.InputOffset())
+
+	open := bytes.IndexByte(data[start:], '{')
+	if open < 0 {
+		return 0, decodeDeploymentFailed(errUnexpectedValue)
+	}
+
+	return start + open, nil
+}
+
+// streamResourceSecret reads the resource in body in two passes. The first
+// pass finds its URN, as the masked read does. The second walks to the secret
+// and reads the rest of the resource, so duplicate keys in it fail the lookup.
 func streamResourceSecret(
 	body []byte, section string, rest []string, path string,
 ) ([]byte, error) {
@@ -444,11 +498,11 @@ func streamResourceSecret(
 		return nil, notFoundCipher(path)
 	}
 
-	return streamSectionSecret(jsontext.NewDecoder(bytes.NewReader(body)), section, rest, path)
+	return streamSectionSecret(jsontext.NewDecoder(bytes.NewReader(body)), body, section, rest, path)
 }
 
 // resourceHasURN streams the resource object that dec streams and reports
-// whether it holds a non-empty string URN. Every other value is skipped.
+// whether it holds a non-empty string URN. It stops at the URN.
 func resourceHasURN(dec *jsontext.Decoder) (bool, error) {
 	open, err := openStreamedObject(dec)
 	if err != nil {
@@ -482,11 +536,11 @@ func urnOrSkip(dec *jsontext.Decoder, name string) (bool, error) {
 	return false, skipStreamed(dec)
 }
 
-// streamSectionSecret walks the resource object that dec streams to the
-// secret at section/rest. The URN is already verified, so the section is
-// walked as it streams, and every other member is skipped.
+// streamSectionSecret walks the resource object that dec streams, in data, to
+// the secret at section/rest. Once the section answers, the rest of the
+// resource is read so that the decoder checks it.
 func streamSectionSecret(
-	dec *jsontext.Decoder, section string, rest []string, path string,
+	dec *jsontext.Decoder, data []byte, section string, rest []string, path string,
 ) ([]byte, error) {
 	open, err := openStreamedObject(dec)
 	if err != nil {
@@ -497,31 +551,27 @@ func streamSectionSecret(
 		return nil, notFoundCipher(path)
 	}
 
-	for {
-		name, end, err := streamedMember(dec)
-		if err != nil {
-			return nil, err
-		}
-
-		if end {
-			return nil, notFoundCipher(path)
-		}
-
-		if name != section {
-			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, skipErr
-			}
-
-			continue
-		}
-
-		return streamDescend(dec, rest, path)
+	cipher, found, err := seekMember(dec, section, func() ([]byte, error) {
+		return streamDescend(dec, data, rest, path)
+	})
+	if err != nil {
+		return nil, err
 	}
+
+	if !found {
+		return nil, notFoundCipher(path)
+	}
+
+	if err := drainStreamedObject(dec); err != nil {
+		return nil, err
+	}
+
+	return cipher, nil
 }
 
-// streamedURNPresent reads the streamed URN value that dec streams and
-// reports whether it is a non-empty string. Any other value is skipped, so
-// the resource reads as one without a URN, as in the masked read.
+// streamedURNPresent reads the streamed URN value that dec streams and reports
+// whether it is a non-empty string. Any other value is skipped, so the
+// resource reads as one without a URN, as in the masked read.
 func streamedURNPresent(dec *jsontext.Decoder) (bool, error) {
 	if dec.PeekKind() != jsontext.KindString {
 		if skipErr := skipStreamed(dec); skipErr != nil {
@@ -539,20 +589,30 @@ func streamedURNPresent(dec *jsontext.Decoder) (bool, error) {
 	return tok.String() != "", nil
 }
 
-// streamDescend walks the streamed value that dec streams to the value at
-// rest and returns the ciphertext bytes when it is a secret. Values off the
-// path are skipped without building them.
-func streamDescend(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
+// streamDescend walks the streamed value that dec streams, in data, to the
+// value at rest and returns the ciphertext bytes when it is a secret. A secret
+// masks only itself, so an object that is a secret answers not-found for any
+// path below it, as maskValue stops at a secret.
+func streamDescend(dec *jsontext.Decoder, data []byte, rest []string, path string) ([]byte, error) {
 	if len(rest) == 0 {
 		return streamTargetSecret(dec, path)
 	}
 
 	if dec.PeekKind() == jsontext.KindBeginObject {
-		return streamDescendObject(dec, rest, path)
+		secret, err := secretAncestor(dec, data)
+		if err != nil {
+			return nil, err
+		}
+
+		if secret {
+			return nil, notFoundCipher(path)
+		}
+
+		return streamDescendObject(dec, data, rest, path)
 	}
 
 	if dec.PeekKind() == jsontext.KindBeginArray {
-		return streamDescendArray(dec, rest, path)
+		return streamDescendArray(dec, data, rest, path)
 	}
 
 	if skipErr := skipStreamed(dec); skipErr != nil {
@@ -562,40 +622,59 @@ func streamDescend(dec *jsontext.Decoder, rest []string, path string) ([]byte, e
 	return nil, notFoundCipher(path)
 }
 
-// streamDescendObject walks the streamed object that dec streams to the
-// value at rest.
-func streamDescendObject(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
+// secretAncestor reports whether the object that dec streams next is a
+// secret. It scans a copy of the object from its opening brace, so dec keeps
+// its position for the walk.
+func secretAncestor(dec *jsontext.Decoder, data []byte) (bool, error) {
+	at, err := objectAt(dec, data)
+	if err != nil {
+		return false, err
+	}
+
+	scan := jsontext.NewDecoder(bytes.NewReader(data[at:]))
+
+	fields, err := scanSecretObject(scan)
+	if err != nil {
+		return false, err
+	}
+
+	return fields.signed, nil
+}
+
+// streamDescendObject walks the streamed object that dec streams to the value
+// at rest. Once the value answers, the rest of the object is read.
+func streamDescendObject(
+	dec *jsontext.Decoder, data []byte, rest []string, path string,
+) ([]byte, error) {
 	if _, err := dec.ReadToken(); err != nil {
 		return nil, decodeDeploymentFailed(err)
 	}
 
-	for {
-		name, end, err := streamedMember(dec)
-		if err != nil {
-			return nil, err
-		}
-
-		if end {
-			return nil, notFoundCipher(path)
-		}
-
-		if name != rest[0] {
-			if skipErr := skipStreamed(dec); skipErr != nil {
-				return nil, skipErr
-			}
-
-			continue
-		}
-
-		return streamDescend(dec, rest[1:], path)
+	cipher, found, err := seekMember(dec, rest[0], func() ([]byte, error) {
+		return streamDescend(dec, data, rest[1:], path)
+	})
+	if err != nil {
+		return nil, err
 	}
+
+	if !found {
+		return nil, notFoundCipher(path)
+	}
+
+	if err := drainStreamedObject(dec); err != nil {
+		return nil, err
+	}
+
+	return cipher, nil
 }
 
 // streamDescendArray walks the streamed array that dec streams to element
-// rest[0], then to the value below it.
-func streamDescendArray(dec *jsontext.Decoder, rest []string, path string) ([]byte, error) {
-	index, err := strconv.Atoi(rest[0])
-	if err != nil || index < 0 {
+// rest[0], then to the value below it. The index is a canonical decimal.
+func streamDescendArray(
+	dec *jsontext.Decoder, data []byte, rest []string, path string,
+) ([]byte, error) {
+	index, ok := parseIndex(rest[0])
+	if !ok {
 		return nil, notFoundCipher(path)
 	}
 
@@ -608,38 +687,179 @@ func streamDescendArray(dec *jsontext.Decoder, rest []string, path string) ([]by
 		return nil, notFoundCipher(path)
 	}
 
-	return streamDescend(dec, rest[1:], path)
-}
-
-// streamTargetSecret reads the streamed value that dec streams and returns
-// its ciphertext bytes. Only the value at the path is decoded. A value that
-// is not a secret fails with ErrResourceNotFound for the path, so a caller
-// cannot probe paths.
-func streamTargetSecret(dec *jsontext.Decoder, path string) ([]byte, error) {
-	raw, err := dec.ReadValue()
+	cipher, err := streamDescend(dec, data, rest[1:], path)
 	if err != nil {
-		return nil, decodeDeploymentFailed(err)
+		return nil, err
 	}
 
-	target := json.NewDecoder(bytes.NewReader(raw))
-	target.UseNumber()
-
-	var value any
-
-	if err := target.Decode(&value); err != nil {
-		return nil, decodeDeploymentFailed(err)
-	}
-
-	cipher, cipherErr := secretCiphertext(value)
-	if cipherErr != nil {
-		if errors.Is(cipherErr, ErrResourceNotFound) {
-			return nil, notFoundCipher(path)
-		}
-
-		return nil, cipherErr
+	if err := drainStreamedArray(dec); err != nil {
+		return nil, err
 	}
 
 	return cipher, nil
+}
+
+// streamTargetSecret reads the streamed value that dec streams at the path. A
+// value that is not an object is not a secret and is not read. An object is
+// read member by member: only its signature and ciphertext fields are kept.
+// A value that is not a secret fails with not-found for the path, so a caller
+// cannot probe paths.
+func streamTargetSecret(dec *jsontext.Decoder, path string) ([]byte, error) {
+	if dec.PeekKind() != jsontext.KindBeginObject {
+		return nil, notFoundCipher(path)
+	}
+
+	fields, err := scanSecretObject(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	if !fields.signed {
+		return nil, notFoundCipher(path)
+	}
+
+	raw := fields.cipher
+	if raw == "" {
+		raw = fields.innerCipher
+	}
+
+	if raw == "" {
+		return nil, fmt.Errorf("secret holds no ciphertext: %w", ErrInvalidUpdate)
+	}
+
+	cipher, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("secret holds no decodable ciphertext: %w", ErrInvalidUpdate)
+	}
+
+	return cipher, nil
+}
+
+// secretFields is what a streamed object shows of a secret: whether its
+// signature is the service signature, its ciphertext field, and the ciphertext
+// field of its value object in newer checkpoints. A field that is not a
+// string reads as empty.
+type secretFields struct {
+	signed      bool
+	cipher      string
+	innerCipher string
+}
+
+// scanSecretObject streams the object that dec streams. It keeps the secret
+// fields and skips every other member. Every member streams, so the decoder
+// checks duplicate keys inside the object.
+func scanSecretObject(dec *jsontext.Decoder) (secretFields, error) {
+	var fields secretFields
+
+	open, err := openStreamedObject(dec)
+	if err != nil || !open {
+		return fields, err
+	}
+
+	for {
+		name, end, err := streamedMember(dec)
+		if err != nil || end {
+			return fields, err
+		}
+
+		if err := scanSecretMember(dec, name, &fields); err != nil {
+			return fields, err
+		}
+	}
+}
+
+// scanSecretMember reads the streamed member value named name of a secret
+// object into fields. Only the signature, the ciphertext and the value object
+// keep anything; every other value is skipped.
+func scanSecretMember(dec *jsontext.Decoder, name string, fields *secretFields) error {
+	var err error
+
+	switch name {
+	case secretSigKey:
+		var text string
+
+		text, err = streamedText(dec)
+		fields.signed = text == secretSigValue
+	case ciphertextField:
+		fields.cipher, err = streamedText(dec)
+	case "value":
+		if dec.PeekKind() != jsontext.KindBeginObject {
+			return skipStreamed(dec)
+		}
+
+		fields.innerCipher, err = scanCiphertextObject(dec)
+	default:
+		return skipStreamed(dec)
+	}
+
+	return err
+}
+
+// scanCiphertextObject streams the object that dec streams and returns its
+// ciphertext field. Every other member is skipped.
+func scanCiphertextObject(dec *jsontext.Decoder) (string, error) {
+	open, err := openStreamedObject(dec)
+	if err != nil || !open {
+		return "", err
+	}
+
+	var cipher string
+
+	for {
+		name, end, err := streamedMember(dec)
+		if err != nil || end {
+			return cipher, err
+		}
+
+		if name != ciphertextField {
+			if skipErr := skipStreamed(dec); skipErr != nil {
+				return "", skipErr
+			}
+
+			continue
+		}
+
+		cipher, err = streamedText(dec)
+		if err != nil {
+			return "", err
+		}
+	}
+}
+
+// streamedText reads the streamed value that dec streams and returns its text.
+// A value that is not a string reads as empty, and is skipped.
+func streamedText(dec *jsontext.Decoder) (string, error) {
+	if dec.PeekKind() != jsontext.KindString {
+		return "", skipStreamed(dec)
+	}
+
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return "", decodeDeploymentFailed(err)
+	}
+
+	return tok.String(), nil
+}
+
+// parseIndex parses an array index of a reveal path. Only a canonical decimal
+// is an index: no sign, no leading zero, and only digits.
+func parseIndex(token string) (int, bool) {
+	if token == "" || (token != "0" && token[0] == '0') {
+		return 0, false
+	}
+
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+
+	index, err := strconv.Atoi(token)
+	if err != nil {
+		return 0, false
+	}
+
+	return index, true
 }
 
 // PlainValue decodes plaintext bytes of a decrypted secret into a plain JSON

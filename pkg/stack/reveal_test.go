@@ -479,3 +479,149 @@ func TestSecretCiphertextOfRejectsNonObjectElement(t *testing.T) {
 		}
 	}
 }
+
+// secretObject returns a secret object holding raw as its ciphertext, with
+// extra members appended before the closing brace.
+func secretObject(raw, extra string) string {
+	return `{"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` +
+		base64.StdEncoding.EncodeToString([]byte(raw)) + `"` + extra + `}`
+}
+
+// TestSecretCiphertextOfRejectsSecretInsideSecret proves a path below a
+// secret answers not-found. The masked set holds the outer secret only, so
+// the inner secret is not a masked path and must not answer.
+func TestSecretCiphertextOfRejectsSecretInsideSecret(t *testing.T) {
+	t.Parallel()
+
+	outer := secretObject("outer-cipher", `,"inner":`+secretObject("inner-cipher", ""))
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{"a":` + outer + `},"outputs":{}}]}`)
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	if !slices.Contains(masked, "/resources/0/inputs/a") || slices.Contains(masked, "/resources/0/inputs/a/inner") {
+		t.Fatalf("masked = %q, want the outer secret only", masked)
+	}
+
+	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/a")
+	if err != nil || string(got) != "outer-cipher" {
+		t.Fatalf("outer reveal = %q, %v; want outer-cipher", got, err)
+	}
+
+	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/inputs/a/inner"); err == nil {
+		t.Fatal("reveal of a secret inside a secret answered, want not-found")
+	}
+}
+
+// TestSecretCiphertextOfRejectsDuplicateKeys proves a document with a repeated
+// key fails the lookup, so the reveal never answers a value that the masked
+// read, which keeps the last key, shows as plain.
+func TestSecretCiphertextOfRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
+
+	const (
+		head = `{"secrets_providers":{"type":"service"},"resources":[`
+		urn  = `"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A"`
+	)
+
+	cases := map[string]string{
+		"duplicate resources key": head + `{` + urn + `,"inputs":{},"outputs":{"k":` +
+			secretObject("first", "") + `}}],"resources":[{` + urn + `,"inputs":{},"outputs":{"k":"plain"}}]}`,
+		"duplicate outputs key": head + `{` + urn + `,"inputs":{},` +
+			`"outputs":{"k":` + secretObject("first", "") + `},"outputs":{"k":"plain"}}]}`,
+		"duplicate key in the value's parent": head + `{` + urn + `,"inputs":{},"outputs":{"k":` +
+			secretObject("first", "") + `,"k":"plain"}}]}`,
+	}
+
+	for name, doc := range cases {
+		if _, _, err := stack.SecretCiphertextOf([]byte(doc), "/resources/0/outputs/k"); err == nil {
+			t.Errorf("%s: reveal answered, want an error", name)
+		}
+	}
+}
+
+// TestSecretCiphertextOfRejectsNonCanonicalPath proves a path that is not in
+// RFC 6901 canonical form answers not-found: an index with a sign or a leading
+// zero, or an escape other than ~0 and ~1. The key a~b is named a~0b.
+func TestSecretCiphertextOfRejectsNonCanonicalPath(t *testing.T) {
+	t.Parallel()
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
+		`"outputs":{"a~b":` + secretObject("tilde", "") + `}}]}`)
+
+	for _, path := range []string{
+		"/resources/+0/outputs/a~0b",
+		"/resources/00/outputs/a~0b",
+		"/resources/0/outputs/a~b",
+		"/resources/0/outputs/a~2b",
+		"/resources/0/outputs/a~0b~",
+	} {
+		if _, _, err := stack.SecretCiphertextOf(deployment, path); err == nil {
+			t.Errorf("reveal of %q answered, want not-found", path)
+		}
+	}
+
+	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/a~0b")
+	if err != nil || string(got) != "tilde" {
+		t.Fatalf("canonical reveal = %q, %v; want tilde", got, err)
+	}
+}
+
+// TestSecretCiphertextOfDoesNotReadLargeTarget proves the lookup does not copy
+// a large target value that is not a secret. A 12 MiB string at the path is
+// not read at all, and a 12 MiB object of small members is streamed.
+//
+//nolint:paralleltest // The allocation measurement needs a quiet runtime, so this test never runs in parallel.
+func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
+	const size = 12 << 20
+
+	members := make([]string, 0, size/1024)
+	for i := range size / 1024 {
+		members = append(members, `"m`+strconv.Itoa(i)+`":"`+strings.Repeat("x", 1000)+`"`)
+	}
+
+	// The ancestor check reads the object that holds the target in full, so a
+	// large string beside the target costs the bound of the document: about
+	// four times the string. A small-member object costs the 4 MiB floor.
+	cases := map[string]struct {
+		value string
+		bound uint64
+	}{
+		"string": {`"` + strings.Repeat("y", size) + `"`, 4<<20 + 4*size},
+		"object": {`{` + strings.Join(members, ",") + `}`, 4 << 20},
+	}
+
+	for name, tc := range cases {
+		value := tc.value
+		deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+			`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
+			`"outputs":{"password":` + value + `}}]}`)
+
+		const path = "/resources/0/outputs/password"
+
+		runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+		runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		_, _, err := stack.SecretCiphertextOf(deployment, path)
+
+		runtime.ReadMemStats(&after)
+
+		if err == nil {
+			t.Errorf("%s: reveal answered a value that is not a secret", name)
+		}
+
+		if growth := after.TotalAlloc - before.TotalAlloc; growth > tc.bound {
+			t.Errorf("%s: allocated = %d bytes, want at most %d for a %d-byte target",
+				name, growth, tc.bound, len(deployment))
+		}
+	}
+}
