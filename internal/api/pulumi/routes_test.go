@@ -313,15 +313,16 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              newUnusedUpdates(t, namespaces),
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        stubAuthenticator{},
-		Authorizer:           stubAuthorizer{},
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              base,
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               newUnusedUpdates(t, namespaces),
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         stubAuthenticator{},
+		Authorizer:            stubAuthorizer{},
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               base,
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -351,15 +352,16 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              newEnforcingUpdates(t, namespaces),
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               newEnforcingUpdates(t, namespaces),
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            authz,
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -554,6 +556,7 @@ func routeRequest(t *testing.T, route pulumi.Route, token string) *http.Request 
 		"{stack}", "prod",
 		"{update}", "update0123456789abcdef",
 		"{version}", "1",
+		"{urn}", "urn:pulumi:dev::web::custom:resource:Type::res1",
 	).Replace(route.Path)
 
 	target := path
@@ -605,6 +608,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 		}
 
 		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(statePatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
@@ -686,6 +693,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 		}
 
 		if slices.Contains(secretPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(statePatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
@@ -1414,15 +1425,16 @@ func newDeleteHandler(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              updates,
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: 0,
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               newTestSecrets(t, namespaces),
+		Namespaces:            namespaces,
+		Authenticator:         tokenAuthenticator{},
+		Authorizer:            selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		MaxBodyBytesInFlight:  0,
+		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

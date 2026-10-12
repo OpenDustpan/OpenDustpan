@@ -61,6 +61,11 @@ type Route struct {
 // console and operators read only this API, and they update on their own
 // schedule.
 func (h *Handler) buildRoutes() []Route {
+	return append(h.coreRoutes(), h.maintenanceRoutes()...)
+}
+
+// coreRoutes returns the namespace, metrics, backup and check routes.
+func (h *Handler) coreRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodPost,
@@ -102,6 +107,28 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveServer,
 			Serve:   h.getBackup,
 		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/backups/{id}/check",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerBackup},
+			Resolve: resolveServer,
+			Serve:   h.checkBackup,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/upgrade-check",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer,
+			Serve:   h.serveUpgradeCheck,
+		},
+	}
+}
+
+// maintenanceRoutes returns the maintenance routes (ADR 38).
+func (h *Handler) maintenanceRoutes() []Route {
+	return []Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/maintenance",

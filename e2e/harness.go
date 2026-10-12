@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -155,11 +156,17 @@ type Env struct {
 	workspaces *workspace.Service
 	// blobs holds checkpoint and state content, so the seed helpers save
 	// through the same store as the server.
-	blobs   *fs.Store
-	token   string
-	tokenB  string
-	home    string
-	project string
+	blobs blob.Store
+	// blobName is the live blob store of the run: "fs" or "s3". The report
+	// names it, so a summary shows what was driven.
+	blobName string
+	// s3Endpoint is the S3 endpoint URL of an S3 run, or "" on the directory
+	// store. Client commands pass it as --s3-endpoint.
+	s3Endpoint string
+	token      string
+	tokenB     string
+	home       string
+	project    string
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
@@ -209,7 +216,7 @@ type serverBuild struct {
 	handler    http.Handler
 	store      serverStore
 	workspaces *workspace.Service
-	blobs      *fs.Store
+	blobs      blob.Store
 	dbProxy    *DBProxy
 }
 
@@ -219,6 +226,8 @@ type serverBuild struct {
 // isolated schema that is dropped when the test ends. OpenTofu gets an HTTPS
 // server, because its service discovery refuses plain HTTP, and the server's
 // certificate is the only one it trusts. Everything is removed when the test ends.
+// The server hides the delta checkpoint capability, so the CLI sends whole
+// checkpoints; use NewEnvWithDeltaCutoff for delta uploads.
 //
 // With E2E_SERVER=binary the server is the real cmd/opendustpan binary run
 // with --tls-cert and --tls-key, fronted by a recording proxy. That variant
@@ -226,11 +235,22 @@ type serverBuild struct {
 func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
+	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
+}
+
+// NewEnvWithDeltaCutoff starts a server as NewEnv does, with the delta
+// checkpoint cutoff in bytes. A cutoff of 1 makes every save after the
+// first a delta; 0 hides the delta capability.
+func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, store Store, cutoff int) *Env {
+	tb.Helper()
+
 	dir := tb.TempDir()
 	token := newToken(tb)
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec}
+	in := envInput{
+		tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec, deltaCutoff: cutoff,
+	}
 
 	if UseBinaryServer() {
 		return newBinaryEnv(ctx, in)
@@ -245,13 +265,12 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
-	build := newServer(
-		ctx,
-		tb,
-		in.store,
-		filepath.Join(in.dir, "dustpan.db"),
-		serverTokens{tokenA: in.token, tokenB: in.tokenB},
-	)
+	build := newServer(ctx, tb, serverArgs{
+		store:       in.store,
+		dbPath:      filepath.Join(in.dir, "dustpan.db"),
+		tokens:      serverTokens{tokenA: in.token, tokenB: in.tokenB},
+		deltaCutoff: in.deltaCutoff,
+	})
 
 	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
 	if in.cli.Tool == ToolTofu {
@@ -274,6 +293,8 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		client:        client,
 		workspaces:    build.workspaces,
 		blobs:         build.blobs,
+		blobName:      blobNameOf(tb),
+		s3Endpoint:    s3EndpointOf(tb),
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),
@@ -365,16 +386,19 @@ func openServerStore(ctx context.Context, tb testing.TB, store Store, dbPath str
 	}
 }
 
-func newServer(
-	ctx context.Context,
-	tb testing.TB,
-	store Store,
-	dbPath string,
-	tokens serverTokens,
-) serverBuild {
+// serverArgs groups what newServer needs, so the constructor takes one
+// argument next to the context and the test helper.
+type serverArgs struct {
+	store       Store
+	dbPath      string
+	tokens      serverTokens
+	deltaCutoff int
+}
+
+func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy := openServerStore(ctx, tb, store, dbPath)
+	st, dbProxy := openServerStore(ctx, tb, args.store, args.dbPath)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
 	if err != nil {
@@ -386,7 +410,7 @@ func newServer(
 	// new installation is proven through the API with the bootstrap admin
 	// token, not through a direct store call.
 
-	authn, err := identity.NewStaticTokens(tokens.tokenA, tokens.tokenB)
+	authn, err := identity.NewStaticTokens(args.tokens.tokenA, args.tokens.tokenB)
 	if err != nil {
 		tb.Fatalf("static tokens: %v", err)
 	}
@@ -404,9 +428,9 @@ func newServer(
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
 
-	blobs := openTestBlobStore(tb, dbPath)
+	blobs := openTestBlobStore(ctx, tb, args.dbPath)
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
-	target, targetName := openBackupTarget(tb, dbPath)
+	target, targetName := openBackupTarget(tb, args.dbPath)
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
@@ -423,6 +447,7 @@ func newServer(
 		dustpan.WithBackupTarget(target, targetName),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 	)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
@@ -457,7 +482,7 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 // newWorkspaceService returns the workspace use cases over st and blobs,
 // for the seed helpers.
 func newWorkspaceService(
-	tb testing.TB, st serverStore, blobs *fs.Store, namespaces *namespace.Service,
+	tb testing.TB, st serverStore, blobs blob.Store, namespaces *namespace.Service,
 ) *workspace.Service {
 	tb.Helper()
 
@@ -498,9 +523,19 @@ func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverSt
 	return st
 }
 
-// openTestBlobStore opens a blob store in the test directory holding dbPath.
-func openTestBlobStore(tb testing.TB, dbPath string) *fs.Store {
+// openTestBlobStore opens the live blob store of one environment: an
+// S3-compatible store under a unique prefix with E2E_BLOBS=s3, else a blob
+// store in the test directory holding dbPath.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openTestBlobStore(ctx context.Context, tb testing.TB, dbPath string) blob.Store {
 	tb.Helper()
+
+	if UseS3Blobs(tb) {
+		cfg := RequireS3Config(tb)
+
+		return openS3Store(ctx, tb, cfg, newS3RunPrefix(tb)+"/blobs")
+	}
 
 	return openBlobStoreAt(tb, filepath.Join(filepath.Dir(dbPath), "blobs"))
 }

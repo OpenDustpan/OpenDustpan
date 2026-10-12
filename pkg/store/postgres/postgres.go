@@ -5,8 +5,9 @@
 // the write commits or aborts. Migrations run under a transaction-scoped
 // advisory lock, so several servers can start at once.
 //
-// Inspect opens a database read-only and reports its schema state. It is the
-// one place `opendustpan upgrade check` reads.
+// AppliedMigrations reports the rows of schema_migrations ordered by
+// version. It is the one place `opendustpan upgrade check` reads, through
+// the installation API: only the server opens the database.
 package postgres
 
 import (
