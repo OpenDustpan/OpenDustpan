@@ -24,12 +24,14 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/state-versions | Token, `unit:read` | Lists the finalized state versions of the filtered workspace, newest first. Needs `filter[organization][name]` and `filter[workspace][name]`. Supports `page[number]` and `page[size]`. |
 | GET | /api/v2/state-versions/{state_version_id} | Token, `unit:read` | Reads one finalized state version. Other versions answer 404. |
 | GET | /api/v2/state-versions/{state_version_id}/download | Token, `unit:read` and `unit:read-secrets` | Downloads the state document as JSON. |
+| GET | /api/v2/state-versions/{state_version_id}/resources | Token, `unit:read` | Lists the masked resources of one finalized state version with `page[cursor]` and `page[size]`: type `state-version-resources` with `address`, `type`, `provider`, `module` and `changed`. `meta` holds the next cursor and `incomplete`. A state the client encrypted answers 409. |
+| GET | /api/v2/state-versions/{state_version_id}/resources/{address} | Token, `unit:read` | Reads one masked resource by address (path-escaped): its instances with masked `attributes` and the `masked` value paths. Unknown addresses answer 404. A state the client encrypted answers 409. |
 | GET | /api/v2/workspaces/{id}/current-state-version-outputs | Token, `unit:read` | Reads the outputs of the current state. |
 | GET | /api/v2/state-version-outputs/{output_id} | Token, `unit:read` and `unit:read-secrets` | Reads one output by ID. Unknown outputs answer 404. |
 | POST | /api/v2/workspaces/{id}/state-versions | Token, `unit:write` | Declares a state version. The caller must hold the lock. |
 | POST | /api/v2/state-versions/{state_version_id}/actions/restore | Token, `unit:write` | Makes the version current again as a new, forced version. Unknown versions answer 404. Another holder answers 409. |
 | PUT | /api/v2/state-uploads/{id}/{token} | Capability URL, no sign-in | Uploads the state document. The token is single use. |
-| PUT | /api/v2/json-state-uploads/{id}/{token} | Capability URL, no sign-in | Accepts the JSON rendering and discards it. The token is single use. |
+| PUT | /api/v2/json-state-uploads/{id}/{token} | Capability URL, no sign-in | Accepts the JSON rendering, keeps only the JSON Pointer paths that `sensitive_values` marks, and discards the rest. The token is single use. |
 
 ## Differences from TFE
 
@@ -63,6 +65,14 @@ The server keeps remote state and locks for local execution only.
 - A force upload never skips the lock check.
 - Errors are JSON:API documents with `status`, `title`, and `detail`.
 - The media type is `application/vnd.api+json`.
+- The masked resource routes answer the structure of a state version with
+  each secret value as a marker holding its value path: outputs with
+  `"sensitive": true`, paths in `sensitive_attributes`, and paths the kept
+  `json-state` marks name. A version with no kept marks masks every
+  attribute value of each resource instance. No route answers a secret
+  value, ciphertext, or sealed bytes.
+- A state that the client encrypted answers 409 with `encrypted-by-client`
+  on the resource routes. The outputs list still works for it.
 
 ## State at rest
 

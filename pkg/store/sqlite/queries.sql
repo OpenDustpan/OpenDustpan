@@ -353,13 +353,13 @@ WHERE workspace_id = ?;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    restored_from, sealed, sensitive_marks
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE id = ?;
 
@@ -368,7 +368,7 @@ WHERE id = ?;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -395,7 +395,7 @@ WHERE workspace_id = ? AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -412,6 +412,14 @@ WHERE id = ? AND status = 'pending';
 UPDATE state_versions
 SET content_key = ?
 WHERE id = ? AND status = 'pending';
+
+-- name: SaveSensitiveMarks :execrows
+-- Stores the secret paths of the json-state rendering of one version. It
+-- works on a pending and on a finalized version: the rendering may land
+-- after the state upload finalizes. A missing version matches no row.
+UPDATE state_versions
+SET sensitive_marks = ?
+WHERE id = ?;
 
 -- name: FinalizeStateVersion :execrows
 -- Marks one pending version finalized with its recorded attempt. The write
@@ -432,7 +440,8 @@ WHERE id = ?;
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
+       sv.sensitive_marks
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?;

@@ -1599,6 +1599,32 @@ func (s *fakeBackupStore) RecordUploadAttempt(
 	return superseded, nil
 }
 
+// SaveSensitiveMarks implements workspace.StateStore.
+func (s *fakeBackupStore) SaveSensitiveMarks(
+	_ context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return err
+	}
+
+	sv, ok := s.data.states[id.String()]
+	if !ok {
+		return workspace.ErrStateVersionNotFound
+	}
+
+	sv.SensitiveMarks = marks
+	s.data.states[id.String()] = sv
+
+	return nil
+}
+
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the expired pending versions of id, oldest expiry first.
 func (s *fakeBackupStore) DeleteExpiredPendingStateVersions(

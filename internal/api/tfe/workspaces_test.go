@@ -736,6 +736,18 @@ func (p pagingWorkspaces) ReadState(
 	return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 }
 
+func (p pagingWorkspaces) ReadResources(
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StatePage, error) {
+	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
+}
+
+func (p pagingWorkspaces) ReadResource(
+	_ context.Context, _ workspace.StateVersionID, _ string,
+) (workspace.StateDetail, error) {
+	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
 func (p pagingWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, workspace.ErrStateVersionNotFound
 }

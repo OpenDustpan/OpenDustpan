@@ -262,6 +262,7 @@ func (s *Store) CreateStateVersion(
 			Outputs:           row.Outputs,
 			Force:             row.Force,
 			Sealed:            row.Sealed,
+			SensitiveMarks:    row.SensitiveMarks,
 			UploadDigest:      row.UploadDigest,
 			UploadExpiresAtMs: row.UploadExpiresAtMs,
 			Holder:            row.Holder,
@@ -465,6 +466,38 @@ func (s *Store) RecordUploadAttempt(
 	}
 
 	return superseded, nil
+}
+
+// SaveSensitiveMarks implements workspace.StateStore: it stores the secret
+// paths of the json-state rendering of id. It works on a pending and on a
+// finalized version: the rendering may land after the state upload
+// finalizes. A missing version reports ErrStateVersionNotFound.
+func (s *Store) SaveSensitiveMarks(
+	ctx context.Context, id workspace.StateVersionID, marks workspace.SensitiveMarks, fence namespace.Fence,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	raw, err := codec.MarshalSensitiveMarks(marks)
+	if err != nil {
+		return fmt.Errorf("encode sensitive marks: %w", err)
+	}
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		n, err := q.SaveSensitiveMarks(ctx, db.SaveSensitiveMarksParams{
+			SensitiveMarks: raw,
+			ID:             id.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("save sensitive marks: %w", err)
+		}
+
+		if n == 0 {
+			return workspace.ErrStateVersionNotFound
+		}
+
+		return nil
+	})
 }
 
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
@@ -719,6 +752,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Force:             row.Force,
 		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
+		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
 		UploadExpiresAtMs: row.UploadExpiresAtMs,
