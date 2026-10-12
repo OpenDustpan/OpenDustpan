@@ -72,6 +72,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testWorkspaceInventoryAfterCreate,
 		},
 		{name: "lock, unlock and finalize move the inventory entry", test: testInventoryFollowsWrites},
+		{name: "a stale fence on lock writes no lock", test: testWorkspaceInventoryLockFenced},
 		{name: "a failed write leaves the inventory unchanged", test: testWorkspaceInventoryFailedWrite},
 		{name: "list returns only finalized versions, newest first", test: testListStateVersionsNewestFirst},
 		{
@@ -375,6 +376,39 @@ func assertWorkspaceEntry(t *testing.T, got inventory.Entry, w workspace.Workspa
 		!got.LastChanged.Equal(changed) || got.Status != "" || got.ResourceCount != nil ||
 		got.Reference() != wantRef {
 		t.Fatalf("inventory entry = %+v, want opentofu unit %q changed %v", got, wantRef, changed)
+	}
+
+	assertWorkspaceLock(t, got.Lock, w.Lock)
+}
+
+// assertWorkspaceLock checks a projection lock against a workspace lock: an
+// unlocked workspace reads no lock, a held one reads its holder with its
+// take time and its reason as the operation, or "lock" without one. It fails
+// the test on a mismatch, so the holder is always the subject that took the
+// lock, never a token or a secret.
+func assertWorkspaceLock(t *testing.T, got *inventory.Lock, want workspace.Lock) {
+	t.Helper()
+
+	if !want.Locked() {
+		if got != nil {
+			t.Fatalf("inventory lock = %+v, want none", got)
+		}
+
+		return
+	}
+
+	operation := want.Reason
+	if operation == "" {
+		operation = "lock"
+	}
+
+	if got == nil {
+		t.Fatalf("inventory lock is missing, want holder %q operation %q", want.Holder, operation)
+	}
+
+	if got.Holder != want.Holder || !got.Since.Equal(want.LockedAt) || got.Operation != operation {
+		t.Fatalf("inventory lock = %+v, want holder %q operation %q since %v",
+			got, want.Holder, operation, want.LockedAt)
 	}
 }
 
@@ -1296,6 +1330,39 @@ func testInventoryFollowsWrites(t *testing.T, s WorkspaceStore) {
 	}
 
 	assertWorkspaceEntry(t, entries[0], stored, finalized.FinalizedAt)
+}
+
+// testWorkspaceInventoryLockFenced checks a stale fence fails the lock write and
+// writes nothing: the entry holds no lock after. Unlock and force-unlock
+// save through the same path, so the fence guards their clear too.
+func testWorkspaceInventoryLockFenced(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	locked := w
+	locked.Lock = workspace.Lock{
+		LockedAt: now(),
+		ID:       "lock-alice",
+		Holder:   "alice",
+		Reason:   "apply",
+	}
+	locked.UpdatedAt = now().Add(time.Hour)
+	locked.Revision++
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.SaveWorkspace(t.Context(), locked, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("lock with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	entries := listWorkspaceInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries after a fenced lock = %+v, want one", entries)
+	}
+
+	assertWorkspaceEntry(t, entries[0], w, w.UpdatedAt)
 }
 
 func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {

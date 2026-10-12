@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -87,6 +88,10 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
+		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},
+		{name: "inventory shows no lock for a preview or a dry run", test: testInventoryIgnoresPreviewLock},
+		{name: "inventory keeps the lock after the lease expires", test: testInventoryKeepsLockAfterLeaseExpiry},
+		{name: "a stale fence on start and end writes no lock", test: testUpdateInventoryLockFenced},
 	}
 
 	for _, tc := range cases {
@@ -173,7 +178,7 @@ func (f fixture) other(t *testing.T) stack.Ref {
 func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan) stack.Update {
 	t.Helper()
 
-	u := newUpdate(ref, id, plan, "", 0)
+	u := newUpdate(ref, id, plan, plan.CreatedBy, plan.RestoredFrom)
 
 	if err := f.s.CreateUpdate(t.Context(), u, f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
@@ -2073,6 +2078,173 @@ func testInventoryAfterUpdateFinish(t *testing.T, f fixture) {
 		!got.LastChanged.Equal(done.EndedAt) || got.Status != "" || got.ResourceCount != nil {
 		t.Fatalf("inventory entry = %+v, want pulumi %q changed %v", got, wantName, done.EndedAt)
 	}
+
+	if got.Lock != nil {
+		t.Fatalf("inventory lock after finish = %+v, want none", got.Lock)
+	}
+}
+
+// testInventoryHoldsRunningLock starts a mutating update and checks the
+// entry holds its lock in the same transaction as the start: the creator
+// with the update kind, since its start. Ending the update clears it in the
+// same transaction as the end itself.
+func testInventoryHoldsRunningLock(t *testing.T, f fixture) {
+	t.Helper()
+
+	plan := stack.Plan{Kind: stack.KindRefresh, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+	u := f.run(t, f.ref, "u1", plan)
+
+	entries := listUpdatesInventory(t, f)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	assertStackLock(t, entries[0].Lock, "admin", "refresh", u.StartedAt)
+
+	done := f.end(t, u, stack.StatusSucceeded)
+
+	entries = listUpdatesInventory(t, f)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries after finish = %+v, want one", entries)
+	}
+
+	if entries[0].Lock != nil {
+		t.Fatalf("inventory lock after finish = %+v, want none", entries[0].Lock)
+	}
+
+	if !entries[0].LastChanged.Equal(done.EndedAt) {
+		t.Fatalf("inventory change = %v, want the end %v", entries[0].LastChanged, done.EndedAt)
+	}
+}
+
+// testInventoryIgnoresPreviewLock starts a preview and a dry run and checks
+// neither publishes a lock: only a mutating update holds the stack.
+func testInventoryIgnoresPreviewLock(t *testing.T, f fixture) {
+	t.Helper()
+
+	f.run(t, f.ref, "u1", preview())
+
+	entries := listUpdatesInventory(t, f)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	if entries[0].Lock != nil {
+		t.Fatalf("inventory lock of a preview = %+v, want none", entries[0].Lock)
+	}
+
+	other := f.other(t)
+	f.run(t, other, "u1", dryRun())
+
+	entries = listUpdatesInventory(t, f)
+	if len(entries) != 2 {
+		t.Fatalf("inventory entries = %+v, want two", entries)
+	}
+
+	for i := range entries {
+		if entries[i].Lock != nil {
+			t.Fatalf("inventory lock of %q = %+v, want none", entries[i].Name, entries[i].Lock)
+		}
+	}
+}
+
+// testInventoryKeepsLockAfterLeaseExpiry starts an update whose lease already
+// expired and checks the entry still holds its lock. An expired lease still
+// holds the stack lock until someone cancels the update, so the projection
+// clears only on the terminal transition, never on expiry.
+func testInventoryKeepsLockAfterLeaseExpiry(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.create(t, f.ref, "u1", mutating())
+
+	tok, err := token.New()
+	if err != nil {
+		t.Fatalf("new lease token: %v", err)
+	}
+
+	u.Status = stack.StatusRunning
+	u.StartedAt = now().Add(time.Second)
+	u.Lease = stack.Lease{ExpiresAt: now().Add(-time.Minute), Digest: tok.Digest()}
+	u.Revision++
+
+	got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+	if err != nil {
+		t.Fatalf("start update with an expired lease: %v", err)
+	}
+
+	entries := listUpdatesInventory(t, f)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	assertStackLock(t, entries[0].Lock, "", string(stack.KindUpdate), got.StartedAt)
+}
+
+// testUpdateInventoryLockFenced checks a stale fence fails both lock writes and
+// writes nothing: a start publishes no lock, and a fenced end keeps the
+// running lock it found.
+func testUpdateInventoryLockFenced(t *testing.T, f fixture) {
+	t.Helper()
+
+	stale := namespace.Fence{Namespace: f.ref.Namespace, FailoverVersion: f.fence.FailoverVersion + 1}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "admin", RestoredFrom: 0}
+
+	u := f.create(t, f.ref, "u1", plan)
+
+	if _, err := f.s.StartUpdate(t.Context(), started(t, u), stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("start with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	entries := listUpdatesInventory(t, f)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries = %+v, want one", entries)
+	}
+
+	if entries[0].Lock != nil {
+		t.Fatalf("inventory lock after a fenced start = %+v, want none", entries[0].Lock)
+	}
+
+	running := f.start(t, u)
+
+	entries = listUpdatesInventory(t, f)
+	assertStackLock(t, entries[0].Lock, "admin", "update", running.StartedAt)
+
+	if err := f.s.SaveUpdate(t.Context(), ended(running, stack.StatusSucceeded), stale); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
+		t.Fatalf("end with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	entries = listUpdatesInventory(t, f)
+	assertStackLock(t, entries[0].Lock, "admin", "update", running.StartedAt)
+}
+
+// assertStackLock checks a projection lock against its holder, operation and
+// take time. It fails the test on a missing lock or a mismatch, so the holder
+// is always the subject the update records, never a token or a secret.
+func assertStackLock(t *testing.T, got *inventory.Lock, holder, operation string, since time.Time) {
+	t.Helper()
+
+	if got == nil {
+		t.Fatalf("inventory lock is missing, want holder %q operation %q", holder, operation)
+	}
+
+	if got.Holder != holder || got.Operation != operation || !got.Since.Equal(since) {
+		t.Fatalf("inventory lock = %+v, want holder %q operation %q since %v", got, holder, operation, since)
+	}
+}
+
+// listUpdatesInventory returns the inventory entries of the fixture stack's
+// namespace, failing the test on error.
+func listUpdatesInventory(t *testing.T, f fixture) []inventory.Entry {
+	t.Helper()
+
+	entries, err := f.s.ListUnits(t.Context(), f.ref.Namespace)
+	if err != nil {
+		t.Fatalf("list inventory: %v", err)
+	}
+
+	return entries
 }
 
 func assertUpdate(t *testing.T, f fixture, want stack.Update) {

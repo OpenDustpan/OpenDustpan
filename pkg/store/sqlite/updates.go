@@ -114,7 +114,13 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 			return err
 		}
 
-		return saveUpdate(ctx, q, u, stackID)
+		if err := saveUpdate(ctx, q, u, stackID); err != nil {
+			return err
+		}
+
+		// A started mutating update holds the stack lock: publish it in the
+		// same transaction. Previews and dry runs never lock.
+		return publishStartLock(ctx, q, u)
 	})
 	if err != nil {
 		return stack.Update{}, err
@@ -156,7 +162,13 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return fmt.Errorf("set stack version: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, u.Ref, stackID, codec.Millis(u.EndedAt))
+		if err := publishStackInventory(ctx, q, u.Ref, stackID, codec.Millis(u.EndedAt)); err != nil {
+			return err
+		}
+
+		// The ended update releases the stack lock: clear it in the same
+		// transaction.
+		return writeInventoryLock(ctx, q, stackInventoryKey(u), nil)
 	})
 }
 
