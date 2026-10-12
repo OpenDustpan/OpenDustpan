@@ -793,9 +793,10 @@ func checkReady(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 // checkReadyWithoutDatabase proves a stopped database turns /health/ready to
 // 503 with the check name only while /health/live stays 204, and that
-// reopening the database turns /health/ready to 200 again. The binary server
-// and the in-process server both reach PostgreSQL through a TCP proxy, so
-// closing the proxy stops the database for that server only. On SQLite the
+// starting the database again turns /health/ready to 200 again. The binary
+// server and the in-process server both reach PostgreSQL through a TCP proxy,
+// so pausing the proxy stops the database for that server only. The proxy
+// keeps its port while paused (issue 391). On SQLite the
 // step is skipped with a report entry that says why.
 func checkReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -837,7 +838,7 @@ func checkReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) 
 }
 
 // doReadyWithoutDatabase runs the stopped-database sequence and returns an
-// error for the first check that fails. It reopens the proxy before
+// error for the first check that fails. It resumes the proxy before
 // returning an error after the stop, so the environment stays usable.
 func doReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) error {
 	t.Helper()
@@ -850,12 +851,12 @@ func doReadyWithoutDatabase(ctx context.Context, t *testing.T, env *e2e.Env) err
 
 	stoppedErr := checkStoppedDatabase(ctx, env)
 	if stoppedErr != nil {
-		env.StartDatabase(ctx, t)
+		env.StartDatabase(t)
 
 		return stoppedErr
 	}
 
-	env.StartDatabase(ctx, t)
+	env.StartDatabase(t)
 
 	return checkRecoveredDatabase(ctx, env)
 }
