@@ -160,6 +160,9 @@ skill (ADR 14):
   Never turn a hedge into a fact to make a sentence shorter.
 - `make docs-lint` checks README, `CLAUDE.md`, `GLOSSARY.md` and ADRs from 14
   on. ADRs accepted before ADR 14 are exempt, because ADR 1 forbids edits.
+- Do not use words that claim quality without proof. Give the measurement or
+  the fact. Do not use emoji. `scripts/docs-banned-words.py` holds the list of
+  banned words, and `make docs-lint` runs it on the same files.
 
 ## Working in this repo
 
