@@ -185,14 +185,15 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	}
 
 	handler, err := pulumiapi.NewHandler(pulumiapi.Config{
-		Stacks:        stacks,
-		Updates:       updates,
-		Secrets:       secrets,
-		Namespaces:    namespaces,
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		BaseURL:       baseurl.Resolver{},
+		Stacks:                stacks,
+		Updates:               updates,
+		Secrets:               secrets,
+		Namespaces:            namespaces,
+		Authenticator:         coverageAuthenticator{},
+		Authorizer:            coverageAuthorizer{},
+		Logger:                slog.New(slog.DiscardHandler),
+		BaseURL:               baseurl.Resolver{},
+		CheckpointDeltaCutoff: 0,
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
 	})

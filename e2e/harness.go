@@ -219,6 +219,8 @@ type serverBuild struct {
 // isolated schema that is dropped when the test ends. OpenTofu gets an HTTPS
 // server, because its service discovery refuses plain HTTP, and the server's
 // certificate is the only one it trusts. Everything is removed when the test ends.
+// The server hides the delta checkpoint capability, so the CLI sends whole
+// checkpoints; use NewEnvWithDeltaCutoff for delta uploads.
 //
 // With E2E_SERVER=binary the server is the real cmd/opendustpan binary run
 // with --tls-cert and --tls-key, fronted by a recording proxy. That variant
@@ -226,11 +228,22 @@ type serverBuild struct {
 func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
+	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
+}
+
+// NewEnvWithDeltaCutoff starts a server as NewEnv does, with the delta
+// checkpoint cutoff in bytes. A cutoff of 1 makes every save after the
+// first a delta; 0 hides the delta capability.
+func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, store Store, cutoff int) *Env {
+	tb.Helper()
+
 	dir := tb.TempDir()
 	token := newToken(tb)
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec}
+	in := envInput{
+		tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec, deltaCutoff: cutoff,
+	}
 
 	if UseBinaryServer() {
 		return newBinaryEnv(ctx, in)
@@ -245,13 +258,12 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
-	build := newServer(
-		ctx,
-		tb,
-		in.store,
-		filepath.Join(in.dir, "dustpan.db"),
-		serverTokens{tokenA: in.token, tokenB: in.tokenB},
-	)
+	build := newServer(ctx, tb, serverArgs{
+		store:       in.store,
+		dbPath:      filepath.Join(in.dir, "dustpan.db"),
+		tokens:      serverTokens{tokenA: in.token, tokenB: in.tokenB},
+		deltaCutoff: in.deltaCutoff,
+	})
 
 	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
 	if in.cli.Tool == ToolTofu {
@@ -365,16 +377,19 @@ func openServerStore(ctx context.Context, tb testing.TB, store Store, dbPath str
 	}
 }
 
-func newServer(
-	ctx context.Context,
-	tb testing.TB,
-	store Store,
-	dbPath string,
-	tokens serverTokens,
-) serverBuild {
+// serverArgs groups what newServer needs, so the constructor takes one
+// argument next to the context and the test helper.
+type serverArgs struct {
+	store       Store
+	dbPath      string
+	tokens      serverTokens
+	deltaCutoff int
+}
+
+func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy := openServerStore(ctx, tb, store, dbPath)
+	st, dbProxy := openServerStore(ctx, tb, args.store, args.dbPath)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
 	if err != nil {
@@ -386,7 +401,7 @@ func newServer(
 	// new installation is proven through the API with the bootstrap admin
 	// token, not through a direct store call.
 
-	authn, err := identity.NewStaticTokens(tokens.tokenA, tokens.tokenB)
+	authn, err := identity.NewStaticTokens(args.tokens.tokenA, args.tokens.tokenB)
 	if err != nil {
 		tb.Fatalf("static tokens: %v", err)
 	}
@@ -404,9 +419,9 @@ func newServer(
 		tb.Fatalf("check key wrapper: %v", checkErr)
 	}
 
-	blobs := openTestBlobStore(tb, dbPath)
+	blobs := openTestBlobStore(tb, args.dbPath)
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
-	target, targetName := openBackupTarget(tb, dbPath)
+	target, targetName := openBackupTarget(tb, args.dbPath)
 
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
@@ -423,6 +438,7 @@ func newServer(
 		dustpan.WithBackupTarget(target, targetName),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
+		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 	)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)

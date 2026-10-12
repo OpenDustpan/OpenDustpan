@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -217,7 +218,150 @@ func runOnStore(t *testing.T, cli e2e.Install, store e2e.Store, scenario func(*t
 	env = e2e.NewEnv(t.Context(), t, cli, store)
 
 	scenario(t, env)
+
+	if cli.Tool == e2e.ToolPulumi {
+		checkDeltaCheckpoints(t, cli, store)
+	}
+
 	checkReadyWithoutDatabase(t.Context(), t, env)
+}
+
+// checkDeltaCheckpoints proves delta checkpoint uploads on two fresh
+// servers: one with the capability at cutoff 1, so every save after the
+// first is a delta, and one with it off. Both run the same up and both
+// exports match. The recorder shows checkpointdelta calls only in the
+// first run. Each run writes its own report, so the route coverage sees
+// the verbatim and delta traffic.
+func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	on := cli
+	on.Label += "-delta-on"
+	onEnv := e2e.NewEnvWithDeltaCutoff(ctx, t, on, store, 1)
+
+	off := cli
+	off.Label += "-delta-off"
+	offEnv := e2e.NewEnvWithDeltaCutoff(ctx, t, off, store, 0)
+
+	onExport := deltaUp(ctx, t, onEnv)
+	offExport := deltaUp(ctx, t, offEnv)
+
+	onCanonical, offCanonical := canonicalExport(t, onExport), canonicalExport(t, offExport)
+	if onCanonical != offCanonical {
+		t.Errorf(
+			"stack export with delta uploads differs from stack export without them:\non=%s\noff=%s",
+			clipCanonical(onCanonical),
+			clipCanonical(offCanonical),
+		)
+	}
+
+	if !recordedPatch(onEnv, "/checkpointverbatim") {
+		t.Error("no PATCH checkpointverbatim answered 200 during up with cutoff 1")
+	}
+
+	if !recordedPatch(onEnv, "/checkpointdelta") {
+		t.Error("no PATCH checkpointdelta answered 200 during up with cutoff 1")
+	}
+
+	if !recordedPatch(offEnv, "/checkpoint") {
+		t.Error("no PATCH checkpoint answered 200 during up with the capability off")
+	}
+
+	if recordedPatch(offEnv, "/checkpointdelta") || recordedPatch(offEnv, "/checkpointverbatim") {
+		t.Error("delta traffic recorded with the capability off")
+	}
+
+	writeReport(t, e2e.NewRun(onEnv))
+	writeReport(t, e2e.NewRun(offEnv))
+}
+
+// deltaUp logs in, creates the stack and the other stack its program
+// references, runs up and returns the stack export. It carries no secrets,
+// so both delta runs hold the same state.
+func deltaUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+
+	env.Step(ctx, t, step("login", contains(env.URL), "login"))
+	env.Step(ctx, t, step("stack init", nil, "stack", "init", qualified))
+	env.Step(ctx, t, step("stack init other", nil, "stack", "init", "other"))
+	env.Step(ctx, t, step("stack select", nil, "stack", "select", qualified))
+	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
+
+	return env.Step(ctx, t, step("stack export", nil, "stack", "export")).Stdout
+}
+
+// providerIDPattern matches the random IDs the engine assigns to the
+// default provider on every up. Each delta run mints its own, so the
+// export comparison ignores them.
+var providerIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// canonicalExport returns the stack export with the volatile fields
+// removed: the two delta runs finish at different times on different
+// servers, so the manifest time, the service URL and the resource
+// timestamps always differ, and each up mints a new default provider ID.
+// What must match is the state itself.
+func canonicalExport(t *testing.T, raw string) string {
+	t.Helper()
+
+	var doc struct {
+		Version    int            `json:"version"`
+		Deployment map[string]any `json:"deployment"`
+	}
+
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatalf("decode stack export: %v", err)
+	}
+
+	delete(doc.Deployment, "manifest")
+
+	if providers, ok := doc.Deployment["secrets_providers"].(map[string]any); ok {
+		delete(providers, "state")
+	}
+
+	if resources, ok := doc.Deployment["resources"].([]any); ok {
+		for _, res := range resources {
+			if r, ok := res.(map[string]any); ok {
+				delete(r, "created")
+				delete(r, "modified")
+			}
+		}
+	}
+
+	canonical, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode stack export: %v", err)
+	}
+
+	return providerIDPattern.ReplaceAllString(string(canonical), "provider-id")
+}
+
+// clipCanonical shortens a canonical export for the failure report.
+func clipCanonical(s string) string {
+	const limit = 20000
+	if len(s) <= limit {
+		return s
+	}
+
+	return s[:limit] + "…"
+}
+
+// recordedPatch reports whether the up step recorded a PATCH of path with a
+// 200 answer. Suffixes keep checkpoint, checkpointverbatim and checkpointdelta
+// apart.
+func recordedPatch(env *e2e.Env, suffix string) bool {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		if entries[i].Step == "up" && entries[i].Method == http.MethodPatch &&
+			strings.HasSuffix(entries[i].Path, suffix) && entries[i].Status == http.StatusOK {
+			return true
+		}
+	}
+
+	return false
 }
 
 func writeReport(t *testing.T, r e2e.Run) {

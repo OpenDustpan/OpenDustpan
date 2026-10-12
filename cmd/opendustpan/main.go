@@ -34,6 +34,7 @@ import (
 	"strings"
 	"syscall"
 
+	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -76,6 +77,11 @@ var (
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+	)
+	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
+	// the delta capability off, so only negative values fail.
+	errDeltaCutoff = errors.New(
+		"checkpoint delta cutoff must not be negative: set --checkpoint-delta-cutoff (DUSTPAN_CHECKPOINT_DELTA_CUTOFF) to 0 or more",
 	)
 	// errBackupTarget reports a backup target with an unknown form. It shows
 	// the allowed forms, so the operator knows what to set. Only the serve
@@ -252,6 +258,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
+	if f.checkpointDeltaCutoff < 0 {
+		return errDeltaCutoff
+	}
+
 	return f.run(ctx, stderr)
 }
 
@@ -259,23 +269,24 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 type serveFlags struct {
 	common
 
-	listen               string
-	consoleDir           string
-	origins              string
-	tlsCert              string
-	tlsKey               string
-	publicURL            string
-	blobDir              string
-	blobStore            string
-	s3Endpoint           string
-	s3Region             string
-	backupTarget         string
-	logLevel             string
-	logFormat            string
-	maxCheckpointBytes   int64
-	maxSecretBatchBytes  int64
-	maxStateBytes        int64
-	maxBodyBytesInFlight int64
+	listen                string
+	consoleDir            string
+	origins               string
+	tlsCert               string
+	tlsKey                string
+	publicURL             string
+	blobDir               string
+	blobStore             string
+	s3Endpoint            string
+	s3Region              string
+	backupTarget          string
+	logLevel              string
+	logFormat             string
+	maxCheckpointBytes    int64
+	maxSecretBatchBytes   int64
+	maxStateBytes         int64
+	maxBodyBytesInFlight  int64
+	checkpointDeltaCutoff int64
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -393,6 +404,12 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 		"max-body-bytes-in-flight",
 		envBytes("DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT"),
 		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
+	)
+	fs.Int64Var(
+		&f.checkpointDeltaCutoff,
+		"checkpoint-delta-cutoff",
+		envDeltaCutoff("DUSTPAN_CHECKPOINT_DELTA_CUTOFF"),
+		"checkpoint size in bytes from which the CLI sends delta uploads, 0 turns delta uploads off (DUSTPAN_CHECKPOINT_DELTA_CUTOFF)",
 	)
 }
 
@@ -559,6 +576,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 	}
 }
 
@@ -1280,6 +1298,23 @@ func envBytes(key string) int64 {
 	raw, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return 0
+	}
+
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+
+	return n
+}
+
+// envDeltaCutoff returns the checkpoint delta cutoff in key, or the
+// default cutoff when unset. An invalid value returns -1, so the serve
+// check rejects it with the flag name.
+func envDeltaCutoff(key string) int64 {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return int64(pulumi.DefaultCheckpointDeltaCutoff)
 	}
 
 	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)

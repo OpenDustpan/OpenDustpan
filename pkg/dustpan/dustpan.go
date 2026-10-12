@@ -113,8 +113,11 @@ type settings struct {
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
 	maxBodyBytesInFlight int64
-	backupTarget         blob.Store
-	backupTargetName     string
+	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
+	// CLI sends delta uploads. Zero hides the delta capability.
+	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
 }
 
 // Option configures a Server.
@@ -262,6 +265,14 @@ func WithMaxBodyBytesInFlight(n int64) Option {
 	return func(o *settings) { o.maxBodyBytesInFlight = n }
 }
 
+// WithCheckpointDeltaCutoff sets the checkpoint size in bytes from which
+// the CLI sends delta uploads. Zero hides the delta capability, so the CLI
+// sends whole checkpoints. A negative value fails NewServer. Without this
+// option the server advertises the default cutoff.
+func WithCheckpointDeltaCutoff(n int) Option {
+	return func(o *settings) { o.checkpointDeltaCutoff = n }
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -304,35 +315,36 @@ type services struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore:       nil,
-		stackStore:           nil,
-		updateStore:          nil,
-		checkpointStore:      nil,
-		eventStore:           nil,
-		secretKeys:           nil,
-		secretWrapper:        nil,
-		workspaceStore:       nil,
-		stateStore:           nil,
-		blobStore:            nil,
-		inventoryReader:      nil,
-		authenticator:        nil,
-		authorizer:           identity.AdminOnly{},
-		logger:               slog.New(slog.DiscardHandler),
-		now:                  time.Now,
-		region:               "",
-		listenAddr:           defaultListenAddr,
-		consoleDir:           "",
-		allowedOrigins:       nil,
-		tlsCertFile:          "",
-		tlsKeyFile:           "",
-		publicURL:            "",
-		version:              "",
-		maxCheckpointBytes:   0,
-		maxSecretBatchBytes:  0,
-		maxStateBytes:        0,
-		maxBodyBytesInFlight: 0,
-		backupTarget:         nil,
-		backupTargetName:     "",
+		namespaceStore:        nil,
+		stackStore:            nil,
+		updateStore:           nil,
+		checkpointStore:       nil,
+		eventStore:            nil,
+		secretKeys:            nil,
+		secretWrapper:         nil,
+		workspaceStore:        nil,
+		stateStore:            nil,
+		blobStore:             nil,
+		inventoryReader:       nil,
+		authenticator:         nil,
+		authorizer:            identity.AdminOnly{},
+		logger:                slog.New(slog.DiscardHandler),
+		now:                   time.Now,
+		region:                "",
+		listenAddr:            defaultListenAddr,
+		consoleDir:            "",
+		allowedOrigins:        nil,
+		tlsCertFile:           "",
+		tlsKeyFile:            "",
+		publicURL:             "",
+		version:               "",
+		maxCheckpointBytes:    0,
+		maxSecretBatchBytes:   0,
+		maxStateBytes:         0,
+		maxBodyBytesInFlight:  0,
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
+		backupTarget:          nil,
+		backupTargetName:      "",
 	}
 
 	for _, opt := range opts {
@@ -728,15 +740,16 @@ func isLoopbackListenAddr(addr string) bool {
 // newPulumiHandler builds the Pulumi CLI API from the domain services.
 func newPulumiHandler(svc services, cfg settings, base baseurl.Resolver) (http.Handler, error) {
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               svc.stacks,
-		Updates:              svc.updates,
-		Secrets:              svc.secrets,
-		Namespaces:           svc.namespaces,
-		Authenticator:        cfg.authenticator,
-		Authorizer:           cfg.authorizer,
-		Logger:               cfg.logger,
-		BaseURL:              base,
-		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Stacks:                svc.stacks,
+		Updates:               svc.updates,
+		Secrets:               svc.secrets,
+		Namespaces:            svc.namespaces,
+		Authenticator:         cfg.authenticator,
+		Authorizer:            cfg.authorizer,
+		Logger:                cfg.logger,
+		BaseURL:               base,
+		MaxBodyBytesInFlight:  cfg.maxBodyBytesInFlight,
+		CheckpointDeltaCutoff: cfg.checkpointDeltaCutoff,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
