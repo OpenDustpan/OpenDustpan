@@ -1,6 +1,6 @@
 # 43. Pulumi journaling support
 
-Status: draft · not accepted · 2026-10-12
+Status: accepted · 2026-10-12
 
 ## Context
 
@@ -40,12 +40,10 @@ The facts from RFC 64 that shape the decisions:
   `pulumi-cli/1 (<version>; <GOOS>...)` in each CLI version that the e2e
   suite runs.
 
-The project lead answered the open questions of RFC 64 on 2026-10-12, in a
-conversation with the agent session that wrote this text. The project
-owner did not accept this ADR yet. ADR 15 says that `docs/adr/` holds only
-accepted decisions. So this file must not merge before the project owner
-accepts it. The acceptance changes the status line and RFC 64 in one
-commit.
+The project lead answered the open questions of RFC 64 on 2026-10-12. On
+the same day, the project owner gave the decisions on RFC 62 and RFC 64 to
+the project lead, and the project lead accepted this ADR. The acceptance
+commit also sets RFC 62 and RFC 64 to accepted.
 
 ## Decision
 
@@ -365,8 +363,7 @@ library. In Go 1.27.2 they are on by default, with no `GOEXPERIMENT`
 generator of decision 8.1 adds no dependency. Streaming reads use
 `jsontext`: the build of decision 7.3, and lookups in state such as the fix
 of #389. The source of this choice is the JSON libraries research note
-(`docs/research/json-libraries.md`, on the branch
-`swarm/pulumi-json-research`, not yet on `main`). RFC 64 found no text that
+(`docs/research/json-libraries.md`, #396). RFC 64 found no text that
 puts `encoding/json/v2` under the Go 1 compatibility promise, so a later Go
 release could change its API.
 

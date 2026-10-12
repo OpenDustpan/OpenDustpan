@@ -1,13 +1,14 @@
 ---
 rfc: 64
 title: Architecture of Pulumi journaling support
-status: draft
+status: accepted
+adr: 43
 created: 2026-10-12
 ---
 
 # RFC 64. Architecture of Pulumi journaling support
 
-Status: draft.
+Status: accepted as ADR 43.
 
 ## Problem
 
@@ -1046,4 +1047,5 @@ This is a recommendation. Decision: for the owner.
 
 ## Outcome
 
-Empty until the RFC is accepted or dropped.
+Accepted on 2026-10-12: option 1B with option 2C, as proposed. The open
+questions are decided in [ADR 43](../adr/0043-pulumi-journaling-support.md).
