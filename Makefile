@@ -18,6 +18,7 @@ fmt: ## Format Go code (gofumpt, gci, golines).
 lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
+	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	golangci-lint run ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
@@ -124,6 +125,7 @@ soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one serve
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
+	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan
