@@ -106,7 +106,7 @@ var (
 	// shows the allowed forms, so the operator knows what to set. Only the
 	// restore flag --from takes it.
 	errRestoreSource = errors.New(
-		"backup source must be dir:/path: set --from (DUSTPAN_BACKUP_TARGET)",
+		"backup source must be dir:/path or s3://<bucket>[/<prefix>]: set --from (DUSTPAN_BACKUP_TARGET)",
 	)
 	// errRestoreSourceMissing reports a restore source that does not exist.
 	// It names the flag, so the operator knows what to set.
@@ -121,7 +121,7 @@ var (
 	// errRestoreFrom reports a restore without a backup source. It names the
 	// flag, so the operator knows what to set.
 	errRestoreFrom = errors.New(
-		"backup source is missing: set --from to dir:/path (DUSTPAN_BACKUP_TARGET)",
+		"backup source is missing: set --from to dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
 	)
 	// errRestoreBackup reports a restore without a backup ID. It names the
 	// flag, so the operator knows what to set.
@@ -831,17 +831,30 @@ func openBackupTarget(
 
 // openRestoreSource opens the restore source in raw as a blob store. It
 // never creates the directory: a restore source must already hold a backup,
-// so a missing source is a refusal naming --from. An s3:// source stays
-// reserved for a later change (issue #158). Anything else is an error that
-// shows the allowed forms.
-func openRestoreSource(raw string) (*blobfs.Store, error) {
+// so a missing source is a refusal naming --from. A dir:/path source opens
+// the local directory; an s3://<bucket>[/<prefix>] source opens S3-compatible
+// storage with the same constructor as the live blob store. Credentials come
+// from AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
+// Anything else is an error that shows the allowed forms.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openRestoreSource(
+	ctx context.Context,
+	raw, endpoint, region string,
+	logger *slog.Logger,
+) (blob.Store, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, errRestoreFrom
 	}
 
 	if strings.HasPrefix(trimmed, "s3://") {
-		return nil, fmt.Errorf("backup source %q: s3 sources are not supported yet: %w", trimmed, errRestoreSource)
+		return openS3Store(ctx, s3StoreConfig{
+			raw:      trimmed,
+			endpoint: endpoint,
+			region:   region,
+			formErr:  errRestoreSource,
+		}, logger)
 	}
 
 	dir, ok := strings.CutPrefix(trimmed, "dir:")
@@ -1040,16 +1053,20 @@ func executeRestore(
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
-	// The offline restore writes to a local blob directory only; ADR 39
-	// (issue #281) moves restore into the server, which owns every store.
-	blobs, err := openFSBlobs(plan.flags.database, plan.flags.blobDir)
+	blobs, err := openBlobs(ctx, blobOpenConfig{
+		database: plan.flags.database,
+		dir:      plan.flags.blobDir,
+		store:    plan.flags.blobStore,
+		endpoint: plan.flags.s3Endpoint,
+		region:   plan.flags.s3Region,
+	}, logger)
 	if err != nil {
 		return fmt.Errorf("restore backup %s: %w", plan.id, err)
 	}
 
 	defer closeLiveStore(ctx, logger, blobs)
 
-	target, err := openRestoreSource(plan.from)
+	target, err := openRestoreSource(ctx, plan.from, plan.flags.s3Endpoint, plan.flags.s3Region, logger)
 	if err != nil {
 		return fmt.Errorf("restore backup %s from %q: %w", plan.id, plan.from, err)
 	}
@@ -1084,10 +1101,15 @@ func executeRestore(
 	return nil
 }
 
-// closeRestoreTarget closes the backup source and logs the error with
-// context instead of discarding it, as serve does for its stores.
-func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target *blobfs.Store) {
-	if err := target.Close(); err != nil {
+// closeRestoreTarget closes the backup source when it holds a directory
+// handle, so dir: sources release their handle while S3 sources need no close.
+func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target blob.Store) {
+	closer, ok := target.(io.Closer)
+	if !ok {
+		return
+	}
+
+	if err := closer.Close(); err != nil {
 		logger.WarnContext(ctx, "close backup source", slog.String("error", err.Error()))
 	}
 }
@@ -1121,9 +1143,12 @@ func writeRestoreWarning(stdout io.Writer, warning string) error {
 type restoreFlags struct {
 	common
 
-	from    string
-	backup  string
-	blobDir string
+	from       string
+	backup     string
+	blobDir    string
+	blobStore  string
+	s3Endpoint string
+	s3Region   string
 }
 
 func (f *restoreFlags) register(fs *flag.FlagSet) {
@@ -1132,7 +1157,7 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 		&f.from,
 		"from",
 		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup source dir:/path (DUSTPAN_BACKUP_TARGET)",
+		"backup source dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
 	)
 	fs.StringVar(&f.backup, "backup", "", "backup ID to restore, for example bkp-aaa")
 	fs.StringVar(
@@ -1142,10 +1167,22 @@ func (f *restoreFlags) register(fs *flag.FlagSet) {
 		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
 	)
 	fs.StringVar(
-		&f.blobDir,
+		&f.blobStore,
 		"blob-store",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"same as --blob-dir (DUSTPAN_BLOB_DIR)",
+		env("DUSTPAN_BLOB_STORE", "fs"),
+		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
+	)
+	fs.StringVar(
+		&f.s3Endpoint,
+		"s3-endpoint",
+		env("DUSTPAN_S3_ENDPOINT", ""),
+		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
+	)
+	fs.StringVar(
+		&f.s3Region,
+		"s3-region",
+		env("DUSTPAN_S3_REGION", ""),
+		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
 	)
 }
 
