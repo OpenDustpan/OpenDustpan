@@ -313,12 +313,14 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	tb.Helper()
 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Workspaces:    coverageWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Workspaces:     coverageWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		tb.Fatalf("tfe handler: %v", err)
@@ -775,6 +777,14 @@ func stateAllowEntries() []AllowEntry {
 				"The harness step reads them after two ups and checks masking.",
 		},
 		{
+			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/state/{version}/reveal",
+			CoveringTest: "TestCLIs (checkMaskedReveal)",
+			Reason: "Console route (ADR 41): the CLI never reveals a secret value. " +
+				"The harness step reveals one masked output after two ups, checks the value, " +
+				"no-store and the reveal audit entry, and checks that a path outside the " +
+				"masked set answers 404.",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/diff",
 			CoveringTest: "TestCLIs (pulumiDiffScenario)",
 			Reason: "Console route (ADR 41): the CLI never diffs state. " +
@@ -792,6 +802,14 @@ func stateAllowEntries() []AllowEntry {
 			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
 			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
 				"The harness step reads it after two applies and checks masking.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/v2/state-versions/{state_version_id}/actions/reveal",
+			CoveringTest: "TestCLIs (maskedRevealCheck)",
+			Reason: "Console route (ADR 41): the CLI never reveals a secret value. " +
+				"The harness step reveals the sensitive input after two applies, checks the value, " +
+				"no-store and the reveal audit entry, and checks that a path outside the " +
+				"masked set answers 404.",
 		},
 	}
 }

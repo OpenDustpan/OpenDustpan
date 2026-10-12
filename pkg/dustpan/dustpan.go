@@ -491,7 +491,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -554,8 +554,17 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. base reports the external base URL for absolute URLs.
-func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs. The reveal call
+// appends through the same audit store as the Pulumi adapter, and failed
+// appends count on the failure metric of observed.
+func newTFEHandler(
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (*tfe.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -563,6 +572,12 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
+		Audit:         entries,
+		OnAuditFailure: func() {
+			if observed != nil {
+				observed.IncAuditAppendFailure()
+			}
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)

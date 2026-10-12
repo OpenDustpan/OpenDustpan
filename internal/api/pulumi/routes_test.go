@@ -623,6 +623,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 			continue
 		}
 
+		if slices.Contains(revealPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteEnforcement(t, route)
@@ -705,6 +709,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 		}
 
 		if slices.Contains(statePatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(revealPatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
