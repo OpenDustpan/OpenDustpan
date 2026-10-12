@@ -24,7 +24,15 @@ Start a backup with the backup command. It calls the server and waits until the 
 opendustpan backup --server https://dustpan.example --ca-file ca.pem
 ```
 
-The command prints the backup ID, the state, and the SQL size. It then prints two warnings. A backup cannot decrypt secrets without `DUSTPAN_KEY_ENCRYPTION_KEY`. A backup holds sealed OpenTofu state, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
+The command takes only `--server` and `--ca-file`. The command prints the backup ID, the state, and the SQL size. It then prints two warnings. Against a local server the output reads, for example:
+
+```text
+backup bkp-opx3krqgb4d7iqglf5gq succeeded (SQL 163840 bytes)
+A backup cannot decrypt secrets without DUSTPAN_KEY_ENCRYPTION_KEY.
+A backup holds sealed OpenTofu state: protect the target.
+```
+
+The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds sealed OpenTofu state, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
 Keep `DUSTPAN_KEY_ENCRYPTION_KEY` apart from the backup target. A backup never holds the key. A lost key still means lost secrets and lost OpenTofu state. Without the key the server cannot open secret values or OpenTofu state after a restore.
 
@@ -44,7 +52,7 @@ Check a backup with the check command. It asks the server to check the backup in
 opendustpan backup check --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
 ```
 
-A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key.
+The command takes only `--server`, `--ca-file` and `--backup`. A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A broken backup exits with status 1 and names the first missing object by key.
 
 ## Restore a backup
 
@@ -62,8 +70,15 @@ the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 opendustpan restore --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
 ```
 
-The command prints the restore ID, the state, and the backup taken before
-the restore. It ends with `restore rst-aaa succeeded`. Only one restore runs
+The command takes only `--server`, `--ca-file`, `--backup`, `--check-only` and `--force`. It takes no `--from`, `--database`, `--blob-dir` or `--blob-store`: the server restores from its own `--backup-target` into its own stores. The command prints the restore ID, the state, and the backup taken before
+the restore. Against a local server the output reads, for example:
+
+```text
+restore rst-qvxfikelldws37gdzxwg succeeded (SQL 163840 bytes)
+backup before restore: bkp-cnsz7imkyfh4mcrk5n3z
+```
+
+It ends with `restore rst-aaa succeeded`. Only one restore runs
 at a time. A second start while one runs answers 409.
 
 Before the server applies anything, it checks the manifest, the
@@ -74,6 +89,13 @@ the same checks and applies nothing:
 
 ```sh
 opendustpan restore --server https://dustpan.example --backup bkp-aaa --check-only
+```
+
+A check-only restore prints that it changed nothing:
+
+```text
+restore rst-kxhi2mzykvpfartzahi4 succeeded (SQL 163840 bytes)
+check only: no data changed
 ```
 
 Before the apply, the server takes a backup of the live data and names it in
@@ -116,6 +138,17 @@ Run the upgrade check before an upgrade. It asks the server for its version and 
 
 ```sh
 opendustpan upgrade check --server https://dustpan.example --ca-file ca.pem
+```
+
+The command takes only `--server` and `--ca-file`. Against a local server with no pending migration the output reads, for example:
+
+```text
+binary version: dev
+server version: dev
+database schema version: 19
+binary schema version: 19
+pending migrations: none
+verdict: up to date
 ```
 
 The command prints the binary version, the schema version of the database, the schema version that the binary needs, and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists. When the server runs without a key-encryption key, or is older than ADR 41, the command also prints a warning. The warning names `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`), `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and `DUSTPAN_KEY_ENCRYPTION_KEY`. Set one of them before the upgrade.
