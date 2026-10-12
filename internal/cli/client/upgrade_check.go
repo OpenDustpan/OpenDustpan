@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -129,18 +130,8 @@ type upgradeCheckFlags struct {
 }
 
 func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.server,
-		"server",
-		env(BackupServerEnvVar, ""),
-		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
-	)
-	fs.StringVar(
-		&f.caFile,
-		"ca-file",
-		"",
-		"PEM bundle of extra CA certificates to trust with the system store",
-	)
+	cli.ByFlag("server").String(fs, &f.server)
+	cli.ByFlag("ca-file").String(fs, &f.caFile)
 }
 
 // UpgradeCheckAnswer is the server answer the upgrade check compares: the

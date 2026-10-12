@@ -13,7 +13,6 @@ package client
 
 import (
 	"errors"
-	"os"
 )
 
 // ErrUsage answers the usage of every subcommand.
@@ -29,11 +28,3 @@ const KeyEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY"
 // KeyFileEnvVar names the setting that holds the key file path. The key
 // warning names it, so the operator knows which setting to check.
 const KeyFileEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY_FILE"
-
-func env(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-
-	return fallback
-}
