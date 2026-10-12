@@ -1,0 +1,24 @@
+package stack
+
+import (
+	"context"
+	"io"
+)
+
+// JournalReplayer replays the journal entries of one Pulumi update on a base
+// checkpoint. The journal package implements it (ADR 43, decision 3.4). The
+// conformance suite for it comes with the CLI corpus (ADR 43, decision 11.3).
+type JournalReplayer interface {
+	// Replay applies the entries, read from entries in order, to the base
+	// checkpoint and writes the checkpoint that results to out. openBase
+	// returns a new reader of the base for each pass. Replay may read the base
+	// two times (ADR 43, decision 7.3), so it closes each reader it opens. The
+	// output goes to out and is never held in full. Replay returns an error
+	// when an entry does not apply to the checkpoint built so far.
+	Replay(
+		ctx context.Context,
+		openBase func(context.Context) (io.ReadCloser, error),
+		entries io.Reader,
+		out io.Writer,
+	) error
+}
