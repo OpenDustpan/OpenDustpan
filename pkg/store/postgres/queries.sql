@@ -20,6 +20,15 @@ FROM namespaces
 WHERE name = $1
 FOR SHARE;
 
+-- name: GetFailoverVersionForUpdate :one
+-- Locks the namespace row FOR UPDATE so concurrent audit appends of one
+-- namespace wait for each other: the next append reads the new last entry.
+-- A promotion still waits the same way, so the fence still holds.
+SELECT failover_version
+FROM namespaces
+WHERE name = $1
+FOR UPDATE;
+
 -- name: CreateStack :execrows
 INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -579,3 +588,46 @@ SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sea
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key;
+
+-- name: LastAuditEntry :one
+-- The entry with the highest sequence of a namespace, for the next append.
+-- A namespace with no entries matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+
+-- name: ListAuditEntries :many
+-- One page of the entries of a namespace, newest first. Ties on time break
+-- by sequence, as the port comment promises.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = $1;
+
+-- name: ListAuditChainPage :many
+-- One bounded page of the chain of a namespace oldest first, for the chain
+-- check. The check reads the chain with this query in pages of
+-- audit.CheckPageSize entries after the last sequence it saw, so a namespace
+-- with a large log never grows the check without a bound.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = $1 AND sequence > $2
+ORDER BY sequence ASC
+LIMIT $3;

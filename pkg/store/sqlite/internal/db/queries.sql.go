@@ -102,6 +102,19 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+const countAuditEntries = `-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = ?
+`
+
+func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAuditEntries, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -1236,6 +1249,95 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	return column_1, err
 }
 
+const insertAuditEntry = `-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertAuditEntryParams struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+}
+
+func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
+	_, err := q.db.ExecContext(ctx, insertAuditEntry,
+		arg.Namespace,
+		arg.Sequence,
+		arg.Subject,
+		arg.IdpSubject,
+		arg.TokenID,
+		arg.Action,
+		arg.Object,
+		arg.Version,
+		arg.ValuePath,
+		arg.AtMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.Channel,
+		arg.Kind,
+		arg.Outcome,
+		arg.RequestID,
+		arg.PrevHash,
+		arg.Hash,
+	)
+	return err
+}
+
+const lastAuditEntry = `-- name: LastAuditEntry :one
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT 1
+`
+
+// The entry with the highest sequence of a namespace, for the next append.
+// A namespace with no entries matches no row.
+func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEntry, error) {
+	row := q.db.QueryRowContext(ctx, lastAuditEntry, namespace)
+	var i AuditEntry
+	err := row.Scan(
+		&i.Namespace,
+		&i.Sequence,
+		&i.Subject,
+		&i.IdpSubject,
+		&i.TokenID,
+		&i.Action,
+		&i.Object,
+		&i.Version,
+		&i.ValuePath,
+		&i.AtMs,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Channel,
+		&i.Kind,
+		&i.Outcome,
+		&i.RequestID,
+		&i.PrevHash,
+		&i.Hash,
+	)
+	return i, err
+}
+
 const latestDeployment = `-- name: LatestDeployment :one
 SELECT c.deployment
 FROM checkpoints AS c
@@ -1274,6 +1376,126 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (sql.
 	var resource_count sql.NullInt64
 	err := row.Scan(&resource_count)
 	return resource_count, err
+}
+
+const listAuditChainPage = `-- name: ListAuditChainPage :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ? AND sequence > ?
+ORDER BY sequence ASC
+LIMIT ?
+`
+
+type ListAuditChainPageParams struct {
+	Namespace string
+	Sequence  int64
+	Limit     int64
+}
+
+// One bounded page of the chain of a namespace oldest first, for the chain
+// check. The check reads the chain with this query in pages of
+// audit.CheckPageSize entries after the last sequence it saw, so a namespace
+// with a large log never grows the check without a bound.
+func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPageParams) ([]AuditEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditChainPage, arg.Namespace, arg.Sequence, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntries = `-- name: ListAuditEntries :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT ? OFFSET ?
+`
+
+type ListAuditEntriesParams struct {
+	Namespace string
+	Limit     int64
+	Offset    int64
+}
+
+// One page of the entries of a namespace, newest first. Ties on time break
+// by sequence, as the port comment promises.
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditEntry, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditEntries, arg.Namespace, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listBackups = `-- name: ListBackups :many
