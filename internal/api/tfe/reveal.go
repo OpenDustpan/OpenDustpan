@@ -87,6 +87,10 @@ func (h *Handler) revealStateValue(
 ) {
 	ctx := r.Context()
 
+	// Every answer of this route is no-store, the errors too: preset the
+	// header so no later branch can answer without it.
+	w.Header().Set("Cache-Control", noStoreValue)
+
 	path, ok := h.revealPath(w, r)
 	if !ok {
 		return
@@ -122,7 +126,11 @@ func (h *Handler) revealStateValue(
 	value, _, err := workspace.RevealValue(state, sv.SensitiveMarks, path)
 	if err != nil {
 		// A path outside the masked set answers 404 with no audit entry
-		// and no value, so a caller cannot probe paths.
+		// and no value, so a caller cannot probe paths. A client-encrypted
+		// state answers 409 with no entry either: no value leaves the
+		// server (ADR 41 decision 5). The Pulumi route differs on purpose:
+		// its issue asks for an entry when another secrets provider holds
+		// the value.
 		h.writeNoStore(ctx, w, err)
 
 		return
