@@ -10,6 +10,9 @@ created: 2026-10-10
 Status: draft. A stub opened from the competitor review in the research doc
 "IaC and TACOS landscape". It records the gap and first ideas only.
 
+The part on soft delete and on the move of a unit between namespaces is
+accepted as ADR 47. The rest stays a draft.
+
 ## Problem
 
 The Pulumi CLI calls endpoints that OpenDustpan does not serve: `pulumi stack
@@ -61,4 +64,5 @@ decides nothing. An ADR records a decision (ADR 15).
 
 ## Outcome
 
-None yet.
+The part on soft delete and on the move of a unit between namespaces is
+accepted as ADR 47 on 2026-10-12. The rest has no outcome yet.
