@@ -31,15 +31,17 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Backups:       nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "",
-		Schema:        stubSchema{migrations: nil},
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		KeyEncryptionKey: false,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

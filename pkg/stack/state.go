@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -74,6 +75,34 @@ type StateDetail struct {
 type StateOutputs struct {
 	Outputs any
 	Masked  []string
+}
+
+// StateDiffChanged is one resource present in both versions with a change:
+// the URN, the resource-relative value paths that changed
+// (for example "/outputs/greeting" or "/type"), and the paths of secrets
+// whose ciphertext changed. A secret value is never in the diff: a changed
+// secret is one path in ChangedSecrets. Secrets compare as ciphertext, and
+// the CLI may encrypt the same value again with a new nonce, so
+// ChangedSecrets may name a secret whose value did not change. The server
+// never decrypts for a diff.
+type StateDiffChanged struct {
+	URN            string
+	ChangedPaths   []string
+	ChangedSecrets []string
+}
+
+// StateDiff is the diff of two deployments: the sorted URNs added and
+// removed, and the sorted changed resources with their paths. NextCursor
+// names the cursor of the next page, or is empty when the page is the last
+// one. Incomplete with a Reason says the server cut the list short of
+// paging, for example when a deployment holds entries the server skips.
+type StateDiff struct {
+	Added      []string
+	Removed    []string
+	Changed    []StateDiffChanged
+	NextCursor string
+	Incomplete bool
+	Reason     string
 }
 
 // EscapePointerToken escapes one JSON Pointer token (RFC 6901): `~` first,
@@ -467,4 +496,370 @@ func ReadStateOutputs(deployment []byte) (StateOutputs, error) {
 	}
 
 	return StateOutputs{Outputs: map[string]any{}, Masked: []string{}}, nil
+}
+
+// secretEqual reports whether two secret values hold the same ciphertext.
+// The comparison never decrypts: it compares the stored objects as encoded.
+func secretEqual(a, b any) bool {
+	rawA, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+
+	rawB, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+
+	return bytes.Equal(rawA, rawB)
+}
+
+// scalarEqual reports whether two plain values are equal. Numbers keep their
+// exact encoding, so "1" and "1.0" differ.
+func scalarEqual(a, b any) bool {
+	switch typedA := a.(type) {
+	case nil:
+		return b == nil
+	case string:
+		text, ok := b.(string)
+
+		return ok && text == typedA
+	case bool:
+		flag, ok := b.(bool)
+
+		return ok && flag == typedA
+	case json.Number:
+		num, ok := b.(json.Number)
+
+		return ok && string(num) == string(typedA)
+	default:
+		rawA, err := json.Marshal(a)
+		if err != nil {
+			return false
+		}
+
+		rawB, err := json.Marshal(b)
+		if err != nil {
+			return false
+		}
+
+		return bytes.Equal(rawA, rawB)
+	}
+}
+
+// diffSecret handles a value pair where either side is a secret: an equal
+// ciphertext is no change, a different one is one entry in secrets. It
+// reports whether it handled the pair.
+func diffSecret(a, b any, base string, secrets *[]string) bool {
+	if !isSecret(a) && !isSecret(b) {
+		return false
+	}
+
+	if isSecret(a) && isSecret(b) && secretEqual(a, b) {
+		return true
+	}
+
+	*secrets = append(*secrets, base)
+
+	return true
+}
+
+// diffMaps appends the child paths under base that differ between two
+// objects.
+func diffMaps(mapA, mapB map[string]any, base string, paths, secrets *[]string) {
+	seen := map[string]bool{}
+	for key := range mapA {
+		seen[key] = true
+	}
+
+	for key := range mapB {
+		seen[key] = true
+	}
+
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+
+	slices.Sort(keys)
+
+	for _, key := range keys {
+		child := base + "/" + EscapePointerToken(key)
+		valA, inA := mapA[key]
+		valB, inB := mapB[key]
+
+		if !inA || !inB {
+			// A secret added or removed is a changed secret, as a
+			// changed ciphertext is.
+			if isSecret(valA) || isSecret(valB) {
+				*secrets = append(*secrets, child)
+			} else {
+				*paths = append(*paths, child)
+			}
+
+			continue
+		}
+
+		diffValues(valA, valB, child, paths, secrets)
+	}
+}
+
+// diffLists appends the child paths under base that differ between two
+// arrays: a length change is one entry for the array itself.
+func diffLists(listA, listB []any, base string, paths, secrets *[]string) {
+	if len(listA) != len(listB) {
+		*paths = append(*paths, base)
+
+		return
+	}
+
+	for i := range listA {
+		diffValues(listA[i], listB[i], base+"/"+strconv.Itoa(i), paths, secrets)
+	}
+}
+
+// diffValues appends the resource-relative paths under base that differ
+// between a and b. A secret on either side compares as ciphertext: an equal
+// ciphertext is no change, a different one is one entry in secrets, never in
+// paths and never a value.
+func diffValues(a, b any, base string, paths, secrets *[]string) {
+	if diffSecret(a, b, base, secrets) {
+		return
+	}
+
+	if mapA, ok := a.(map[string]any); ok {
+		if mapB, ok := b.(map[string]any); ok {
+			diffMaps(mapA, mapB, base, paths, secrets)
+
+			return
+		}
+	}
+
+	if listA, ok := a.([]any); ok {
+		if listB, ok := b.([]any); ok {
+			diffLists(listA, listB, base, paths, secrets)
+
+			return
+		}
+	}
+
+	if !scalarEqual(a, b) {
+		*paths = append(*paths, base)
+	}
+}
+
+// resourceDiff holds the changed paths and secret paths of one resource
+// present in both versions.
+type resourceDiff struct {
+	paths   []string
+	secrets []string
+}
+
+// diffResource returns the changed paths and secret paths of one resource
+// present in both versions. Only the identity fields (type, provider,
+// parent) with the inputs and outputs mark a resource changed; other stored
+// fields do not. The result holds empty slices, never nil, when nothing
+// changed.
+func diffResource(from, to map[string]any) resourceDiff {
+	out := resourceDiff{paths: []string{}, secrets: []string{}}
+
+	for _, field := range []string{"type", "provider", "parent"} {
+		if resourceField(from, field) != resourceField(to, field) {
+			out.paths = append(out.paths, "/"+field)
+		}
+	}
+
+	fromInputs := from["inputs"]
+	if fromInputs == nil {
+		fromInputs = map[string]any{}
+	}
+
+	toInputs := to["inputs"]
+	if toInputs == nil {
+		toInputs = map[string]any{}
+	}
+
+	diffValues(fromInputs, toInputs, "/inputs", &out.paths, &out.secrets)
+
+	fromOutputs := from["outputs"]
+	if fromOutputs == nil {
+		fromOutputs = map[string]any{}
+	}
+
+	toOutputs := to["outputs"]
+	if toOutputs == nil {
+		toOutputs = map[string]any{}
+	}
+
+	diffValues(fromOutputs, toOutputs, "/outputs", &out.paths, &out.secrets)
+
+	slices.Sort(out.paths)
+	slices.Sort(out.secrets)
+
+	return out
+}
+
+// resourcesByURN maps each URN of entries to its object.
+func resourcesByURN(entries []map[string]any) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(entries))
+	for _, obj := range entries {
+		out[resourceField(obj, "urn")] = obj
+	}
+
+	return out
+}
+
+// diffMismatch holds the sorted diff entries of two deployments before
+// paging, with the count of skipped entries without a URN.
+type diffMismatch struct {
+	added     []string
+	removed   []string
+	changed   []StateDiffChanged
+	differing []string
+	skipped   int
+}
+
+// collectDiff compares the resources by URN: added holds the URNs only in
+// to, removed those only in from, and changed those in both with a change.
+// Differing holds the sorted URNs that differ in any way.
+func collectDiff(fromByURN, toByURN map[string]map[string]any) diffMismatch {
+	var out diffMismatch
+
+	for urn := range toByURN {
+		if _, ok := fromByURN[urn]; !ok {
+			out.added = append(out.added, urn)
+			out.differing = append(out.differing, urn)
+		}
+	}
+
+	for urn := range fromByURN {
+		if _, ok := toByURN[urn]; !ok {
+			out.removed = append(out.removed, urn)
+			out.differing = append(out.differing, urn)
+		}
+	}
+
+	for urn, fromObj := range fromByURN {
+		toObj, ok := toByURN[urn]
+		if !ok {
+			continue
+		}
+
+		entry := diffResource(fromObj, toObj)
+		if len(entry.paths) == 0 && len(entry.secrets) == 0 {
+			continue
+		}
+
+		out.changed = append(
+			out.changed,
+			StateDiffChanged{URN: urn, ChangedPaths: entry.paths, ChangedSecrets: entry.secrets},
+		)
+		out.differing = append(out.differing, urn)
+	}
+
+	// Sort for a stable page across calls.
+	slices.Sort(out.added)
+	slices.Sort(out.removed)
+	slices.SortFunc(out.changed, func(a, b StateDiffChanged) int {
+		return strings.Compare(a.URN, b.URN)
+	})
+	slices.Sort(out.differing)
+
+	return out
+}
+
+// pageDiff returns the page of mismatch at offset with at most limit
+// differing URNs.
+func pageDiff(mismatch diffMismatch, offset, limit int) StateDiff {
+	page := StateDiff{
+		Added:      []string{},
+		Removed:    []string{},
+		Changed:    []StateDiffChanged{},
+		NextCursor: "",
+		Incomplete: mismatch.skipped > 0,
+		Reason:     "",
+	}
+	if mismatch.skipped > 0 {
+		page.Reason = "the deployment holds entries without a URN that the server skips"
+	}
+
+	if offset >= len(mismatch.differing) {
+		return page
+	}
+
+	end := min(offset+limit, len(mismatch.differing))
+	window := map[string]bool{}
+	for _, urn := range mismatch.differing[offset:end] {
+		window[urn] = true
+	}
+
+	for _, urn := range mismatch.added {
+		if window[urn] {
+			page.Added = append(page.Added, urn)
+		}
+	}
+
+	for _, urn := range mismatch.removed {
+		if window[urn] {
+			page.Removed = append(page.Removed, urn)
+		}
+	}
+
+	for _, entry := range mismatch.changed {
+		if window[entry.URN] {
+			page.Changed = append(page.Changed, entry)
+		}
+	}
+
+	if end < len(mismatch.differing) {
+		page.NextCursor = strconv.Itoa(end)
+	}
+
+	return page
+}
+
+// DiffStates returns the diff of two deployments: from is the older
+// deployment, to is the newer one. Added holds the sorted URNs only in to,
+// Removed the sorted URNs only in from, and Changed the sorted resources in
+// both with a change. Cursor is "" or the NextCursor of an earlier page;
+// limit is 1 to 500 and counts differing URNs. Resources keep sorted URN
+// order across versions; matching across versions uses the URN.
+func DiffStates(from, to []byte, cursor string, limit int) (StateDiff, error) {
+	offset, err := stateOffset(cursor)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	if limit <= 0 || limit > maxStateLimit {
+		return StateDiff{}, fmt.Errorf("%w: resource limit %d, want 1 to %d", ErrInvalidUpdate, limit, maxStateLimit)
+	}
+
+	fromDoc, err := decodeDeployment(from)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	toDoc, err := decodeDeployment(to)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	fromEntries, fromSkipped := resourceList(fromDoc)
+	toEntries, toSkipped := resourceList(toDoc)
+
+	if (fromEntries == nil && fromSkipped > 0) || (toEntries == nil && toSkipped > 0) {
+		return StateDiff{
+			Added:      []string{},
+			Removed:    []string{},
+			Changed:    []StateDiffChanged{},
+			NextCursor: "",
+			Incomplete: true,
+			Reason:     "the deployment holds no resources array",
+		}, nil
+	}
+
+	mismatch := collectDiff(resourcesByURN(fromEntries), resourcesByURN(toEntries))
+	mismatch.skipped = fromSkipped + toSkipped
+
+	return pageDiff(mismatch, offset, limit), nil
 }

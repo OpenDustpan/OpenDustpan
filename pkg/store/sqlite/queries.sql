@@ -273,6 +273,9 @@ DELETE FROM secret_keys
 WHERE stack_id = ?;
 
 -- name: UpsertInventory :exec
+-- The lock columns stay out of the upsert: other writes keep the lock a
+-- running update or a held workspace published, and only UpdateInventoryLock
+-- changes it.
 INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (namespace, tool, name) DO UPDATE SET
@@ -282,12 +285,21 @@ ON CONFLICT (namespace, tool, name) DO UPDATE SET
     status = excluded.status,
     resource_count = excluded.resource_count;
 
+-- name: UpdateInventoryLock :exec
+-- Publishes a lock change of one unit: holder with take time and operation
+-- to set it, all NULL to clear it. The caller writes it in the same
+-- transaction as the lock itself.
+UPDATE inventory
+SET lock_holder = ?, lock_since_ms = ?, lock_operation = ?
+WHERE namespace = ? AND tool = ? AND name = ?;
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = ?
 ORDER BY tool, name;
@@ -463,6 +475,48 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state;
 UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
+
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = ?;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+-- Moves one running restore to its end state. A finished restore matches no
+-- row, so a retry reports no change.
+UPDATE restores
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = ?
+WHERE id = ? AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+-- Marks every running restore failed. The server calls it at start, after a
+-- stop during a restore.
+UPDATE restores
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;
 
 -- name: LastAuditEntry :one
 -- The entry with the highest sequence of a namespace, for the next append.

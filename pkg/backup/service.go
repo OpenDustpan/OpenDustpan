@@ -237,6 +237,29 @@ func (s *Service) ReadManifest(ctx context.Context, id ID) (Manifest, error) {
 	return manifest, nil
 }
 
+// PreserveAfterRestore re-records rec after a restore swap replaced the live
+// data with a staged snapshot that predates it (ADR 38 decision 9). The
+// backup objects already sit in the target; only the registry row went away
+// with the old live data. When the row already exists it does nothing, so a
+// registry that the swap does not replace still passes.
+func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
+	if _, err := s.registry.GetBackup(ctx, rec.ID); err == nil {
+		return nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("read backup %s after the swap: %w", rec.ID, err)
+	}
+
+	if err := s.registry.CreateBackup(ctx, rec); err != nil {
+		if errors.Is(err, ErrAlreadyExists) {
+			return nil
+		}
+
+		return fmt.Errorf("record backup %s after the swap: %w", rec.ID, err)
+	}
+
+	return nil
+}
+
 // startedBackup holds the keys and start time of a claimed backup row. Run
 // uses them at once; Start hands them to its background work.
 type startedBackup struct {

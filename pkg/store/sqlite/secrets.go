@@ -20,6 +20,9 @@ var _ secret.KeyStore = (*Store)(nil)
 func (s *Store) CreateKey(
 	ctx context.Context, k secret.WrappedKey, fence namespace.Fence,
 ) (secret.WrappedKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToSecretKeyRow(k)
 
 	var stored secret.WrappedKey
@@ -63,6 +66,9 @@ func (s *Store) CreateKey(
 
 // GetKey implements secret.KeyStore.
 func (s *Store) GetKey(ctx context.Context, scope secret.Scope) (secret.WrappedKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetSecretKey(ctx, db.GetSecretKeyParams{
 		Namespace: scope.Namespace.String(),
 		StackID:   scope.ID,
@@ -86,6 +92,9 @@ func (s *Store) GetKey(ctx context.Context, scope secret.Scope) (secret.WrappedK
 
 // ListWrapperIDs implements secret.KeyStore.
 func (s *Store) ListWrapperIDs(ctx context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	ids, err := s.queries.ListSecretWrapperIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("select wrapper IDs: %w", err)

@@ -10,7 +10,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,8 +38,6 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -282,6 +279,8 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Error("delta traffic recorded with the capability off")
 	}
 
+	checkDeltaMaskedState(t, onEnv)
+
 	writeReport(t, e2e.NewRun(onEnv))
 	writeReport(t, e2e.NewRun(offEnv))
 }
@@ -371,6 +370,337 @@ func recordedPatch(env *e2e.Env, suffix string) bool {
 	}
 
 	return false
+}
+
+// checkDeltaMaskedState proves the masked state read after delta saves on
+// the delta-enabled server: two ups of a program with a secret output and
+// a stack reference, then the resource list, one resource detail and the
+// outputs on latest and on version 1. It runs on the delta-on server only,
+// so the default scenario does not change.
+func checkDeltaMaskedState(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	org := e2e.Namespace
+	qualified := fmt.Sprintf("%s/%s/masked-delta", org, e2e.Project)
+	base := fmt.Sprintf("/api/stacks/%s/%s/masked-delta", org, e2e.Project)
+
+	env.WritePulumiProject(t, maskedStateProgram(org, ""))
+	env.Step(ctx, t, step("stack init masked delta", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for masked delta",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
+		),
+	)
+	env.Step(ctx, t, step("up masked delta 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
+	env.Step(ctx, t, step("up masked delta 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	exported := env.Step(
+		ctx,
+		t,
+		step("stack export masked delta", nil, "stack", "export", "--stack", qualified),
+	).Stdout
+	firstExported := env.Step(
+		ctx,
+		t,
+		step("stack export masked delta version 1", nil, "stack", "export", "--version", "1", "--stack", qualified),
+	).Stdout
+	env.Step(ctx, t, step(
+		"masked delta state read",
+		checkDeltaMaskedBodies(ctx, env, base, exported, firstExported),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm masked delta", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// checkDeltaMaskedBodies proves the masked bodies on the delta stack: the
+// recorder shows checkpointdelta saves for the masked ups, the latest list
+// holds the same URNs as the export with no envelope fields, one resource
+// detail answers masked inputs and outputs, the outputs answer the secret
+// masked, and the version 1 reads answer the unwrapped deployment too.
+func checkDeltaMaskedBodies(
+	ctx context.Context, env *e2e.Env, base, exported, firstExported string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		if !recordedDeltaPatchInSteps(env, []string{"up masked delta 1", "up masked delta 2"}) {
+			return fmt.Errorf("%w: no PATCH checkpointdelta answered 200 during the masked delta ups", errUnexpected)
+		}
+
+		stackURN, latestErr := checkDeltaMaskedLatest(ctx, env, base, exported)
+		if latestErr != nil {
+			return latestErr
+		}
+
+		outputs, outputsErr := maskedStateGet(ctx, env, base+"/state/latest/outputs")
+		if outputsErr != nil {
+			return outputsErr
+		}
+
+		if outputsErr := checkDeltaMaskedOutputs(outputs); outputsErr != nil {
+			return outputsErr
+		}
+
+		return checkDeltaMaskedVersionOne(ctx, env, base, firstExported, stackURN)
+	}
+}
+
+// checkDeltaMaskedLatest proves the latest reads: the list holds the same
+// URNs as the export with no envelope fields, and one resource detail
+// answers masked inputs and outputs. It returns the stack URN for the
+// version 1 reads.
+func checkDeltaMaskedLatest(ctx context.Context, env *e2e.Env, base, exported string) (string, error) {
+	latest, latestErr := maskedStateGet(ctx, env, base+"/state/latest/resources")
+	if latestErr != nil {
+		return "", latestErr
+	}
+
+	if listErr := checkDeltaListMatchesExport(latest, exported); listErr != nil {
+		return "", listErr
+	}
+
+	stackURN, urnErr := deltaMaskedStackURN(latest)
+	if urnErr != nil {
+		return "", urnErr
+	}
+
+	detail, detailErr := maskedStateGet(ctx, env, base+"/state/latest/resources/"+url.PathEscape(stackURN))
+	if detailErr != nil {
+		return "", detailErr
+	}
+
+	if detailErr := checkDeltaMaskedDetail(detail); detailErr != nil {
+		return "", detailErr
+	}
+
+	return stackURN, nil
+}
+
+// recordedDeltaPatchInSteps reports whether any of the named steps recorded
+// a PATCH checkpointdelta with a 200 answer.
+func recordedDeltaPatchInSteps(env *e2e.Env, steps []string) bool {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		if entries[i].Method == http.MethodPatch &&
+			strings.HasSuffix(entries[i].Path, "/checkpointdelta") &&
+			entries[i].Status == http.StatusOK &&
+			slices.Contains(steps, entries[i].Step) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkDeltaListMatchesExport proves the resource list holds the same URNs
+// as the stack export and neither holds envelope fields.
+func checkDeltaListMatchesExport(listBody, exported string) error {
+	if err := checkDeltaNoEnvelope(listBody); err != nil {
+		return err
+	}
+
+	listURNs, listErr := maskedListURNs(listBody)
+	if listErr != nil {
+		return listErr
+	}
+
+	if len(listURNs) < 2 {
+		return fmt.Errorf(
+			"%w: latest list holds %d resources, want at least the stack and a reference",
+			errUnexpected,
+			len(listURNs),
+		)
+	}
+
+	wantURNs, exportErr := exportURNs(exported)
+	if exportErr != nil {
+		return exportErr
+	}
+
+	slices.Sort(listURNs)
+	slices.Sort(wantURNs)
+
+	if !slices.Equal(listURNs, wantURNs) {
+		return fmt.Errorf("%w: latest list URNs %q differ from export URNs %q", errUnexpected, listURNs, wantURNs)
+	}
+
+	return nil
+}
+
+// maskedListURNs returns the URNs of the masked resource list body.
+func maskedListURNs(body string) ([]string, error) {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		return nil, fmt.Errorf("%w: decode latest list: %w", errUnexpected, err)
+	}
+
+	urns := make([]string, 0, len(list.Resources))
+	for _, res := range list.Resources {
+		urns = append(urns, res.URN)
+	}
+
+	return urns, nil
+}
+
+// deltaExportResource is one resource of a stack export in e2e checks.
+type deltaExportResource struct {
+	URN string `json:"urn"`
+}
+
+// deltaExportDeployment is the deployment of a stack export in e2e checks.
+type deltaExportDeployment struct {
+	Resources []deltaExportResource `json:"resources"`
+}
+
+// deltaExportDoc is a stack export in e2e checks.
+type deltaExportDoc struct {
+	Deployment deltaExportDeployment `json:"deployment"`
+}
+
+// exportURNs returns the URNs of the deployment resources in the stack
+// export.
+func exportURNs(exported string) ([]string, error) {
+	var doc deltaExportDoc
+
+	if err := json.Unmarshal([]byte(exported), &doc); err != nil {
+		return nil, fmt.Errorf("%w: decode stack export: %w", errUnexpected, err)
+	}
+
+	urns := make([]string, 0, len(doc.Deployment.Resources))
+	for _, res := range doc.Deployment.Resources {
+		urns = append(urns, res.URN)
+	}
+
+	return urns, nil
+}
+
+// deltaMaskedStackURN returns the URN of the stack resource in the list.
+func deltaMaskedStackURN(listBody string) (string, error) {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(listBody), &list); err != nil {
+		return "", fmt.Errorf("%w: decode latest list: %w", errUnexpected, err)
+	}
+
+	for _, res := range list.Resources {
+		if res.Type == "pulumi:pulumi:Stack" {
+			return res.URN, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: latest list holds no stack resource", errUnexpected)
+}
+
+// checkDeltaMaskedDetail proves one resource detail answers its inputs and
+// outputs with the secret masked and no envelope fields.
+func checkDeltaMaskedDetail(detail string) error {
+	if err := checkDeltaNoEnvelope(detail); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckLeaks(detail, maskedStateSecret); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckMarkers(detail); err != nil {
+		return err
+	}
+
+	var doc struct {
+		Inputs  map[string]any `json:"inputs"`
+		Outputs map[string]any `json:"outputs"`
+		Masked  []string       `json:"masked"`
+	}
+
+	if err := json.Unmarshal([]byte(detail), &doc); err != nil {
+		return fmt.Errorf("%w: decode resource detail: %w", errUnexpected, err)
+	}
+
+	if doc.Inputs == nil || doc.Outputs == nil {
+		return fmt.Errorf("%w: resource detail holds no inputs and outputs", errUnexpected)
+	}
+
+	if !maskedStateHasMaskedWith(detail, "/outputs/") {
+		return fmt.Errorf("%w: resource detail holds no masked secret in outputs", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkDeltaMaskedOutputs proves the stack outputs answer the secret masked
+// with no plain text, ciphertext or signature key.
+func checkDeltaMaskedOutputs(outputs string) error {
+	if err := checkDeltaNoEnvelope(outputs); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckLeaks(outputs, maskedStateSecret); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckMarkers(outputs); err != nil {
+		return err
+	}
+
+	if !maskedStateHasSecret(outputs) {
+		return fmt.Errorf("%w: outputs hold no masked secret", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkDeltaMaskedVersionOne proves the version 1 reads answer the
+// unwrapped deployment: the list holds the same URNs as the export of
+// version 1, and the detail and outputs answer masked with no leaks.
+func checkDeltaMaskedVersionOne(
+	ctx context.Context, env *e2e.Env, base, firstExported, stackURN string,
+) error {
+	first, firstErr := maskedStateGet(ctx, env, base+"/state/1/resources")
+	if firstErr != nil {
+		return firstErr
+	}
+
+	if listErr := checkDeltaListMatchesExport(first, firstExported); listErr != nil {
+		return listErr
+	}
+
+	firstDetail, detailErr := maskedStateGet(ctx, env, base+"/state/1/resources/"+url.PathEscape(stackURN))
+	if detailErr != nil {
+		return detailErr
+	}
+
+	if detailErr := checkDeltaMaskedDetail(firstDetail); detailErr != nil {
+		return detailErr
+	}
+
+	firstOutputs, outputsErr := maskedStateGet(ctx, env, base+"/state/1/outputs")
+	if outputsErr != nil {
+		return outputsErr
+	}
+
+	return checkDeltaMaskedOutputs(firstOutputs)
+}
+
+// checkDeltaNoEnvelope fails when the masked body carries envelope fields
+// of the stored deployment: version, deployment or features.
+func checkDeltaNoEnvelope(body string) error {
+	var doc map[string]any
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode masked body: %w", errUnexpected, err)
+	}
+
+	for _, field := range []string{"version", "deployment", "features"} {
+		if _, ok := doc[field]; ok {
+			return fmt.Errorf("%w: masked body holds envelope field %q", errUnexpected, field)
+		}
+	}
+
+	return nil
 }
 
 func writeReport(t *testing.T, r e2e.Run) {
@@ -889,6 +1219,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	// through the API, prove the CLI reports the conflict, then release it.
 	// The stack is the renamed one, which up, refresh and destroy ran on.
 	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	// The running update holds the stack lock: the inventory entry of the
+	// stack holds it with the holder and the update kind.
+	checkInventoryLock(ctx, t, env, lockedUnit{
+		ref:       "pulumi:" + org + "/" + e2e.Project + "/renamed",
+		holder:    e2e.Subject,
+		operation: "update",
+	})
 	env.Step(ctx, t, failStep(
 		"second up while one runs",
 		outputContains("another update of this stack is in progress"),
@@ -900,6 +1237,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		"stack", "import", "--file", importPath,
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+	// The ended update releases the lock: the inventory entry holds none.
+	checkInventoryUnlocked(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
@@ -979,6 +1318,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	pulumiChangeSecretsProviderScenario(t, env, org)
 
 	pulumiMaskedStateScenario(t, env, org)
+
+	pulumiDiffScenario(t, env, org)
 }
 
 // changeSecretsProviderProgram is the scratch YAML program for the
@@ -1180,6 +1521,282 @@ func pulumiMaskedStateScenario(t *testing.T, env *e2e.Env, org string) {
 		"stack", "--show-name", "--stack", qualified,
 	))
 	env.Step(ctx, t, step("stack rm masked", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// diffSecretV1 and diffSecretV2 are the config secret values of the two diff
+// ups. They are test values only; no diff response may ever return them.
+const (
+	diffSecretV1 = "s3cr3t-diff-v1"
+	diffSecretV2 = "s3cr3t-diff-v2" //nolint:gosec // Test value only; no diff response may return it.
+)
+
+// stateDiffProgram returns the Pulumi.yaml of the diff scenario: a secret
+// output from config, a plain greeting that changes between the two ups,
+// one kept stack reference, and one reference whose logical name is extra.
+func stateDiffProgram(org, greeting, extra string) string {
+	return "name: " + e2e.Project + "\nruntime: yaml\n" +
+		"config:\n" +
+		"  apiKey:\n" +
+		"    type: string\n" +
+		"    secret: true\n" +
+		"outputs:\n" +
+		"  apiKeyOut:\n" +
+		"    fn::secret: ${apiKey}\n" +
+		"  greeting: " + greeting + "\n" +
+		"resources:\n" +
+		"  keep:\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + org + "/" + e2e.Project + "/other\n" +
+		"  " + extra + ":\n" +
+		"    type: pulumi:pulumi:StackReference\n" +
+		"    properties:\n" +
+		"      name: " + org + "/" + e2e.Project + "/other\n"
+}
+
+// pulumiDiffScenario proves the state diff (ADR 41 decision 9, masked per
+// decision 2) on a stack of its own that it removes: two ups with one added
+// reference, one removed reference, one changed greeting and one changed
+// secret. The diff answers each, with no secret value in the response.
+func pulumiDiffScenario(t *testing.T, env *e2e.Env, org string) {
+	t.Helper()
+
+	ctx := t.Context()
+	qualified := fmt.Sprintf("%s/%s/diffed", org, e2e.Project)
+
+	env.WritePulumiProject(t, stateDiffProgram(org, "hi", "gone"))
+	env.Step(ctx, t, step("stack init diffed", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for diff 1",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", diffSecretV1,
+		),
+	)
+	env.Step(ctx, t, step("up diffed 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.WritePulumiProject(t, stateDiffProgram(org, "hello-again", "added"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for diff 2",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", diffSecretV2,
+		),
+	)
+	env.Step(ctx, t, step("up diffed 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.Step(ctx, t, step(
+		"state diff",
+		checkStateDiff(ctx, env, org),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm diffed", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// stateDiffChangedEntry is one changed resource of the diff in e2e checks.
+type stateDiffChangedEntry struct {
+	URN            string   `json:"urn"`
+	ChangedPaths   []string `json:"changedPaths"`
+	ChangedSecrets []string `json:"changedSecrets"`
+}
+
+// stateDiffDoc is the diff body in e2e checks.
+type stateDiffDoc struct {
+	Added      []string                `json:"added"`
+	Removed    []string                `json:"removed"`
+	Changed    []stateDiffChangedEntry `json:"changed"`
+	NextCursor string                  `json:"nextCursor"`
+	Incomplete bool                    `json:"incomplete"`
+}
+
+// decodeStateDiffBody decodes a diff body.
+func decodeStateDiffBody(body string) (stateDiffDoc, error) {
+	var doc stateDiffDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return stateDiffDoc{}, fmt.Errorf("%w: decode state diff: %w", errUnexpected, err)
+	}
+
+	return doc, nil
+}
+
+// checkStateDiff proves the diff of versions 1 and 2 of the diffed stack:
+// one added reference, one removed reference, and the changed stack with
+// the changed greeting in changedPaths and the changed secret in
+// changedSecrets. No body holds a secret value, a ciphertext field or the
+// secret signature. A paged read with a limit of one lists the same three
+// URNs, and the diff of version 2 with itself is empty.
+func checkStateDiff(ctx context.Context, env *e2e.Env, org string) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		base := fmt.Sprintf("/api/stacks/%s/%s/diffed", org, e2e.Project)
+
+		raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=1&to=2")
+		if err != nil {
+			return err
+		}
+
+		doc, err := decodeStateDiffBody(raw)
+		if err != nil {
+			return err
+		}
+
+		if err := assertStateDiffEntries(doc); err != nil {
+			return err
+		}
+
+		if err := assertStateDiffHasNoSecrets(raw); err != nil {
+			return err
+		}
+
+		if err := assertStateDiffPaged(ctx, env, base, doc); err != nil {
+			return err
+		}
+
+		return assertStateDiffEmpty(ctx, env, base)
+	}
+}
+
+// assertStateDiffEntries proves the diff holds one added reference, one
+// removed reference, and the changed stack with the greeting path and the
+// secret path.
+func assertStateDiffEntries(doc stateDiffDoc) error {
+	if len(doc.Added) != 1 || !strings.HasSuffix(doc.Added[0], "::added") {
+		return fmt.Errorf("%w: diff added = %q, want the added reference", errUnexpected, doc.Added)
+	}
+
+	if len(doc.Removed) != 1 || !strings.HasSuffix(doc.Removed[0], "::gone") {
+		return fmt.Errorf("%w: diff removed = %q, want the gone reference", errUnexpected, doc.Removed)
+	}
+
+	if len(doc.Changed) != 1 {
+		return fmt.Errorf("%w: diff changed = %+v, want only the stack resource", errUnexpected, doc.Changed)
+	}
+
+	entry := doc.Changed[0]
+
+	if !strings.Contains(entry.URN, "pulumi:pulumi:Stack::") {
+		return fmt.Errorf("%w: diff changed URN %q is not the stack resource", errUnexpected, entry.URN)
+	}
+
+	if !slices.Contains(entry.ChangedPaths, "/outputs/greeting") {
+		return fmt.Errorf(
+			"%w: diff changed paths = %q, want /outputs/greeting",
+			errUnexpected,
+			entry.ChangedPaths,
+		)
+	}
+
+	if !slices.ContainsFunc(entry.ChangedSecrets, func(path string) bool {
+		return strings.Contains(path, "/outputs/")
+	}) {
+		return fmt.Errorf(
+			"%w: diff changed secrets = %q, want the secret output",
+			errUnexpected,
+			entry.ChangedSecrets,
+		)
+	}
+
+	if doc.NextCursor != "" || doc.Incomplete {
+		return fmt.Errorf("%w: diff = %+v, want a single complete page", errUnexpected, doc)
+	}
+
+	return nil
+}
+
+// assertStateDiffHasNoSecrets fails when the diff body holds a secret value,
+// a ciphertext field or the secret signature key.
+func assertStateDiffHasNoSecrets(body string) error {
+	for _, leaked := range []string{diffSecretV1, diffSecretV2, "ciphertext", maskedStateSigKey} {
+		if strings.Contains(body, leaked) {
+			return fmt.Errorf("%w: diff body holds %q", errUnexpected, leaked)
+		}
+	}
+
+	return nil
+}
+
+// stateDiffPageURNs returns the URNs of one diff page.
+func stateDiffPageURNs(doc stateDiffDoc) []string {
+	urns := make([]string, 0, len(doc.Added)+len(doc.Removed)+len(doc.Changed))
+	urns = append(urns, doc.Added...)
+	urns = append(urns, doc.Removed...)
+
+	for _, entry := range doc.Changed {
+		urns = append(urns, entry.URN)
+	}
+
+	return urns
+}
+
+// assertStateDiffPaged proves a paged read with a limit of one lists the
+// same differing URNs as the full diff, with no secret value in any page.
+func assertStateDiffPaged(ctx context.Context, env *e2e.Env, base string, full stateDiffDoc) error {
+	want := map[string]bool{}
+	for _, urn := range stateDiffPageURNs(full) {
+		want[urn] = true
+	}
+
+	seen := map[string]bool{}
+	cursor := ""
+
+	for {
+		raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=1&to=2&limit=1&cursor="+cursor)
+		if err != nil {
+			return err
+		}
+
+		if leakErr := assertStateDiffHasNoSecrets(raw); leakErr != nil {
+			return leakErr
+		}
+
+		doc, err := decodeStateDiffBody(raw)
+		if err != nil {
+			return err
+		}
+
+		urns := stateDiffPageURNs(doc)
+		if len(urns) != 1 {
+			return fmt.Errorf("%w: diff page at %q holds %d entries, want 1", errUnexpected, cursor, len(urns))
+		}
+
+		if seen[urns[0]] {
+			return fmt.Errorf("%w: diff page lists %q twice", errUnexpected, urns[0])
+		}
+
+		seen[urns[0]] = true
+		cursor = doc.NextCursor
+
+		if cursor == "" {
+			break
+		}
+	}
+
+	if !maps.Equal(seen, want) {
+		return fmt.Errorf("%w: paged diff URNs %v differ from full diff URNs %v", errUnexpected, seen, want)
+	}
+
+	return nil
+}
+
+// assertStateDiffEmpty proves the diff of version 2 with itself is empty.
+func assertStateDiffEmpty(ctx context.Context, env *e2e.Env, base string) error {
+	raw, err := maskedStateGet(ctx, env, base+"/state/diff?from=2&to=2")
+	if err != nil {
+		return err
+	}
+
+	doc, err := decodeStateDiffBody(raw)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Added) != 0 || len(doc.Removed) != 0 || len(doc.Changed) != 0 {
+		return fmt.Errorf("%w: same-version diff = %+v, want no change", errUnexpected, doc)
+	}
+
+	return nil
 }
 
 // maskedStateItem is one entry of the masked resource list in e2e checks.
@@ -3588,6 +4205,123 @@ func statePullLacksGreeting(r e2e.Result) error {
 	return nil
 }
 
+// inventoryLockDoc decodes the lock object of GET /api/inventory/units: the
+// holder, the take time in Unix seconds, and the operation.
+type inventoryLockDoc struct {
+	Holder    string `json:"holder"`
+	Since     int64  `json:"since"`
+	Operation string `json:"operation"`
+}
+
+// inventoryUnitDoc decodes one unit of GET /api/inventory/units.
+type inventoryUnitDoc struct {
+	Tool       string            `json:"tool"`
+	Reference  string            `json:"reference"`
+	Namespace  string            `json:"namespace"`
+	Name       string            `json:"name"`
+	LastChange int64             `json:"lastChange"`
+	Lock       *inventoryLockDoc `json:"lock"`
+}
+
+// readInventoryUnits reads the inventory units of ns through the API as
+// principal A.
+func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns string) []inventoryUnitDoc {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+ns, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/inventory/units: %v", err)
+	}
+
+	if got.Status != http.StatusOK {
+		t.Fatalf("GET /api/inventory/units answers %d, want %d (%s)", got.Status, http.StatusOK, got.Body)
+	}
+
+	var doc struct {
+		Units []inventoryUnitDoc `json:"units"`
+	}
+
+	if err := json.Unmarshal([]byte(got.Body), &doc); err != nil {
+		t.Fatalf("decode inventory units: %v (%s)", err, got.Body)
+	}
+
+	return doc.Units
+}
+
+// findInventoryUnit returns the unit with reference, or nil when the list
+// holds none.
+func findInventoryUnit(units []inventoryUnitDoc, ref string) *inventoryUnitDoc {
+	for i := range units {
+		if units[i].Reference == ref {
+			return &units[i]
+		}
+	}
+
+	return nil
+}
+
+// namespaceOf returns the namespace of an inventory reference
+// ("tool:namespace/name").
+func namespaceOf(ref string) string {
+	_, rest, _ := strings.Cut(ref, ":")
+	ns, _, _ := strings.Cut(rest, "/")
+
+	return ns
+}
+
+// lockedUnit is one unit with the lock the test expects: its reference,
+// the holder and the operation.
+type lockedUnit struct {
+	ref       string
+	holder    string
+	operation string
+}
+
+// checkInventoryLock proves the inventory entry of want.ref holds a lock
+// with its holder and operation, and a take time. It fails the test
+// otherwise.
+func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lockedUnit) {
+	t.Helper()
+
+	unit := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(want.ref)), want.ref)
+
+	if unit == nil {
+		t.Fatalf("inventory holds no entry %q", want.ref)
+	}
+
+	if unit.Lock == nil {
+		t.Fatalf("inventory entry %q holds no lock", want.ref)
+	}
+
+	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since <= 0 {
+		t.Fatalf(
+			"inventory lock of %q = %+v, want holder %q operation %q with a take time",
+			want.ref,
+			unit.Lock,
+			want.holder,
+			want.operation,
+		)
+	}
+}
+
+// checkInventoryUnlocked proves the inventory entry of ref holds no lock. It
+// fails the test otherwise.
+func checkInventoryUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	unit := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(ref)), ref)
+
+	if unit == nil {
+		t.Fatalf("inventory holds no entry %q", ref)
+	}
+
+	if unit.Lock != nil {
+		t.Fatalf("inventory entry %q holds %+v, want no lock", ref, unit.Lock)
+	}
+}
+
 // tofuLockScenario proves workspace locks across two principals: A locks
 // through the API, B cannot plan until it force-unlocks.
 func tofuLockScenario(t *testing.T, env *e2e.Env) {
@@ -3603,6 +4337,36 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  nil,
 		Name:   "lock by A",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+
+	// The inventory entry of the workspace holds the lock: holder A, no
+	// operation named, so "lock".
+	checkInventoryLock(ctx, t, env, lockedUnit{
+		ref:       "opentofu:" + e2e.Namespace + "/" + e2e.Workspace,
+		holder:    e2e.Subject,
+		operation: "lock",
+	})
+
+	// An unlock by A releases it, and the inventory entry holds no lock
+	// after. A relocks for the steps below.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "unlock by A",
+		Method: http.MethodPost,
+		Path:   unlockPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by A again",
 		Method: http.MethodPost,
 		Path:   lockPath,
 		Body:   `{"data":{}}`,
@@ -3654,6 +4418,9 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: false,
 	})
+
+	// The force-unlock releases the lock: the inventory entry holds none.
+	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	// A plan as B now passes.
 	env.Step(ctx, t, e2e.StepSpec{
@@ -8902,10 +9669,6 @@ func backupCheckpointBlobSize(manifest backupManifestDoc) int64 {
 	return largest
 }
 
-// restoreRegion is the region the restore test passes. It matches the region
-// of the harness environment, so no region warning appears.
-const restoreRegion = "e2e"
-
 // restoreSecret is the Pulumi config secret the test writes before the
 // backup and reads back after the restore.
 const restoreSecret = "s3cr3t"
@@ -8913,15 +9676,18 @@ const restoreSecret = "s3cr3t"
 // TestBackupRestore proves the backup exit test of ADR 30 consequence 5 with
 // the real binary. Server A serves with --backup-target. Both CLIs write
 // first, then background writers churn other stacks while `opendustpan
-// backup` runs, and `backup check` exits 0. The test stops A, restores the
-// backup into an empty destination with the same key, starts server B on it,
-// and proves both CLIs read the same state: the Pulumi export and the OpenTofu
-// pull match server A, the secret decrypts, and the history and state version
-// counts match. A restore with a wrong key exits 1, names
-// DUSTPAN_KEY_ENCRYPTION_KEY and writes nothing. Restores into a loaded
-// destination and into another schema version exit 1. It runs for every CLI
-// version of both tools, paired, on SQLite and on PostgreSQL, and only with
-// E2E_SERVER=binary on Linux.
+// backup` runs, and `backup check` exits 0. The test stops A, wipes the
+// destination, starts the server on the empty database, and restores the
+// backup into the empty installation through `opendustpan restore` against
+// the running server (ADR 38, ADR 39), then proves both CLIs read the same
+// state: the Pulumi export and the OpenTofu pull match server A, the secret
+// decrypts, and the history and state version counts match. It then restores
+// over live data, runs a check-only restore, proves a failed check changes
+// nothing, proves a lease from before a restore is fenced after it, undoes
+// the restore with the backup taken before it, and proves a wrong-key and a
+// schema-mismatch restore name their cause and change nothing. It runs for
+// every CLI version of both tools, paired, on SQLite and on PostgreSQL, and
+// only with E2E_SERVER=binary on Linux.
 func TestBackupRestore(t *testing.T) {
 	t.Parallel()
 
@@ -9018,7 +9784,11 @@ func pairBackupCLIs(pulumi, tofu []e2e.Install) []backupPair {
 // backup check exits 0, the backup restores into an empty destination with
 // the same key, server B reads the same state, a wrong-key restore names the
 // key and writes nothing, and loaded-destination and schema-mismatch restores
-// exit 1.
+// exit 1. Restores run through `opendustpan restore` against the running
+// server (ADR 38, ADR 39): restore into an empty installation, restore over
+// live data, check-only, a failed check that changes nothing, a lease from
+// before the restore fenced after it, and an undo with the backup taken
+// before the restore.
 func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	t.Helper()
 
@@ -9047,21 +9817,78 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	after := captureExitState(ctx, t, env, tools, "after backup")
 	checkExitStateStable(t, before, after)
 	runBackupCheck(ctx, t, env, id)
+	backupVersions := readFailoverVersions(ctx, t, env, store)
 
+	// Restore into an empty installation through the API: stop A, wipe the
+	// destination, start the server on the empty database, and restore
+	// through the new client command.
 	env.StopServer(ctx, t)
 	wipeRestoreDestination(ctx, t, env, store)
-	runRestoreBinary(ctx, t, env, target, id)
 	env.StartServer(ctx, t)
+	runRestoreCommand(ctx, t, env, id)
+	env.NoteStep(t, "restore into an empty installation", "restored "+id+" through the API")
 
 	restored := captureExitState(ctx, t, env, tools, "after restore")
 	checkExitStateMatches(t, after, restored)
-	checkRestoreRefusesLoaded(ctx, t, env, target, id)
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
 
-	env.StopServer(ctx, t)
-	wipeRestoreDestination(ctx, t, env, store)
-	runRestoreWrongKey(ctx, t, env, target, id)
-	checkRestoreDestinationEmpty(ctx, t, env, store)
-	runRestoreSchemaMismatch(ctx, t, env, tamperManifestSchema(t, target, id), id)
+	// Restore over live data: back up the restored state, restore the
+	// first backup over it, and prove the state matches the first backup.
+	liveID := runBackupCommand(ctx, t, env)
+	runRestoreCommand(ctx, t, env, id)
+	overRestored := captureExitState(ctx, t, env, tools, "after over-live restore")
+	checkExitStateMatches(t, after, overRestored)
+
+	// Check-only changes nothing.
+	runRestoreCheckOnly(ctx, t, env, liveID)
+	checkOnlyUnchanged := captureExitState(ctx, t, env, tools, "after check-only")
+	checkExitStateMatches(t, overRestored, checkOnlyUnchanged)
+
+	// A failed check changes nothing: restore a missing backup and prove
+	// the state stays.
+	runRestoreMissing(ctx, t, env)
+	failedUnchanged := captureExitState(ctx, t, env, tools, "after failed check")
+	checkExitStateMatches(t, overRestored, failedUnchanged)
+
+	// A lease from before the restore is fenced after it: hold an update,
+	// prove a restore without --force is refused while work is active, then
+	// restore with --force and prove the old lease no longer writes and every
+	// namespace moved exactly one failover version.
+	held := env.StartHeldUpdate(ctx, t, e2e.Namespace, e2e.Project, stackName)
+	heldBaseline := captureExitState(ctx, t, env, tools, "with held update")
+	runRestoreRefused(ctx, t, env, id, "active")
+	runRestoreCommandForced(ctx, t, env, id)
+	checkHeldLeaseFenced(ctx, t, env, held)
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	env.NoteStep(t, "lease fenced after restore", "old lease from before the restore no longer writes")
+
+	// Undo with the backup taken before the restore: the restore names its
+	// pre-backup, and restoring it brings back the state from before the
+	// forced restore, held update included.
+	preID := restorePreBackupID(ctx, t, env, id)
+	runRestoreCommand(ctx, t, env, preID)
+	undone := captureExitState(ctx, t, env, tools, "after undo")
+	checkExitStateMatches(t, heldBaseline, undone)
+
+	// A restore with a key that matches no wrapper stops before it writes
+	// and names DUSTPAN_KEY_ENCRYPTION_KEY: tamper the manifest wrappers in
+	// place, restore, prove the failure and the unchanged state, then put
+	// the manifest back.
+	saved := readTargetManifest(t, target, id)
+	rewriteTargetManifest(t, target, id, func(m *backup.Manifest) { m.WrapperIDs = []string{"kek-unknown"} })
+	runRestoreRefused(ctx, t, env, id, "DUSTPAN_KEY_ENCRYPTION_KEY")
+	wrongKeyUnchanged := captureExitState(ctx, t, env, tools, "after wrong-key restore")
+	checkExitStateMatches(t, undone, wrongKeyUnchanged)
+	writeTargetManifest(t, target, id, saved)
+
+	// A restore of another schema version stops before it writes and names
+	// the versions: tamper the schema version in place, restore, prove the
+	// failure and the unchanged state, then put the manifest back.
+	rewriteTargetManifest(t, target, id, func(m *backup.Manifest) { m.SchemaVersion += 1000 })
+	runRestoreRefused(ctx, t, env, id, "schema version")
+	schemaUnchanged := captureExitState(ctx, t, env, tools, "after schema-mismatch restore")
+	checkExitStateMatches(t, undone, schemaUnchanged)
+	writeTargetManifest(t, target, id, saved)
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack
@@ -9636,327 +10463,432 @@ func restoreSchema(t *testing.T, schemaURL string) string {
 	return ""
 }
 
-// restoreBinaryArgs returns the restore arguments the test runs: the backup
-// id from target into the database and blob store of the environment. On the
-// S3 store the blob flags name --blob-store with --s3-endpoint, which also
-// opens the S3 backup source; on the directory store they name --blob-dir.
-func restoreBinaryArgs(t *testing.T, env *e2e.Env, target, id string) []string {
+// runRestoreRefused runs `opendustpan restore` for id against the running
+// server and proves it exits 1 with output naming want, for restores the
+// server refuses before it writes anything.
+func runRestoreRefused(ctx context.Context, t *testing.T, env *e2e.Env, id, want string) {
 	t.Helper()
 
-	blobs := env.RestoreBlobArgs(t)
-	args := make([]string, 0, len(blobs)+6)
-	args = append(args,
-		"restore",
-		"--from", target,
-		"--backup", id,
-		"--database", env.DatabaseURL(t),
-		"--region", restoreRegion,
-	)
-
-	return append(args, blobs...)
-}
-
-// runRestoreBinary restores the backup id from target into the empty
-// destination with the same key and proves the steps with the row counts.
-func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
-	t.Helper()
-
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
-
-	if res.ExitCode != 0 {
-		t.Fatalf("restore exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
-	}
-
-	for _, want := range []string{
-		"restored backup " + id,
-		"table namespaces: 1 rows",
-		"table state_versions: 1 rows",
-	} {
-		if !strings.Contains(res.Stdout, want) {
-			t.Fatalf("restore output lacks %q:\n%s%s", want, res.Stdout, res.Stderr)
-		}
-	}
-}
-
-// checkRestoreRefusesLoaded proves a second restore into the loaded
-// destination exits 1 and names the refusal.
-func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
-	t.Helper()
-
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
+	res := env.RunBinary(ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id)
 
 	if res.ExitCode != 1 {
-		t.Fatalf("restore into a loaded destination exits with status %d, want 1:\n%s%s",
+		t.Fatalf("refused restore exits with status %d, want 1:\n%s%s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "not empty") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "not empty", out)
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, want) {
+		t.Fatalf("restore refusal lacks %q:\n%s", want, out)
 	}
 }
 
-// wrongRestoreKeyBytes is the size of the wrong key-encryption key the
-// wrong-key step restores with: a full builtin wrapper key, so the key loads
-// and the restore refuses on the mismatch instead of the key size.
-const wrongRestoreKeyBytes = 32
-
-// runRestoreWrongKey restores the backup id from target with a different
-// key-encryption key and proves it exits 1 naming DUSTPAN_KEY_ENCRYPTION_KEY.
-func runRestoreWrongKey(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
+// targetManifestPath returns the path of backups/<id>/manifest.json in the
+// file backup target, failing the test when the target is not a directory.
+func targetManifestPath(t *testing.T, target, id string) string {
 	t.Helper()
-
-	raw := make([]byte, wrongRestoreKeyBytes)
-	if _, err := rand.Read(raw); err != nil {
-		t.Fatalf("generate wrong key: %v", err)
-	}
-
-	key := base64.StdEncoding.EncodeToString(raw)
-	res := env.RunBinaryWithEnv(
-		ctx,
-		t,
-		[]string{"DUSTPAN_KEY_ENCRYPTION_KEY=" + key},
-		restoreBinaryArgs(t, env, target, id)...,
-	)
-
-	if res.ExitCode != 1 {
-		t.Fatalf("restore with a wrong key exits with status %d, want 1:\n%s%s",
-			res.ExitCode, res.Stdout, res.Stderr)
-	}
-
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "DUSTPAN_KEY_ENCRYPTION_KEY") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "DUSTPAN_KEY_ENCRYPTION_KEY", out)
-	}
-}
-
-// installationTable is the backup table that the migration seeds with the
-// installation state row.
-const installationTable = "installation"
-
-// checkRestoreDestinationEmpty proves a refused restore wrote nothing: every
-// data table holds no rows except the seeded installation row, and the live
-// blob store holds no objects.
-func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
-	t.Helper()
-
-	counts := exportRowCounts(ctx, t, env, store)
-
-	for _, table := range backup.Tables {
-		// The migration seeds the one installation row (ADR 38): an empty
-		// installation holds it, and a refused restore keeps it.
-		want := int64(0)
-		if table == installationTable {
-			want = 1
-		}
-
-		if got := counts[table]; got != want {
-			t.Fatalf("table %s holds %d rows after the refused restore, want %d", table, got, want)
-		}
-	}
-
-	if got := env.CountLiveBlobs(ctx, t); got != 0 {
-		t.Fatalf("live blob store holds %d objects after the refused restore, want none", got)
-	}
-}
-
-// exportRowCounts returns the row count of each data table in the destination
-// the environment serves, read straight from the store.
-func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) map[string]int64 {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
-		if !ok {
-			t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
-		}
-
-		st, err := sqlite.Open(ctx, path)
-		if err != nil {
-			t.Fatalf("open destination store: %v", err)
-		}
-
-		defer func() {
-			if closeErr := st.Close(); closeErr != nil {
-				t.Errorf("close destination store: %v", closeErr)
-			}
-		}()
-
-		sum, err := st.Export(ctx, io.Discard)
-		if err != nil {
-			t.Fatalf("export destination: %v", err)
-		}
-
-		return sum.RowCounts
-	case e2e.StorePostgres:
-		st, err := postgres.Open(ctx, env.DatabaseURL(t))
-		if err != nil {
-			t.Fatalf("open destination store: %v", err)
-		}
-
-		defer st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
-
-		sum, err := st.Export(ctx, io.Discard)
-		if err != nil {
-			t.Fatalf("export destination: %v", err)
-		}
-
-		return sum.RowCounts
-	default:
-		t.Fatalf("unknown store: %s", store)
-
-		return nil
-	}
-}
-
-// tamperManifestSchema copies the backup target to a new target and moves
-// its manifest to a schema version the binary never wrote, so a restore from
-// the copy names the schema versions and exits 1. The backup target stays
-// intact.
-func tamperManifestSchema(t *testing.T, target, id string) string {
-	t.Helper()
-
-	if strings.HasPrefix(target, "s3://") {
-		return tamperS3ManifestSchema(t, target, id)
-	}
 
 	dir, ok := strings.CutPrefix(target, "dir:")
 	if !ok || strings.TrimSpace(dir) == "" {
 		t.Fatalf("backup target = %q, want dir:<path>", target)
 	}
 
-	dst := filepath.Join(t.TempDir(), "tampered-target")
-	copyDir(t, dir, dst)
+	return filepath.Join(strings.TrimSpace(dir), "backups", id, "manifest.json")
+}
 
-	manifestPath := filepath.Join(dst, "backups", id, "manifest.json")
+// readTargetManifest reads backups/<id>/manifest.json from the backup target
+// of the running server.
+func readTargetManifest(t *testing.T, target, id string) backup.Manifest {
+	t.Helper()
 
-	// The test reads the manifest it copied from its own backup target.
-	raw, err := os.ReadFile(manifestPath) //nolint:gosec // Test file copied from the own backup target.
+	// The test reads the manifest the server wrote into its own backup target.
+	raw := readManifestBytes(t, target, id)
+
+	var manifest backup.Manifest
+
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+
+	return manifest
+}
+
+// readManifestBytes returns backups/<id>/manifest.json from the backup target
+// of the running server: a file read on a dir: target, an object read on an
+// s3:// target.
+func readManifestBytes(t *testing.T, target, id string) []byte {
+	t.Helper()
+
+	key := "backups/" + id + "/manifest.json"
+
+	if strings.HasPrefix(target, "s3://") {
+		ctx := t.Context()
+
+		return readS3Object(ctx, t, e2e.OpenS3TargetStore(ctx, t, target), key)
+	}
+
+	raw, err := os.ReadFile(targetManifestPath(t, target, id))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
 
-	var manifest backup.Manifest
+	return raw
+}
 
-	if decodeErr := json.Unmarshal(raw, &manifest); decodeErr != nil {
-		t.Fatalf("decode manifest: %v", decodeErr)
-	}
+// rewriteTargetManifest edits backups/<id>/manifest.json in the backup target
+// of the running server, so the next restore meets the tampered manifest.
+// Callers write the saved manifest back after the refused restore.
+func rewriteTargetManifest(t *testing.T, target, id string, edit func(*backup.Manifest)) {
+	t.Helper()
 
-	manifest.SchemaVersion += 1000
+	manifest := readTargetManifest(t, target, id)
+	edit(&manifest)
+	writeTargetManifest(t, target, id, manifest)
+}
+
+// writeTargetManifest writes manifest as backups/<id>/manifest.json in the
+// backup target of the running server.
+func writeTargetManifest(t *testing.T, target, id string, manifest backup.Manifest) {
+	t.Helper()
 
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatalf("encode manifest: %v", err)
 	}
 
-	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+	writeManifestBytes(t, target, id, data)
+}
+
+// writeManifestBytes writes data as backups/<id>/manifest.json into the
+// backup target of the running server: a file write on a dir: target, an
+// object write on an s3:// target.
+func writeManifestBytes(t *testing.T, target, id string, data []byte) {
+	t.Helper()
+
+	key := "backups/" + id + "/manifest.json"
+
+	if strings.HasPrefix(target, "s3://") {
+		ctx := t.Context()
+
+		parsed, err := blob.ParseKey(key)
+		if err != nil {
+			t.Fatalf("parse backup object key %q: %v", key, err)
+		}
+
+		// Blob keys are write-once, so the old manifest goes first.
+		store := e2e.OpenS3TargetStore(ctx, t, target)
+		if delErr := store.Delete(ctx, parsed); delErr != nil {
+			t.Fatalf("delete backup object %s: %v", key, delErr)
+		}
+
+		if putErr := store.Put(ctx, parsed, bytes.NewReader(data)); putErr != nil {
+			t.Fatalf("write backup object %s: %v", key, putErr)
+		}
+
+		return
+	}
+
+	if err := os.WriteFile(targetManifestPath(t, target, id), data, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-
-	return "dir:" + dst
 }
 
-// copyDir copies the directory tree src to dst, so a test tampers the copy
-// while the backup target stays intact.
-func copyDir(t *testing.T, src, dst string) {
+// runRestoreCommand runs `opendustpan restore` against the running server
+// (ADR 38, ADR 39): it starts a restore of id, waits until it leaves
+// running, and proves it succeeded. The server reads its own configured
+// backup target and its own live stores: the command takes no --from,
+// --database, --blob-dir or --blob-store.
+func runRestoreCommand(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	checkRestoreSucceeded(t, id, env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id,
+	))
+}
 
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
+// runRestoreCommandForced restores id with --force, canceling active work
+// first, and proves it succeeded.
+func runRestoreCommandForced(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
+	t.Helper()
 
-		out := filepath.Join(dst, rel)
+	checkRestoreSucceeded(t, id, env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id, "--force",
+	))
+}
 
-		if entry.IsDir() {
-			return os.MkdirAll(out, 0o700)
-		}
+// checkRestoreSucceeded proves a restore invocation exited 0 with the
+// succeeded state.
+func checkRestoreSucceeded(t *testing.T, id string, res e2e.BinaryResult) {
+	t.Helper()
 
-		// The test copies its own backup target, so the walked paths stay
-		// inside it.
-		raw, err := os.ReadFile(path) //nolint:gosec // Test file inside the own backup target.
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan restore %s exits with status %d:\n%s%s", id, res.ExitCode, res.Stdout, res.Stderr)
+	}
 
-		// The destination holds the copied backup, so it stays owner-only.
-		if err := os.WriteFile(out, raw, 0o600); err != nil { //nolint:gosec // Test file inside the copied target.
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("copy %s: %v", src, err)
+	if !strings.Contains(res.Stdout, "succeeded") {
+		t.Fatalf("opendustpan restore %s output lacks the succeeded state:\n%s%s", id, res.Stdout, res.Stderr)
 	}
 }
 
-// runRestoreSchemaMismatch restores the backup id from the tampered copy into
-// the empty destination and proves it exits 1 naming the schema versions.
-func runRestoreSchemaMismatch(ctx context.Context, t *testing.T, env *e2e.Env, tampered, id string) {
+// runRestoreCheckOnly runs `opendustpan restore --check-only` and proves it
+// exits 0 without applying anything.
+func runRestoreCheckOnly(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, tampered, id)...)
+	res := env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id, "--check-only",
+	)
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan restore --check-only %s exits with status %d:\n%s%s",
+			id, res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
 
+// runRestoreMissing restores a backup ID the target never held and proves it
+// exits 1 without changing the live data.
+func runRestoreMissing(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	res := env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", "bkp-missing000000000001",
+	)
 	if res.ExitCode != 1 {
-		t.Fatalf("restore into another schema version exits with status %d, want 1:\n%s%s",
+		t.Fatalf("restore of a missing backup exits with status %d, want 1:\n%s%s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
+}
 
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "schema version") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "schema version", out)
+// checkHeldLeaseFenced proves the lease held from before the restore no
+// longer writes: completing it with the old lease token fails, while a new
+// update starts at once. The restore replaced the update row, so the old
+// lease answers an error either way; checkRestoreFenced proves the fencing
+// itself by reading the failover version of every namespace.
+func checkHeldLeaseFenced(ctx context.Context, t *testing.T, env *e2e.Env, held e2e.HeldUpdate) {
+	t.Helper()
+
+	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
+
+	got, err := env.StatusWithHeader(
+		ctx,
+		"update-token "+held.Lease,
+		http.MethodPost,
+		prefix+"/update/"+held.ID+"/complete",
+		`{"status":"succeeded"}`,
+	)
+	if err != nil {
+		t.Fatalf("complete old update after restore: %v", err)
+	}
+
+	if got.Status < 400 {
+		t.Fatalf("complete with a lease from before the restore answers %d, want an error (%s)",
+			got.Status, got.Body)
+	}
+
+	fresh := env.StartHeldUpdate(ctx, t, held.Namespace, held.Project, held.Name)
+	env.EndHeldUpdate(ctx, t, fresh, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+}
+
+// readFailoverVersions returns the failover version of every namespace in the
+// live database, read directly: the server API exposes no namespace read, and
+// the fencing proof needs the stored versions before and after the restore.
+func readFailoverVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store,
+) map[string]int64 {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		return readSQLiteFailoverVersions(ctx, t, env)
+	case e2e.StorePostgres:
+		return readPostgresFailoverVersions(ctx, t, env)
+	default:
+		t.Fatalf("unknown store: %s", store)
+	}
+
+	return nil
+}
+
+// readSQLiteFailoverVersions reads the failover version of every namespace
+// from the live SQLite file while the server runs: a single ordered select,
+// so a concurrent write only waits out the read.
+func readSQLiteFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
+	t.Helper()
+
+	path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
+	if !ok {
+		t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
+	}
+
+	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		t.Fatalf("open database for failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	}()
+
+	return queryFailoverVersions(ctx, t, conn)
+}
+
+// queryFailoverVersions returns the failover version of every namespace
+// through conn, which reads the live database of the running server.
+func queryFailoverVersions(ctx context.Context, t *testing.T, conn *sql.DB) map[string]int64 {
+	t.Helper()
+
+	rows, err := conn.QueryContext(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close failover versions: %v", closeErr)
+		}
+	}()
+
+	out := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			name    string
+			version int64
+		)
+
+		if scanErr := rows.Scan(&name, &version); scanErr != nil {
+			t.Fatalf("scan failover version: %v", scanErr)
+		}
+
+		out[name] = version
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read failover versions: %v", iterErr)
+	}
+
+	return out
+}
+
+// readPostgresFailoverVersions reads the failover version of every namespace
+// from the live PostgreSQL schema of the running server.
+func readPostgresFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
+	if err != nil {
+		t.Fatalf("connect to postgres for failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	rows, err := conn.Query(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read failover versions: %v", err)
+	}
+
+	defer rows.Close()
+
+	out := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			name    string
+			version int64
+		)
+
+		if scanErr := rows.Scan(&name, &version); scanErr != nil {
+			t.Fatalf("scan failover version: %v", scanErr)
+		}
+
+		out[name] = version
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read failover versions: %v", iterErr)
+	}
+
+	return out
+}
+
+// checkRestoreFenced proves the restore fenced every namespace the backup
+// holds: each version after the restore sits exactly one above the version
+// the backup captured. A restore that swaps the data without the bump leaves
+// the captured versions and fails here, while the replaced update rows alone
+// would still answer that the old lease is gone.
+func checkRestoreFenced(t *testing.T, backupVersions, after map[string]int64) {
+	t.Helper()
+
+	if len(after) == 0 {
+		t.Fatal("no namespaces after the restore, want the fenced namespaces")
+	}
+
+	for name, captured := range backupVersions {
+		got, ok := after[name]
+		if !ok {
+			t.Fatalf("namespace %q is missing after the restore", name)
+		}
+
+		if got != captured+1 {
+			t.Fatalf(
+				"failover version of %q after the restore is %d, want one above the backed-up %d",
+				name,
+				got,
+				captured,
+			)
+		}
+	}
+
+	for name := range after {
+		if _, ok := backupVersions[name]; !ok {
+			t.Fatalf("namespace %q appeared during the restore", name)
+		}
 	}
 }
 
-// tamperS3ManifestSchema copies the S3 backup target to a new prefix and
-// moves its manifest to a schema version the binary never wrote, so a restore
-// from the copy names the schema versions and exits 1. The backup target
-// stays intact. The copied prefix is removed when the test ends.
-func tamperS3ManifestSchema(t *testing.T, target, id string) string {
+// restoreListEntry is one row of the restores list in tests.
+type restoreListEntry struct {
+	BackupID    string `json:"backupID"`
+	PreBackupID string `json:"preBackupID"`
+}
+
+// restoreListDoc decodes the restores list in tests.
+type restoreListDoc struct {
+	Restores []restoreListEntry `json:"restores"`
+}
+
+// restorePreBackupID reads the restore of id and returns the backup taken
+// before it, failing when the restore names none.
+func restorePreBackupID(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
 	t.Helper()
 
-	ctx := t.Context()
-	src := e2e.OpenS3TargetStore(ctx, t, target)
-
-	rest, ok := strings.CutPrefix(target, "s3://")
-	if !ok || strings.TrimSpace(rest) == "" {
-		t.Fatalf("backup target = %q, want s3://<bucket>[/<prefix>]", target)
-	}
-
-	bucket, _, _ := strings.Cut(strings.TrimSpace(rest), "/")
-
-	rawPrefix := make([]byte, 8)
-	if _, err := rand.Read(rawPrefix); err != nil {
-		t.Fatalf("generate tampered prefix: %v", err)
-	}
-
-	dstTarget := "s3://" + strings.TrimSpace(bucket) + "/e2e-" + hex.EncodeToString(rawPrefix) + "/backup-tampered"
-	dst := e2e.OpenS3TargetStore(ctx, t, dstTarget)
-
-	manifestName := "backups/" + id + "/manifest.json"
-
-	objects, err := src.List(ctx, "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/restores", "")
 	if err != nil {
-		t.Fatalf("list backup target: %v", err)
+		t.Fatalf("list restores: %v", err)
 	}
 
-	for _, obj := range objects {
-		data := readS3Object(ctx, t, src, obj.Key.String())
+	if status != http.StatusOK {
+		t.Fatalf("list restores answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
 
-		if obj.Key.String() == manifestName {
-			data = tamperManifestData(t, data)
-		}
+	var doc restoreListDoc
 
-		if err := dst.Put(ctx, obj.Key, bytes.NewReader(data)); err != nil {
-			t.Fatalf("copy backup object %s: %v", obj.Key, err)
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode restores %q: %v", body, err)
+	}
+
+	for _, r := range doc.Restores {
+		if r.BackupID == id && r.PreBackupID != "" {
+			return r.PreBackupID
 		}
 	}
 
-	return dstTarget
+	t.Fatalf("restores list holds no pre-backup for %s (%s)", id, body)
+
+	return ""
 }
 
 // readS3Object returns the content of the object under key in store.
@@ -9982,26 +10914,6 @@ func readS3Object(ctx context.Context, t *testing.T, store blob.Store, key strin
 	data, err := io.ReadAll(body)
 	if err != nil {
 		t.Fatalf("read backup object %s: %v", key, err)
-	}
-
-	return data
-}
-
-// tamperManifestData moves raw to a schema version the binary never wrote.
-func tamperManifestData(t *testing.T, raw []byte) []byte {
-	t.Helper()
-
-	var manifest backup.Manifest
-
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		t.Fatalf("decode manifest: %v", err)
-	}
-
-	manifest.SchemaVersion += 1000
-
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("encode manifest: %v", err)
 	}
 
 	return data

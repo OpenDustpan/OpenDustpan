@@ -85,7 +85,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile)
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan upgrade check again")
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 
-	if err := writeUpgradeReport(stdout, answer.ServerVersion, inspection); err != nil {
+	if err := writeUpgradeReport(stdout, answer.ServerVersion, inspection, keyWarningFor(answer)); err != nil {
 		return err
 	}
 
@@ -139,11 +139,32 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 
 // upgradeCheckAnswer is the server answer the upgrade check compares: the
 // server version, the schema version of its database and the names of the
-// applied migrations ordered by version.
+// applied migrations ordered by version. KeyEncryptionKey is nil when the
+// server is older than ADR 41 and does not answer the field.
 type upgradeCheckAnswer struct {
 	ServerVersion     string   `json:"version"`
 	SchemaVersion     int64    `json:"schemaVersion"`
 	AppliedMigrations []string `json:"appliedMigrations"`
+	KeyEncryptionKey  *bool    `json:"keyEncryptionKey"`
+}
+
+// keyWarning is the upgrade report line for a server that runs without a
+// key-encryption key, or that is too old to say. This release needs a key
+// (ADR 41 decision 12), so the operator sets one before the upgrade.
+const keyWarning = "warning: this release needs a key-encryption key (ADR 41): " +
+	"set DUSTPAN_KEY_ENCRYPTION_KEY or --key-encryption-key-file " +
+	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
+	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"
+
+// keyWarningFor returns keyWarning when the server answer shows no
+// key-encryption key (the field is missing on an older server, or false),
+// else "".
+func keyWarningFor(answer upgradeCheckAnswer) string {
+	if answer.KeyEncryptionKey == nil || !*answer.KeyEncryptionKey {
+		return keyWarning
+	}
+
+	return ""
 }
 
 // readUpgradeCheck asks the server for its version, schema version and
@@ -280,10 +301,12 @@ func upgradeVerdict(inspection schema.Inspection) string {
 
 // writeUpgradeReport writes the binary version, the server version, the
 // schema version of the database, the schema version the binary needs, the
-// pending migration names and the verdict. When migrations are pending it
-// tells the operator to back up the database first and that no downgrade
-// path exists.
-func writeUpgradeReport(stdout io.Writer, serverVersion string, inspection schema.Inspection) error {
+// pending migration names, the key warning when warning is not empty, and
+// the verdict. When migrations are pending it tells the operator to back up the
+// database first and that no downgrade path exists.
+func writeUpgradeReport(
+	stdout io.Writer, serverVersion string, inspection schema.Inspection, warning string,
+) error {
 	lines := []string{
 		"binary version: " + version,
 		"server version: " + serverVersion,
@@ -303,6 +326,10 @@ func writeUpgradeReport(stdout io.Writer, serverVersion string, inspection schem
 			lines,
 			"Back up the database before the upgrade. No downgrade path exists.",
 		)
+	}
+
+	if warning != "" {
+		lines = append(lines, warning)
 	}
 
 	lines = append(lines, "verdict: "+upgradeVerdict(inspection))

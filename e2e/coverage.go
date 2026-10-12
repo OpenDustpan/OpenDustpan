@@ -527,22 +527,24 @@ func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigr
 }
 
 // coverageServerRoutes returns the installation adapter's route table: the
-// namespace route (ADR 39), the backup routes (ADR 30), the metrics route
-// (ADR 32), the maintenance routes (ADR 38) and the check routes (ADR 39
-// decisions 3): backup check and upgrade check.
+// namespace route (ADR 39), the backup routes (ADR 30), the restore routes
+// (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
+// the check routes (ADR 39 decisions 3): backup check and upgrade check.
 func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    coverageNamespaces(tb),
-		Backups:       nil,
-		Maintenance:   coverageMaintenance{},
-		Metrics:       coverageMetrics{},
-		Version:       "test",
-		Schema:        coverageSchema{},
+		Authenticator:    coverageAuthenticator{},
+		Authorizer:       coverageAuthorizer{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       coverageNamespaces(tb),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      coverageMaintenance{},
+		Metrics:          coverageMetrics{},
+		Version:          "test",
+		Schema:           coverageSchema{},
+		KeyEncryptionKey: false,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -632,71 +634,17 @@ type AllowEntry struct {
 func CoverageAllowlist() []AllowEntry {
 	return slices.Concat(
 		consoleAllowEntries(),
-		operatorAllowEntries(),
 		backupAllowEntries(),
 		namespaceAllowEntries(),
 		maintenanceAllowEntries(),
+		operatorAllowEntries(),
 		stateAllowEntries(),
+		restoreAllowEntries(),
 	)
 }
 
-// operatorAllowEntries returns the operator and CLI-unreached routes that no
-// matrix version calls: batch encrypt, lease renewal, restore, state
-// version reads and the probes.
-func operatorAllowEntries() []AllowEntry {
-	return []AllowEntry{
-		{
-			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
-			CoveringTest: "TestSecretsBatchRoundTrip",
-			Reason: "The CLI encrypts one value per call through the single " +
-				"encrypt route and decrypts in batches, so no matrix version " +
-				"calls batch encrypt.",
-		},
-		{
-			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
-			CoveringTest: "TestRenewLeaseEchoesToken",
-			Reason:       "Fast e2e updates finish before the CLI renews its lease.",
-		},
-		{
-			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/restore/{version}",
-			CoveringTest: "TestCLIs (pulumiRestoreScenario)",
-			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
-				"The harness step restores version 1 and checks it with stack export.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/v2/state-versions",
-			CoveringTest: "TestCLIs (tofuStateVersionListScenario)",
-			Reason: "Operator and console route (ADR 28): the CLI never lists " +
-				"state versions. The harness step lists two versions after " +
-				"two applies.",
-		},
-		{
-			Method: http.MethodPost, Path: "/api/v2/state-versions/{state_version_id}/actions/restore",
-			CoveringTest: "TestCLIs (tofuRestoreScenario)",
-			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
-				"The harness step restores a version and checks it with state pull.",
-		},
-		{
-			Method: http.MethodGet, Path: "/api/server/metrics",
-			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
-			Reason:       "Operator route (ADR 32): no CLI calls it.",
-		},
-		{
-			Method: http.MethodGet, Path: "/health/live",
-			CoveringTest: "TestHealthLiveStillChecksNothing",
-			Reason:       "Operator probe: no CLI calls it.",
-		},
-		{
-			Method: http.MethodGet, Path: "/health/ready",
-			CoveringTest: "TestHealthReadyOK",
-			Reason:       "Operator probe: no CLI calls it.",
-		},
-	}
-}
-
-// consoleAllowEntries returns the console-only read routes that no CLI
-// calls: the cross-tool unit list, the audit reads and the workspace reads
-// by ID or for a single output.
+// consoleAllowEntries returns the allowlist rows for console-only routes and
+// routes the CLI never calls.
 func consoleAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
@@ -730,6 +678,59 @@ func consoleAllowEntries() []AllowEntry {
 				"main scenario without one never reaches it. The seeded e2e run " +
 				"proves it, but it writes no matrix report.",
 		},
+		{
+			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/batch-encrypt",
+			CoveringTest: "TestSecretsBatchRoundTrip",
+			Reason: "The CLI encrypts one value per call through the single " +
+				"encrypt route and decrypts in batches, so no matrix version " +
+				"calls batch encrypt.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/update/{update}/renew_lease",
+			CoveringTest: "TestRenewLeaseEchoesToken",
+			Reason:       "Fast e2e updates finish before the CLI renews its lease.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/stacks/{namespace}/{project}/{stack}/restore/{version}",
+			CoveringTest: "TestCLIs (pulumiRestoreScenario)",
+			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
+				"The harness step restores version 1 and checks it with stack export.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions",
+			CoveringTest: "TestCLIs (tofuStateVersionListScenario)",
+			Reason: "Operator and console route (ADR 28): the CLI never lists " +
+				"state versions. The harness step lists two versions after " +
+				"two applies.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/v2/state-versions/{state_version_id}/actions/restore",
+			CoveringTest: "TestCLIs (tofuRestoreScenario)",
+			Reason: "Operator and console route (ADR 28): the CLI never restores. " +
+				"The harness step restores a version and checks it with state pull.",
+		},
+	}
+}
+
+// operatorAllowEntries returns the operator routes and probes that no CLI
+// calls.
+func operatorAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/metrics",
+			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
+			Reason:       "Operator route (ADR 32): no CLI calls it.",
+		},
+		{
+			Method: http.MethodGet, Path: "/health/live",
+			CoveringTest: "TestHealthLiveStillChecksNothing",
+			Reason:       "Operator probe: no CLI calls it.",
+		},
+		{
+			Method: http.MethodGet, Path: "/health/ready",
+			CoveringTest: "TestHealthReadyOK",
+			Reason:       "Operator probe: no CLI calls it.",
+		},
 	}
 }
 
@@ -758,6 +759,13 @@ func stateAllowEntries() []AllowEntry {
 			CoveringTest: stateCoveringTest,
 			Reason: "Console route (ADR 41): the CLI never reads masked outputs. " +
 				"The harness step reads them after two ups and checks masking.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/stacks/{namespace}/{project}/{stack}/state/diff",
+			CoveringTest: "TestCLIs (pulumiDiffScenario)",
+			Reason: "Console route (ADR 41): the CLI never diffs state. " +
+				"The harness step diffs two ups with an added, a removed and a changed " +
+				"resource and a changed secret, and checks that no secret value appears.",
 		},
 	}
 }
@@ -853,6 +861,38 @@ func maintenanceAllowEntries() []AllowEntry {
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",
+		},
+	}
+}
+
+// restoreCoveringTest names the test that proves the restore routes instead
+// of a CLI: the restore command calls them with the Go User-Agent, which
+// never counts toward route coverage.
+const restoreCoveringTest = "TestBackupRestore"
+
+// restoreAllowEntries returns the operator restore routes that only the
+// restore command calls. The steps of restoreCoveringTest drive them through
+// the new command: restore into an empty installation, restore over live
+// data, check-only, a failed check, a fenced lease, and an undo.
+func restoreAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPost, Path: "/api/server/restores",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command starts a restore. " +
+				"The harness step starts one through it and checks the second start conflicts.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/restores",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command lists restores. " +
+				"The harness step lists them to find the backup taken before the restore.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/restores/{id}",
+			CoveringTest: restoreCoveringTest,
+			Reason: "Operator route: only the restore command reads a restore. " +
+				"The harness step polls it until it succeeds and checks the manifest.",
 		},
 	}
 }

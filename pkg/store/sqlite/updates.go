@@ -25,6 +25,9 @@ var (
 
 // CreateUpdate implements stack.UpdateStore.
 func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if err != nil {
@@ -67,6 +70,9 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 
 // GetUpdate implements stack.UpdateStore.
 func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID) (stack.Update, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if err != nil {
 		return stack.Update{}, err
@@ -87,6 +93,9 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 // StartUpdate implements stack.UpdateStore. The write lock taken when the
 // transaction begins makes the conflict check and version allocation atomic.
 func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) (stack.Update, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
@@ -114,7 +123,13 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 			return err
 		}
 
-		return saveUpdate(ctx, q, u, stackID)
+		if err := saveUpdate(ctx, q, u, stackID); err != nil {
+			return err
+		}
+
+		// A started mutating update holds the stack lock: publish it in the
+		// same transaction. Previews and dry runs never lock.
+		return publishStartLock(ctx, q, u)
 	})
 	if err != nil {
 		return stack.Update{}, err
@@ -127,6 +142,9 @@ func (s *Store) StartUpdate(ctx context.Context, u stack.Update, fence namespace
 // stack version moves and the inventory entry moves with it, in the same
 // transaction.
 func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
@@ -156,12 +174,21 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return fmt.Errorf("set stack version: %w", err)
 		}
 
-		return publishStackInventory(ctx, q, u.Ref, stackID, codec.Millis(u.EndedAt))
+		if err := publishStackInventory(ctx, q, u.Ref, stackID, codec.Millis(u.EndedAt)); err != nil {
+			return err
+		}
+
+		// The ended update releases the stack lock: clear it in the same
+		// transaction.
+		return writeInventoryLock(ctx, q, stackInventoryKey(u), nil)
 	})
 }
 
 // ActiveUpdate implements stack.UpdateStore.
 func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if err != nil {
 		return stack.Update{}, err
@@ -181,6 +208,9 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 
 // ListUpdates implements stack.UpdateStore.
 func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return nil, nil
@@ -212,6 +242,9 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 // without a key keeps the content as given. Each write of the running update
 // overwrites the row of that update.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	// The resource count scans the deployment bytes, about one second for a
 	// large checkpoint under the race detector. Compute it before the fenced
 	// transaction, so the write lock covers only SQL statements.
@@ -287,6 +320,9 @@ func writeCheckpoint(
 // LatestCheckpoint implements stack.CheckpointStore. It returns the
 // checkpoint of the stack's highest version that has one.
 func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Checkpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
@@ -312,6 +348,9 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 func (s *Store) CheckpointByVersion(
 	ctx context.Context, ref stack.Ref, version int64,
 ) (stack.Checkpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
@@ -340,6 +379,9 @@ func (s *Store) CheckpointByVersion(
 func (s *Store) CheckpointByUpdate(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID,
 ) (stack.Checkpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return stack.Checkpoint{}, stack.ErrNoState
@@ -366,6 +408,9 @@ func (s *Store) CheckpointByUpdate(
 
 // ReferencedCheckpointKeys implements stack.CheckpointStore.
 func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
 		return nil, nil
@@ -396,6 +441,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 
 // AppendEvents implements stack.EventStore.
 func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, batch.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
@@ -433,6 +481,9 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
 ) ([]stack.Event, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	stackID, err := s.stackID(ctx, ref)
 	if err != nil {
 		return nil, err

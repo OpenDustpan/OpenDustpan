@@ -96,11 +96,13 @@ chmod 644 "$CERT_DIR/cert.pem" "$CERT_DIR/key.pem"
 
 export DUSTPAN_ADMIN_TOKEN
 DUSTPAN_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export DUSTPAN_KEY_ENCRYPTION_KEY
+DUSTPAN_KEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 echo "smoke-image: starting $CONTAINER"
 docker run -d --name "$CONTAINER" -p 127.0.0.1::8080 \
   -v "$DATA_DIR:/data" -v "$CERT_DIR:/certs:ro" \
-  -e DUSTPAN_ADMIN_TOKEN \
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY \
   -e DUSTPAN_TLS_CERT=/certs/cert.pem -e DUSTPAN_TLS_KEY=/certs/key.pem \
   "$IMAGE" serve \
   --database sqlite:/data/dustpan.db --listen :8080 \

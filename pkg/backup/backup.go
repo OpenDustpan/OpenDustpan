@@ -67,6 +67,7 @@ var Tables = []string{
 	"state_versions",
 	"audit_entries",
 	"backups",
+	"restores",
 	"installation",
 }
 

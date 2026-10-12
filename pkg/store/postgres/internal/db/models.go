@@ -70,6 +70,9 @@ type Inventory struct {
 	LastChangedMs int64
 	Status        string
 	ResourceCount pgtype.Int8
+	LockHolder    pgtype.Text
+	LockSinceMs   pgtype.Int8
+	LockOperation pgtype.Text
 }
 
 type Namespace struct {
@@ -77,6 +80,17 @@ type Namespace struct {
 	HomeRegion      string
 	FailoverVersion int64
 	CreatedAtMs     int64
+}
+
+type Restore struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
 }
 
 type SecretKey struct {

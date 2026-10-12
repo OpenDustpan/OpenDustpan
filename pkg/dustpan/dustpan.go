@@ -67,6 +67,12 @@ var (
 	// errBackupNeedsRegistry reports a backup target with a namespace store
 	// that cannot track backups.
 	errBackupNeedsRegistry = errors.New("backup target needs a namespace store that tracks backups")
+	// errRestoreNeedsLive reports a backup target with a namespace store
+	// that cannot check, apply or fence a restore.
+	errRestoreNeedsLive = errors.New("backup target needs a namespace store that restores")
+	// errRestoreNeedsRegistry reports a backup target with a namespace store
+	// that cannot track restores.
+	errRestoreNeedsRegistry = errors.New("backup target needs a namespace store that tracks restores")
 	// errMaintenanceNeedsStore reports a namespace store that cannot keep
 	// the installation state. Every SQL adapter serves it from the same
 	// database connection; a custom store must serve it too, so every
@@ -84,6 +90,11 @@ const (
 // backupStoppedText marks a backup that was running when the server stopped.
 // FailRunningBackups writes it at the next start (ADR 30 decision 9).
 const backupStoppedText = "server stopped during backup"
+
+// restoreStoppedText marks a restore that was running when the server
+// stopped. FailRunningRestores writes it at the next start (ADR 38 decision
+// 9).
+const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
@@ -104,6 +115,7 @@ type settings struct {
 	now                  func() time.Time
 	region               namespace.Region
 	listenAddr           string
+	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
 	tlsCertFile          string
@@ -203,8 +215,17 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithListenAddr sets the address Run listens on. Defaults to ":8080".
+// It is ignored when WithListener is set: the passed listener wins.
 func WithListenAddr(addr string) Option {
 	return func(o *settings) { o.listenAddr = addr }
+}
+
+// WithListener sets the listener Run serves on. The listener must already
+// be bound, for example on 127.0.0.1:0, and stay open until Run starts.
+// Run serves plain HTTP or TLS on it and closes it on shutdown. When set,
+// it wins over WithListenAddr: Run never dials or binds another address.
+func WithListener(l net.Listener) Option {
+	return func(o *settings) { o.listener = l }
 }
 
 // WithConsoleDir serves a built web console from dir at "/". The console is a
@@ -288,20 +309,23 @@ func WithBackupTarget(target blob.Store, name string) Option {
 
 // Server is a configured OpenDustpan server.
 type Server struct {
-	handler        http.Handler
-	logger         *slog.Logger
-	listenAddr     string
-	secrets        *secret.Service
-	secretKeys     secret.KeyStore
-	secretWrapper  secret.Wrapper
-	workspaces     *workspace.Service
-	backups        *backup.Service
-	backupRegistry backup.Registry
-	now            func() time.Time
-	registry       *metrics.Registry
-	tlsCertFile    string
-	tlsKeyFile     string
-	observed       *metrics.ServerMetrics
+	handler         http.Handler
+	logger          *slog.Logger
+	listenAddr      string
+	listener        net.Listener
+	secrets         *secret.Service
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
+	workspaces      *workspace.Service
+	backups         *backup.Service
+	backupRegistry  backup.Registry
+	restores        *backup.RestoreService
+	restoreRegistry backup.RestoreRegistry
+	now             func() time.Time
+	registry        *metrics.Registry
+	tlsCertFile     string
+	tlsKeyFile      string
+	observed        *metrics.ServerMetrics
 }
 
 // services holds the domain services that NewServer wires together.
@@ -333,6 +357,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		now:                   time.Now,
 		region:                "",
 		listenAddr:            defaultListenAddr,
+		listener:              nil,
 		consoleDir:            "",
 		allowedOrigins:        nil,
 		tlsCertFile:           "",
@@ -343,9 +368,9 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxSecretBatchBytes:   0,
 		maxStateBytes:         0,
 		maxBodyBytesInFlight:  0,
-		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
 		backupTarget:          nil,
 		backupTargetName:      "",
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
 	}
 
 	for _, opt := range opts {
@@ -394,21 +419,29 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		backupRegistry = reg
 	}
 
+	var restoreRegistry backup.RestoreRegistry
+	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
+		restoreRegistry = reg
+	}
+
 	return &Server{
-		handler:        handler,
-		logger:         cfg.logger,
-		listenAddr:     cfg.listenAddr,
-		secrets:        svc.secrets,
-		secretKeys:     cfg.secretKeys,
-		secretWrapper:  cfg.secretWrapper,
-		workspaces:     svc.workspaces,
-		backups:        backups,
-		backupRegistry: backupRegistry,
-		now:            cfg.now,
-		registry:       registry,
-		tlsCertFile:    cfg.tlsCertFile,
-		tlsKeyFile:     cfg.tlsKeyFile,
-		observed:       observed,
+		handler:         handler,
+		logger:          cfg.logger,
+		listenAddr:      cfg.listenAddr,
+		listener:        cfg.listener,
+		secrets:         svc.secrets,
+		secretKeys:      cfg.secretKeys,
+		secretWrapper:   cfg.secretWrapper,
+		workspaces:      svc.workspaces,
+		backups:         backups,
+		backupRegistry:  backupRegistry,
+		restores:        adapters.restores,
+		restoreRegistry: restoreRegistry,
+		now:             cfg.now,
+		registry:        registry,
+		tlsCertFile:     cfg.tlsCertFile,
+		tlsKeyFile:      cfg.tlsKeyFile,
+		observed:        observed,
 	}, nil
 }
 
@@ -421,6 +454,7 @@ type adapters struct {
 	server      http.Handler
 	ready       http.Handler
 	maintenance *maintenance.Watcher
+	restores    *backup.RestoreService
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -474,7 +508,12 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	serverAPI, err := newServerHandler(cfg, svc, backups, maint, observed)
+	serverAPI, restores, err := newInstallationAPI(cfg, installationDeps{
+		services: svc,
+		backups:  backups,
+		maint:    maint,
+		observed: observed,
+	})
 	if err != nil {
 		return adapters{}, err
 	}
@@ -495,6 +534,7 @@ func newAdapters(
 		server:      serverAPI,
 		ready:       ready,
 		maintenance: watcher,
+		restores:    restores,
 	}, nil
 }
 
@@ -645,6 +685,12 @@ func (s *Server) Backups() *backup.Service {
 	return s.backups
 }
 
+// Restores returns the restore service the server was wired with, or nil
+// when no backup target is configured.
+func (s *Server) Restores() *backup.RestoreService {
+	return s.restores
+}
+
 // Metrics returns the request, build, process, runtime and readiness
 // metrics the middleware records. The metrics route of issue #165 reads
 // through it.
@@ -654,53 +700,117 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
 // WithTLS it serves HTTPS; without it, it warns when the listen address is
-// not loopback and serves plain HTTP anyway. Run first runs the start-up
-// check that refuses a key-encryption key that opens less than every wrapped
-// key in the database (ADR 23), so a program that embeds the server cannot
-// start with the wrong key. It then marks every running backup failed: the
-// server stopped during it (ADR 30 decision 9). When ctx is done before
-// these start-up steps end, Run returns nil: the caller asked it to stop,
-// and an error caused by that stop is not a failure.
+// not loopback and serves plain HTTP anyway. With WithListener it serves on
+// the passed listener, which wins over WithListenAddr. Without it, Run binds
+// WithListenAddr itself. Either way it logs the bound address in the
+// listening line, so a server on :0 reports the port it holds. Run first
+// runs the start-up check that refuses a key-encryption key that opens less
+// than every wrapped key in the database (ADR 23), so a program that embeds
+// the server cannot start with the wrong key. It then marks every running
+// backup and every running restore failed: the server stopped during them
+// (ADR 30 decision 9, ADR 38 decision 9). When ctx
+// is done before these start-up steps end, Run returns nil: the caller asked
+// it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
-	if err := s.startUp(ctx); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
+	if err := s.runStartUp(ctx); err != nil {
+		return startUpResult(ctx, err)
+	}
 
+	tlsCfg, err := s.tlsConfig()
+	if err != nil {
+		return err
+	}
+
+	ln, err := s.listen(ctx)
+	if err != nil {
 		return err
 	}
 
 	srv := &http.Server{
-		Addr:              s.listenAddr,
+		Addr:              ln.Addr().String(),
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		TLSConfig:         tlsCfg,
 	}
 
-	if s.tlsCertFile != "" {
-		cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
-		if err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
-		}
+	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
-		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
-	} else if !isLoopbackListenAddr(s.listenAddr) {
-		s.logger.WarnContext(
-			ctx,
-			"serving plain HTTP on a non-loopback address",
-			slog.String("addr", s.listenAddr),
-		)
+	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// startUpResult answers the result of Run when a start-up step fails with
+// err: nil when ctx is done, because the caller asked Run to stop and an
+// error caused by that stop is not a failure, else err.
+func startUpResult(ctx context.Context, err error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		return err
+	}
+}
+
+// tlsConfig loads the TLS configuration when a certificate is set, else
+// returns nil without an error for plain HTTP.
+func (s *Server) tlsConfig() (*tls.Config, error) {
+	if s.tlsCertFile == "" {
+		//nolint:nilnil // No certificate without an error means plain HTTP.
+		return nil, nil
 	}
 
+	cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate: %w", err)
+	}
+
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, nil
+}
+
+// listen answers the listener Run serves on: the passed listener when
+// WithListener is set, else a new binding of the listen address.
+func (s *Server) listen(ctx context.Context) (net.Listener, error) {
+	if s.listener != nil {
+		return s.listener, nil
+	}
+
+	//nolint:exhaustruct_v5 // The server listens with defaults; only the network and address matter.
+	lc := &net.ListenConfig{}
+
+	ln, err := lc.Listen(ctx, "tcp", s.listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	return ln, nil
+}
+
+// warnPlainHTTP logs a warning when addr serves plain HTTP off loopback.
+func warnPlainHTTP(ctx context.Context, logger *slog.Logger, addr string, tlsCfg *tls.Config) {
+	if tlsCfg != nil || isLoopbackListenAddr(addr) {
+		return
+	}
+
+	logger.WarnContext(ctx, "serving plain HTTP on a non-loopback address", slog.String("addr", addr))
+}
+
+// serveUntilDone serves srv on ln until ctx is done, then shuts down
+// gracefully. It logs the bound address, so a server on :0 reports the
+// port it holds.
+func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	boundAddr := ln.Addr().String()
 	serveErr := make(chan error, 1)
 
 	go func() {
-		s.logger.InfoContext(ctx, "listening", slog.String("addr", s.listenAddr))
+		s.logger.InfoContext(ctx, "listening", slog.String("addr", boundAddr))
 
 		if srv.TLSConfig != nil {
-			serveErr <- srv.ListenAndServeTLS("", "")
+			// ServeTLS, not Serve on a tls listener, so the server keeps
+			// HTTP/2. The certificate is already in TLSConfig, so the file
+			// arguments stay empty.
+			serveErr <- srv.ServeTLS(ln, "", "")
 		} else {
-			serveErr <- srv.ListenAndServe()
+			serveErr <- srv.Serve(ln)
 		}
 	}()
 
@@ -710,6 +820,12 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
+	return shutdownServer(ctx, srv, serveErr)
+}
+
+// shutdownServer shuts down srv after ctx is done and reports the serve
+// result: a clean close reads ErrServerClosed.
+func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 
@@ -719,6 +835,73 @@ func (s *Server) Run(ctx context.Context) error {
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve: %w", err)
+	}
+
+	return nil
+}
+
+// runStartUp runs the start-up steps of Run in order: the key check and the
+// running backups of startUp (ADR 23, ADR 30 decision 9), then the running
+// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// the steps is a stop, not a failure, so it answers nil: the caller asked
+// the server to stop.
+func (s *Server) runStartUp(ctx context.Context) error {
+	startErr := s.startUp(ctx)
+	if startErr == nil {
+		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr != nil && ctx.Err() == nil {
+		return startErr
+	}
+
+	return nil
+}
+
+// failStoppedRestores marks every running restore failed: the server stopped
+// during it (ADR 38 decision 9). When a restore was running, it fences every
+// namespace again before serving tool APIs: a stop during the checks or the
+// apply may leave live data that a later restore cannot fence, so leases
+// from before the restore still stop working (ADR 38 decision 7). Both
+// adapters fence with the swap (PostgreSQL in the same transaction, SQLite in
+// the staged file before the rename), so a crash after the swap already lands
+// fenced; this is the crash recovery for a stop before it.
+func (s *Server) failStoppedRestores(ctx context.Context) error {
+	if s.restoreRegistry == nil {
+		return nil
+	}
+
+	running, err := s.restoreRegistry.ListRestores(ctx)
+	if err != nil {
+		return fmt.Errorf("list running restores: %w", err)
+	}
+
+	crashed := false
+
+	for i := range running {
+		state := running[i].State
+		if state == backup.RestoreChecking || state == backup.RestoreApplying {
+			crashed = true
+
+			break
+		}
+	}
+
+	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
+		return fmt.Errorf("fail running restores: %w", err)
+	}
+
+	if !crashed {
+		return nil
+	}
+
+	fencer, ok := s.restoreRegistry.(backup.Fencer)
+	if !ok {
+		return nil
+	}
+
+	if _, err := fencer.BumpFailoverVersions(ctx); err != nil {
+		return fmt.Errorf("fence namespaces after a killed restore: %w", err)
 	}
 
 	return nil
@@ -841,28 +1024,53 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// installationDeps carries the services of the installation API.
+type installationDeps struct {
+	services services
+	backups  *backup.Service
+	maint    *maintenance.Service
+	observed *metrics.ServerMetrics
+}
+
+// newInstallationAPI builds the restore service and the tool-neutral
+// installation API from the backup service and the maintenance service.
+func newInstallationAPI(
+	cfg settings, deps installationDeps,
+) (http.Handler, *backup.RestoreService, error) {
+	restores, err := newRestoreService(cfg, deps.backups, deps.maint)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	serverAPI, err := newServerHandler(cfg, deps, restores)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return serverAPI, restores, nil
+}
+
 // newServerHandler builds the tool-neutral installation API. It carries the
 // namespace service that creates namespaces, the backup service when a
-// backup target is configured, else nil, the maintenance service, the
-// registry that the metrics route writes, the server version and the schema
-// store that the upgrade check reads.
+// backup target is configured, else nil, the restore service when a backup
+// target is configured, else nil, the maintenance service, the registry
+// that the metrics route writes, the server version and the schema store
+// that the upgrade check reads.
 func newServerHandler(
-	cfg settings,
-	svc services,
-	backups *backup.Service,
-	maint *maintenance.Service,
-	observed *metrics.ServerMetrics,
+	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		Namespaces:    svc.namespaces,
-		Backups:       backups,
-		Maintenance:   maint,
-		Metrics:       observed,
-		Version:       cfg.version,
-		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Authenticator:    cfg.authenticator,
+		Authorizer:       cfg.authorizer,
+		Logger:           cfg.logger,
+		Namespaces:       deps.services.namespaces,
+		Backups:          deps.backups,
+		Restores:         restores,
+		Maintenance:      deps.maint,
+		Metrics:          deps.observed,
+		Version:          cfg.version,
+		Schema:           schemaReporterOf(cfg.namespaceStore),
+		KeyEncryptionKey: cfg.secretWrapper != nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -924,6 +1132,53 @@ func newBackupService(cfg settings) (*backup.Service, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("backup service: %w", err)
+	}
+
+	return service, nil
+}
+
+// newRestoreService builds the installation restore service when a backup
+// target is configured, else returns nil. The live store, the registry and
+// the check ports come from the namespace store: every SQL adapter serves
+// all ports from one database connection. The backup service takes the
+// backup of the live data before the apply. A nil target means no backup
+// target is configured.
+func newRestoreService(
+	cfg settings, backups *backup.Service, maint *maintenance.Service,
+) (*backup.RestoreService, error) {
+	if cfg.backupTarget == nil {
+		//nolint:nilnil // Nil without an error means no backup target is configured.
+		return nil, nil
+	}
+
+	if backups == nil {
+		return nil, errBackupNeedsRegistry
+	}
+
+	live, ok := cfg.namespaceStore.(backup.RestoreLive)
+	if !ok {
+		return nil, errRestoreNeedsLive
+	}
+
+	registry, ok := cfg.namespaceStore.(backup.RestoreRegistry)
+	if !ok {
+		return nil, errRestoreNeedsRegistry
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        live,
+		Registry:    registry,
+		Backups:     backups,
+		Maintenance: maint,
+		Blobs:       cfg.blobStore,
+		Target:      cfg.backupTarget,
+		Key:         cfg.secretWrapper,
+		Region:      cfg.region.String(),
+		Now:         cfg.now,
+		Logger:      cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("restore service: %w", err)
 	}
 
 	return service, nil

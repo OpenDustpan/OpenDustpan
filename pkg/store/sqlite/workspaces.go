@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -25,6 +26,9 @@ const workspaceInventoryTool = "opentofu"
 // CreateWorkspace implements workspace.Store with a fenced insert. The
 // inventory entry is written in the same transaction.
 func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToWorkspaceRow(w)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -55,6 +59,9 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 
 // GetWorkspace implements workspace.Store.
 func (s *Store) GetWorkspace(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetWorkspace(ctx, db.GetWorkspaceParams{
 		Namespace: ref.Namespace.String(),
 		Name:      ref.Name.String(),
@@ -72,6 +79,9 @@ func (s *Store) GetWorkspace(ctx context.Context, ref workspace.Ref) (workspace.
 
 // GetWorkspaceByID implements workspace.Store.
 func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetWorkspaceByID(ctx, id.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return workspace.Workspace{}, workspace.ErrNotFound
@@ -86,6 +96,9 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id workspace.ID) (workspac
 
 // ListWorkspaces implements workspace.Store.
 func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]workspace.Workspace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	rows, err := s.queries.ListWorkspaces(ctx, ns.String())
 	if err != nil {
 		return nil, fmt.Errorf("select workspaces: %w", err)
@@ -102,6 +115,9 @@ func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]worksp
 // SaveWorkspace implements workspace.Store: a compare-and-swap on the
 // revision. The inventory entry moves with the write in the same transaction.
 func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToWorkspaceRow(w)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -120,7 +136,19 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 		}
 
 		if n > 0 {
-			return publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs)
+			if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+				return pubErr
+			}
+
+			// The lock moves with the write in the same transaction: lock,
+			// unlock and force-unlock all save here.
+			return writeInventoryLock(
+				ctx, q, inventoryLockKey{
+					namespace: w.Ref.Namespace.String(),
+					tool:      workspaceInventoryTool,
+					name:      w.Ref.Name.String(),
+				}, workspaceLock(w.Lock),
+			)
 		}
 
 		_, err = q.GetWorkspaceByID(ctx, row.ID)
@@ -143,6 +171,9 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 func (s *Store) CreateStateVersion(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -199,6 +230,9 @@ func (s *Store) CreateStateVersion(
 func (s *Store) GetStateVersion(
 	ctx context.Context, id workspace.StateVersionID,
 ) (workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetStateVersion(ctx, id.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
@@ -216,6 +250,9 @@ func (s *Store) GetStateVersion(
 func (s *Store) CurrentStateVersion(
 	ctx context.Context, workspaceID workspace.ID,
 ) (workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetCurrentStateVersion(ctx, workspaceID.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return workspace.StateVersion{}, workspace.ErrNoState
@@ -235,6 +272,9 @@ func (s *Store) CurrentStateVersion(
 func (s *Store) ListStateVersions(
 	ctx context.Context, id workspace.ID, page workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	page = normalizeStatePage(page)
 
 	total, err := s.queries.CountStateVersions(ctx, id.String())
@@ -283,6 +323,9 @@ func normalizeStatePage(page workspace.Page) workspace.Page {
 // pending versions the workspace holds. A workspace that does not exist
 // holds none.
 func (s *Store) CountPendingStateVersions(ctx context.Context, id workspace.ID) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	n, err := s.queries.CountPendingStateVersions(ctx, id.String())
 	if err != nil {
 		return 0, fmt.Errorf("count pending state versions: %w", err)
@@ -296,6 +339,9 @@ func (s *Store) CountPendingStateVersions(ctx context.Context, id workspace.ID) 
 // ones. A workspace without versions, or one that does not exist, yields an
 // empty list.
 func (s *Store) ReferencedContentKeys(ctx context.Context, id workspace.ID) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	keys, err := s.queries.ListStateContentKeys(ctx, id.String())
 	if err != nil {
 		return nil, fmt.Errorf("select state content keys: %w", err)
@@ -322,6 +368,9 @@ func (s *Store) ReferencedContentKeys(ctx context.Context, id workspace.ID) ([]b
 func (s *Store) RecordUploadAttempt(
 	ctx context.Context, id workspace.StateVersionID, key blob.Key, fence namespace.Fence,
 ) (blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var superseded blob.Key
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -373,6 +422,9 @@ func (s *Store) RecordUploadAttempt(
 func (s *Store) DeleteExpiredPendingStateVersions(
 	ctx context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
 ) ([]workspace.StateVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var out []workspace.StateVersion
 
 	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -424,6 +476,9 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 func (s *Store) FinalizeStateVersion(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -632,7 +687,9 @@ func workspaceRef(row db.Workspace) workspace.Ref {
 
 // publishWorkspaceInventory writes the OpenTofu entry for a workspace with
 // the given change time. Status and resource count stay unknown: OpenTofu
-// reports no status vocabulary and the server never reads state.
+// reports no status vocabulary and the server never reads state. The lock
+// columns stay untouched: only writeInventoryLock changes them, in the same
+// transaction as the lock, unlock or force-unlock that they describe.
 func publishWorkspaceInventory(
 	ctx context.Context, q *db.Queries, ref workspace.Ref, unitID string, lastChangedMs int64,
 ) error {
@@ -653,4 +710,26 @@ func publishWorkspaceInventory(
 	}
 
 	return nil
+}
+
+// workspaceLock returns the inventory lock a workspace holds, or nil when it
+// is unlocked. The holder is the subject of the principal that took the
+// lock, never a token or a secret.
+func workspaceLock(lock workspace.Lock) *inventory.Lock {
+	if !lock.Locked() {
+		return nil
+	}
+
+	return &inventory.Lock{Since: lock.LockedAt, Holder: lock.Holder, Operation: lockOperation(lock.Reason)}
+}
+
+// lockOperation maps a workspace lock reason to the inventory operation: the
+// CLI's own word when it locked with one, else "lock". The TFE protocol
+// carries only the reason, so the reason is the operation word.
+func lockOperation(reason string) string {
+	if reason == "" {
+		return "lock"
+	}
+
+	return reason
 }
