@@ -508,3 +508,116 @@ func TestRestoreCommandUsage(t *testing.T) {
 		t.Fatal("restore with a positional argument succeeded, want the usage error")
 	}
 }
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestRestoreCommandReadMissingNamesBackup(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+
+		if _, err := io.WriteString(w, `{"id":"`+restoreTestID+`"}`); err != nil {
+			t.Errorf("write start body: %v", err)
+		}
+	})
+	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+
+		body := `{"code": 404, "message": "restore not found"}`
+
+		if _, err := io.WriteString(w, body); err != nil {
+			t.Errorf("write 404 body: %v", err)
+		}
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	_, err := runRestoreClient(t, server.URL, "test-token")
+	if err == nil {
+		t.Fatal("restore with a missing row succeeded, want an error for exit code 1")
+	}
+
+	if !strings.Contains(err.Error(), "read restore failed "+restoreTestID) {
+		t.Fatalf("restore error = %v, want it to name the restore ID", err)
+	}
+
+	if want := "--backup " + restoreBackupTestID; !strings.Contains(err.Error(), want) {
+		t.Fatalf("restore error = %v, want it to suggest %q", err, want)
+	}
+
+	if strings.Contains(err.Error(), "--backup "+restoreTestID) {
+		t.Fatalf("restore error = %v, want the hint to name the backup, not the restore", err)
+	}
+}
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestRestoreCommandRetriesTransientMissing(t *testing.T) {
+	succeeded := restoreStatusResponse{
+		ID:          restoreTestID,
+		State:       "succeeded",
+		BackupID:    restoreBackupTestID,
+		PreBackupID: restorePreTestID,
+		Error:       "",
+		Manifest:    nil,
+	}
+	checking := restoreStatusResponse{
+		ID:          restoreTestID,
+		State:       "checking",
+		BackupID:    restoreBackupTestID,
+		PreBackupID: "",
+		Error:       "",
+		Manifest:    nil,
+	}
+
+	var reads atomic.Int64
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/server/restores", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+
+		if _, err := io.WriteString(w, `{"id":"`+restoreTestID+`"}`); err != nil {
+			t.Errorf("write start body: %v", err)
+		}
+	})
+	mux.HandleFunc("GET /api/server/restores/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		n := reads.Add(1)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch n {
+		case 1:
+			w.WriteHeader(http.StatusOK)
+
+			if err := json.NewEncoder(w).Encode(checking); err != nil {
+				t.Errorf("write checking state: %v", err)
+			}
+		case 2:
+			w.WriteHeader(http.StatusNotFound)
+
+			body := `{"code": 404, "message": "restore not found"}`
+
+			if _, err := io.WriteString(w, body); err != nil {
+				t.Errorf("write 404 body: %v", err)
+			}
+		default:
+			w.WriteHeader(http.StatusOK)
+
+			if err := json.NewEncoder(w).Encode(succeeded); err != nil {
+				t.Errorf("write succeeded state: %v", err)
+			}
+		}
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	out, err := runRestoreClient(t, server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("restore with a transient missing row: %v", err)
+	}
+
+	checkRestoreOutput(t, out, "succeeded")
+}

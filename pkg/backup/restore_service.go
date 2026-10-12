@@ -95,6 +95,14 @@ type RestoreService struct {
 	logger      *slog.Logger
 	mu          sync.Mutex
 	running     bool
+	// inflight holds the latest known row of each restore this process
+	// started and has not finished yet. The swap in applyPinned replaces
+	// the live data with staged data that predates the restore row, so
+	// the registry loses the row between the swap and recreateAfterSwap.
+	// Get serves the held row across that window instead of answering
+	// ErrRestoreNotFound.
+	inflightMu sync.RWMutex
+	inflight   map[RestoreID]RestoreRecord
 }
 
 // NewRestoreService returns a RestoreService. Live, Registry, Backups,
@@ -139,6 +147,8 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		logger:      logger,
 		mu:          sync.Mutex{},
 		running:     false,
+		inflightMu:  sync.RWMutex{},
+		inflight:    map[RestoreID]RestoreRecord{},
 	}, nil
 }
 
@@ -187,10 +197,13 @@ func (s *RestoreService) Start(
 		return fmt.Errorf("create restore %s: %w", id, createErr)
 	}
 
+	s.trackRestore(create)
+
 	if winnerErr := s.yieldToEarlierRunner(ctx, create); winnerErr != nil {
 		_, _ = s.registry.FinishRestore( //nolint:errcheck // Loser row records its own refusal.
 			ctx, id, RestoreFailed, sanitizeRestoreError(winnerErr), s.now().UTC(),
 		)
+		s.untrackRestore(id)
 
 		return fmt.Errorf("begin restore %s: %w", id, winnerErr)
 	}
@@ -202,14 +215,21 @@ func (s *RestoreService) Start(
 	return nil
 }
 
-// Get returns the restore row id, or ErrRestoreNotFound.
+// Get returns the restore row id, or ErrRestoreNotFound. While the swap in
+// applyPinned hides the registry row between the swap and recreateAfterSwap,
+// Get serves the row this process holds for the running restore, so polling
+// never sees a transient 404.
 func (s *RestoreService) Get(ctx context.Context, id RestoreID) (RestoreRecord, error) {
 	record, err := s.registry.GetRestore(ctx, id)
-	if err != nil {
-		return RestoreRecord{}, fmt.Errorf("get restore %s: %w", id, err)
+	if err == nil {
+		return record, nil
 	}
 
-	return record, nil
+	if held, ok := s.inflightRecord(id); ok && errors.Is(err, ErrRestoreNotFound) {
+		return held, nil
+	}
+
+	return RestoreRecord{}, fmt.Errorf("get restore %s: %w", id, err)
 }
 
 // ReadManifest returns the manifest of backup id from the target. A backup
@@ -254,6 +274,39 @@ func (s *RestoreService) release() {
 	defer s.mu.Unlock()
 
 	s.running = false
+}
+
+// trackRestore remembers the latest known row of a running restore, so Get
+// can serve it while the swap hides the registry row.
+func (s *RestoreService) trackRestore(record RestoreRecord) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+
+	if s.inflight == nil {
+		s.inflight = map[RestoreID]RestoreRecord{}
+	}
+
+	s.inflight[record.ID] = record
+}
+
+// untrackRestore forgets a restore that reached its end state in the
+// registry, so later reads come from the stored row.
+func (s *RestoreService) untrackRestore(id RestoreID) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+
+	delete(s.inflight, id)
+}
+
+// inflightRecord returns the held row of a running restore, if this process
+// started it and has not finished it yet.
+func (s *RestoreService) inflightRecord(id RestoreID) (RestoreRecord, bool) {
+	s.inflightMu.RLock()
+	defer s.inflightMu.RUnlock()
+
+	record, ok := s.inflight[id]
+
+	return record, ok
 }
 
 // runningElsewhere reports ErrRestoreRunning when the registry already
@@ -327,17 +380,60 @@ func (s *RestoreService) finish(ctx context.Context, id RestoreID, req RestoreRe
 	if restoreErr != nil {
 		// Background result: the registry row records the outcome, and a
 		// finish failure leaves the row running for the next server start
-		// to mark failed.
+		// to mark failed. When the swap hid the row and the recreate never
+		// ran, FinishRestore reports not found: create the failed row so
+		// the restore stays visible.
 		text := sanitizeRestoreError(restoreErr)
-		_, _ = s.registry.FinishRestore(ctx, id, RestoreFailed, text, end) //nolint:errcheck // The row is the record.
+		if _, finishErr := s.registry.FinishRestore(ctx, id, RestoreFailed, text, end); finishErr != nil &&
+			errors.Is(finishErr, ErrRestoreNotFound) {
+			s.createFinishedRow(
+				ctx,
+				restoreOutcome{id: id, req: req, state: RestoreFailed, errText: text, full: nil},
+				end,
+			)
+		}
+
+		s.untrackRestore(id)
 		s.logRestore(ctx, restoreOutcome{id: id, req: req, state: RestoreFailed, errText: text, full: restoreErr})
 
 		return
 	}
 
 	// Background result, as above.
-	_, _ = s.registry.FinishRestore(ctx, id, RestoreSucceeded, "", end) //nolint:errcheck // The row is the record.
+	if _, finishErr := s.registry.FinishRestore(ctx, id, RestoreSucceeded, "", end); finishErr != nil &&
+		errors.Is(finishErr, ErrRestoreNotFound) {
+		s.createFinishedRow(ctx, restoreOutcome{id: id, req: req, state: RestoreSucceeded, errText: "", full: nil}, end)
+	}
+
+	s.untrackRestore(id)
 	s.logRestore(ctx, restoreOutcome{id: id, req: req, state: RestoreSucceeded, errText: "", full: nil})
+}
+
+// createFinishedRow stores the end state of out.id when the swap hid the row
+// and the recreate never ran, so FinishRestore had no row to finish. The
+// held row, when present, keeps the start time, the backup, the pre-backup
+// and the requester. Best effort: the row is the record, and a failed create
+// leaves the held row for the next server start to mark failed.
+func (s *RestoreService) createFinishedRow(ctx context.Context, out restoreOutcome, end time.Time) {
+	record := RestoreRecord{
+		StartedAt:   end,
+		EndedAt:     end,
+		ID:          out.id,
+		BackupID:    out.req.BackupID,
+		PreBackupID: out.req.PreBackupID,
+		RequestedBy: out.req.RequestedBy,
+		Error:       out.errText,
+		State:       out.state,
+	}
+
+	if held, ok := s.inflightRecord(out.id); ok {
+		record.StartedAt = held.StartedAt
+		record.BackupID = held.BackupID
+		record.PreBackupID = held.PreBackupID
+		record.RequestedBy = held.RequestedBy
+	}
+
+	_ = s.registry.CreateRestore(ctx, record) //nolint:errcheck // The row is the record.
 }
 
 // restoreOutcome carries one finished restore to the log line.
@@ -673,6 +769,12 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 		return fmt.Errorf("mark restore %s applying: %w", id, markErr)
 	}
 
+	// Remember the applying row before the swap hides it: Get serves the
+	// held row while the registry loses it.
+	if marked, getErr := s.registry.GetRestore(ctx, id); getErr == nil {
+		s.trackRestore(marked)
+	}
+
 	return s.applyPinned(ctx, id, req.BackupID, pinned, pre)
 }
 
@@ -710,6 +812,10 @@ func (s *RestoreService) applyPinned(
 	if err != nil {
 		return fmt.Errorf("read restore %s before the swap: %w", id, err)
 	}
+
+	// Hold the row across the swap: the apply below drops the registry row,
+	// and Get serves the held row until recreateAfterSwap stores it again.
+	s.trackRestore(before)
 
 	if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
 		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)

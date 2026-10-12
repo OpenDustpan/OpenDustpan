@@ -79,6 +79,12 @@ type restoreServiceLive struct {
 	registry   *restoreServiceRegistry
 	mu         sync.Mutex
 	stageBlock chan struct{}
+	// applyGate, when non-nil, holds the second StageRestore call open: the
+	// first call serves the checks, the second stages the apply. Tests close
+	// it to let the apply proceed, so the restore parks after it left
+	// checking. stageBlock still gates every call when set.
+	applyGate  chan struct{}
+	stageCalls int
 	applied    int
 	bumped     int
 	resurrect  *backup.RestoreRecord
@@ -103,6 +109,9 @@ func (l *restoreServiceLive) StageRestore(
 ) (backup.Summary, error) {
 	l.mu.Lock()
 	block := l.stageBlock
+	l.stageCalls++
+	call := l.stageCalls
+	gate := l.applyGate
 	l.mu.Unlock()
 
 	if block != nil {
@@ -110,6 +119,14 @@ func (l *restoreServiceLive) StageRestore(
 		case <-ctx.Done():
 			return backup.Summary{}, fmt.Errorf("wait for the stage gate: %w", ctx.Err())
 		case <-block:
+		}
+	}
+
+	if gate != nil && call >= 2 {
+		select {
+		case <-ctx.Done():
+			return backup.Summary{}, fmt.Errorf("wait for the apply gate: %w", ctx.Err())
+		case <-gate:
 		}
 	}
 
@@ -409,6 +426,8 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		registry:    regs,
 		mu:          sync.Mutex{},
 		stageBlock:  nil,
+		applyGate:   nil,
+		stageCalls:  0,
 		applied:     0,
 		bumped:      0,
 		resurrect:   nil,
@@ -1154,6 +1173,8 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		registry:    regs,
 		mu:          sync.Mutex{},
 		stageBlock:  nil,
+		applyGate:   nil,
+		stageCalls:  0,
 		applied:     0,
 		bumped:      0,
 		resurrect:   nil,
@@ -1239,5 +1260,166 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 
 	if !found {
 		t.Fatalf("pre-backup %s missing from the backups list %+v", row.PreBackupID, listed)
+	}
+}
+
+// TestRestoreGetStaysVisibleAcrossSwapWindow proves polling Get never meets
+// ErrRestoreNotFound while the swap hides the registry row: the service holds
+// the applying row from before the swap and serves it until the recreate
+// stores it again. The test parks a restore in staging, drops the registry
+// rows to emulate the swap, and proves the service still answers the row.
+func TestRestoreGetStaysVisibleAcrossSwapWindow(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+	gate := holdRestoreApplyStage(setup)
+	id := backup.RestoreID("rst-swapwindow000001")
+
+	startSwapWindowRestore(t, setup, id)
+
+	held := waitServiceRestoreApplying(t, setup.service, id)
+
+	emulateRestoreSwapDrop(t, setup, id, held)
+
+	recreateDroppedRestore(t, setup, held)
+
+	close(gate)
+
+	waitServiceRestoreSucceeded(t, setup.service, id)
+}
+
+// holdRestoreApplyStage holds the second StageRestore call (the apply stage)
+// open and returns the gate to close to let the apply proceed. The first
+// call serves the checks, so the restore parks after it left checking for
+// the pre-backup.
+func holdRestoreApplyStage(setup *restoreServiceSetup) chan struct{} {
+	gate := make(chan struct{})
+
+	setup.live.mu.Lock()
+	defer setup.live.mu.Unlock()
+
+	setup.live.applyGate = gate
+
+	return gate
+}
+
+// startSwapWindowRestore starts id for the setup backup and fails on error.
+func startSwapWindowRestore(t *testing.T, setup *restoreServiceSetup, id backup.RestoreID) {
+	t.Helper()
+
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := setup.service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+}
+
+// waitServiceRestoreApplying polls the service Get until id reads applying
+// and answers the applying row, which already names the pre-backup.
+func waitServiceRestoreApplying(
+	t *testing.T, service *backup.RestoreService, id backup.RestoreID,
+) backup.RestoreRecord {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		row, err := service.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get restore %s: %v", id, err)
+		}
+
+		if row.State == backup.RestoreApplying {
+			if row.PreBackupID == "" {
+				t.Fatal("held applying row names no pre-backup")
+			}
+
+			return row
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s never reached applying (state %q)", id, row.State)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// emulateRestoreSwapDrop drops every registry row to emulate the swap, whose
+// staged data predates the restore row, and proves the service Get still
+// answers the held applying row instead of ErrRestoreNotFound.
+func emulateRestoreSwapDrop(
+	t *testing.T, setup *restoreServiceSetup, id backup.RestoreID, held backup.RestoreRecord,
+) {
+	t.Helper()
+
+	setup.regs.dropAll()
+
+	_, regErr := setup.regs.GetRestore(t.Context(), id)
+	if !errors.Is(regErr, backup.ErrRestoreNotFound) {
+		t.Fatalf("registry get after the emulated swap = %v, want %v", regErr, backup.ErrRestoreNotFound)
+	}
+
+	got, err := setup.service.Get(t.Context(), id)
+	if err != nil {
+		t.Fatalf("service get across the swap window: %v", err)
+	}
+
+	if got.ID != id || got.State != backup.RestoreApplying || got.BackupID != held.BackupID ||
+		got.PreBackupID != held.PreBackupID {
+		t.Fatalf("service get across the swap = %+v, want the held row %+v", got, held)
+	}
+}
+
+// recreateDroppedRestore re-records the row the emulated swap dropped, so
+// the parked restore reads it before its own swap and runs to its end state.
+func recreateDroppedRestore(t *testing.T, setup *restoreServiceSetup, held backup.RestoreRecord) {
+	t.Helper()
+
+	if err := setup.regs.CreateRestore(t.Context(), held); err != nil {
+		t.Fatalf("recreate the dropped row: %v", err)
+	}
+}
+
+// waitServiceRestoreSucceeded polls the service Get to the end state and
+// fails unless the restore succeeded.
+func waitServiceRestoreSucceeded(t *testing.T, service *backup.RestoreService, id backup.RestoreID) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		row, err := service.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get restore %s after the swap: %v", id, err)
+		}
+
+		if row.State != backup.RestoreChecking && row.State != backup.RestoreApplying {
+			if row.State != backup.RestoreSucceeded {
+				t.Fatalf("restore state = %q, want succeeded (%q)", row.State, row.Error)
+			}
+
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s never finished", id)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }

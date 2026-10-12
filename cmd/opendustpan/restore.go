@@ -45,6 +45,10 @@ var (
 	errRestoreStart = errors.New("start restore failed")
 	// errRestoreRead reports a restore row that never arrived.
 	errRestoreRead = errors.New("read restore failed")
+	// errRestoreMissing reports a restore row the server does not hold.
+	// waitRestore uses it to tell a transient swap gap from other read
+	// failures: after one successful read, a missing row retries.
+	errRestoreMissing = errors.New("restore not found")
 )
 
 // restoreRerunHelp names the one command that helps after a restore error:
@@ -151,7 +155,13 @@ func restoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 
-	doc, err := waitRestore(ctx, client, server, token, started.ID)
+	doc, err := waitRestore(ctx, restoreReadParams{
+		client:    client,
+		server:    server,
+		token:     token,
+		restoreID: started.ID,
+		backupID:  id,
+	})
 	if err != nil {
 		return err
 	}
@@ -334,35 +344,45 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	return doc, nil
 }
 
+// restoreReadParams carries one restore read: the client, the server, the
+// token, the polled restore ID, and the requested backup ID. The hint names
+// the backup, so an operator who follows the error reruns a command that can
+// work; the restore ID stays only in the failure prefix.
+type restoreReadParams struct {
+	client    *http.Client
+	server    string
+	token     string
+	restoreID string
+	backupID  string
+}
+
 // readRestore reads one restore row.
-func readRestore(
-	ctx context.Context, client *http.Client, server, token, id string,
-) (restoreStatusResponse, error) {
-	endpoint := backupEndpoint(server, "/api/server/restores/"+url.PathEscape(id))
+func readRestore(ctx context.Context, params restoreReadParams) (restoreStatusResponse, error) {
+	endpoint := backupEndpoint(params.server, "/api/server/restores/"+url.PathEscape(params.restoreID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return restoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
 			errRestoreRead,
-			id,
+			params.restoreID,
 			err,
-			server,
-			id,
+			params.server,
+			params.backupID,
 		)
 	}
 
-	backupAuth(req, token)
+	backupAuth(req, params.token)
 
-	resp, err := client.Do(req)
+	resp, err := params.client.Do(req)
 	if err != nil {
 		return restoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
 			errRestoreRead,
-			id,
+			params.restoreID,
 			err,
-			server,
-			id,
+			params.server,
+			params.backupID,
 		)
 	}
 
@@ -371,14 +391,7 @@ func readRestore(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return restoreStatusResponse{}, fmt.Errorf(
-			"%w %s: %s: "+restoreRerunHelp,
-			errRestoreRead,
-			id,
-			decodeBackupError(resp),
-			server,
-			id,
-		)
+		return restoreStatusResponse{}, restoreStatusError(resp, params)
 	}
 
 	var doc restoreStatusResponse
@@ -389,30 +402,69 @@ func readRestore(
 		return restoreStatusResponse{}, fmt.Errorf(
 			"%w %s: %w: "+restoreRerunHelp,
 			errRestoreRead,
-			id,
+			params.restoreID,
 			err,
-			server,
-			id,
+			params.server,
+			params.backupID,
 		)
 	}
 
 	return doc, nil
 }
 
+// restoreStatusError answers the read error for a non-200 status. A missing
+// row wraps errRestoreMissing so the wait tells a transient swap gap from
+// other failures; any other status is a plain read failure.
+func restoreStatusError(resp *http.Response, params restoreReadParams) error {
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf(
+			"%w %s: %w: %s: "+restoreRerunHelp,
+			errRestoreRead,
+			params.restoreID,
+			errRestoreMissing,
+			decodeBackupError(resp),
+			params.server,
+			params.backupID,
+		)
+	}
+
+	return fmt.Errorf(
+		"%w %s: %s: "+restoreRerunHelp,
+		errRestoreRead,
+		params.restoreID,
+		decodeBackupError(resp),
+		params.server,
+		params.backupID,
+	)
+}
+
 // waitRestore polls one restore until it leaves checking and applying and
-// answers its last row. A canceled context stops the wait with the context
-// error.
-func waitRestore(
-	ctx context.Context, client *http.Client, server, token, id string,
-) (restoreStatusResponse, error) {
+// answers its last row. A missing row after one successful read waits one
+// poll interval and retries until the context ends: the swap hides the row
+// between the apply and its recreate. A missing row before any successful
+// read fails at once, so a wrong ID never polls forever. A canceled context
+// stops the wait with the context error.
+func waitRestore(ctx context.Context, params restoreReadParams) (restoreStatusResponse, error) {
 	timer := time.NewTimer(backupPollInterval)
 	defer timer.Stop()
 
+	sawRow := false
+
 	for {
-		doc, err := readRestore(ctx, client, server, token, id)
+		doc, err := readRestore(ctx, params)
 		if err != nil {
-			return restoreStatusResponse{}, err
+			if !sawRow || !errors.Is(err, errRestoreMissing) {
+				return restoreStatusResponse{}, err
+			}
+
+			if waitErr := waitRestoreMissing(ctx, timer, params); waitErr != nil {
+				return restoreStatusResponse{}, waitErr
+			}
+
+			continue
 		}
+
+		sawRow = true
 
 		if doc.State != "checking" && doc.State != "applying" {
 			return doc, nil
@@ -422,14 +474,33 @@ func waitRestore(
 		case <-ctx.Done():
 			return restoreStatusResponse{}, fmt.Errorf(
 				"wait for restore %s: %w: "+restoreRerunHelp,
-				id,
+				params.restoreID,
 				ctx.Err(),
-				server,
+				params.server,
 				doc.BackupID,
 			)
 		case <-timer.C:
 			timer.Reset(backupPollInterval)
 		}
+	}
+}
+
+// waitRestoreMissing waits one poll interval after a transient missing row.
+// A canceled context stops the wait with the context error.
+func waitRestoreMissing(ctx context.Context, timer *time.Timer, params restoreReadParams) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf(
+			"wait for restore %s: %w: "+restoreRerunHelp,
+			params.restoreID,
+			ctx.Err(),
+			params.server,
+			params.backupID,
+		)
+	case <-timer.C:
+		timer.Reset(backupPollInterval)
+
+		return nil
 	}
 }
 
