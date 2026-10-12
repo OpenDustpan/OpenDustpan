@@ -106,6 +106,7 @@ type auditEntry struct {
 	Object     string `json:"object"`
 	Version    string `json:"version"`
 	ValuePath  string `json:"valuePath"`
+	ValueCount *int64 `json:"valueCount,omitempty"`
 	SourceIP   string `json:"sourceIP"`
 	UserAgent  string `json:"userAgent"`
 	Channel    string `json:"channel"`
@@ -128,6 +129,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Object:     e.Object,
 		Version:    e.Version,
 		ValuePath:  e.ValuePath,
+		ValueCount: e.ValueCount,
 		SourceIP:   e.SourceIP,
 		UserAgent:  e.UserAgent,
 		Channel:    string(e.Channel),

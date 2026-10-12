@@ -496,7 +496,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -559,8 +559,18 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. base reports the external base URL for absolute URLs.
-func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs. observed counts
+// failed audit appends: the state download and the single output route fail
+// closed with a 500 when the append fails, so the counter is the alert for
+// lost entries.
+func newTFEHandler(
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (*tfe.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -568,6 +578,10 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
+		Audit:         entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
