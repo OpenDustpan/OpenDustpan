@@ -671,11 +671,7 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 // it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.startUp(ctx); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-
-		return err
+		return startUpResult(ctx, err)
 	}
 
 	tlsCfg, err := s.tlsConfig()
@@ -699,6 +695,18 @@ func (s *Server) Run(ctx context.Context) error {
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// startUpResult answers the result of Run when a start-up step fails with
+// err: nil when ctx is done, because the caller asked Run to stop and an
+// error caused by that stop is not a failure, else err.
+func startUpResult(ctx context.Context, err error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		return err
+	}
 }
 
 // tlsConfig loads the TLS configuration when a certificate is set, else
