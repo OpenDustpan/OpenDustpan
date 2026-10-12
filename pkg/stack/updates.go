@@ -253,7 +253,18 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 // with ErrUpdateConflict while another one runs on the stack. It sweeps the
 // stack's orphan checkpoint blobs, best effort: a cleanup failure never fails
 // the start, and the blobs stay for the next sweep.
+// Start moves an update to running under a new lease. The update keeps journal
+// version 0, which means checkpoints.
 func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, error) {
+	return s.StartWithJournalVersion(ctx, ref, id, 0)
+}
+
+// StartWithJournalVersion starts the update like Start, and keeps the journal
+// version that the server negotiated for it (ADR 43, decision 1.3). The store
+// writes the version in the same fenced transaction as the start.
+func (s *Updates) StartWithJournalVersion(
+	ctx context.Context, ref Ref, id UpdateID, journalVersion int64,
+) (Started, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Started{}, err
@@ -275,6 +286,8 @@ func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, err
 	if err != nil {
 		return Started{}, err
 	}
+
+	u.JournalVersion = journalVersion
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {

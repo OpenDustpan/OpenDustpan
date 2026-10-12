@@ -1,6 +1,7 @@
 package pulumi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -428,7 +429,8 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 }
 
 // startUpdate starts the update and hands out its lease. The request tags
-// are ignored in milestone 1: they only annotate the stack.
+// are ignored in milestone 1: they only annotate the stack. The journal version
+// is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
 func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -437,7 +439,16 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	started, err := h.updates.Start(ctx, ref, id)
+	offer, ok := h.startOffer(w, r)
+	if !ok {
+		return
+	}
+
+	journal := negotiateJournalVersion(
+		r.UserAgent(), offer.JournalVersion, h.disablePulumiJournaling, maxSupportedJournalVersion,
+	)
+
+	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -450,6 +461,29 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		Version:         int(started.Update.Version),
 		JournalVersion:  int(started.Update.JournalVersion),
 	})
+}
+
+// startOffer reads the start-update body. An empty body offers no journal
+// version, because some clients send no body.
+func (h *Handler) startOffer(w http.ResponseWriter, r *http.Request) (startUpdateOffer, bool) {
+	var offer startUpdateOffer
+
+	body, ok := h.readBody(w, r, maxBodyBytes)
+	if !ok {
+		return offer, false
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return offer, true
+	}
+
+	if err := json.Unmarshal(body, &offer); err != nil {
+		h.writeInvalidBody(r.Context(), w)
+
+		return offer, false
+	}
+
+	return offer, true
 }
 
 // renewLease extends the update's lease. The lease token arrives in the
