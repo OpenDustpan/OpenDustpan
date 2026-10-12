@@ -588,3 +588,280 @@ func TestSealUnsealedStatesSkipsForeignRegions(t *testing.T) {
 		t.Fatalf("remote blob = %q, want %q", got, content)
 	}
 }
+
+// raceBlobStore runs onList once before the next List answers, so the test
+// records a live upload attempt with its blob while the sweep runs.
+type raceBlobStore struct {
+	blob.Store
+
+	onList func()
+}
+
+func (s *raceBlobStore) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	if s.onList != nil {
+		fn := s.onList
+		s.onList = nil
+		fn()
+	}
+
+	return s.Store.List(ctx, prefix)
+}
+
+// TestSealSweepKeepsConcurrentUpload proves the sweep lists the blobs before
+// it reads the referenced keys: a blob put, with its row recorded, while the
+// sweep runs survives it, because the later reference read names it.
+func TestSealSweepKeepsConcurrentUpload(t *testing.T) {
+	t.Parallel()
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	content := `{"version":4,"serial":1}`
+
+	sv := f.pushPlain(t, content, sealedOutputsDoc("output-one"), 1)
+
+	raceKey, err := blob.ParseKey("tofu/" + f.ws.ID.String() + "/sv-race000000000001/a1")
+	if err != nil {
+		t.Fatalf("parse race key: %v", err)
+	}
+
+	raced := &raceBlobStore{Store: f.blobs, onList: func() {
+		if putErr := f.blobs.Put(ctx, raceKey, strings.NewReader("race")); putErr != nil {
+			t.Errorf("put race blob: %v", putErr)
+
+			return
+		}
+
+		race := sv
+		race.ID = "sv-race000000000001"
+		race.Status = workspace.StatusPending
+		race.Content = raceKey
+		race.Sealed = false
+
+		f.store.mu.Lock()
+		defer f.store.mu.Unlock()
+
+		f.store.versions[race.ID] = race
+	}}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              raced,
+		Namespaces:         f.namespaces,
+		Sealer:             f.sealer,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      4 << 20,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("sealed service: %v", err)
+	}
+
+	res, err := svc.SealUnsealedStates(ctx)
+	if err != nil {
+		t.Fatalf("seal unsealed state: %v", err)
+	}
+
+	if res.Sealed != 1 || res.Skipped != 0 {
+		t.Fatalf("seal result = %+v, want 1 sealed and none skipped", res)
+	}
+
+	checkSealedRow(t, f, sealedRow{
+		id:      sv.ID,
+		content: content,
+		output:  "output-one",
+		old:     sv.Content,
+	})
+
+	raw, err := f.blobs.Get(ctx, raceKey)
+	if err != nil {
+		t.Fatalf("get race blob: %v, want the concurrent upload to survive", err)
+	}
+
+	got, readErr := io.ReadAll(raw)
+	closeErr := raw.Close()
+
+	if readErr != nil {
+		t.Fatalf("read race blob: %v", readErr)
+	}
+
+	if closeErr != nil {
+		t.Fatalf("close race blob: %v", closeErr)
+	}
+
+	if string(got) != "race" {
+		t.Fatalf("race blob = %q, want %q", got, "race")
+	}
+}
+
+// deleteBeforeSealStore deletes the version before its seal change commits,
+// as another instance pruning it between the listing and the seal would.
+type deleteBeforeSealStore struct {
+	*memStore
+}
+
+func (s *deleteBeforeSealStore) SealStateVersion(
+	ctx context.Context,
+	id workspace.StateVersionID,
+	key blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	s.mu.Lock()
+	delete(s.versions, id)
+	s.mu.Unlock()
+
+	return s.memStore.SealStateVersion(ctx, id, key, outputs, fence)
+}
+
+// TestSealSkipsVersionDeletedBeforeSeal proves a version deleted between the
+// listing and its seal change counts as skipped, not as a start-up failure,
+// and the new sealed blob goes with it.
+func TestSealSkipsVersionDeletedBeforeSeal(t *testing.T) {
+	t.Parallel()
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	sv := f.pushPlain(t, `{"version":4,"serial":1}`, sealedOutputsDoc("output-one"), 1)
+	old := sv.Content
+
+	faulty := &deleteBeforeSealStore{memStore: f.store}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         faulty,
+		States:             faulty,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             f.sealer,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      4 << 20,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("sealed service: %v", err)
+	}
+
+	res, err := svc.SealUnsealedStates(ctx)
+	if err != nil {
+		t.Fatalf("seal unsealed state: %v", err)
+	}
+
+	if res.Sealed != 0 || res.Skipped != 1 {
+		t.Fatalf("seal result = %+v, want nothing sealed and 1 skipped", res)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, sv.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("get deleted state: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	keys := listWorkspaceKeys(t, f.blobs, f.ws.ID)
+	if len(keys) != 1 || keys[0] != old {
+		t.Fatalf("stored blobs = %q, want only the old blob %q", keys, old)
+	}
+}
+
+// pruneBeforeReadBlobs deletes the version with its blob on the next read of
+// old, as another instance pruning it between the listing and the seal would.
+type pruneBeforeReadBlobs struct {
+	blob.Store
+
+	store *memStore
+	id    workspace.StateVersionID
+	old   blob.Key
+	fired bool
+}
+
+func (s *pruneBeforeReadBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if !s.fired && key == s.old {
+		s.fired = true
+
+		s.store.mu.Lock()
+		delete(s.store.versions, s.id)
+		s.store.mu.Unlock()
+
+		// The Get below proves the blob is gone: it answers ErrNotFound,
+		// so the test fails there when this best-effort delete misses.
+		_ = s.Delete(ctx, s.old) //nolint:errcheck // The Get below proves the blob is gone.
+	}
+
+	return s.Store.Get(ctx, key)
+}
+
+// TestSealSkipsVersionAndBlobDeletedBeforeRead proves a version pruned with
+// its blob between the listing and its blob read counts as skipped, not as a
+// start-up failure.
+func TestSealSkipsVersionAndBlobDeletedBeforeRead(t *testing.T) {
+	t.Parallel()
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	sv := f.pushPlain(t, `{"version":4,"serial":1}`, sealedOutputsDoc("output-one"), 1)
+
+	pruned := &pruneBeforeReadBlobs{Store: f.blobs, store: f.store, id: sv.ID, old: sv.Content, fired: false}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              pruned,
+		Namespaces:         f.namespaces,
+		Sealer:             f.sealer,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      4 << 20,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("sealed service: %v", err)
+	}
+
+	res, err := svc.SealUnsealedStates(ctx)
+	if err != nil {
+		t.Fatalf("seal unsealed state: %v", err)
+	}
+
+	if res.Sealed != 0 || res.Skipped != 1 {
+		t.Fatalf("seal result = %+v, want nothing sealed and 1 skipped", res)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, sv.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("get deleted state: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	if keys := listWorkspaceKeys(t, f.blobs, f.ws.ID); len(keys) != 0 {
+		t.Fatalf("stored blobs = %q, want none", keys)
+	}
+}
+
+// TestSealFailsOnMissingBlob proves a missing blob with the row still present
+// stays an error: that is data loss and must stay loud.
+func TestSealFailsOnMissingBlob(t *testing.T) {
+	t.Parallel()
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	sv := f.pushPlain(t, `{"version":4,"serial":1}`, sealedOutputsDoc("output-one"), 1)
+
+	if err := f.blobs.Delete(ctx, sv.Content); err != nil {
+		t.Fatalf("delete old blob: %v", err)
+	}
+
+	_, err := f.sealed.SealUnsealedStates(ctx)
+	if !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("seal without its blob: err = %v, want ErrNotFound", err)
+	}
+
+	stored, err := f.store.GetStateVersion(ctx, sv.ID)
+	if err != nil {
+		t.Fatalf("get state %s: %v", sv.ID, err)
+	}
+
+	if stored.Sealed {
+		t.Fatalf("state %s reads sealed after a failed seal, want unsealed", sv.ID)
+	}
+}

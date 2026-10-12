@@ -80,45 +80,26 @@ func (s *Service) SealUnsealedStates(ctx context.Context) (SealResult, error) {
 // sealOne seals one unsealed version. It reports whether this run sealed
 // the version and whether it was skipped for a foreign home region, in that
 // order. A version whose workspace is gone is skipped the same way: its blob
-// stays for the existing sweep.
+// stays for the existing sweep. A version that another instance deleted
+// between the listing and this seal is skipped too: a version that is gone
+// has nothing to seal, so the start-up never fails on it.
 //
 //nolint:revive // Unnamed two-boolean result per nonamedreturns; order is documented.
 func (s *Service) sealOne(ctx context.Context, sv StateVersion) (bool, bool, error) {
-	w, err := s.GetByID(ctx, sv.Workspace)
-	if errors.Is(err, ErrNotFound) {
-		s.logger.WarnContext(
-			ctx,
-			"skip seal of a missing workspace",
-			slog.String("state_version", sv.ID.String()),
-		)
+	w, fence, skip, err := s.sealWorkspace(ctx, sv)
+	if err != nil {
+		return false, false, err
+	}
 
+	if skip {
 		return false, true, nil
-	}
-
-	if err != nil {
-		return false, false, fmt.Errorf("seal state %s: %w", sv.ID, err)
-	}
-
-	fence, err := s.fence(ctx, w.Ref.Namespace)
-	if err != nil {
-		if errors.Is(err, namespace.ErrNotHome) || errors.Is(err, namespace.ErrNotFound) {
-			s.logger.WarnContext(
-				ctx,
-				"skip seal outside the home region",
-				slog.String("state_version", sv.ID.String()),
-			)
-
-			return false, true, nil
-		}
-
-		return false, false, fmt.Errorf("seal state %s: %w", sv.ID, err)
 	}
 
 	oldKey := sv.Content
 
 	key, sealErr := s.writeSealedBlob(ctx, w, sv)
 	if sealErr != nil {
-		return false, false, sealErr
+		return s.skipPrunedBeforeRead(ctx, sv, sealErr)
 	}
 
 	sealedOutputs, outputsErr := s.sealRowOutputs(ctx, w, sv)
@@ -126,12 +107,13 @@ func (s *Service) sealOne(ctx context.Context, sv StateVersion) (bool, bool, err
 		return false, false, errors.Join(outputsErr, s.blobs.Delete(ctx, key))
 	}
 
-	sealErr = s.states.SealStateVersion(ctx, sv.ID, key, sealedOutputs, fence)
+	skip, sealErr = s.commitSeal(ctx, sv.ID, key, sealedOutputs, fence)
 	if sealErr != nil {
-		return false, false, errors.Join(
-			fmt.Errorf("seal state %s: %w", sv.ID, sealErr),
-			s.blobs.Delete(ctx, key),
-		)
+		return false, false, sealErr
+	}
+
+	if skip {
+		return false, true, nil
 	}
 
 	stored, err := s.states.GetStateVersion(ctx, sv.ID)
@@ -151,6 +133,112 @@ func (s *Service) sealOne(ctx context.Context, sv StateVersion) (bool, bool, err
 	}
 
 	return true, false, nil
+}
+
+// sealWorkspace returns the workspace of sv with the fence its seal writes
+// carry. It reports whether the version was skipped for a missing workspace
+// or a foreign home region: the row stays for the existing sweep.
+//
+//nolint:revive // Unnamed boolean skip result per nonamedreturns; order is documented.
+func (s *Service) sealWorkspace(
+	ctx context.Context, sv StateVersion,
+) (Workspace, namespace.Fence, bool, error) {
+	var none Workspace
+
+	var noFence namespace.Fence
+
+	w, err := s.GetByID(ctx, sv.Workspace)
+	if errors.Is(err, ErrNotFound) {
+		s.logger.WarnContext(
+			ctx,
+			"skip seal of a missing workspace",
+			slog.String("state_version", sv.ID.String()),
+		)
+
+		return none, noFence, true, nil
+	}
+
+	if err != nil {
+		return none, noFence, false, fmt.Errorf("seal state %s: %w", sv.ID, err)
+	}
+
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		if errors.Is(err, namespace.ErrNotHome) || errors.Is(err, namespace.ErrNotFound) {
+			s.logger.WarnContext(
+				ctx,
+				"skip seal outside the home region",
+				slog.String("state_version", sv.ID.String()),
+			)
+
+			return none, noFence, true, nil
+		}
+
+		return none, noFence, false, fmt.Errorf("seal state %s: %w", sv.ID, err)
+	}
+
+	return w, fence, false, nil
+}
+
+// skipPrunedBeforeRead maps the blob-read failure of a seal to a skip when a
+// fresh read also misses the version row: another instance pruned the version
+// with its blob between the listing and this seal. A missing blob with the
+// row still present is data loss and stays loud. It reports whether this run
+// sealed the version and whether it was skipped, in the order sealOne uses.
+//
+//nolint:revive // Unnamed two-boolean result per nonamedreturns; order is documented.
+func (s *Service) skipPrunedBeforeRead(
+	ctx context.Context, sv StateVersion, sealErr error,
+) (bool, bool, error) {
+	if !errors.Is(sealErr, blob.ErrNotFound) {
+		return false, false, sealErr
+	}
+
+	_, getErr := s.states.GetStateVersion(ctx, sv.ID)
+	if errors.Is(getErr, ErrStateVersionNotFound) {
+		s.logger.WarnContext(
+			ctx,
+			"skip seal of a missing state version",
+			slog.String("state_version", sv.ID.String()),
+		)
+
+		return false, true, nil
+	}
+
+	if getErr != nil {
+		return false, false, errors.Join(sealErr, getErr)
+	}
+
+	return false, false, sealErr
+}
+
+// commitSeal moves the finalized unsealed version id to the sealed blob under
+// content with the sealed outputs document. A version that another instance
+// deleted between the listing and this seal has nothing to seal: it counts
+// as skipped and the new blob goes as usual, so the start-up never fails on
+// it. It reports whether the version was skipped.
+func (s *Service) commitSeal(
+	ctx context.Context, id StateVersionID, content blob.Key, outputs []byte, fence namespace.Fence,
+) (bool, error) {
+	sealErr := s.states.SealStateVersion(ctx, id, content, outputs, fence)
+	if sealErr == nil {
+		return false, nil
+	}
+
+	if errors.Is(sealErr, ErrStateVersionNotFound) {
+		s.logger.WarnContext(
+			ctx,
+			"skip seal of a missing state version",
+			slog.String("state_version", id.String()),
+		)
+
+		return true, s.blobs.Delete(ctx, content)
+	}
+
+	return false, errors.Join(
+		fmt.Errorf("seal state %s: %w", id, sealErr),
+		s.blobs.Delete(ctx, content),
+	)
 }
 
 // writeSealedBlob writes the sealed content of sv to a new blob key and
@@ -221,12 +309,23 @@ func (s *Service) sealRowOutputs(
 
 // sweepSealedOrphans deletes the blobs under each sealed workspace that no
 // version references: the sealed blob of a run that crashed before its SQL
-// change, and the old blob of a run that crashed after it. The seal job runs
-// at start-up and after a restore, while no upload streams, so every
-// unreferenced blob under these workspaces is a seal leftover: unlike the
-// declare sweep, this waits for no grace period.
+// change, and the old blob of a run that crashed after it. Another instance
+// may record a new upload attempt and put its blob while this sweep runs, so
+// the sweep lists the blobs before reading the referenced keys: the upload
+// path names the row before the bytes land, so a reference read after the
+// listing names every listed blob of a live attempt. The reverse order could
+// list a live blob that the earlier reference read does not name yet and
+// delete a live upload. Unlike the declare sweep, this waits for no grace
+// period: every listed blob that the later reference read does not name is a
+// seal leftover.
 func (s *Service) sweepSealedOrphans(ctx context.Context, workspaces map[ID]struct{}) error {
 	for id := range workspaces {
+		// Order matters: list first, then read the references (see above).
+		listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
+		if err != nil {
+			return fmt.Errorf("list state content of %s: %w", id, err)
+		}
+
 		refs, err := s.states.ReferencedContentKeys(ctx, id)
 		if err != nil {
 			return fmt.Errorf("list referenced content of %s: %w", id, err)
@@ -236,11 +335,6 @@ func (s *Service) sweepSealedOrphans(ctx context.Context, workspaces map[ID]stru
 
 		for _, key := range refs {
 			named[key] = struct{}{}
-		}
-
-		listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
-		if err != nil {
-			return fmt.Errorf("list state content of %s: %w", id, err)
 		}
 
 		for i := range listed {
