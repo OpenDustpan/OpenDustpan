@@ -168,7 +168,7 @@ func startSealingServer(
 	}
 
 	srv, err := dustpan.NewServer(append(
-		fullServerOptions(st, blobs, authn),
+		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 		dustpan.WithListenAddr("127.0.0.1:0"),
@@ -349,7 +349,7 @@ func newUnstartedSealingServer(
 	}
 
 	srv, err := dustpan.NewServer(append(
-		fullServerOptions(st, blobs, authn),
+		fullServerOptions(t, st, blobs, authn),
 		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithBackupTarget(target, "dir:/var/backups"),
 	)...)
