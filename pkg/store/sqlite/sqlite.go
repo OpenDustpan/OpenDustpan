@@ -45,6 +45,10 @@ type Store struct {
 	conn    *sql.DB
 	queries *db.Queries
 	path    string
+	// mu guards conn and queries across the online restore swap: readers
+	// hold it shared, and the swap holds it exclusive while it renames the
+	// database file. Lock order with stagingMu is stagingMu before mu.
+	mu sync.RWMutex
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
@@ -71,7 +75,14 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 
-	s := &Store{conn: conn, queries: db.New(conn), path: abs, stagingMu: sync.Mutex{}, stagingPath: ""}
+	s := &Store{
+		conn:        conn,
+		queries:     db.New(conn),
+		path:        abs,
+		mu:          sync.RWMutex{},
+		stagingMu:   sync.Mutex{},
+		stagingPath: "",
+	}
 	if err := s.migrate(ctx); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
@@ -105,7 +116,15 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 // Close closes the database. It removes a staged restore file first, so no
 // scratch file survives the handle.
 func (s *Store) Close() error {
-	s.discardStagingFile()
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stagingPath != "" {
+		removeSnapshot(s.stagingPath)
+		s.stagingPath = ""
+	}
 
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close sqlite database: %w", err)
@@ -117,6 +136,9 @@ func (s *Store) Close() error {
 // Ping implements namespace.Store. It maps any driver failure to
 // ErrUnavailable without driver text.
 func (s *Store) Ping(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if err := s.conn.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping sqlite database: %w", namespace.ErrUnavailable)
 	}
@@ -126,6 +148,9 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToNamespaceRow(ns)
 
 	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
@@ -147,6 +172,9 @@ func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) err
 
 // GetNamespace implements namespace.Store.
 func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetNamespace(ctx, name.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return namespace.Namespace{}, namespace.ErrNotFound
@@ -161,6 +189,9 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 
 // ListNamespaces implements namespace.Store.
 func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	rows, err := s.queries.ListNamespaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("select namespaces: %w", err)
@@ -178,6 +209,9 @@ func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, erro
 // stack_tags table, keyed by the new stack ID. The inventory entry is written
 // in the same transaction.
 func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToStackRow(st)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -208,6 +242,9 @@ func (s *Store) CreateStack(ctx context.Context, st stack.Stack, fence namespace
 
 // GetStack implements stack.Store.
 func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row, err := s.queries.GetStack(ctx, db.GetStackParams{
 		Namespace: ref.Namespace.String(),
 		Project:   ref.Project.String(),
@@ -243,6 +280,9 @@ func (s *Store) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error
 func (s *Store) UpdateStackTags(
 	ctx context.Context, ref stack.Ref, tags map[string]string, updatedAt time.Time, fence namespace.Fence,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		id, err := q.GetStackID(ctx, db.GetStackIDParams{
 			Namespace: ref.Namespace.String(),
@@ -316,6 +356,9 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 func (s *Store) RenameStack(
 	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		if newName == oldRef.Stack {
 			return confirmStackPresent(ctx, q, oldRef)
@@ -404,14 +447,21 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // rows go through foreign keys, the data key through an explicit delete. It
 // removes the inventory entry in the same transaction. When the latest
 // checkpoint manages resources, it returns ErrHasResources and removes
-// nothing: each checkpoint stores its managed resource count, so the check
-// reads only the count, or the one latest deployment when the checkpoint
-// predates the count. It returns ErrNotFound if the stack does not
-// exist, and ErrUpdateConflict while a mutating update of the stack runs.
+// nothing: rows with a stored count use it, rows with SQL deployment content
+// count it, and rows with a NULL count and blob content use guard, which the
+// service counted outside the transaction. A guard naming another checkpoint
+// returns ErrConcurrentModification so the service recounts once. It returns
+// ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
+// mutating update of the stack runs.
 // The transaction holds the write lock from the start, so a concurrent start
 // or finish of an update either runs before the checks or waits until the
 // delete commits.
-func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *Store) DeleteStack(
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
@@ -422,7 +472,7 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 			return err
 		}
 
-		if err := refuseResourcedStack(ctx, q, stackID); err != nil {
+		if err := refuseResourcedStack(ctx, q, stackID, guard); err != nil {
 			return err
 		}
 
@@ -436,6 +486,9 @@ func (s *Store) DeleteStack(ctx context.Context, ref stack.Ref, fence namespace.
 // ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
@@ -466,37 +519,91 @@ func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) erro
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of
-// the stack with stackID manages resources. It reads the stored count; a
-// NULL count predates the count column, so it loads that one deployment and
-// counts it instead.
-func refuseResourcedStack(ctx context.Context, q *db.Queries, stackID string) error {
-	count, err := q.LatestResourceCount(ctx, stackID)
-	if err != nil {
-		return fmt.Errorf("count managed resources: %w", err)
-	}
-
-	if count.Valid {
-		if count.Int64 > 0 {
-			return stack.ErrHasResources
-		}
-
-		return nil
-	}
-
-	deployment, err := q.LatestDeployment(ctx, stackID)
+// the stack with stackID manages resources. Rows with a stored count use it;
+// rows with SQL deployment content count it with stack.CountManagedResources;
+// rows with a NULL count and blob content use guard, which the service counted
+// outside the transaction: a guard naming another checkpoint returns
+// ErrConcurrentModification so the service recounts once. It reads only the
+// latest row, never a blob.
+func refuseResourcedStack(
+	ctx context.Context, q *db.Queries, stackID string, guard stack.DeleteGuard,
+) error {
+	row, err := q.GetLatestCheckpoint(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return checkNoCheckpoint(guard)
 	}
 
 	if err != nil {
-		return fmt.Errorf("read latest deployment: %w", err)
+		return fmt.Errorf("read latest checkpoint: %w", err)
 	}
 
+	if row.ResourceCount.Valid {
+		return checkStoredCount(row.ResourceCount.Int64)
+	}
+
+	if len(row.Deployment) > 0 || !row.BlobKey.Valid || row.BlobKey.String == "" {
+		return checkDeployment(row.Deployment)
+	}
+
+	return checkBlobGuard(guard, row.UpdateID, row.Digest)
+}
+
+// checkNoCheckpoint answers a delete with no checkpoint row: a guard that
+// counted one means a checkpoint landed after the count.
+func checkNoCheckpoint(guard stack.DeleteGuard) error {
+	if guard.HasCheckpoint {
+		return stack.ErrConcurrentModification
+	}
+
+	return nil
+}
+
+// checkStoredCount answers a delete from the stored count of an older binary.
+func checkStoredCount(count int64) error {
+	if count > 0 {
+		return stack.ErrHasResources
+	}
+
+	return nil
+}
+
+// checkDeployment answers a delete by counting the SQL deployment column.
+func checkDeployment(deployment []byte) error {
 	if stack.CountManagedResources(deployment) > 0 {
 		return stack.ErrHasResources
 	}
 
 	return nil
+}
+
+// checkBlobGuard answers a delete of a blob row from the domain count in
+// guard: a guard naming another checkpoint means a save landed after the
+// count, so the caller recounts once.
+func checkBlobGuard(guard stack.DeleteGuard, updateID string, digest []byte) error {
+	if !guard.HasCheckpoint || string(guard.UpdateID) != updateID || !equalDigest(guard.Digest, digest) {
+		return stack.ErrConcurrentModification
+	}
+
+	if guard.HasResources {
+		return stack.ErrHasResources
+	}
+
+	return nil
+}
+
+// equalDigest reports whether digest holds the checkpoint digest column.
+func equalDigest(digest [32]byte, column []byte) bool {
+	if len(column) != len(digest) {
+		return false
+	}
+
+	for i := range digest {
+		if digest[i] != column[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // removeStack deletes the stack with stackID with its wrapped data key and
@@ -526,6 +633,9 @@ func removeStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID stri
 // ListStacks implements stack.Store. Tags come from one query for the whole
 // namespace, not one query per stack.
 func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.Stack, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if filter.Project == "" {
 		rows, err := s.queries.ListStacksInNamespace(ctx, filter.Namespace.String())
 		if err != nil {
@@ -621,17 +731,6 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 	}
 
 	return out, nil
-}
-
-// discardStagingFile removes the staged restore file, if any.
-func (s *Store) discardStagingFile() {
-	s.stagingMu.Lock()
-	defer s.stagingMu.Unlock()
-
-	if s.stagingPath != "" {
-		removeSnapshot(s.stagingPath)
-		s.stagingPath = ""
-	}
 }
 
 func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {

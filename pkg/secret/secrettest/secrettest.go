@@ -340,7 +340,7 @@ func testDeleteStackDeletesKey(t *testing.T, s Store) {
 		t.Fatalf("create key: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

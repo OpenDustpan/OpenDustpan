@@ -170,3 +170,50 @@ func FromBackupRow(row BackupRow) (backup.Record, error) {
 		return backup.Record{}, fmt.Errorf("%w: unknown backup state %q", ErrCorruptRow, row.State)
 	}
 }
+
+// RestoreRow is the column representation of a restore registry row. The end
+// time is 0 while the restore runs. PreBackupID stays empty when the restore
+// stopped before the apply.
+type RestoreRow struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	Error       string
+	StartedAtMs int64
+	EndedAtMs   int64
+}
+
+// ToRestoreRow converts a domain restore record into a row.
+func ToRestoreRow(r backup.RestoreRecord) RestoreRow {
+	return RestoreRow{
+		ID:          r.ID.String(),
+		State:       string(r.State),
+		BackupID:    r.BackupID.String(),
+		PreBackupID: r.PreBackupID.String(),
+		RequestedBy: r.RequestedBy,
+		Error:       r.Error,
+		StartedAtMs: Millis(r.StartedAt),
+		EndedAtMs:   OptionalMillis(r.EndedAt),
+	}
+}
+
+// FromRestoreRow converts a row into a domain restore record.
+func FromRestoreRow(row RestoreRow) (backup.RestoreRecord, error) {
+	switch state := backup.RestoreState(row.State); state {
+	case backup.RestoreChecking, backup.RestoreApplying, backup.RestoreSucceeded, backup.RestoreFailed:
+		return backup.RestoreRecord{
+			StartedAt:   FromMillis(row.StartedAtMs),
+			EndedAt:     FromOptionalMillis(row.EndedAtMs),
+			ID:          backup.RestoreID(row.ID),
+			BackupID:    backup.ID(row.BackupID),
+			PreBackupID: backup.ID(row.PreBackupID),
+			RequestedBy: row.RequestedBy,
+			Error:       row.Error,
+			State:       state,
+		}, nil
+	default:
+		return backup.RestoreRecord{}, fmt.Errorf("%w: unknown restore state %q", ErrCorruptRow, row.State)
+	}
+}

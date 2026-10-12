@@ -176,6 +176,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 // backupStore wraps a PostgreSQL store with the URL of its schema, so the
 // suite can close and reopen the same backing storage.
 type backupStore struct {
@@ -301,7 +316,10 @@ type uncountedStore struct {
 	t   *testing.T
 }
 
-var _ storetest.CountNullifier = (*uncountedStore)(nil)
+var (
+	_ storetest.CountNullifier = (*uncountedStore)(nil)
+	_ storetest.CountSetter    = (*uncountedStore)(nil)
+)
 
 // openUncounted returns a store in a fresh schema of the database at base
 // that the uncounted-checkpoint case can NULL through SQL.
@@ -335,6 +353,27 @@ func (s *uncountedStore) NullifyResourceCount(ctx context.Context) error {
 
 	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
 		return fmt.Errorf("nullify the checkpoint count: %w", err)
+	}
+
+	return nil
+}
+
+// SetResourceCount implements storetest.CountSetter: it plants a stored
+// count from before saves stopped counting.
+func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) error {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			s.t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = $1`, count); err != nil {
+		return fmt.Errorf("set the checkpoint count: %w", err)
 	}
 
 	return nil
@@ -2039,7 +2078,9 @@ type addedSeed struct {
 }
 
 // resourcedDeployment holds one managed resource beyond the automatic stack
-// resource, so the stored checkpoint resource count is 1, not 0 or NULL.
+// resource. Saves store a NULL resource count, so the seeded checkpoint
+// carries NULL, not 1; the deployment still exercises the inline content
+// round trip with a realistic shape.
 const resourcedDeployment = `{"resources":[` +
 	`{"type":"pulumi:pulumi:Stack"},` +
 	`{"type":"custom:resource:Type"}]}`
@@ -2336,8 +2377,10 @@ func checkAddedCheckpointCount(t *testing.T, dstURL string) {
 		t.Fatalf("read checkpoint resource count after import: %v", err)
 	}
 
-	if count == nil || *count != 1 {
-		t.Fatalf("checkpoint resource count after import = %v, want 1", count)
+	// Saves store a NULL resource count; the import keeps it, so the column
+	// survives the round trip as NULL.
+	if count != nil {
+		t.Fatalf("checkpoint resource count after import = %v, want NULL", *count)
 	}
 }
 

@@ -177,7 +177,7 @@ func (m *mapStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 	return out, nil
 }
 
-func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return m.deleteRef(ref)
 }
 
@@ -256,7 +256,9 @@ func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) sec
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1019,7 +1021,9 @@ func TestSecretsMissingKey(t *testing.T) {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
 
-	stacks, stacksErr := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, stacksErr := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
 	}
@@ -1100,7 +1104,7 @@ func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]sta
 	panic("failingStackStore.ListStacks is not used")
 }
 
-func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
@@ -1398,7 +1402,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1538,7 +1542,9 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1754,7 +1760,9 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1818,7 +1826,12 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: &failingStackStore{err: err}, Namespaces: namespaces, Now: nil},
+		stack.Config{
+			Store:      &failingStackStore{err: err},
+			Namespaces: namespaces,
+			Now:        nil,
+			State:      nil,
+		},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)

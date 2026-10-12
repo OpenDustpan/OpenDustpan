@@ -106,7 +106,7 @@ func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile)
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup check again")
 	if err != nil {
 		return err
 	}

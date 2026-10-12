@@ -486,3 +486,45 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state;
 UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
+
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = ?;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+-- Moves one running restore to its end state. A finished restore matches no
+-- row, so a retry reports no change.
+UPDATE restores
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = ?
+WHERE id = ? AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+-- Marks every running restore failed. The server calls it at start, after a
+-- stop during a restore.
+UPDATE restores
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;

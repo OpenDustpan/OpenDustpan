@@ -5,6 +5,7 @@ package stack
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
@@ -127,6 +128,29 @@ type Filter struct {
 	Project   ProjectName
 }
 
+// DeleteGuard carries the domain count of the latest checkpoint into the
+// store delete transaction. Saves store a NULL resource count and blob rows
+// keep no deployment in SQL, so the service counts the one latest deployment
+// outside any transaction (reading and gunzipping its blob) and the store
+// checks the checkpoint is still the one counted. UpdateID with Digest
+// identify the counted checkpoint; HasCheckpoint is false when the stack had
+// no checkpoint; HasResources reports whether it managed resources.
+type DeleteGuard struct {
+	UpdateID      UpdateID
+	Digest        [sha256.Size]byte
+	HasCheckpoint bool
+	HasResources  bool
+}
+
+// EmptyGuard returns the DeleteGuard for a delete with no domain count: the
+// store uses only its SQL fallback. Tests with inline checkpoints and stacks
+// without checkpoints use it; production deletes with blob checkpoints pass
+// the counted guard instead.
+func EmptyGuard() DeleteGuard {
+	//nolint:exhaustruct_v5 // An empty guard means the stack had no checkpoint to count.
+	return DeleteGuard{}
+}
+
 // Store is the persistence port for stacks. Tags live in their own table
 // keyed by the stack ID, so a rename keeps them without moving any tag row.
 type Store interface {
@@ -140,13 +164,17 @@ type Store interface {
 	ListStacks(ctx context.Context, filter Filter) ([]Stack, error)
 	// DeleteStack removes the stack identified by ref with its updates, events
 	// and checkpoints in one fenced transaction. When the latest checkpoint
-	// manages resources, it returns ErrHasResources and removes nothing. The
-	// check runs in the same transaction as the delete, so an update that
-	// finishes concurrently cannot drop resources. It returns ErrNotFound if
-	// the stack does not exist, ErrUpdateConflict while a mutating update of
-	// the stack runs, namespace.ErrNotFound if the namespace does not exist,
-	// or namespace.ErrFenced if fence is stale.
-	DeleteStack(ctx context.Context, ref Ref, fence namespace.Fence) error
+	// manages resources, it returns ErrHasResources and removes nothing.
+	// Rows with a stored count use it; rows with SQL deployment content count
+	// it; rows with a NULL count and blob content use guard, which the caller
+	// counted outside the transaction. When the latest checkpoint is no
+	// longer the one guard names, it returns ErrConcurrentModification so the
+	// caller recounts once. The check runs in the same transaction as the
+	// delete, so an update that finishes concurrently cannot drop resources.
+	// It returns ErrNotFound if the stack does not exist, ErrUpdateConflict
+	// while a mutating update of the stack runs, namespace.ErrNotFound if the
+	// namespace does not exist, or namespace.ErrFenced if fence is stale.
+	DeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, guard DeleteGuard) error
 	// ForceDeleteStack removes the stack identified by ref with its updates,
 	// events and checkpoints in one fenced transaction, even when the latest
 	// checkpoint manages resources. It returns ErrNotFound if the stack does
@@ -168,11 +196,35 @@ type Store interface {
 	RenameStack(ctx context.Context, oldRef Ref, newName Name, fence namespace.Fence) error
 }
 
+// LatestState resolves the latest checkpoint of a stack with its deployment
+// bytes. *Updates implements it: the guard counts through the same resolve,
+// digest check and unwrap path as the export, under the configured checkpoint
+// size limit.
+type LatestState interface {
+	// Export returns the stack's latest checkpoint with its deployment
+	// resolved, digest-checked and unwrapped. A sequenced save keeps the
+	// versioned envelope bytes, so the digest still names the stored row
+	// while the deployment holds the inner bytes. It returns ErrNoState
+	// when the stack never saved state, ErrCheckpointUnavailable when the
+	// blob cannot be read, ErrCheckpointMismatch when the stored bytes do
+	// not match their record, or another store error. On a content error
+	// the returned checkpoint still carries the stored row identity (Update
+	// and Digest) with no deployment, so the caller can name the checkpoint
+	// it could not read.
+	Export(ctx context.Context, ref Ref) (Checkpoint, error)
+}
+
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store      Store
 	Namespaces *namespace.Service
 	Now        func() time.Time
+	// State resolves the latest checkpoint for the delete guard: the
+	// service counts its deployment outside any transaction, since saves
+	// store a NULL count and blob rows keep no deployment in SQL. Nil
+	// means the service passes an empty guard and the store uses only its
+	// SQL fallback, as in tests with inline checkpoints.
+	State LatestState
 }
 
 // Service implements the stack use cases.
@@ -180,6 +232,7 @@ type Service struct {
 	store      Store
 	namespaces *namespace.Service
 	now        func() time.Time
+	state      LatestState
 }
 
 // NewService returns a Service. Store and Namespaces are required; Now defaults to time.Now.
@@ -197,7 +250,10 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{store: cfg.Store, namespaces: cfg.Namespaces, now: now}, nil
+	return &Service{
+		store: cfg.Store, namespaces: cfg.Namespaces, now: now,
+		state: cfg.State,
+	}, nil
 }
 
 // Create creates the stack identified by ref with the given tags. The write is
@@ -261,7 +317,10 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Stack, error) {
 
 // Delete removes the stack identified by ref with its updates, events and
 // checkpoints. When the stack still manages resources, it returns
-// ErrHasResources and removes nothing. The write is fenced on the
+// ErrHasResources and removes nothing. The service counts the one latest
+// deployment outside any transaction (reading and gunzipping its blob) and
+// the store checks it is still the latest in the delete transaction, retrying
+// the count once on a concurrent save. The write is fenced on the
 // namespace's failover version and only allowed in its home region. It
 // returns ErrNotFound if the stack does not exist, and ErrUpdateConflict
 // while a mutating update of the stack runs.
@@ -271,7 +330,29 @@ func (s *Service) Delete(ctx context.Context, ref Ref) error {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
-	if err := s.store.DeleteStack(ctx, ref, ns.Fence()); err != nil {
+	fence := ns.Fence()
+
+	if s.state == nil {
+		if delErr := s.store.DeleteStack(ctx, ref, fence, EmptyGuard()); delErr != nil {
+			return fmt.Errorf("delete stack %s: %w", ref, delErr)
+		}
+
+		return nil
+	}
+
+	for attempt := range 2 {
+		guard, guardErr := s.deleteGuard(ctx, ref)
+		if guardErr != nil {
+			return fmt.Errorf("delete stack %s: %w", ref, guardErr)
+		}
+
+		err = s.store.DeleteStack(ctx, ref, fence, guard)
+		if !errors.Is(err, ErrConcurrentModification) || attempt == 1 {
+			break
+		}
+	}
+
+	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
@@ -350,4 +431,31 @@ func (s *Service) Rename(ctx context.Context, oldRef Ref, newName Name) (Stack, 
 	}
 
 	return st, nil
+}
+
+// deleteGuard counts the latest checkpoint of ref outside any transaction,
+// through the export: resolved, digest-checked and unwrapped under the
+// configured checkpoint size limit.
+func (s *Service) deleteGuard(ctx context.Context, ref Ref) (DeleteGuard, error) {
+	cp, err := s.state.Export(ctx, ref)
+	if errors.Is(err, ErrNoState) {
+		return EmptyGuard(), nil
+	}
+
+	if errors.Is(err, ErrCheckpointUnavailable) || errors.Is(err, ErrCheckpointMismatch) {
+		// A blob read failure counts as resourced, not a delete failure.
+		return DeleteGuard{
+			UpdateID: cp.Update, Digest: cp.Digest,
+			HasCheckpoint: true, HasResources: true,
+		}, nil
+	}
+
+	if err != nil {
+		return DeleteGuard{}, err
+	}
+
+	return DeleteGuard{
+		UpdateID: cp.Update, Digest: cp.Digest,
+		HasCheckpoint: true, HasResources: CountManagedResources(cp.Deployment) > 0,
+	}, nil
 }

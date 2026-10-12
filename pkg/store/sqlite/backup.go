@@ -32,6 +32,9 @@ var (
 // CreateBackup implements backup.Registry: it stores r as a running backup.
 // The row carries no fence: it describes the installation, not one namespace.
 func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	row := codec.ToBackupRow(r)
 
 	n, err := s.queries.CreateBackup(ctx, db.CreateBackupParams{
@@ -55,6 +58,14 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 
 // GetBackup implements backup.Registry.
 func (s *Store) GetBackup(ctx context.Context, id backup.ID) (backup.Record, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.fetchBackup(ctx, id)
+}
+
+// fetchBackup reads one backup row. The caller holds the store lock.
+func (s *Store) fetchBackup(ctx context.Context, id backup.ID) (backup.Record, error) {
 	row, err := s.queries.GetBackup(ctx, id.String())
 	if errors.Is(err, sql.ErrNoRows) {
 		return backup.Record{}, backup.ErrNotFound
@@ -69,6 +80,9 @@ func (s *Store) GetBackup(ctx context.Context, id backup.ID) (backup.Record, err
 
 // ListBackups implements backup.Registry: every backup row, newest first.
 func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	rows, err := s.queries.ListBackups(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("select backups: %w", err)
@@ -90,10 +104,15 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 
 // FinishBackup implements backup.Registry: it moves the running backup id to
 // state with the error text and the end time.
+//
+//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishBackup(
 	ctx context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {
-	if _, err := s.GetBackup(ctx, id); err != nil {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := s.fetchBackup(ctx, id); err != nil {
 		return backup.Record{}, err
 	}
 
@@ -115,13 +134,16 @@ func (s *Store) FinishBackup(
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	return s.GetBackup(ctx, id)
+	return s.fetchBackup(ctx, id)
 }
 
 // FailRunningBackups implements backup.Registry: it marks every running row
 // failed with the error text and the end time. The server calls it at start,
 // after a stop during a backup.
 func (s *Store) FailRunningBackups(ctx context.Context, endedAt time.Time, errText string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	err := s.queries.FailRunningBackups(ctx, db.FailRunningBackupsParams{
 		Error:     errText,
 		EndedAtMs: codec.OptionalMillis(endedAt),
@@ -151,6 +173,9 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 // fails while the two differ. It excludes bookkeeping (schema_migrations)
 // and SQLite internals.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	const query = `SELECT name FROM sqlite_master
 		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
 		ORDER BY name`
@@ -190,6 +215,9 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 // database), and streams the file to w. VACUUM INTO reads one consistent
 // view, so the capture runs while the server writes. It adds no dependency.
 func (s *Store) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	snap, err := s.capture(ctx)
 	if err != nil {
 		return backup.Summary{}, err
@@ -213,7 +241,9 @@ func (s *Store) Export(ctx context.Context, w io.Writer) (backup.Summary, error)
 // in the destination directory, checks it (schema version, row counts,
 // PRAGMA integrity_check), then renames it into place and reopens the store.
 // A failed import removes the temporary file and leaves the destination
-// empty. Restore runs offline: the destination has no server writing to it.
+// empty. Restore runs offline: the destination has no server writing to it,
+// so Import takes no lock; the online path stages and applies under lock
+// instead.
 func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (backup.Summary, error) {
 	if want.Dialect != backup.DialectSQLite {
 		return backup.Summary{}, fmt.Errorf(
@@ -279,7 +309,12 @@ func (s *Store) StageRestore(
 		)
 	}
 
-	version, err := schemaVersion(ctx, s.conn)
+	version, err := func() (int64, error) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+
+		return schemaVersion(ctx, s.conn)
+	}()
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -473,8 +508,13 @@ func (s *Store) requireEmpty(ctx context.Context) error {
 // swapDatabase replaces the destination file with the staged file and reopens
 // the store on it. The staged file passed every check, and the destination is
 // empty, so the rename cannot mix two installations. It removes the stale
-// write-ahead log first, so the reopened store never recovers it.
+// write-ahead log first, so the reopened store never recovers it. It holds
+// the store lock exclusive, so concurrent readers wait out the rename instead
+// of reading a closed handle.
 func (s *Store) swapDatabase(ctx context.Context, temp string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -506,6 +546,7 @@ func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 
 // reopenDatabase reopens the store on its current path after a swap failure
 // before the rename. Restore runs offline, so the destination stays usable.
+// The caller holds the store lock.
 func (s *Store) reopenDatabase(ctx context.Context) error {
 	conn, err := openDatabase(ctx, s.path)
 	if err != nil {

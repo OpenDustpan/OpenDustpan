@@ -40,6 +40,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0015_maintenance.sql":               "fe7f0910b40e911edd4599847fdc1e3a3f8b8c8cf1b601ab5b7eb8ae08c922a7",
 		"0016_checkpoint_blobs.sql":          "b69c018c9b362ea4452ea7724a0ef6fac9d945fbcaddf90a1952d0b682ae57b9",
 		"0017_inventory_lock.sql":            "5db1e38161cfcdb399d64d4e8ec975f9295f2de907597819a84e02e6531b7df3",
+		"0018_restores.sql":                  "ae1be8a786e9543fa51d88f8b2a709b3f42f18ce53b4642c365c94a858c93ed1",
 		"0020_sealed_state.sql":              "0e5358918cfed4540c40cc685142087d14b0133a6676ad19860fb407445eb52c",
 	}
 
