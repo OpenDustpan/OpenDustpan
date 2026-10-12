@@ -512,6 +512,7 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -670,6 +671,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -858,6 +860,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Target:      proxy,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1073,6 +1076,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Target:      setup.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      slog.New(slog.NewTextHandler(buf, nil)),
 	})
@@ -1271,6 +1275,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Target:      check.target,
 		Key:         testWrapper(),
 		Region:      "eu-west",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1511,5 +1516,107 @@ func waitServiceRestoreSucceeded(t *testing.T, service *backup.RestoreService, i
 			t.Fatalf("restore %s: %v", id, t.Context().Err())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+// restoreServiceWithHook rebuilds the restore service of setup with an
+// after-apply step, sharing its fakes. The setup service stays idle.
+func restoreServiceWithHook(
+	t *testing.T, setup *restoreServiceSetup, hook func(ctx context.Context) error,
+) *backup.RestoreService {
+	t.Helper()
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        setup.live,
+		Registry:    setup.regs,
+		Backups:     setup.backups,
+		Maintenance: setup.maint,
+		Blobs:       setup.blobs,
+		Target:      setup.target,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  hook,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service with a hook: %v", err)
+	}
+
+	return service
+}
+
+// TestRestoreRunsAfterApplyAfterTheSwap proves the after-apply step runs
+// after a restore applies: the server seals rows the backup holds unsealed
+// through it.
+func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	ran := make(chan struct{}, 1)
+
+	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+		ran <- struct{}{}
+
+		return nil
+	})
+
+	id := backup.RestoreID("rst-afterapply00000001")
+
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore %s: %v", id, err)
+	}
+
+	row := pollRestoreSucceeded(t, setup.regs, id)
+
+	if row.State != backup.RestoreSucceeded {
+		t.Fatalf("restore state = %q, want succeeded", row.State)
+	}
+
+	select {
+	case <-ran:
+	default:
+		t.Fatal("after-apply step never ran")
+	}
+}
+
+// TestRestoreFailsWhenAfterApplyFails proves a failing after-apply step
+// fails the restore: unsealed rows never pass silently.
+func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+		return errFakeDriver
+	})
+
+	id := backup.RestoreID("rst-afterapplyfail001")
+
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore %s: %v", id, err)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
 	}
 }

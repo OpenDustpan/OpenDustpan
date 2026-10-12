@@ -266,6 +266,7 @@ func newRouteTestRestores(
 		Target:      target,
 		Key:         nil,
 		Region:      "test",
+		AfterApply:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})

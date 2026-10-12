@@ -874,13 +874,18 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 // runStartUp runs the start-up steps of Run in order: the key check and the
 // running backups of startUp (ADR 23, ADR 30 decision 9), then the running
-// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// restores of failStoppedRestores (ADR 38 decision 9), then the seal of
+// unsealed OpenTofu state (ADR 41 decision 11). A done context during
 // the steps is a stop, not a failure, so it answers nil: the caller asked
 // the server to stop.
 func (s *Server) runStartUp(ctx context.Context) error {
 	startErr := s.startUp(ctx)
 	if startErr == nil {
 		startErr = s.failStoppedRestores(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.sealUnsealedStates(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {
@@ -957,6 +962,23 @@ func (s *Server) startUp(ctx context.Context) error {
 		s.now().UTC(),
 		backupStoppedText,
 	)
+}
+
+// sealUnsealedStates seals the OpenTofu state versions that still hold plain
+// content (ADR 41 decision 11). It runs after the fencing recovery of
+// failStoppedRestores, so its writes carry current fences. Without a
+// key-encryption key it seals nothing: rows stay readable as before until an
+// operator configures one.
+func (s *Server) sealUnsealedStates(ctx context.Context) error {
+	if s.secretWrapper == nil {
+		return nil
+	}
+
+	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
+		return fmt.Errorf("seal unsealed state: %w", err)
+	}
+
+	return nil
 }
 
 // isLoopbackListenAddr reports whether addr binds only the loopback
@@ -1069,7 +1091,7 @@ type installationDeps struct {
 func newInstallationAPI(
 	cfg settings, deps installationDeps,
 ) (http.Handler, *backup.RestoreService, error) {
-	restores, err := newRestoreService(cfg, deps.backups, deps.maint)
+	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1176,14 +1198,14 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 // backup of the live data before the apply. A nil target means no backup
 // target is configured.
 func newRestoreService(
-	cfg settings, backups *backup.Service, maint *maintenance.Service,
+	cfg settings, deps installationDeps, maint *maintenance.Service,
 ) (*backup.RestoreService, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
 	}
 
-	if backups == nil {
+	if deps.backups == nil {
 		return nil, errBackupNeedsRegistry
 	}
 
@@ -1200,12 +1222,13 @@ func newRestoreService(
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:        live,
 		Registry:    registry,
-		Backups:     backups,
+		Backups:     deps.backups,
 		Maintenance: maint,
 		Blobs:       cfg.blobStore,
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
+		AfterApply:  sealAfterRestore(cfg, deps),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -1214,6 +1237,27 @@ func newRestoreService(
 	}
 
 	return service, nil
+}
+
+// sealAfterRestore returns the after-apply step of a restore: it seals the
+// OpenTofu state versions that the restored backup holds unsealed (ADR 41
+// decision 11), with the same job the server runs at start-up. Nil means
+// no key-encryption key is configured: the restore seals nothing, and the
+// restored rows stay readable until a key is configured.
+func sealAfterRestore(
+	cfg settings, deps installationDeps,
+) func(ctx context.Context) error {
+	if cfg.secretWrapper == nil {
+		return nil
+	}
+
+	return func(ctx context.Context) error {
+		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
+			return fmt.Errorf("seal unsealed state: %w", err)
+		}
+
+		return nil
+	}
 }
 
 // requestIDHeader carries the request ID in each response. The server mints
