@@ -38,7 +38,7 @@ No flag takes these values, because flags show in process lists.
 | Environment | Value |
 | --- | --- |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | The S3 credentials. |
-| `DUSTPAN_ADMIN_TOKEN` | Required when you set no token file. At least 32 bytes. Comma-separated tokens sign in as distinct administrators: `admin`, `admin-2`, and so on. Give each CI job or runner that writes OpenTofu state its own token, because the server checks the lock holder by subject ([TFE-compatible API](../tfe-api.md#one-token-for-each-ci-job)). Each token is a full administrator, and a change to the list needs a restart. The server clears the variable from its environment after the read. |
+| `DUSTPAN_ADMIN_TOKEN` | Required when you set no token file. At least 32 bytes. Comma-separated tokens sign in as distinct administrators: `admin`, `admin-2`, and so on. Give each CI job or runner that writes OpenTofu state its own token, because the server checks the lock holder by subject. Each token is a full administrator, and a change to the list needs a restart. The server clears the variable from its environment after the read. |
 | `DUSTPAN_ADMIN_TOKEN_FILE` | A file that holds the tokens, one per line or comma-separated. Only its owner can read it. When you set both, `DUSTPAN_ADMIN_TOKEN` wins. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
