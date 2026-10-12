@@ -119,6 +119,12 @@ type Handler struct {
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
 	// means the server hides the delta capability.
 	deltaCutoff int
+	// disablePulumiJournaling turns journaling off for every start (ADR 43,
+	// decision 1.2).
+	disablePulumiJournaling bool
+	// supportedJournal is the highest journal version that a start may answer.
+	// It is maxSupportedJournalVersion in production.
+	supportedJournal int
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -157,6 +163,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 		mux:            newPatternMux(),
 		routes:         nil,
 		deltaCutoff:    cfg.CheckpointDeltaCutoff,
+
+		disablePulumiJournaling: cfg.DisablePulumiJournaling,
+		supportedJournal:        maxSupportedJournalVersion,
 	}
 
 	h.routes = h.buildRoutes()
