@@ -17,9 +17,9 @@ import (
 
 // TestToCheckpointRowBoundsMemory proves the save path holds at most one
 // decompressed copy of a checkpoint: converting a deployment with many
-// resources peaks below twice its size plus slack. A second retained copy,
-// as a full unmarshal of the deployment keeps, peaks near six times the
-// input and fails this test.
+// resources peaks below twice its size plus slack. The conversion keeps no
+// decoded copy of the deployment, since saves store a NULL resource count,
+// so a retained second copy fails this test.
 //
 //nolint:paralleltest // The heap bound needs a quiet heap; no other test in this package runs in parallel.
 func TestToCheckpointRowBoundsMemory(t *testing.T) {
@@ -43,13 +43,8 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 		BlobMD5:       [16]byte{},
 	}
 
-	row, err := codec.ToCheckpointRow(cp, stack.ID("stk-test"))
-	if err != nil {
+	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); err != nil {
 		t.Fatalf("convert checkpoint: %v", err)
-	}
-
-	if row.ResourceCount != resources {
-		t.Fatalf("resource count = %d, want %d: the row must still count every resource", row.ResourceCount, resources)
 	}
 
 	base := heapBase()

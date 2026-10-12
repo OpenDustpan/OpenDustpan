@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -61,11 +62,13 @@ type fakeData struct {
 	events       map[string]map[string][]stack.Event
 	keys         map[string]secret.WrappedKey
 	entries      map[string]inventory.Entry
+	audit        map[string][]audit.Entry
 	workspaces   map[string]workspace.Workspace
 	workspaceIDs map[string]string
 	states       map[string]workspace.StateVersion
 	current      map[string]string
 	backups      map[string]backup.Record
+	restores     map[string]backup.RestoreRecord
 	// installation is the installation state. It starts normal, as the
 	// seeded row of the SQL adapters does.
 	installation maintenance.State
@@ -82,11 +85,13 @@ func newFakeData() *fakeData {
 		events:       map[string]map[string][]stack.Event{},
 		keys:         map[string]secret.WrappedKey{},
 		entries:      map[string]inventory.Entry{},
+		audit:        map[string][]audit.Entry{},
 		workspaces:   map[string]workspace.Workspace{},
 		workspaceIDs: map[string]string{},
 		states:       map[string]workspace.StateVersion{},
 		current:      map[string]string{},
 		backups:      map[string]backup.Record{},
+		restores:     map[string]backup.RestoreRecord{},
 		installation: maintenance.StateNormal,
 	}
 }
@@ -124,12 +129,15 @@ type fakeBackupStore struct {
 
 var (
 	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
+	_ storetest.RestoreStore   = (*fakeBackupStore)(nil)
 	_ storetest.Reopener       = (*fakeBackupStore)(nil)
 	_ storetest.ExportTamperer = (*fakeBackupStore)(nil)
 	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
 	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
-	_ backup.RestoreStore      = (*fakeBackupStore)(nil)
 	_ backup.Stager            = (*fakeBackupStore)(nil)
+	_ backup.Applier           = (*fakeBackupStore)(nil)
+	_ backup.Fencer            = (*fakeBackupStore)(nil)
+	_ backup.RestoreRegistry   = (*fakeBackupStore)(nil)
 )
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
@@ -326,8 +334,17 @@ func (s *fakeBackupStore) ListStacks(_ context.Context, filter stack.Filter) ([]
 
 // DeleteStack implements stack.Store with its children, key and entry.
 // When the latest checkpoint manages resources, it returns
-// ErrHasResources and removes nothing.
-func (s *fakeBackupStore) DeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
+// ErrHasResources and removes nothing. It ignores the delete guard and
+// counts the stored deployment instead: the backup suite only writes inline
+// checkpoints, so the guard path for blob rows never applies here. A nil
+// deployment of a blob row would count as resourced, unlike the real
+// adapters, which answer the guard on that path.
+func (s *fakeBackupStore) DeleteStack(
+	_ context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	_ stack.DeleteGuard,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1026,6 +1043,95 @@ func (s *fakeBackupStore) ListWrapperIDs(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+// Append implements audit.Store: it chains the entry after the last one of
+// the namespace.
+func (s *fakeBackupStore) Append(
+	_ context.Context, fence namespace.Fence, e audit.Entry,
+) (audit.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return audit.Entry{}, errFakeClosed
+	}
+
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, err
+	}
+
+	if err := s.checkFence(fence); err != nil {
+		return audit.Entry{}, err
+	}
+
+	chain := s.data.audit[fence.Namespace.String()]
+
+	var prevHash string
+
+	if len(chain) > 0 {
+		prevHash = chain[len(chain)-1].Hash
+	}
+
+	e.Sequence = int64(len(chain)) + 1
+	e.PrevHash = prevHash
+	e.Hash = audit.ComputeHash(e, prevHash)
+	s.data.audit[fence.Namespace.String()] = append(chain, e)
+
+	return e, nil
+}
+
+// List implements audit.Store: one page newest first with the total count.
+func (s *fakeBackupStore) List(
+	_ context.Context, ns namespace.Name, page audit.Page,
+) (audit.Listing, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return audit.Listing{}, errFakeClosed
+	}
+
+	p := page.Normalized()
+	chain := s.data.audit[ns.String()]
+
+	entries := make([]audit.Entry, 0, min(int64(len(chain)), int64(p.Size)))
+
+	for i := len(chain) - 1; i >= 0 && len(entries) < p.Size; i-- {
+		if int64(len(chain)-1-i) >= p.Offset() {
+			entries = append(entries, chain[i])
+		}
+	}
+
+	return audit.Listing{Entries: entries, Total: int64(len(chain))}, nil
+}
+
+// Check implements audit.Store: it walks the chain oldest first.
+func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.CheckResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return audit.CheckResult{}, errFakeClosed
+	}
+
+	chain := s.data.audit[ns.String()]
+
+	var prevHash string
+
+	var wantSeq int64 = 1
+
+	for i := range chain {
+		e := &chain[i]
+		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
+			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+		}
+
+		prevHash = e.Hash
+		wantSeq++
+	}
+
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+}
+
 // ListUnits implements inventory.Reader, ordered by tool then name.
 func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	s.mu.RLock()
@@ -1704,6 +1810,214 @@ func (s *fakeBackupStore) FailRunningBackups(_ context.Context, endedAt time.Tim
 	return nil
 }
 
+// CreateRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) CreateRestore(_ context.Context, r backup.RestoreRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if _, ok := s.data.restores[r.ID.String()]; ok {
+		return backup.ErrRestoreExists
+	}
+
+	s.data.restores[r.ID.String()] = r
+
+	return nil
+}
+
+// FinishRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) FinishRestore(
+	_ context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
+) (backup.RestoreRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return backup.RestoreRecord{}, errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	if state != backup.RestoreSucceeded && state != backup.RestoreFailed {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	if r.State != backup.RestoreChecking && r.State != backup.RestoreApplying {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	r.State = state
+	r.Error = errText
+	r.EndedAt = endedAt
+	s.data.restores[id.String()] = r
+
+	return r, nil
+}
+
+// GetRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) GetRestore(_ context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return backup.RestoreRecord{}, errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	return r, nil
+}
+
+// ListRestores implements backup.RestoreRegistry, newest first.
+func (s *fakeBackupStore) ListRestores(_ context.Context) ([]backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	out := make([]backup.RestoreRecord, 0, len(s.data.restores))
+	for i := range s.data.restores {
+		out = append(out, s.data.restores[i])
+	}
+
+	slices.SortFunc(out, func(a, b backup.RestoreRecord) int {
+		if a.StartedAt.Equal(b.StartedAt) {
+			switch {
+			case a.ID < b.ID:
+				return -1
+			case a.ID > b.ID:
+				return 1
+			default:
+				return 0
+			}
+		}
+
+		if a.StartedAt.After(b.StartedAt) {
+			return -1
+		}
+
+		return 1
+	})
+
+	return out, nil
+}
+
+// FailRunningRestores implements backup.RestoreRegistry.
+func (s *fakeBackupStore) FailRunningRestores(_ context.Context, endedAt time.Time, errText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	for _, id := range slices.Sorted(maps.Keys(s.data.restores)) {
+		r := s.data.restores[id]
+		if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+			r.State = backup.RestoreFailed
+			r.Error = errText
+			r.EndedAt = endedAt
+			s.data.restores[id] = r
+		}
+	}
+
+	return nil
+}
+
+// MarkRestoreApplying implements backup.RestoreRegistry.
+func (s *fakeBackupStore) MarkRestoreApplying(
+	_ context.Context, id backup.RestoreID, preBackupID backup.ID,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.ErrRestoreNotFound
+	}
+
+	if r.State != backup.RestoreChecking {
+		return backup.ErrRestoreNotRunning
+	}
+
+	r.State = backup.RestoreApplying
+	r.PreBackupID = preBackupID
+	s.data.restores[id.String()] = r
+
+	return nil
+}
+
+// ApplyStaging implements backup.Applier: it swaps the staged copy into the
+// live tables in one locked step, fences every namespace by one version, and
+// drops the staging area. With no staged copy it reports ErrCorrupt and
+// changes nothing.
+func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if s.staged == nil {
+		return backup.ErrCorrupt
+	}
+
+	s.data = s.staged
+	s.staged = nil
+
+	if s.stageCurrent != 0 {
+		delete(s.stageLive, s.stageCurrent)
+		s.stageCurrent = 0
+	}
+
+	for name, ns := range s.data.namespaces {
+		ns.FailoverVersion++
+		s.data.namespaces[name] = ns
+	}
+
+	s.rebuildIndexes()
+
+	return nil
+}
+
+// BumpFailoverVersions implements backup.Fencer: it increments the failover
+// version of every namespace by one, so writes with an older fence fail
+// fenced.
+func (s *fakeBackupStore) BumpFailoverVersions(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return 0, errFakeClosed
+	}
+
+	var n int64
+
+	for name, ns := range s.data.namespaces {
+		ns.FailoverVersion++
+		s.data.namespaces[name] = ns
+		n++
+	}
+
+	return n, nil
+}
+
 // SchemaTables implements backup.Inspector. It reports the tables the fake
 // implements, derived from the same table set the exporter covers, so both
 // drift directions can fail: extraSchemaTable adds a table the backup list
@@ -1880,13 +2194,26 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 		"update_events":  int64(events),
 		"secret_keys":    int64(len(data.keys)),
 		"inventory":      int64(len(data.entries)),
+		"audit_entries":  int64(auditRowCount(data)),
 		"workspaces":     int64(len(data.workspaces)),
 		"state_versions": int64(len(data.states)),
 		"backups":        int64(len(data.backups)),
+		"restores":       int64(len(data.restores)),
 		// The installation table holds its one seeded row in every store,
 		// as in the SQL adapters.
 		"installation": 1,
 	}
+}
+
+// auditRowCount counts every audit entry of every namespace.
+func auditRowCount(data *fakeData) int {
+	n := 0
+
+	for _, chain := range data.audit {
+		n += len(chain)
+	}
+
+	return n
 }
 
 // Export implements backup.Exporter. Without the tear knob it encodes every
@@ -2374,15 +2701,24 @@ func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
 // decodePeekKeys decodes the export stream frame by frame and returns the
 // secret_keys rows, or an empty map when the stream holds no secret_keys
 // frame. A corrupt stream reports ErrCorrupt.
+// decodePeekKeys reads the secret keys of the stream. It decodes every
+// frame, not only the secret keys: a truncated stream must fail even when
+// the cut lands after the secret keys frame.
 func decodePeekKeys(r io.Reader) (map[string]secret.WrappedKey, error) {
 	dec := gob.NewDecoder(r)
+
+	var keys map[string]secret.WrappedKey
 
 	for {
 		var frame fakeTableFrame
 
 		if err := dec.Decode(&frame); err != nil {
 			if errors.Is(err, io.EOF) {
-				return map[string]secret.WrappedKey{}, nil
+				if keys == nil {
+					keys = map[string]secret.WrappedKey{}
+				}
+
+				return keys, nil
 			}
 
 			return nil, fmt.Errorf("decode backup stream: %w", backup.ErrCorrupt)
@@ -2392,13 +2728,13 @@ func decodePeekKeys(r io.Reader) (map[string]secret.WrappedKey, error) {
 			continue
 		}
 
-		var keys map[string]secret.WrappedKey
+		var decoded map[string]secret.WrappedKey
 
-		if err := gob.NewDecoder(bytes.NewReader(frame.Rows)).Decode(&keys); err != nil {
+		if err := gob.NewDecoder(bytes.NewReader(frame.Rows)).Decode(&decoded); err != nil {
 			return nil, fmt.Errorf("decode backup table %q: %w", frame.Table, backup.ErrCorrupt)
 		}
 
-		return keys, nil
+		keys = decoded
 	}
 }
 
@@ -2580,9 +2916,11 @@ func (s *fakeBackupStore) snapshotTables() map[string]any {
 		"update_events":  s.data.events,
 		"secret_keys":    s.data.keys,
 		"inventory":      s.data.entries,
+		"audit_entries":  s.data.audit,
 		"workspaces":     fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
 		"state_versions": s.data.states,
 		"backups":        s.data.backups,
+		"restores":       s.data.restores,
 		"installation":   s.data.installation,
 	}
 }
@@ -2858,8 +3196,10 @@ func backupDecodeTargets(loaded *fakeData) map[string]any {
 		"update_events":  &loaded.events,
 		"secret_keys":    &loaded.keys,
 		"inventory":      &loaded.entries,
+		"audit_entries":  &loaded.audit,
 		"state_versions": &loaded.states,
 		"backups":        &loaded.backups,
+		"restores":       &loaded.restores,
 		"installation":   &loaded.installation,
 	}
 }
@@ -2899,6 +3239,18 @@ func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.RunBackup(t, fakeFactory)
+}
+
+// TestRestoreConformance runs the restore suite against the fake. The SQL
+// adapters run the same suite once they implement the ports.
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		return newFakeBackupStore()
+	})
 }
 
 // fakeNamespace creates a namespace homed in region.

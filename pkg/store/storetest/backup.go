@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -41,9 +42,11 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.Importer
 	backup.KeyPeeker
 	backup.Registry
+	backup.RestoreRegistry
 	backup.Inspector
 	maintenance.Store
 	backup.Stager
+	audit.Store
 }
 
 // BackupFactory returns a fresh, empty store for one subtest.
@@ -110,6 +113,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 		{name: "staging loads a backup without touching live data", test: testBackupStagingKeepsLive},
+		{name: "staging keeps a checkpoint held in blobs", test: testBackupStagingKeepsCheckpointBlobs},
 		{name: "a new stage discards the previous staging area", test: testBackupStagingReplacesPrevious},
 		{name: "staging refuses a manifest that omits a table", test: testBackupStagingRefusesOmittedTable},
 		{name: "staging refuses another dialect", test: testBackupStagingRefusesDialect},
@@ -145,6 +149,7 @@ type backupSeed struct {
 	current    workspace.StateVersion
 	pending    workspace.StateVersion
 	backedUp   backup.Record
+	audit      []audit.Entry
 }
 
 // seedBackupStore fills s through the real ports: namespaces, stacks with
@@ -228,6 +233,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 
 	plain := createTestWorkspace(t, s, other, "plain")
 	backedUp := seedBackupRecord(t, s)
+	entries := seedBackupAudit(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -245,7 +251,46 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		current:    current,
 		pending:    pending,
 		backedUp:   backedUp,
+		audit:      entries,
 	}
+}
+
+// seedBackupAudit appends two reveal entries to acme, so the round trip
+// compares the audit table row by row and proves the chain survives it.
+func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
+	t.Helper()
+
+	out := make([]audit.Entry, 0, 2)
+
+	for i := 1; i <= 2; i++ {
+		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
+			At:         now(),
+			Namespace:  acme.Name,
+			Subject:    "admin",
+			IDPSubject: "",
+			TokenID:    "",
+			Action:     "unit:decrypt",
+			Object:     "pulumi:" + acme.Name.String() + "/web/prod",
+			Version:    "",
+			ValuePath:  "",
+			SourceIP:   "192.0.2.1",
+			UserAgent:  "test",
+			Channel:    audit.ChannelAPI,
+			Kind:       audit.KindReveal,
+			Outcome:    audit.OutcomeSuccess,
+			RequestID:  fmt.Sprintf("req-%d", i),
+			PrevHash:   "",
+			Hash:       "",
+			Sequence:   0,
+		})
+		if err != nil {
+			t.Fatalf("append audit entry %d: %v", i, err)
+		}
+
+		out = append(out, stored)
+	}
+
+	return out
 }
 
 // mustCreateStack creates one stack called name in ns, failing on error.
@@ -334,10 +379,11 @@ func importBackup(t *testing.T, dst BackupStore, data []byte, want backup.Summar
 	return got
 }
 
-// assertBackupEmpty fails when s holds any namespace, secret key, or backup
-// row. Namespaces own every other row through foreign keys, so an empty
-// namespace and backup list means an empty store; the wrapper-ID check names
-// the secret_keys table directly, matching the fake's full-table empty check.
+// assertBackupEmpty fails when s holds any namespace, secret key, backup
+// row or restore row. Namespaces own every other row through foreign keys,
+// so an empty namespace and backup list means an empty store; the wrapper-ID
+// check names the secret_keys table directly, matching the fake's
+// full-table empty check.
 func assertBackupEmpty(t *testing.T, s BackupStore) {
 	t.Helper()
 
@@ -366,6 +412,15 @@ func assertBackupEmpty(t *testing.T, s BackupStore) {
 
 	if len(rows) != 0 {
 		t.Fatalf("backups = %+v, want none", rows)
+	}
+
+	restores, err := s.ListRestores(t.Context())
+	if err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+
+	if len(restores) != 0 {
+		t.Fatalf("restores = %+v, want none", restores)
 	}
 }
 
@@ -575,6 +630,18 @@ func mustListBackups(t *testing.T, s BackupStore) []backup.Record {
 	return got
 }
 
+// mustListRestores lists every restore row, failing on error.
+func mustListRestores(t *testing.T, s BackupStore) []backup.RestoreRecord {
+	t.Helper()
+
+	got, err := s.ListRestores(t.Context())
+	if err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+
+	return got
+}
+
 // mustCreateBackup stores a running backup row, failing on error.
 func mustCreateBackup(t *testing.T, s BackupStore, r backup.Record) backup.Record {
 	t.Helper()
@@ -689,6 +756,46 @@ func testBackupCheckpointBlob(t *testing.T, newStore BackupFactory) {
 		got.Sequence != want.Sequence || got.Digest != want.Digest {
 		t.Fatalf("checkpoint after import = %+v, want key %q with the stored size and digest", got, key)
 	}
+}
+
+// testBackupStagingKeepsCheckpointBlobs stages an export that holds a
+// checkpoint kept in blobs into an empty store: the staged summary names the
+// blob, like the export does. A stager that reads blob references from state
+// versions alone reports corrupt here, while the export names the checkpoint
+// blob.
+func testBackupStagingKeepsCheckpointBlobs(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	st := mustGetStack(t, src, f.ref)
+
+	key, err := blob.ParseKey("pulumi/" + st.ID.String() + "/" + u.ID.String() + "/0")
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
+
+	if putErr := src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+		t.Fatalf("put checkpoint: %v", putErr)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	sum, data := exportBackup(t, src)
+
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize}}
+	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
+	}
+
+	dst := newStore(t)
+	staged := stageBackup(t, dst, data, sum)
+	assertSummary(t, staged, sum)
+	discardStaging(t, dst)
 }
 
 // assertSummary compares two summaries field by field.
@@ -822,7 +929,8 @@ func assertExportDialect(t *testing.T, newStore BackupFactory, sum backup.Summar
 // export counts meet values the exporter did not produce. The hardcoded
 // numbers document the seed shape: two namespaces, three stacks with one tag
 // each, two updates, one checkpoint, two secret keys, two workspaces, two
-// state versions, one backup row and the one seeded installation row.
+// state versions, one backup row, two audit entries and the one seeded
+// installation row.
 func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string]int64 {
 	t.Helper()
 
@@ -848,6 +956,11 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		t.Fatalf("list workspaces of %q: %v", seed.other.Name, err)
 	}
 
+	auditEntries, err := s.List(ctx, seed.acme.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries of %q: %v", seed.acme.Name, err)
+	}
+
 	got := map[string]int64{
 		"namespaces":     int64(len(mustListNamespaces(t, s))),
 		"stacks":         int64(len(stacks)),
@@ -860,6 +973,8 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     int64(len(acmeWorkspaces) + len(otherWorkspaces)),
 		"state_versions": 2,
 		"backups":        int64(len(mustListBackups(t, s))),
+		"restores":       int64(len(mustListRestores(t, s))),
+		"audit_entries":  auditEntries.Total,
 		// The installation table holds its one seeded row in every store:
 		// no port lists it, so the count is the schema constant.
 		"installation": 1,
@@ -877,6 +992,8 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     2,
 		"state_versions": 2,
 		"backups":        1,
+		"restores":       0,
+		"audit_entries":  int64(len(seed.audit)),
 		"installation":   1,
 	}
 
@@ -902,7 +1019,83 @@ func compareBackupStores(t *testing.T, dst, want BackupStore, seed *backupSeed) 
 	compareBackupWorkspaces(t, dst, want, seed)
 	compareBackupStates(t, dst, want, seed)
 	compareBackupRecord(t, dst, seed)
+	compareBackupRestores(t, dst, want)
 	compareBackupInstallation(t, dst, want)
+	compareBackupAudit(t, dst, want, seed)
+}
+
+// compareBackupAudit compares the audit entries after import and proves
+// the chain is still valid: a backup and a restore keep the entries and a
+// valid chain.
+func compareBackupAudit(t *testing.T, dst, want BackupStore, seed *backupSeed) {
+	t.Helper()
+
+	got, err := dst.List(t.Context(), seed.acme.Name, audit.Page{Number: 1, Size: len(seed.audit)})
+	if err != nil {
+		t.Fatalf("list audit entries after import: %v", err)
+	}
+
+	all, err := want.List(t.Context(), seed.acme.Name, audit.Page{Number: 1, Size: len(seed.audit)})
+	if err != nil {
+		t.Fatalf("list audit entries of the source: %v", err)
+	}
+
+	if !slices.EqualFunc(got.Entries, all.Entries, sameAuditEntry) {
+		t.Fatalf("audit entries after import = %+v, want %+v", got.Entries, all.Entries)
+	}
+
+	if got.Total != int64(len(seed.audit)) {
+		t.Fatalf("audit total after import = %d, want %d", got.Total, len(seed.audit))
+	}
+
+	check, err := dst.Check(t.Context(), seed.acme.Name)
+	if err != nil {
+		t.Fatalf("check audit chain after import: %v", err)
+	}
+
+	if !check.Valid || check.Checked != int64(len(seed.audit)) {
+		t.Fatalf("audit check after import = %+v, want valid with %d entries", check, len(seed.audit))
+	}
+}
+
+// sameAuditEntry compares two audit entries field by field.
+func sameAuditEntry(a, b audit.Entry) bool {
+	return sameAuditWho(a, b) && sameAuditWhat(a, b) && sameAuditWhere(a, b) && sameAuditChain(a, b)
+}
+
+// sameAuditWho compares the identity, time and sequence of two entries.
+func sameAuditWho(a, b audit.Entry) bool {
+	return a.AtMs() == b.AtMs() &&
+		a.Namespace == b.Namespace &&
+		a.Sequence == b.Sequence &&
+		a.Subject == b.Subject &&
+		a.IDPSubject == b.IDPSubject &&
+		a.TokenID == b.TokenID
+}
+
+// sameAuditWhat compares the action, object, version and value path of two
+// entries.
+func sameAuditWhat(a, b audit.Entry) bool {
+	return a.Action == b.Action &&
+		a.Object == b.Object &&
+		a.Version == b.Version &&
+		a.ValuePath == b.ValuePath
+}
+
+// sameAuditWhere compares the source, channel, kind, outcome and request of
+// two entries.
+func sameAuditWhere(a, b audit.Entry) bool {
+	return a.SourceIP == b.SourceIP &&
+		a.UserAgent == b.UserAgent &&
+		a.Channel == b.Channel &&
+		a.Kind == b.Kind &&
+		a.Outcome == b.Outcome &&
+		a.RequestID == b.RequestID
+}
+
+// sameAuditChain compares the chain fields of two entries.
+func sameAuditChain(a, b audit.Entry) bool {
+	return a.PrevHash == b.PrevHash && a.Hash == b.Hash
 }
 
 // compareBackupNamespaces compares the namespaces after import.
@@ -1043,6 +1236,26 @@ func compareBackupRecord(t *testing.T, dst BackupStore, seed *backupSeed) {
 
 	if got := mustGetBackup(t, dst, seed.backedUp.ID); got != seed.backedUp {
 		t.Fatalf("backup after import = %+v, want %+v", got, seed.backedUp)
+	}
+}
+
+// compareBackupRestores compares the restore rows after import: the seed
+// holds none, so the destination must hold none either. The dedicated
+// RunRestore suite covers the restores table itself.
+func compareBackupRestores(t *testing.T, dst, want BackupStore) {
+	t.Helper()
+
+	got := mustListRestores(t, dst)
+	all := mustListRestores(t, want)
+
+	if len(got) != len(all) {
+		t.Fatalf("restores after import = %+v, want %+v", got, all)
+	}
+
+	for i := range all {
+		if got[i] != all[i] {
+			t.Fatalf("restore %d after import = %+v, want %+v", i, got[i], all[i])
+		}
 	}
 }
 

@@ -475,3 +475,88 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state;
 UPDATE installation
 SET state = ?
 WHERE id = 1 AND state = ?;
+
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = ?;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+-- Moves one running restore to its end state. A finished restore matches no
+-- row, so a retry reports no change.
+UPDATE restores
+SET state = ?, error = ?, ended_at_ms = ?
+WHERE id = ? AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = ?
+WHERE id = ? AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+-- Marks every running restore failed. The server calls it at start, after a
+-- stop during a restore.
+UPDATE restores
+SET state = 'failed', error = ?, ended_at_ms = ?
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;
+
+-- name: LastAuditEntry :one
+-- The entry with the highest sequence of a namespace, for the next append.
+-- A namespace with no entries matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: ListAuditEntries :many
+-- One page of the entries of a namespace, newest first. Ties on time break
+-- by sequence, as the port comment promises.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ?
+ORDER BY sequence DESC
+LIMIT ? OFFSET ?;
+
+-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = ?;
+
+-- name: ListAuditChainPage :many
+-- One bounded page of the chain of a namespace oldest first, for the chain
+-- check. The check reads the chain with this query in pages of
+-- audit.CheckPageSize entries after the last sequence it saw, so a namespace
+-- with a large log never grows the check without a bound.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash
+FROM audit_entries
+WHERE namespace = ? AND sequence > ?
+ORDER BY sequence ASC
+LIMIT ?;

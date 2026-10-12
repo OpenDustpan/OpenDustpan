@@ -45,12 +45,16 @@ const pgMD5Len = 16
 // COPY column names shared by several backup tables.
 const (
 	pgColCreatedAtMs = "created_at_ms"
+	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
 	pgColSequence    = "sequence"
 	pgColStackID     = "stack_id"
+	pgColStartedAtMs = "started_at_ms"
+	pgColState       = "state"
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
+	pgColVersion     = "version"
 )
 
 // pgTableDump is one table of the export stream: the raw COPY text of its
@@ -111,7 +115,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", "version", pgColCreatedAtMs, "updated_at_ms",
+				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
@@ -123,8 +127,8 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", "kind", "dry_run", pgColStatus, "version", "revision",
-				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, "started_at_ms", "ended_at_ms",
+				pgColStackID, "id", "kind", "dry_run", pgColStatus, pgColVersion, "revision",
+				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				"created_by", "restored_from",
 			},
 			orderBy: []string{pgColStackID, "id"},
@@ -133,8 +137,8 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "checkpoints",
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
-				"digest", "invalid", "features", "deployment", "saved_at_ms", "resource_count",
-				"blob_key", "size", "blob_size", "blob_md5",
+				"digest", "invalid", "features", "deployment", "saved_at_ms",
+				"resource_count", "blob_key", "size", "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -192,13 +196,30 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
+			table: "audit_entries",
+			columns: []string{
+				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
+				"channel", "kind", "outcome", "request_id", "prev_hash", "hash",
+			},
+			orderBy: []string{pgColNamespace, pgColSequence},
+		},
+		{
 			table:   "backups",
-			columns: []string{"id", "state", "started_at_ms", "ended_at_ms", "target", "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
 		},
 		{
+			table: "restores",
+			columns: []string{
+				"id", pgColState, "backup_id", "pre_backup_id", "requested_by",
+				pgColStartedAtMs, pgColEndedAtMs, "error",
+			},
+			orderBy: []string{pgColStartedAtMs, "id"},
+		},
+		{
 			table:   "installation",
-			columns: []string{"id", "state"},
+			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
 		},
 	}
@@ -933,14 +954,18 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 	return count, nil
 }
 
-// stagingBlobRefs reads the blob references of the staging schema: the
-// content key, size and MD5 of every state version that names content, ordered
-// by key. A pending version names no content, so only finalized versions appear.
+// stagingBlobRefs reads the blob references of the staging schema: every blob
+// key the staged state versions and the staged checkpoints name, with the
+// size and MD5 of the stored bytes, ordered by key. A pending version names
+// no content, so only finalized versions appear. It matches BackupBlobs, so
+// the staged summary compares equal with the manifest.
 func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
 		"SELECT content_key, size, md5 FROM "+stagingTable(staging, "state_versions")+
-			" WHERE content_key <> '' ORDER BY content_key",
+			" WHERE content_key <> '' UNION ALL SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5 FROM "+
+			stagingTable(staging, "checkpoints")+
+			" WHERE blob_key IS NOT NULL AND blob_key <> '' ORDER BY content_key",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("read staged blob references: %w", err)
@@ -1378,6 +1403,8 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 // a finished state with the error text and end time, and returns the
 // finished row. Any state but succeeded or failed reports ErrNotRunning, as
 // do a missing row (ErrNotFound) and a row that is not running.
+//
+//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
 func (s *Store) FinishBackup(
 	ctx context.Context, id backup.ID, state backup.State, errText string, endedAt time.Time,
 ) (backup.Record, error) {

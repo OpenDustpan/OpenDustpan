@@ -21,6 +21,7 @@ func statePatterns() []string {
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources",
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources/{urn}",
 		"GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/outputs",
+		"GET /api/stacks/{namespace}/{project}/{stack}/state/diff",
 	}
 }
 
@@ -166,12 +167,14 @@ func TestStateRoutesDeclareUnitRead(t *testing.T) {
 }
 
 // stateTargets returns one valid target per state route for enforcement:
-// the list, one resource with a seeded URN, and the outputs.
+// the list, one resource with a seeded URN, the outputs, and the diff of
+// the two seeded versions.
 func stateTargets() []string {
 	return []string{
 		"/api/stacks/acme/web/prod/state/latest/resources",
 		"/api/stacks/acme/web/prod/state/latest/resources/" + stateURNRef,
 		"/api/stacks/acme/web/prod/state/latest/outputs",
+		"/api/stacks/acme/web/prod/state/diff?from=1&to=2",
 	}
 }
 
@@ -596,6 +599,277 @@ func TestStateResourceWithSlashInURN(t *testing.T) {
 	}
 }
 
+// stateDiffChangedEntry is one changed resource of the diff in tests.
+type stateDiffChangedEntry struct {
+	URN            string   `json:"urn"`
+	ChangedPaths   []string `json:"changedPaths"`
+	ChangedSecrets []string `json:"changedSecrets"`
+}
+
+// stateDiffDoc is the wire shape of the diff in tests.
+type stateDiffDoc struct {
+	Added      []string                `json:"added"`
+	Removed    []string                `json:"removed"`
+	Changed    []stateDiffChangedEntry `json:"changed"`
+	NextCursor string                  `json:"nextCursor"`
+	Incomplete bool                    `json:"incomplete"`
+}
+
+// decodeStateDiff decodes a diff body.
+func decodeStateDiff(t *testing.T, body string) stateDiffDoc {
+	t.Helper()
+
+	var doc stateDiffDoc
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode diff: %v (%s)", err, body)
+	}
+
+	return doc
+}
+
+// diffURNs are the URNs of the diff fixtures.
+const (
+	diffURNStack = stateURNStack
+	diffURNKeep  = "urn:pulumi:dev::web::pulumi:pulumi:StackReference::web-dev-keep"
+	diffURNGone  = "urn:pulumi:dev::web::pulumi:pulumi:StackReference::web-dev-gone"
+	diffURNAdded = "urn:pulumi:dev::web::pulumi:pulumi:StackReference::web-dev-added"
+)
+
+// diffDeploymentV1 holds the stack, the kept reference and the removed
+// reference.
+func diffDeploymentV1() string {
+	return `{"resources":[{` +
+		`"urn":"` + diffURNStack + `","type":"pulumi:pulumi:Stack",` +
+		`"inputs":{},"outputs":{"greeting":"hi","password":` + stateSecret("v1:old-cipher") + `}},` +
+		`{"urn":"` + diffURNKeep + `","type":"pulumi:pulumi:StackReference",` +
+		`"inputs":{"name":"acme/web/other"},"outputs":{}},` +
+		`{"urn":"` + diffURNGone + `","type":"pulumi:pulumi:StackReference",` +
+		`"inputs":{"name":"acme/web/gone"},"outputs":{}}]}`
+}
+
+// diffDeploymentV2 keeps the stack with a changed greeting and secret, keeps
+// the kept reference, drops the gone one and adds a new reference.
+func diffDeploymentV2() string {
+	return `{"resources":[{` +
+		`"urn":"` + diffURNStack + `","type":"pulumi:pulumi:Stack",` +
+		`"inputs":{},"outputs":{"greeting":"changed","password":` + stateSecret("v1:new-cipher") + `}},` +
+		`{"urn":"` + diffURNKeep + `","type":"pulumi:pulumi:StackReference",` +
+		`"inputs":{"name":"acme/web/other"},"outputs":{}},` +
+		`{"urn":"` + diffURNAdded + `","type":"pulumi:pulumi:StackReference",` +
+		`"inputs":{"name":"acme/web/added"},"outputs":{}}]}`
+}
+
+// seedDiffVersions saves the diff fixtures as versions 1 and 2.
+func seedDiffVersions(t *testing.T, f updateFixture) {
+	t.Helper()
+
+	seedStateVersion(t, f, diffDeploymentV1())
+	seedStateVersion(t, f, diffDeploymentV2())
+}
+
+// checkDiffAddedRemoved proves the diff answers the added and removed URNs.
+func checkDiffAddedRemoved(t *testing.T, doc stateDiffDoc) {
+	t.Helper()
+
+	if len(doc.Added) != 1 || doc.Added[0] != diffURNAdded {
+		t.Fatalf("added = %q, want only %q", doc.Added, diffURNAdded)
+	}
+
+	if len(doc.Removed) != 1 || doc.Removed[0] != diffURNGone {
+		t.Fatalf("removed = %q, want only %q", doc.Removed, diffURNGone)
+	}
+}
+
+// checkDiffChangedStack proves the diff answers the changed stack with its
+// plain path and its secret path.
+func checkDiffChangedStack(t *testing.T, doc stateDiffDoc) {
+	t.Helper()
+
+	if len(doc.Changed) != 1 || doc.Changed[0].URN != diffURNStack {
+		t.Fatalf("changed = %+v, want only the stack resource", doc.Changed)
+	}
+
+	if !slices.Contains(doc.Changed[0].ChangedPaths, "/outputs/greeting") {
+		t.Fatalf("changed paths = %q, want /outputs/greeting", doc.Changed[0].ChangedPaths)
+	}
+
+	if !slices.Contains(doc.Changed[0].ChangedSecrets, "/outputs/password") {
+		t.Fatalf("changed secrets = %q, want /outputs/password", doc.Changed[0].ChangedSecrets)
+	}
+}
+
+// checkDiffBodyHasNoSecrets proves the diff body holds no ciphertext,
+// signature key or plain secret.
+func checkDiffBodyHasNoSecrets(t *testing.T, body string, doc stateDiffDoc) {
+	t.Helper()
+
+	for _, leaked := range []string{stateSigKey, "ciphertext", "v1:old-cipher", "v1:new-cipher"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("diff body holds %q: %s", leaked, body)
+		}
+	}
+
+	if doc.NextCursor != "" || doc.Incomplete {
+		t.Fatalf("diff = %+v, want a single complete page", doc)
+	}
+}
+
+// TestStateDiffAnswersAddedRemovedChanged proves the diff of the two fixture
+// versions answers the added and removed URNs and the changed stack with its
+// plain path and its secret path, without any ciphertext, signature key or
+// plain secret.
+func TestStateDiffAnswersAddedRemovedChanged(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	body := getStateOK(t, f, "/api/stacks/acme/web/prod/state/diff?from=1&to=2")
+	doc := decodeStateDiff(t, body)
+
+	checkDiffAddedRemoved(t, doc)
+	checkDiffChangedStack(t, doc)
+	checkDiffBodyHasNoSecrets(t, body, doc)
+}
+
+// TestStateDiffSameVersionIsEmpty proves the diff of a version with itself
+// holds no change.
+func TestStateDiffSameVersionIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	doc := decodeStateDiff(t, getStateOK(t, f, "/api/stacks/acme/web/prod/state/diff?from=2&to=2"))
+
+	if len(doc.Added) != 0 || len(doc.Removed) != 0 || len(doc.Changed) != 0 {
+		t.Fatalf("same-version diff = %+v, want no change", doc)
+	}
+}
+
+// TestStateDiffLatest proves "latest" names the latest checkpoint as a diff
+// side.
+func TestStateDiffLatest(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	pinned := getStateOK(t, f, "/api/stacks/acme/web/prod/state/diff?from=1&to=2")
+	latest := getStateOK(t, f, "/api/stacks/acme/web/prod/state/diff?from=1&to=latest")
+
+	if latest != pinned {
+		t.Fatalf("diff to latest differs from diff to 2:\nlatest=%s\npinned=%s", latest, pinned)
+	}
+}
+
+// collectDiffPage records the single entry of one diff page in seen and
+// returns the next cursor. It fails when the page holds anything but one
+// entry.
+func collectDiffPage(t *testing.T, f updateFixture, cursor string, seen map[string]bool) string {
+	t.Helper()
+
+	target := "/api/stacks/acme/web/prod/state/diff?from=1&to=2&limit=1&cursor=" + cursor
+	doc := decodeStateDiff(t, getStateOK(t, f, target))
+
+	if got := len(doc.Added) + len(doc.Removed) + len(doc.Changed); got != 1 {
+		t.Fatalf("page at %q holds %d entries, want 1 (%+v)", cursor, got, doc)
+	}
+
+	for _, urn := range slices.Concat(doc.Added, doc.Removed, diffChangedURNs(doc)) {
+		if seen[urn] {
+			t.Fatalf("resource %q listed twice", urn)
+		}
+
+		seen[urn] = true
+	}
+
+	return doc.NextCursor
+}
+
+// diffChangedURNs returns the URNs of the changed entries of doc.
+func diffChangedURNs(doc stateDiffDoc) []string {
+	urns := make([]string, 0, len(doc.Changed))
+	for _, entry := range doc.Changed {
+		urns = append(urns, entry.URN)
+	}
+
+	return urns
+}
+
+// TestStateDiffPaging proves the cursor pages through the three differing
+// URNs with a limit of one.
+func TestStateDiffPaging(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	seen := map[string]bool{}
+	cursor := ""
+
+	for {
+		cursor = collectDiffPage(t, f, cursor, seen)
+
+		if cursor == "" {
+			break
+		}
+	}
+
+	for _, want := range []string{diffURNAdded, diffURNGone, diffURNStack} {
+		if !seen[want] {
+			t.Fatalf("paged diff never lists %q (seen %v)", want, seen)
+		}
+	}
+}
+
+// TestStateDiffValidation proves bad sides and paging answer 400, and
+// missing state answers 404.
+func TestStateDiffValidation(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	for _, tc := range []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{name: "missing from", target: "/api/stacks/acme/web/prod/state/diff?to=2", want: 400},
+		{name: "missing to", target: "/api/stacks/acme/web/prod/state/diff?from=1", want: 400},
+		{name: "bad from", target: "/api/stacks/acme/web/prod/state/diff?from=nope&to=2", want: 400},
+		{name: "bad to", target: "/api/stacks/acme/web/prod/state/diff?from=1&to=nope", want: 400},
+		{name: "missing version", target: "/api/stacks/acme/web/prod/state/diff?from=1&to=999999", want: 404},
+		{name: "limit over 500", target: "/api/stacks/acme/web/prod/state/diff?from=1&to=2&limit=501", want: 400},
+		{name: "bad cursor", target: "/api/stacks/acme/web/prod/state/diff?from=1&to=2&cursor=nope", want: 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, _ := f.doUpdate(t, accessRequest(http.MethodGet, tc.target, ""))
+
+			if status != tc.want {
+				t.Fatalf("GET %s answers %d, want %d", tc.target, status, tc.want)
+			}
+		})
+	}
+}
+
+// TestStateDiffDoesNotClash proves the literal diff path does not clash with
+// the version routes: the diff answers with its query, and the version list
+// still answers.
+func TestStateDiffDoesNotClash(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedDiffVersions(t, f)
+
+	getStateOK(t, f, "/api/stacks/acme/web/prod/state/diff?from=1&to=2")
+	getStateOK(t, f, "/api/stacks/acme/web/prod/state/1/resources")
+	getStateOK(t, f, "/api/stacks/acme/web/prod/state/latest/resources")
+}
+
 // TestStateResourceUnescapedSlashMatchesNothing proves the unescaped form
 // of a URN with "/" does not match another resource: the one-segment "{urn}"
 // pattern only sees the escaped form, so the raw slashes miss the route.
@@ -623,5 +897,155 @@ func TestStateResourceUnescapedSlashMatchesNothing(t *testing.T) {
 
 	if strings.Contains(body, plainURN) {
 		t.Fatalf("unescaped URN answers with another resource %q (%s)", plainURN, body)
+	}
+}
+
+// stateFilterList fetches the resource list with filter q and requires
+// status 200.
+func stateFilterList(t *testing.T, f updateFixture, q string) stateListDoc {
+	t.Helper()
+
+	target := "/api/stacks/acme/web/prod/state/latest/resources?filter[q]=" + url.QueryEscape(q)
+
+	return decodeStateList(t, getStateOK(t, f, target))
+}
+
+// TestStateListFilterMatchesType proves filter[q] with a type substring
+// answers only resources of that type.
+func TestStateListFilterMatchesType(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	list := stateFilterList(t, f, "StackReference")
+
+	if len(list.Resources) != 1 {
+		t.Fatalf("filtered list holds %d resources, want only the reference", len(list.Resources))
+	}
+
+	if list.Resources[0].URN != stateURNRef {
+		t.Fatalf("urn = %q, want %q", list.Resources[0].URN, stateURNRef)
+	}
+
+	if list.NextCursor != "" || list.Incomplete {
+		t.Fatalf("filtered list = %+v, want one page with no cursor", list)
+	}
+}
+
+// TestStateListFilterMatchesURN proves filter[q] with a URN substring
+// answers the named resource.
+func TestStateListFilterMatchesURN(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	list := stateFilterList(t, f, "pulumi:pulumi:Stack::web-dev")
+
+	if len(list.Resources) != 1 || list.Resources[0].URN != stateURNStack {
+		t.Fatalf("filtered list = %+v, want only the stack resource", list)
+	}
+}
+
+// TestStateListFilterIgnoresValues proves filter[q] never matches attribute
+// values or secret values: a greeting, a plain input and a ciphertext all
+// answer no resources.
+func TestStateListFilterIgnoresValues(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersions(t, f)
+
+	for _, q := range []string{"hi", "changed", "acme/web/other", "v1:input-cipher", "v1:rotated-cipher"} {
+		list := stateFilterList(t, f, q)
+
+		if len(list.Resources) != 0 {
+			t.Fatalf("filter %q matched %d resources, want none", q, len(list.Resources))
+		}
+
+		if list.NextCursor != "" {
+			t.Fatalf("filter %q next cursor = %q, want empty", q, list.NextCursor)
+		}
+	}
+}
+
+// TestStateListFilterPaging proves paging applies after the filter: a page
+// holds only matching resources and the cursor walks them.
+func TestStateListFilterPaging(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+
+	third := `{"urn":"urn:pulumi:dev::web::custom:resource:Type::res3",` +
+		`"type":"custom:resource:Type","inputs":{},"outputs":{}}`
+	deployment := `{"resources":[{` +
+		`"urn":"` + stateURNStack + `","type":"pulumi:pulumi:Stack","inputs":{},"outputs":{}},` +
+		`{"urn":"` + stateURNRef + `","type":"pulumi:pulumi:StackReference","inputs":{},"outputs":{}},` +
+		third + `]}`
+
+	seedStateVersion(t, f, deployment)
+
+	first := decodeStateList(t, getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:dev")+`&limit=2`,
+	))
+
+	if len(first.Resources) != 2 || first.NextCursor == "" {
+		t.Fatalf("first filtered page = %+v, want 2 matches with a cursor", first)
+	}
+
+	second := decodeStateList(t, getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+
+			url.QueryEscape("pulumi:dev")+`&limit=2&cursor=`+first.NextCursor,
+	))
+
+	if len(second.Resources) != 1 || second.NextCursor != "" {
+		t.Fatalf("second filtered page = %+v, want 1 match with no cursor", second)
+	}
+
+	if first.Resources[0].URN == second.Resources[0].URN {
+		t.Fatalf("filtered pages overlap on %q", second.Resources[0].URN)
+	}
+}
+
+// TestStateListFilterKeepsIncomplete proves the filter keeps the incomplete
+// marker: skipped entries without a URN still mark the page, which holds
+// only matching resources.
+func TestStateListFilterKeepsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	seedStateVersion(t, f, `{"resources":[{`+
+		`"urn":"`+stateURNStack+`","type":"pulumi:pulumi:Stack","inputs":{},"outputs":{}},`+
+		`{"type":"custom:resource:Type","inputs":{}},`+
+		`{"urn":"`+stateURNRef+`","type":"pulumi:pulumi:StackReference","inputs":{},"outputs":{}}]}`)
+
+	body := getStateOK(
+		t,
+		f,
+		"/api/stacks/acme/web/prod/state/latest/resources?filter[q]="+url.QueryEscape("pulumi:pulumi:Stack::"),
+	)
+
+	var doc struct {
+		Resources  []stateListItem `json:"resources"`
+		NextCursor string          `json:"nextCursor"`
+		Incomplete bool            `json:"incomplete"`
+		Reason     string          `json:"reason"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode filtered list: %v (%s)", err, body)
+	}
+
+	if !doc.Incomplete || doc.Reason == "" {
+		t.Fatalf("filtered list = %+v, want incomplete with a reason", doc)
+	}
+
+	if len(doc.Resources) != 1 || doc.Resources[0].URN != stateURNStack {
+		t.Fatalf("filtered list = %+v, want only the stack resource", doc)
 	}
 }

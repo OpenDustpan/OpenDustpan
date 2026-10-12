@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -177,7 +178,7 @@ func (m *mapStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 	return out, nil
 }
 
-func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	return m.deleteRef(ref)
 }
 
@@ -249,6 +250,30 @@ type secretFixture struct {
 func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) secretFixture {
 	t.Helper()
 
+	return buildSecretFixture(
+		t,
+		authz,
+		maxBatch,
+		fixtureAudit{store: nil, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+}
+
+// fixtureAudit carries the audit wiring of buildSecretFixture: the store,
+// the failure callback and the logger. A nil store means no audit store is
+// configured.
+type fixtureAudit struct {
+	store  audit.Store
+	onFail func()
+	logger *slog.Logger
+}
+
+// buildSecretFixture builds a Handler as newSecretFixture does, with the
+// audit wiring of cfg for the audit tests.
+func buildSecretFixture(
+	t *testing.T, authz identity.Authorizer, maxBatch int, cfg fixtureAudit,
+) secretFixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -256,7 +281,9 @@ func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) sec
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -295,9 +322,11 @@ func newSecretFixture(t *testing.T, authz identity.Authorizer, maxBatch int) sec
 		Namespaces:            namespaces,
 		Authenticator:         tokenAuthenticator{},
 		Authorizer:            authz,
-		Logger:                slog.New(slog.DiscardHandler),
+		Logger:                cfg.logger,
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 cfg.store,
+		OnAuditFailure:        cfg.onFail,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
@@ -907,7 +936,10 @@ func TestSecretsGzipBomb(t *testing.T) {
 	}
 }
 
-// TestSecretsAuditRoutes prove the audit routes answer 204 and store nothing.
+// TestSecretsAuditRoutes proves the audit routes answer 204 with an empty
+// body. With an audit store configured they also write one reveal entry
+// each (see TestLogDecryptionWritesARevealEntry); without one they answer
+// 204 all the same.
 func TestSecretsAuditRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -1019,7 +1051,9 @@ func TestSecretsMissingKey(t *testing.T) {
 		t.Fatalf("namespace service: %v", nsErr)
 	}
 
-	stacks, stacksErr := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, stacksErr := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
 	}
@@ -1054,6 +1088,8 @@ func TestSecretsMissingKey(t *testing.T) {
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if handlerErr != nil {
@@ -1100,7 +1136,7 @@ func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]sta
 	panic("failingStackStore.ListStacks is not used")
 }
 
-func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
@@ -1398,7 +1434,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1439,6 +1475,8 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if handlerErr != nil {
@@ -1538,7 +1576,9 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1633,6 +1673,8 @@ func newLoggedSecretsHandler(
 		Logger:                logger,
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if handlerErr != nil {
@@ -1754,7 +1796,9 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -1796,6 +1840,8 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		Logger:                slog.New(slog.NewJSONHandler(logged, nil)),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if err != nil {
@@ -1818,7 +1864,12 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: &failingStackStore{err: err}, Namespaces: namespaces, Now: nil},
+		stack.Config{
+			Store:      &failingStackStore{err: err},
+			Namespaces: namespaces,
+			Now:        nil,
+			State:      nil,
+		},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1834,6 +1885,8 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 		Logger:                slog.New(slog.DiscardHandler),
 		BaseURL:               baseurl.Resolver{},
 		MaxBodyBytesInFlight:  0,
+		Audit:                 nil,
+		OnAuditFailure:        nil,
 		CheckpointDeltaCutoff: 0,
 	})
 	if handlerErr != nil {
