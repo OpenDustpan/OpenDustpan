@@ -400,7 +400,7 @@ func revealFromResource(dec *jsontext.Decoder, target revealTarget) (any, bool, 
 		return nil, false, fmt.Errorf("decode revealed value: %w", err)
 	}
 
-	_, masked := maskTofuInstance(instance, target.resource, target.position, address, target.marks)
+	_, masked := maskTofuInstance(side.instance, target.resource, target.position, address, target.marks)
 	if !slices.Contains(masked, target.path) {
 		return nil, false, nil
 	}
