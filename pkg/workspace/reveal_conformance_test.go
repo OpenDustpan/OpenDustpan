@@ -834,6 +834,36 @@ func conformanceCases() []conformanceCase {
 			marks:      workspace.SensitiveMarks{"terraform_data.x": {"/m"}},
 			mustReveal: true,
 		},
+		{
+			name: "number literals inside containers",
+			state: conformanceState(
+				`{"a":{"k":1,"s":"xA"},"b":{"k":1.0,"s":"xA"},`+
+					`"c":{"k":1,"s":"xA"},"d":{"k":1e0,"s":"xA"}}`,
+				`[[{"type":"get_attr","value":"a"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "key order and array order",
+			state: conformanceState(
+				`{"s":{"x":1,"y":[1,2]},"same":{"y":[1,2],"x":1},`+
+					`"other":{"y":[2,1],"x":1}}`,
+				`[[{"type":"get_attr","value":"s"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "deep duplicate container",
+			state: conformanceState(
+				`{"s":{"p":{"q":["v",{"r":"w"}]}},`+
+					`"t":{"u":{"p":{"q":["v",{"r":"w"}]}}}}`,
+				`[[{"type":"get_attr","value":"s"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
 	}
 }
 

@@ -74,7 +74,9 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 // encrypted fails with ErrClientEncrypted. It streams the state to the path
 // and keeps no more than one resource instance in memory.
 func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string, error) {
-	return RevealValueFromReader(bytes.NewReader(state), marks, path)
+	return RevealValueFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(state)), nil
+	}, marks, path)
 }
 
 // Limit: the lookup decodes the one target instance in full, into a map
@@ -83,17 +85,33 @@ func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string
 // not only with its largest string. A two-pass lookup that keeps only the
 // kept secrets is designed in #416.
 
-// RevealValueFromReader returns the plain value at path of the state that r
-// streams, and the masked set holding the path. The path must be in the
+// StateOpener opens the content of one finalized state version. The lookup calls it once for each pass, and each call
+// must return the same bytes from the start. The caller does not close the result: the lookup does.
+type StateOpener func() (io.ReadCloser, error)
+
+// RevealValueFromOpener returns the plain value at path of the state that
+// open serves, and the masked set holding the path. The path must be in the
 // masked set, else it fails with ErrResourceNotFound, so a caller cannot
 // probe paths. A state the client encrypted fails with ErrClientEncrypted.
 // It decodes from the stream directly: values off the path are skipped
 // without building them, and no more than one resource instance is kept in
-// memory. The numbers of the answer keep their exact encoding.
-func RevealValueFromReader(
-	r io.Reader, marks SensitiveMarks, path string,
+// memory. The numbers of the answer keep their exact encoding. Later versions
+// may call open more than once, one call for each pass; today it is called
+// once. A failed open fails as an open state error. A close error does not
+// fail the lookup. The opener logs it.
+func RevealValueFromOpener(
+	open StateOpener, marks SensitiveMarks, path string,
 ) (any, []string, error) {
-	return revealStream(jsontext.NewDecoder(r), marks, path)
+	stream, err := open()
+	if err != nil {
+		return nil, nil, fmt.Errorf("open state: %w", err)
+	}
+
+	defer func() {
+		_ = stream.Close() //nolint:errcheck // the opener logs a close failure
+	}()
+
+	return revealStream(jsontext.NewDecoder(stream), marks, path)
 }
 
 // revealTarget names the streamed value a reveal lookup walks to: the

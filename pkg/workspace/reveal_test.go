@@ -54,6 +54,48 @@ func TestRevealValueAnswersPlain(t *testing.T) {
 	}
 }
 
+// errCloseState is the close error of the test opener.
+var errCloseState = errors.New("close state")
+
+// closeFailReadCloser answers the bytes of the wrapped reader and fails on
+// close, so the test proves a close error does not fail the lookup.
+type closeFailReadCloser struct {
+	io.Reader
+}
+
+// Close fails with a close error.
+func (c closeFailReadCloser) Close() error {
+	return errCloseState
+}
+
+// TestRevealValueFromOpenerIgnoresCloseError proves a close error does not
+// fail the lookup.
+func TestRevealValueFromOpenerIgnoresCloseError(t *testing.T) {
+	t.Parallel()
+
+	masked, err := workspace.MaskedPaths([]byte(revealState()), revealMarks())
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	if len(masked) == 0 {
+		t.Fatal("masked holds no path")
+	}
+
+	open := func() (io.ReadCloser, error) {
+		return closeFailReadCloser{Reader: strings.NewReader(revealState())}, nil
+	}
+
+	value, _, err := workspace.RevealValueFromOpener(open, revealMarks(), masked[0])
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if value != "s3cr3t" {
+		t.Fatalf("value = %#v, want s3cr3t", value)
+	}
+}
+
 // TestRevealValueRejectsPlainPath proves a path outside the masked set
 // answers a not-found error, so a caller cannot probe paths.
 func TestRevealValueRejectsPlainPath(t *testing.T) {
@@ -255,7 +297,11 @@ func TestRevealValueStreamsLargeState(t *testing.T) {
 
 	// Warm the path once, so one-time allocations stay out of the
 	// measurement.
-	if _, _, err := workspace.RevealValueFromReader(newStream(), marks, path); err != nil {
+	warm := func() (io.ReadCloser, error) {
+		return io.NopCloser(newStream()), nil
+	}
+
+	if _, _, err := workspace.RevealValueFromOpener(warm, marks, path); err != nil {
 		t.Fatalf("warm reveal: %v", err)
 	}
 
@@ -268,7 +314,11 @@ func TestRevealValueStreamsLargeState(t *testing.T) {
 
 	stream := newStream()
 
-	value, masked, err := workspace.RevealValueFromReader(stream, marks, path)
+	serve := func() (io.ReadCloser, error) {
+		return io.NopCloser(stream), nil
+	}
+
+	value, masked, err := workspace.RevealValueFromOpener(serve, marks, path)
 
 	var after runtime.MemStats
 
@@ -409,5 +459,86 @@ func TestRevealValueBoundsLargeStringToken(t *testing.T) {
 	if growth := after.TotalAlloc - before.TotalAlloc; growth > bound {
 		t.Fatalf("allocated = %d bytes, want at most %d for a %d-byte state with one %d-byte string",
 			growth, bound, len(state), largeBytes)
+	}
+}
+
+// countCloseReader wraps a reader and counts closes.
+type countCloseReader struct {
+	*strings.Reader
+
+	closes *int
+}
+
+// Close counts one close and reports success.
+func (c *countCloseReader) Close() error {
+	*c.closes++
+
+	return nil
+}
+
+// errOpenerBoom is the injected open failure of the open error test.
+var errOpenerBoom = errors.New("opener boom")
+
+// TestRevealValueFromOpenerClosesStream proves the opener lookup closes
+// every stream it opens and answers the same value as the bytes lookup.
+func TestRevealValueFromOpenerClosesStream(t *testing.T) {
+	t.Parallel()
+
+	masked, err := workspace.MaskedPaths([]byte(revealState()), revealMarks())
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	if len(masked) == 0 {
+		t.Fatal("masked holds no path")
+	}
+
+	path := masked[0]
+
+	want, _, err := workspace.RevealValue([]byte(revealState()), revealMarks(), path)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	var opens, closes int
+
+	open := func() (io.ReadCloser, error) {
+		opens++
+
+		return &countCloseReader{Reader: strings.NewReader(revealState()), closes: &closes}, nil
+	}
+
+	value, _, err := workspace.RevealValueFromOpener(open, revealMarks(), path)
+	if err != nil {
+		t.Fatalf("opener reveal: %v", err)
+	}
+
+	if value != want {
+		t.Fatalf("value = %#v, want %#v", value, want)
+	}
+
+	if opens < 1 {
+		t.Fatalf("opens = %d, want at least 1", opens)
+	}
+
+	if opens != closes {
+		t.Fatalf("opens = %d, closes = %d, want equal", opens, closes)
+	}
+}
+
+// TestRevealValueFromOpenerOpenError proves a failing open fails the lookup
+// with an error that wraps the open error.
+func TestRevealValueFromOpenerOpenError(t *testing.T) {
+	t.Parallel()
+
+	open := func() (io.ReadCloser, error) {
+		return nil, errOpenerBoom
+	}
+
+	_, _, err := workspace.RevealValueFromOpener(open, revealMarks(), "/resources/0/instances/0/attributes/input")
+	if err == nil {
+		t.Fatal("open error succeeded, want an error")
+	} else if !errors.Is(err, errOpenerBoom) {
+		t.Fatalf("open error = %v, want it to wrap the open failure", err)
 	}
 }
