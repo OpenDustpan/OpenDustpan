@@ -48,13 +48,13 @@ openssl rand -base64 32
 
 ## Client commands
 
-`opendustpan namespace create` and `opendustpan backup` call a running server.
+`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
+check` and `opendustpan upgrade check` call a running server.
 They read the server URL from `--server` or `DUSTPAN_SERVER`, and the token
 from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a
 PEM bundle of CA certificates to the system store.
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
-`opendustpan backup check`, `opendustpan restore` and `opendustpan upgrade
-check` are offline commands. The
-[backup guide](../guides/backup-restore-upgrade.md) shows their flags.
+`opendustpan restore` is an offline command. The
+[backup guide](../guides/backup-restore-upgrade.md) shows its flags.

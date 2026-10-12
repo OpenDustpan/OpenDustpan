@@ -219,6 +219,8 @@ func newServiceBackedHandler(
 		Backups:       service,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        st,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -641,6 +643,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Backups:       nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	}
 
 	cases := []struct {
@@ -766,6 +770,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Backups:       service,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -783,6 +789,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Backups:       nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

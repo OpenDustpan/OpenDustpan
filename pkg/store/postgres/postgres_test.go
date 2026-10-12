@@ -51,6 +51,21 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+func TestSchemaConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunSchema(t, func(t *testing.T) storetest.SchemaStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 // TestPingClosed checks Ping answers on an open store and returns exactly the
 // sentinel text, with no driver text, after Close.
 func TestPingClosed(t *testing.T) {
