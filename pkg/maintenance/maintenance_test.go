@@ -1287,3 +1287,8 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
 	return nil
 }
+
+// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
+func (f *fakeWorkspaces) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return f.SaveWorkspace(ctx, w, fence)
+}

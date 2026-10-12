@@ -4228,3 +4228,23 @@ func (m *memStore) checkUnlockedSwitches(w workspace.Workspace) error {
 
 	return nil
 }
+
+// ReleaseUnfenced refuses the save unless the forced-write switches of the
+// namespace and of the unit are on (ADR 44, decisions 4 and 6).
+func (m *memStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	m.mu.Lock()
+	ns, nsOK := m.namespaces[w.Ref.Namespace]
+	stored, ok := m.workspaces[w.ID]
+	m.mu.Unlock()
+
+	switch {
+	case !ok:
+		return workspace.ErrNotFound
+	case !nsOK:
+		return namespace.ErrNotFound
+	case !ns.Overrides.Forced || !stored.Overrides.Forced:
+		return fmt.Errorf("%w: the forced-write switch is off", workspace.ErrOverrideRefused)
+	}
+
+	return m.SaveWorkspace(ctx, w, fence)
+}

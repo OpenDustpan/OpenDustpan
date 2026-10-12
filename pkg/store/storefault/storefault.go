@@ -435,6 +435,15 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	return s.inner.SaveWorkspace(ctx, w, fence)
 }
 
+// ReleaseUnfenced saves a released unit under the forced-write override, unless a fault fires first.
+func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	if err := s.before(ctx, "ReleaseUnfenced"); err != nil {
+		return err
+	}
+
+	return s.inner.ReleaseUnfenced(ctx, w, fence)
+}
+
 // DeleteWorkspace removes the workspace called ref with its state versions
 // and its data key, unless a fault fires first.
 func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {

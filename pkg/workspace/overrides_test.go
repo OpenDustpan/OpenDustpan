@@ -133,6 +133,14 @@ func TestForceUnlockClientEncryptedWithForcedOverride(t *testing.T) {
 		t.Fatalf("current before: %v", err)
 	}
 
+	if _, err = f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, forcedOnly()); err != nil {
+		t.Fatalf("turn on the namespace switch: %v", err)
+	}
+
+	if _, err = f.svc.SetOverrides(ctx, f.ws.ID, namespace.Overrides{Forced: true, Unlocked: false}); err != nil {
+		t.Fatalf("turn on the unit switch: %v", err)
+	}
+
 	released, overridden, err := f.svc.ForceUnlock(
 		ctx,
 		f.ws.ID,

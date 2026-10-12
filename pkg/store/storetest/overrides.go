@@ -221,18 +221,63 @@ func turnOnUnlockedSwitches(
 ) workspace.Workspace {
 	t.Helper()
 
-	if err := s.SetOverrides(t.Context(), ns.Name, namespace.Overrides{Forced: false, Unlocked: true}); err != nil {
-		t.Fatalf("turn on the namespace switch: %v", err)
+	return turnOnSwitches(t, s, ns, w, namespace.Overrides{Forced: false, Unlocked: true})
+}
+
+// turnOnSwitches sets the switches of the namespace and of the unit to ov, and
+// returns the unit as stored.
+func turnOnSwitches(
+	t *testing.T, s WorkspaceStore, ns namespace.Namespace, w workspace.Workspace, ov namespace.Overrides,
+) workspace.Workspace {
+	t.Helper()
+
+	if err := s.SetOverrides(t.Context(), ns.Name, ov); err != nil {
+		t.Fatalf("set the namespace switches: %v", err)
 	}
 
 	on := w
-	on.Overrides = namespace.Overrides{Forced: false, Unlocked: true}
+	on.Overrides = ov
 	on.Revision = w.Revision + 1
 	on.UpdatedAt = now().Add(time.Minute)
 
 	if err := s.SaveWorkspace(t.Context(), on, ns.Fence()); err != nil {
-		t.Fatalf("turn on the unit switch: %v", err)
+		t.Fatalf("set the unit switches: %v", err)
 	}
 
 	return on
+}
+
+// testReleaseUnfencedNeedsForcedSwitches checks that an unfenced release is refused
+// unless the forced-write switches of the namespace and of the unit are on (ADR 44,
+// decisions 4 and 6), and that the switch is read in the release itself.
+func testReleaseUnfencedNeedsForcedSwitches(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	released := w
+	released.Revision = w.Revision + 1
+	released.UpdatedAt = now().Add(time.Hour)
+
+	if err := s.ReleaseUnfenced(t.Context(), released, ns.Fence()); !errors.Is(err, workspace.ErrOverrideRefused) {
+		t.Fatalf("release with the switches off: err = %v, want ErrOverrideRefused", err)
+	}
+
+	on := turnOnSwitches(t, s, ns, w, namespace.Overrides{Forced: true, Unlocked: false})
+
+	released = on
+	released.Revision = on.Revision + 1
+	released.UpdatedAt = now().Add(2 * time.Hour)
+
+	if err := s.ReleaseUnfenced(t.Context(), released, ns.Fence()); err != nil {
+		t.Fatalf("release with the switches on: %v", err)
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, released)
 }

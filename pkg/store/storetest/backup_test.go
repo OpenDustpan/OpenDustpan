@@ -4093,3 +4093,8 @@ func (s *fakeBackupStore) rebuildIndexes() {
 		s.data.workspaceIDs[s.data.workspaces[id].Ref.String()] = id
 	}
 }
+
+// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
+func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return s.SaveWorkspace(ctx, w, fence)
+}

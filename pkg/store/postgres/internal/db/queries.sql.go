@@ -1066,6 +1066,29 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 	return i, err
 }
 
+const getNamespaceForShare = `-- name: GetNamespaceForShare :one
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name = $1
+FOR SHARE
+`
+
+// Reads the namespace row with a shared lock. A switch change waits for the
+// transaction that reads it, so the switch it reads is the one that commits.
+func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namespace, error) {
+	row := q.db.QueryRow(ctx, getNamespaceForShare, name)
+	var i Namespace
+	err := row.Scan(
+		&i.Name,
+		&i.HomeRegion,
+		&i.FailoverVersion,
+		&i.CreatedAtMs,
+		&i.AllowForcedWrites,
+		&i.AllowUnlockedWrites,
+	)
+	return i, err
+}
+
 const getRestore = `-- name: GetRestore :one
 SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
 FROM restores

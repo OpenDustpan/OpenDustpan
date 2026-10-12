@@ -213,6 +213,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testUnlockedFinalizeNeedsTheFlag,
 		},
 		{
+			name: "an unfenced release is ErrOverrideRefused unless both forced-write switches are on",
+			test: testReleaseUnfencedNeedsForcedSwitches,
+		},
+		{
 			name: "a declare of an unlocked write is ErrOverrideRefused unless both switches are on",
 			test: testUnlockedDeclareNeedsSwitches,
 		},

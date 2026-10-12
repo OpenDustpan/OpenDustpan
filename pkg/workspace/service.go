@@ -54,6 +54,11 @@ type Store interface {
 	// not exist, namespace.ErrNotFound if the namespace does not exist, or
 	// namespace.ErrFenced if fence is stale.
 	SaveWorkspace(ctx context.Context, w Workspace, fence namespace.Fence) error
+	// ReleaseUnfenced saves a released unit like SaveWorkspace, and refuses with
+	// ErrOverrideRefused unless the forced-write switches of the namespace and of
+	// the unit are on, in the same transaction. It is the unfenced release of a
+	// client-encrypted state under the forced-write override (ADR 44, decision 4).
+	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence) error
 	// DeleteWorkspace removes the workspace called ref with its state
 	// versions and its wrapped data key in one fenced transaction. It
 	// removes the inventory entry in the same transaction. It returns
@@ -376,9 +381,12 @@ func (s *Service) ForceUnlock(
 
 	switch {
 	case errors.Is(err, ErrNoState):
-		unfenced, changeErr := s.releaseUnfenced(ctx, id)
+		// A unit without state is a plain release: no override is used.
+		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+			return w.forceUnlock(now)
+		})
 
-		return unfenced, false, changeErr
+		return released, false, changeErr
 	case err != nil:
 		return Workspace{}, false, fmt.Errorf("current state of %s: %w", w.Ref, err)
 	}
@@ -1864,9 +1872,26 @@ func (s *Service) clock() time.Time {
 
 // releaseUnfenced releases the lock of the unit without writing a version.
 func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error) {
-	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-		return w.forceUnlock(now)
-	})
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	released, err := w.forceUnlock(s.clock())
+	if err != nil {
+		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
+	}
+
+	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence); err != nil {
+		return Workspace{}, fmt.Errorf("release %s: %w", id, err)
+	}
+
+	return released, nil
 }
 
 // attemptKey is a fresh blob key for one upload attempt of sv. IDs are

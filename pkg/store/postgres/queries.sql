@@ -19,6 +19,14 @@ UPDATE namespaces
 SET allow_forced_writes = $1, allow_unlocked_writes = $2
 WHERE name = $3;
 
+-- name: GetNamespaceForShare :one
+-- Reads the namespace row with a shared lock. A switch change waits for the
+-- transaction that reads it, so the switch it reads is the one that commits.
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name = $1
+FOR SHARE;
+
 -- name: GetFailoverVersionForShare :one
 -- Locks the namespace row so a concurrent promotion waits for this write.
 SELECT failover_version

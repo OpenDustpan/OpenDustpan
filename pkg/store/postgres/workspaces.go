@@ -104,54 +104,30 @@ func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]worksp
 	return out, nil
 }
 
+// ReleaseUnfenced implements workspace.Store. It saves a released unit like
+// SaveWorkspace, and refuses the save with ErrOverrideRefused unless the
+// forced-write switches of the namespace and of the unit are on, in the same
+// transaction (ADR 44, decisions 4 and 6).
+func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		wrow, err := lockWorkspace(ctx, q, w.ID.String())
+		if err != nil {
+			return err
+		}
+
+		if switchErr := checkForcedSwitches(ctx, q, wrow); switchErr != nil {
+			return switchErr
+		}
+
+		return saveWorkspaceRow(ctx, q, w)
+	})
+}
+
 // SaveWorkspace implements workspace.Store: a compare-and-swap on the
 // revision. The inventory entry moves with the write in the same transaction.
 func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
-	row := codec.ToWorkspaceRow(w)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
-			Revision:            row.Revision,
-			LockID:              row.LockID,
-			LockHolder:          row.LockHolder,
-			LockReason:          row.LockReason,
-			LockedAtMs:          row.LockedAtMs,
-			UpdatedAtMs:         row.UpdatedAtMs,
-			ID:                  row.ID,
-			AllowForcedWrites:   row.AllowForcedWrites,
-			AllowUnlockedWrites: row.AllowUnlockedWrites,
-			ExpectedRevision:    row.Revision - 1,
-		})
-		if err != nil {
-			return fmt.Errorf("update workspace: %w", err)
-		}
-
-		if n > 0 {
-			if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
-				return pubErr
-			}
-
-			// The lock moves with the write in the same transaction: lock,
-			// unlock and force-unlock all save here.
-			return writeInventoryLock(
-				ctx, q, inventoryLockKey{
-					namespace: w.Ref.Namespace.String(),
-					tool:      inventoryToolOpenTofu,
-					name:      w.Ref.Name.String(),
-				}, workspaceLock(w.Lock),
-			)
-		}
-
-		exists, err := q.WorkspaceExists(ctx, row.ID)
-		if err != nil {
-			return fmt.Errorf("check workspace: %w", err)
-		}
-
-		if !exists {
-			return workspace.ErrNotFound
-		}
-
-		return workspace.ErrConcurrentModification
+		return saveWorkspaceRow(ctx, q, w)
 	})
 }
 
@@ -767,12 +743,36 @@ func checkFinalizePending(ctx context.Context, q *db.Queries, id string) error {
 	return nil
 }
 
+// checkForcedSwitches refuses the release of a client-encrypted state unless
+// the forced-write switches of the namespace and of the unit are on. It reads
+// the namespace with a shared lock, so a switch change waits for the release
+// (ADR 44, decisions 4 and 6).
+func checkForcedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) error {
+	ns, err := q.GetNamespaceForShare(ctx, wrow.Namespace)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read namespace: %w", err)
+	}
+
+	if !ns.AllowForcedWrites || !wrow.AllowForcedWrites {
+		return fmt.Errorf(
+			"%w: the forced-write switch of the namespace or the unit is off",
+			workspace.ErrOverrideRefused,
+		)
+	}
+
+	return nil
+}
+
 // checkUnlockedSwitches refuses an unlocked write when the namespace or the
 // unit does not allow it. It reads both switches in the caller's transaction,
 // so a switch that is turned off before the write commits stops the write
 // (ADR 44, decisions 5 and 6).
 func checkUnlockedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) error {
-	ns, err := q.GetNamespace(ctx, wrow.Namespace)
+	ns, err := q.GetNamespaceForShare(ctx, wrow.Namespace)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return namespace.ErrNotFound
 	}
@@ -973,4 +973,53 @@ func checkFenceCurrent(
 	}
 
 	return nil
+}
+
+// saveWorkspaceRow writes the workspace row in the caller's transaction, with
+// its inventory entry and lock. It is the compare-and-swap of SaveWorkspace.
+func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+	row := codec.ToWorkspaceRow(w)
+
+	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
+		Revision:            row.Revision,
+		LockID:              row.LockID,
+		LockHolder:          row.LockHolder,
+		LockReason:          row.LockReason,
+		LockedAtMs:          row.LockedAtMs,
+		UpdatedAtMs:         row.UpdatedAtMs,
+		ID:                  row.ID,
+		AllowForcedWrites:   row.AllowForcedWrites,
+		AllowUnlockedWrites: row.AllowUnlockedWrites,
+		ExpectedRevision:    row.Revision - 1,
+	})
+	if err != nil {
+		return fmt.Errorf("update workspace: %w", err)
+	}
+
+	if n > 0 {
+		if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+			return pubErr
+		}
+
+		// The lock moves with the write in the same transaction: lock,
+		// unlock and force-unlock all save here.
+		return writeInventoryLock(
+			ctx, q, inventoryLockKey{
+				namespace: w.Ref.Namespace.String(),
+				tool:      inventoryToolOpenTofu,
+				name:      w.Ref.Name.String(),
+			}, workspaceLock(w.Lock),
+		)
+	}
+
+	exists, err := q.WorkspaceExists(ctx, row.ID)
+	if err != nil {
+		return fmt.Errorf("check workspace: %w", err)
+	}
+
+	if !exists {
+		return workspace.ErrNotFound
+	}
+
+	return workspace.ErrConcurrentModification
 }
