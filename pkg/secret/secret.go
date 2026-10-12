@@ -1,6 +1,11 @@
 // Package secret encrypts values for clients that leave key management to the
 // server. The Pulumi CLI's default ("service") secrets provider sends every
 // secret config value and state output here to be encrypted and decrypted.
+// Large content seals in chunks instead: the server seals each OpenTofu state
+// blob in 64 KiB chunks with the data key of its workspace scope, so it never
+// holds a whole state in memory. Each chunk carries its position and a
+// final-chunk flag in its nonce and associated data, so a cut, reordered or
+// extended stream fails to open.
 //
 // It uses envelope encryption. Each Scope, in practice one stack, has its own
 // random 256-bit data key, sealed by AES-256-GCM. Data keys are stored only

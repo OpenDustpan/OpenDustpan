@@ -3488,6 +3488,10 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The list route serves the two versions with the go-tfe query shape.
 	tofuStateVersionListScenario(t, env)
 
+	// The sealed round trip with a key set: state pull, the API download of
+	// the current version and its MD5 attribute agree.
+	tofuSealedStateScenario(t, env)
+
 	// A restore of the first version makes it current again: state pull
 	// matches its MD5, a new apply succeeds, and a locked restore names the
 	// holder.
@@ -9902,7 +9906,7 @@ func checkBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("opendustpan backup exits with status %d: %s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "plain text"} {
+	for _, want := range []string{"bkp-", "succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q: %q", want, res.Stdout)
 		}
@@ -10606,7 +10610,7 @@ func churnTofuWorkspaces(ctx context.Context, in churnInput) churnOutcome {
 // runBackupCommand runs `opendustpan backup` against the running server and
 // returns the backup ID. The output names the ID, the succeeded state, the
 // key warning that a backup cannot decrypt secrets without
-// DUSTPAN_KEY_ENCRYPTION_KEY, and the plain-text state warning.
+// DUSTPAN_KEY_ENCRYPTION_KEY, and the sealed-state warning.
 func runBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
@@ -10615,7 +10619,7 @@ func runBackupCommand(ctx context.Context, t *testing.T, env *e2e.Env) string {
 		t.Fatalf("opendustpan backup exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "plain text"} {
+	for _, want := range []string{"succeeded", "DUSTPAN_KEY_ENCRYPTION_KEY", "sealed"} {
 		if !strings.Contains(res.Stdout, want) {
 			t.Fatalf("opendustpan backup output lacks %q:\n%s", want, res.Stdout)
 		}
@@ -11716,5 +11720,90 @@ func checkMaintenanceUnauthorized(ctx context.Context, t *testing.T, env *e2e.En
 		if doc.Code != http.StatusUnauthorized || doc.Message == "" {
 			t.Fatalf("%s %s error = %+v, want code 401 with a message", target.method, target.path, doc)
 		}
+	}
+}
+
+// sealedStateVersionAttributes decodes the MD5, serial and lineage
+// attributes of one state version document.
+type sealedStateVersionAttributes struct {
+	MD5     string `json:"md5"`
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+}
+
+// sealedStateVersionData decodes the ID and attributes of one state version
+// document.
+type sealedStateVersionData struct {
+	ID         string                       `json:"id"`
+	Attributes sealedStateVersionAttributes `json:"attributes"`
+}
+
+// sealedStateVersionDoc decodes the ID and the MD5, serial and lineage
+// attributes of one state version document.
+type sealedStateVersionDoc struct {
+	Data sealedStateVersionData `json:"data"`
+}
+
+// tofuSealedStateScenario proves the sealed round trip with a key set (ADR 41
+// decision 10): the CLI pulls state, the API download of the current version
+// holds the same serial, lineage and greeting, and its MD5 matches the MD5
+// attribute of the current version, so the download answers the same bytes
+// the CLI sent through the seal and the open.
+func tofuSealedStateScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	wsID := env.WorkspaceID(ctx, t)
+
+	pulled := env.Step(ctx, t, step("state pull sealed", contains(`"greeting"`), "state", "pull"))
+
+	var cli pulledRestoreState
+
+	if err := json.Unmarshal([]byte(pulled.Stdout), &cli); err != nil {
+		t.Fatalf("decode pulled state: %v", err)
+	}
+
+	status, body, err := env.TFEStatusA(
+		ctx, http.MethodGet, "/api/v2/workspaces/"+wsID+"/current-state-version", "",
+	)
+	if err != nil {
+		t.Fatalf("get current state version: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("get current state version answers %d: %s", status, body)
+	}
+
+	var doc sealedStateVersionDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode current state version: %v", err)
+	}
+
+	download := downloadStateVersion(ctx, t, env, doc.Data.ID)
+
+	if got := md5Hex(download); got != doc.Data.Attributes.MD5 {
+		t.Fatalf("download MD5 is %s, want the MD5 %s of the current version", got, doc.Data.Attributes.MD5)
+	}
+
+	var stored pulledRestoreState
+
+	if err := json.Unmarshal([]byte(download), &stored); err != nil {
+		t.Fatalf("decode downloaded state: %v", err)
+	}
+
+	if stored.Serial != cli.Serial || stored.Lineage != cli.Lineage {
+		t.Fatalf(
+			"downloaded serial %d lineage %q, want the pulled serial %d lineage %q",
+			stored.Serial,
+			stored.Lineage,
+			cli.Serial,
+			cli.Lineage,
+		)
+	}
+
+	greeting, ok := stored.Outputs["greeting"]
+	if !ok || greeting.Value != cli.Outputs["greeting"].Value || greeting.Value == "" {
+		t.Fatalf("downloaded state lacks the pulled greeting: %s", download)
 	}
 }

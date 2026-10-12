@@ -425,6 +425,16 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	return s.inner.SaveWorkspace(ctx, w, fence)
 }
 
+// DeleteWorkspace removes the workspace called ref with its state versions
+// and its data key, unless a fault fires first.
+func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
+	if err := s.before(ctx, "DeleteWorkspace"); err != nil {
+		return err
+	}
+
+	return s.inner.DeleteWorkspace(ctx, ref, fence)
+}
+
 // CreateStateVersion persists a new, pending version, unless a fault fires first.
 func (s *Store) CreateStateVersion(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,

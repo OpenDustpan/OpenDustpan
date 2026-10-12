@@ -297,6 +297,11 @@ func (f *fakeWorkspaces) SaveWorkspace(
 	return nil
 }
 
+// DeleteWorkspace implements workspace.Store.
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence) error {
+	return workspace.ErrNotFound
+}
+
 // fakeStates answers no state version. The force-unlock path reads none.
 type fakeStates struct{}
 
@@ -434,6 +439,7 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -573,6 +579,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,

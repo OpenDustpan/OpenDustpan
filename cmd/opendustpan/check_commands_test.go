@@ -604,7 +604,7 @@ func TestClientCommandsOpenNoStore(t *testing.T) {
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckKeyWarning(t *testing.T) {
-	names, _ := embeddedNames(t)
+	names, binVersion := embeddedNames(t)
 
 	keyed := true
 	unkeyed := false
@@ -620,7 +620,7 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 	} {
 		body, err := json.Marshal(upgradeCheckAnswer{
 			ServerVersion:     checkServerVersion,
-			SchemaVersion:     int64(len(names)),
+			SchemaVersion:     binVersion,
 			AppliedMigrations: names,
 			KeyEncryptionKey:  tc.key,
 		})

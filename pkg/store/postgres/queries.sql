@@ -371,19 +371,30 @@ SELECT EXISTS (
     SELECT 1 FROM workspaces WHERE id = $1
 );
 
+-- name: DeleteWorkspace :execrows
+-- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+-- the data key through DeleteSecretKeysOfStack with the workspace ID.
+DELETE FROM workspaces
+WHERE namespace = $1 AND name = $2;
+
+-- name: DeleteStateVersionsOfWorkspace :exec
+-- Removes every state version of one workspace, pending and finalized.
+DELETE FROM state_versions
+WHERE workspace_id = $1;
+
 -- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
+    restored_from, sealed
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE id = $1;
 
@@ -392,7 +403,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -428,7 +439,7 @@ WHERE workspace_id = $1 AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -451,7 +462,7 @@ WHERE id = $2 AND status = 'pending';
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -566,12 +577,14 @@ ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
 -- Every blob key the state versions and the checkpoints name, with the size
--- and MD5 of the stored bytes, ordered by key.
-SELECT content_key, size, md5
+-- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
+-- state blobs are stored sealed: the backup opens them to check and stores
+-- the sealed bytes.
+SELECT content_key, size, md5, sealed
 FROM state_versions
 WHERE content_key <> ''
 UNION ALL
-SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5
+SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key;

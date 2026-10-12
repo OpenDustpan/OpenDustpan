@@ -51,6 +51,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Exporter:    stores.registry,
 		Registry:    stores.registry,
 		Blobs:       stores.live,
+		StateOpener: nil,
 		Target:      target,
 		TargetName:  "dir:test",
 		Now:         nil,

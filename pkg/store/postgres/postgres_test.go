@@ -2418,6 +2418,7 @@ func declareAddedVersion(
 		Serial:          1,
 		Size:            0,
 		Force:           force,
+		Sealed:          false,
 		RestoredFrom:    from,
 	}
 }
