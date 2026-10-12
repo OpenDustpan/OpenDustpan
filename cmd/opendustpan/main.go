@@ -332,7 +332,7 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 
 	open := func() (store, error) {
 		if st == nil {
-			opened, err := openStore(ctx, f.database)
+			opened, err := openStore(ctx, f.database, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -1262,10 +1262,10 @@ func (s postgresStore) close() { s.Close() }
 // client command that opens a store fails the test.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
-var openStore = func(ctx context.Context, database string) (store, error) {
+var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"))
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), sqlite.WithLogger(logger))
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,7 +50,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 
 	previous := openStore
-	openStore = func(_ context.Context, _ string) (store, error) {
+	openStore = func(_ context.Context, _ string, _ *slog.Logger) (store, error) {
 		t.Error(errGateStoreOpened.Error())
 
 		return nil, errGateStoreOpened
