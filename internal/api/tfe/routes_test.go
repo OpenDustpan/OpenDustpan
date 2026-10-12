@@ -324,6 +324,7 @@ func (stubWorkspaces) BeginState(
 			Sealed:          false,
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
+			FenceBy:         "",
 		},
 	}, nil
 }
@@ -384,6 +385,7 @@ func stubStateVersion() workspace.StateVersion {
 		Sealed:          false,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
+		FenceBy:         "",
 	}
 }
 

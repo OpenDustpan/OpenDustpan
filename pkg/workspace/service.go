@@ -1589,6 +1589,7 @@ func (s *Service) createPending(
 		Sealed:          sealed,
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
+		FenceBy:         "",
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {

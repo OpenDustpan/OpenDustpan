@@ -41,20 +41,56 @@ func (s *Service) releaseWithFence(
 		return Workspace{}, err
 	}
 
-	plain, err := s.openCurrentPlain(ctx, cur)
+	sv, content, err := s.buildFence(ctx, w, cur, by)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
+	}
+
+	size, err := s.store(ctx, storeInput{
+		namespace: w.Ref.Namespace,
+		workspace: w.ID,
+		seal:      cur.Sealed,
+		key:       sv.Content,
+		want:      sv.MD5,
+		content:   bytes.NewReader(content),
+	})
+	if err != nil {
+		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
+	}
+
+	sv.Size = size
+
+	released := w
+	released.Lock = Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	released.UpdatedAt = sv.FinalizedAt
+	released.Revision++
+
+	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, fence); fenceErr != nil {
+		return Workspace{}, s.fenceRefused(ctx, w, sv.Content, fenceErr)
+	}
+
+	return released, nil
+}
+
+// buildFence returns the fence version of w that follows cur, and the plain
+// content it holds. The version has a new lineage and the next serial, keeps
+// the outputs and the kept marks of cur, and names by. Its content key is set,
+// and its MD5 is that of the plain content.
+func (s *Service) buildFence(
+	ctx context.Context, w Workspace, cur StateVersion, by string,
+) (StateVersion, []byte, error) {
+	plain, err := s.openCurrentPlain(ctx, cur)
+	if err != nil {
+		return StateVersion{}, nil, err
 	}
 
 	lineage := ident.NewID(fenceLineagePrefix)
-	serial := cur.Serial + 1
 
-	content, err := fenceContent(plain, lineage, serial)
+	content, err := fenceContent(plain, lineage, cur.Serial+1)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
+		return StateVersion{}, nil, err
 	}
 
-	sum := md5.Sum(content) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 	now := s.clock()
 
 	sv := StateVersion{
@@ -70,8 +106,8 @@ func (s *Service) releaseWithFence(
 		Status:          StatusFinalized,
 		Content:         "",
 		Outputs:         cur.Outputs,
-		MD5:             sum,
-		Serial:          serial,
+		MD5:             md5.Sum(content), //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+		Serial:          cur.Serial + 1,
 		Size:            0,
 		Force:           false,
 		Sealed:          cur.Sealed,
@@ -82,35 +118,12 @@ func (s *Service) releaseWithFence(
 
 	key, err := attemptKey(sv)
 	if err != nil {
-		return Workspace{}, err
+		return StateVersion{}, nil, err
 	}
 
 	sv.Content = key
 
-	size, err := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		seal:      cur.Sealed,
-		key:       key,
-		want:      sum,
-		content:   bytes.NewReader(content),
-	})
-	if err != nil {
-		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
-	}
-
-	sv.Size = size
-
-	released := w
-	released.Lock = Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
-	released.UpdatedAt = now
-	released.Revision++
-
-	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, fence); fenceErr != nil {
-		return Workspace{}, s.fenceRefused(ctx, w, key, fenceErr)
-	}
-
-	return released, nil
+	return sv, content, nil
 }
 
 // openCurrentPlain returns the plain content of the current version. A sealed
@@ -139,7 +152,7 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 	}
 
 	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(plain, &doc); err != nil || doc == nil {
+	if decodeErr := json.Unmarshal(plain, &doc); decodeErr != nil || doc == nil {
 		return nil, fmt.Errorf("%w: state is not a JSON object", ErrInvalidState)
 	}
 

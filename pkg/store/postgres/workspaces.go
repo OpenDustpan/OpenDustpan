@@ -234,11 +234,7 @@ func (s *Store) CreateStateVersion(
 			)
 		}
 
-		if insertErr := insertStateVersion(ctx, q, row); insertErr != nil {
-			return insertErr
-		}
-
-		return nil
+		return insertStateVersion(ctx, q, row)
 	})
 }
 
@@ -563,11 +559,12 @@ func fenceAndUnlockInTx(
 		return insertErr
 	}
 
-	if setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
+	setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
 		CurrentStateVersionID: row.ID,
 		UpdatedAtMs:           row.FinalizedAtMs,
 		ID:                    row.WorkspaceID,
-	}); setErr != nil {
+	})
+	if setErr != nil {
 		return fmt.Errorf("set current state: %w", setErr)
 	}
 

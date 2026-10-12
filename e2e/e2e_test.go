@@ -3852,6 +3852,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
+	tofuForceUnlockFenceScenario(t, env)
+
 	tofuMaintenanceScenario(t, env)
 
 	// A second apply with a changed output makes a second state version, so

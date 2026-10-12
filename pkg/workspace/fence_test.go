@@ -75,21 +75,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 			cur.Sealed, cur.FenceBy, cur.Serial, cur.Lineage)
 	}
 
-	raw, err := f.blobs.Get(ctx, cur.Content)
-	if err != nil {
-		t.Fatalf("blob of the fence: %v", err)
-	}
-
-	stored, readErr := io.ReadAll(raw)
-	closeErr := raw.Close()
-
-	if readErr != nil || closeErr != nil {
-		t.Fatalf("read the sealed blob: %v, close %v", readErr, closeErr)
-	}
-
-	if strings.Contains(string(stored), "null_resource") || strings.Contains(string(stored), cur.Lineage) {
-		t.Fatal("the fence blob holds plain state")
-	}
+	assertBlobHidesState(t, f, cur)
 
 	doc := readFenced(t, f.sealed, cur)
 
@@ -103,6 +89,28 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 
 	if !strings.Contains(string(doc["resources"]), "null_resource") {
 		t.Fatalf("plain fence lost the resources: %s", doc["resources"])
+	}
+}
+
+// assertBlobHidesState checks that the blob of a sealed fence holds neither the
+// resources nor the lineage of the state in plain text.
+func assertBlobHidesState(t *testing.T, f sealFixture, cur workspace.StateVersion) {
+	t.Helper()
+
+	raw, err := f.blobs.Get(t.Context(), cur.Content)
+	if err != nil {
+		t.Fatalf("blob of the fence: %v", err)
+	}
+
+	stored, readErr := io.ReadAll(raw)
+	closeErr := raw.Close()
+
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read the sealed blob: %v, close %v", readErr, closeErr)
+	}
+
+	if strings.Contains(string(stored), "null_resource") || strings.Contains(string(stored), cur.Lineage) {
+		t.Fatal("the fence blob holds plain state")
 	}
 }
 
