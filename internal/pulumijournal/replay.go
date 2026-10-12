@@ -1,0 +1,987 @@
+// Copyright 2016, Pulumi Corporation.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// This file is derived from pkg/backend/journal.go (JournalReplayer.Add,
+// GenerateDeployment and the manifest of the deployment) and from
+// pkg/resource/deploy/manifest.go (NewMagic) of pulumi/pulumi at commit
+// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). OpenDustpan changed
+// the replayer in these ways, each marked in the code:
+//
+//   - The replay runs in two passes over the base (ADR 43, decision 7.3) and
+//     writes its output to a writer. Upstream holds the whole base and the whole
+//     output in memory.
+//   - A reference to an entry that is not applied is an error (ErrMissingReference).
+//     Upstream reads index 0 of a missing reference without an error.
+//   - Entries of kinds 5, 7 and 10 are refused (ErrUnsupportedKind). They replace
+//     the base in the middle of a replay; see issue #430.
+//   - The operations that are pending are written in the order of their operation
+//     IDs. Upstream writes them in the order of a map, which is not stable.
+//   - The manifest time comes from the clock that the caller gives, and the
+//     manifest version is the CLI version of the update, as upstream writes it.
+
+package pulumijournal
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"time"
+)
+
+// Errors that Replay returns.
+var (
+	// ErrUnsupportedKind reports an entry kind that this replayer does not replay yet.
+	// Kinds 5, 7 and 10 wait for issue #430.
+	ErrUnsupportedKind = errors.New("pulumijournal: journal entry kind is not replayed yet")
+	// ErrMissingReference reports an entry that refers to an entry no applied entry created (R16).
+	ErrMissingReference = errors.New("pulumijournal: journal entry refers to an entry that is not applied")
+)
+
+// journalVersion is the entry version that the replayer negotiates with DecodeEntries.
+const journalVersion = 2
+
+// OpenBase opens a new reader of the base deployment document, the JSON object
+// of the deployment. Replay calls it once for each pass, so each call must
+// return a new reader.
+type OpenBase = func(context.Context) (io.ReadCloser, error)
+
+// Replayer replays the journal entries of one update. Its clock and the CLI
+// version of the update come from the constructor.
+type Replayer struct {
+	now        func() time.Time
+	cliVersion string
+}
+
+// NewReplayer returns a replayer. now gives the time of the manifest of each
+// deployment it writes. cliVersion is the CLI version of the update, which the
+// manifest records and whose SHA-256 is the manifest magic (as upstream writes it).
+func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
+	return &Replayer{now: now, cliVersion: cliVersion}
+}
+
+// Replay applies the entries to the base deployment and writes the deployment
+// that results to out. entries is a batch body (DecodeEntries); the entries are
+// applied in the order of the body, as the replayer of the CLI does (ADR 43,
+// decision 6.6).
+//
+// The replay runs in three steps. First it reads the whole entry stream, and
+// applies each entry as it is read. Then the first pass reads the base for the
+// features and the final URNs. Then the second pass reads the base again and
+// writes the output to out, which is never held in full. The resources of the
+// update are held in memory, because they are the replay state. The base
+// resources are held one at a time.
+func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
+	state := newReplayState()
+	if err := DecodeEntries(entries, journalVersion, state.apply); err != nil {
+		return fmt.Errorf("pulumijournal: replay entries: %w", err)
+	}
+	scan, err := state.scanBase(ctx, openBase)
+	if err != nil {
+		return err
+	}
+	return state.write(ctx, openBase, out, scan, r)
+}
+
+// stateRecord is one resource state of the update, kept as raw JSON, with the
+// parts that replay reads.
+type stateRecord struct {
+	raw     jsontext.Value
+	view    resourceView
+	links   linkFields
+	deleted bool // set by a DeleteNew entry
+	pending bool // set by a PendingReplacementNew entry
+}
+
+// newStateRecord reads the parts of a state that replay uses.
+func newStateRecord(raw jsontext.Value) (stateRecord, error) {
+	var rec stateRecord
+	rec.raw = raw
+	if err := json.Unmarshal(raw, &rec.view); err != nil {
+		return stateRecord{}, fmt.Errorf("pulumijournal: read resource view: %w", err)
+	}
+	if err := json.Unmarshal(raw, &rec.links); err != nil {
+		return stateRecord{}, fmt.Errorf("pulumijournal: read resource links: %w", err)
+	}
+	return rec, nil
+}
+
+// operationView is the part of an operation that replay reads.
+type operationView struct {
+	Resource resourceView `json:"resource"`
+}
+
+// replayState is the state of one replay. It is built from the entries in the
+// order of arrival and read by the two passes over the base.
+type replayState struct {
+	toRemove            map[int64]struct{}
+	toDeleteInSnapshot  map[int64]struct{}
+	toReplaceInSnapshot map[int64]stateRecord
+	markAsDeletion      map[int64]struct{}
+	markAsPending       map[int64]struct{}
+	// opToIndex maps the operation ID of a new resource to its index in newRecords.
+	opToIndex map[int64]int64
+	// incomplete holds the operation of each begun operation. A nil operation
+	// is kept too, as upstream does, and is not written.
+	incomplete map[int64]jsontext.Value
+	newRecords []stateRecord
+	hasRefresh bool
+	byteString bool
+	// secrets, snippets and extensions replace the base values when set.
+	secrets     jsontext.Value
+	snippets    []jsontext.Value
+	snippetsSet bool
+	extensions  map[string]jsontext.Value
+}
+
+// newReplayState returns an empty replay state.
+func newReplayState() *replayState {
+	return &replayState{
+		toRemove:            make(map[int64]struct{}),
+		toDeleteInSnapshot:  make(map[int64]struct{}),
+		toReplaceInSnapshot: make(map[int64]stateRecord),
+		markAsDeletion:      make(map[int64]struct{}),
+		markAsPending:       make(map[int64]struct{}),
+		opToIndex:           make(map[int64]int64),
+		incomplete:          make(map[int64]jsontext.Value),
+		newRecords:          nil,
+		hasRefresh:          false,
+		byteString:          false,
+		secrets:             nil,
+		snippets:            nil,
+		snippetsSet:         false,
+		extensions:          make(map[string]jsontext.Value),
+	}
+}
+
+// present reports whether an optional member has a value. A member that is
+// absent or null has none.
+func present(v jsontext.Value) bool {
+	return len(v) > 0 && string(v) != "null"
+}
+
+// entryLabel names an entry in an error by its sequence ID.
+func entryLabel(entry JournalEntry) string {
+	return fmt.Sprintf("with sequence ID %d", entry.SequenceID)
+}
+
+// lookup returns the index of the new resource that an operation created. It
+// returns ErrMissingReference when no applied entry created the operation (R16).
+// Upstream reads index 0 here without an error, so a missing reference gives the
+// wrong resource. This port refuses on purpose.
+func (s *replayState) lookup(op int64, name, field string) (int64, error) {
+	idx, ok := s.opToIndex[op]
+	if !ok {
+		return 0, fmt.Errorf("pulumijournal: entry %s, field %s: %w", name, field, ErrMissingReference)
+	}
+	return idx, nil
+}
+
+// apply applies one entry. It is the callback of DecodeEntries, so it runs for
+// each entry before the later entries of the batch are checked.
+func (s *replayState) apply(entry JournalEntry) error {
+	name := entryLabel(entry)
+	if entry.RequiresByteString {
+		s.byteString = true
+	}
+	switch entry.Kind {
+	case JournalEntryKindBegin:
+		s.incomplete[entry.OperationID] = entry.Operation
+		return nil
+	case JournalEntryKindFailure:
+		delete(s.incomplete, entry.OperationID)
+		return nil
+	case JournalEntryKindSuccess:
+		return s.applySuccess(entry, name)
+	case JournalEntryKindRefreshSuccess:
+		return s.applyRefreshSuccess(entry, name)
+	case JournalEntryKindOutputs:
+		return s.applyOutputs(entry, name)
+	case JournalEntryKindSecretsManager:
+		return s.applySecrets(entry, name)
+	case JournalEntryKindSnippets:
+		s.snippets = entry.Snippets
+		s.snippetsSet = true
+		return nil
+	case JournalEntryKindExtensionParameterize:
+		return s.applyExtension(entry, name)
+	case JournalEntryKindWrite, JournalEntryKindRebuiltBaseState, JournalEntryKindStateMigration:
+		// These kinds replace the base in the middle of a replay (issue #430).
+		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnsupportedKind)
+	default:
+		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnknownKind)
+	}
+}
+
+// applySecrets applies a secrets manager entry (upstream Add, kind 6).
+func (s *replayState) applySecrets(entry JournalEntry, name string) error {
+	if !present(entry.SecretsProvider) {
+		return fmt.Errorf("pulumijournal: entry %s: secrets provider: %w", name, ErrMissingMember)
+	}
+	s.secrets = entry.SecretsProvider
+	return nil
+}
+
+// applySuccess applies a success entry (upstream Add, kind 1).
+func (s *replayState) applySuccess(entry JournalEntry, name string) error {
+	delete(s.incomplete, entry.OperationID)
+	if present(entry.State) {
+		rec, err := newStateRecord(entry.State)
+		if err != nil {
+			return fmt.Errorf("pulumijournal: entry %s: %w", name, err)
+		}
+		s.opToIndex[entry.OperationID] = int64(len(s.newRecords))
+		s.newRecords = append(s.newRecords, rec)
+	}
+	if err := s.applySuccessRemovals(entry, name); err != nil {
+		return err
+	}
+	if err := s.applySuccessFlags(entry, name); err != nil {
+		return err
+	}
+	if entry.IsRefresh {
+		s.hasRefresh = true
+	}
+	return nil
+}
+
+// applySuccessRemovals applies the removals and the markings of a success entry
+// for the base and for the new resources it removes.
+func (s *replayState) applySuccessRemovals(entry JournalEntry, name string) error {
+	if entry.RemoveOld != nil {
+		s.toDeleteInSnapshot[*entry.RemoveOld] = struct{}{}
+	}
+	if entry.RemoveNew != nil {
+		if _, err := s.lookup(*entry.RemoveNew, name, "removeNew"); err != nil {
+			return err
+		}
+		s.toRemove[*entry.RemoveNew] = struct{}{}
+	}
+	if entry.DeleteOld != nil {
+		s.markAsDeletion[*entry.DeleteOld] = struct{}{}
+	}
+	if entry.PendingReplacementOld != nil {
+		s.markAsPending[*entry.PendingReplacementOld] = struct{}{}
+	}
+	return nil
+}
+
+// applySuccessFlags sets the flags of new resources that a success entry names.
+func (s *replayState) applySuccessFlags(entry JournalEntry, name string) error {
+	if entry.DeleteNew != nil {
+		idx, err := s.lookup(*entry.DeleteNew, name, "deleteNew")
+		if err != nil {
+			return err
+		}
+		s.newRecords[idx].deleted = true
+	}
+	if entry.PendingReplacementNew != nil {
+		idx, err := s.lookup(*entry.PendingReplacementNew, name, "pendingReplacementNew")
+		if err != nil {
+			return err
+		}
+		s.newRecords[idx].pending = true
+	}
+	return nil
+}
+
+// applyRefreshSuccess applies a refresh-success entry (upstream Add, kind 3).
+func (s *replayState) applyRefreshSuccess(entry JournalEntry, name string) error {
+	delete(s.incomplete, entry.OperationID)
+	s.hasRefresh = true
+	if entry.RemoveOld != nil {
+		if err := s.applyRefreshBase(entry, name); err != nil {
+			return err
+		}
+	}
+	if entry.RemoveNew != nil {
+		return s.applyRefreshNew(entry, name)
+	}
+	return nil
+}
+
+// applyRefreshBase deletes or replaces the base resource that a refresh names.
+func (s *replayState) applyRefreshBase(entry JournalEntry, name string) error {
+	if !present(entry.State) {
+		s.toDeleteInSnapshot[*entry.RemoveOld] = struct{}{}
+		return nil
+	}
+	rec, err := newStateRecord(entry.State)
+	if err != nil {
+		return fmt.Errorf("pulumijournal: entry %s: %w", name, err)
+	}
+	s.toReplaceInSnapshot[*entry.RemoveOld] = rec
+	return nil
+}
+
+// applyRefreshNew removes or replaces the new resource that a refresh names.
+func (s *replayState) applyRefreshNew(entry JournalEntry, name string) error {
+	idx, err := s.lookup(*entry.RemoveNew, name, "removeNew")
+	if err != nil {
+		return err
+	}
+	if !present(entry.State) {
+		s.toRemove[*entry.RemoveNew] = struct{}{}
+		return nil
+	}
+	rec, rerr := newStateRecord(entry.State)
+	if rerr != nil {
+		return fmt.Errorf("pulumijournal: entry %s: %w", name, rerr)
+	}
+	s.newRecords[idx] = rec
+	return nil
+}
+
+// applyOutputs applies an outputs entry (upstream Add, kind 4).
+func (s *replayState) applyOutputs(entry JournalEntry, name string) error {
+	if present(entry.State) && entry.RemoveOld != nil {
+		rec, err := newStateRecord(entry.State)
+		if err != nil {
+			return fmt.Errorf("pulumijournal: entry %s: %w", name, err)
+		}
+		s.toReplaceInSnapshot[*entry.RemoveOld] = rec
+	}
+	if present(entry.State) && entry.RemoveNew != nil {
+		idx, err := s.lookup(*entry.RemoveNew, name, "removeNew")
+		if err != nil {
+			return err
+		}
+		rec, rerr := newStateRecord(entry.State)
+		if rerr != nil {
+			return fmt.Errorf("pulumijournal: entry %s: %w", name, rerr)
+		}
+		s.newRecords[idx] = rec
+	}
+	return nil
+}
+
+// applyExtension applies an extension parameterize entry (upstream Add, kind 8).
+// The key is the decoded reference, because the base holds the same references.
+func (s *replayState) applyExtension(entry JournalEntry, name string) error {
+	if !present(entry.ExtensionRef) || !present(entry.Extension) {
+		return fmt.Errorf("pulumijournal: entry %s: extension: %w", name, ErrMissingMember)
+	}
+	var ref string
+	if err := json.Unmarshal(entry.ExtensionRef, &ref); err != nil {
+		return fmt.Errorf("pulumijournal: entry %s: extension reference: %w", name, err)
+	}
+	s.extensions[ref] = entry.Extension
+	return nil
+}
+
+// baseScan holds what the first pass over the base finds: the features of the
+// deployment, the URNs of its resources, and the base members that the output
+// keeps (the ones that are not resources).
+type baseScan struct {
+	features map[string]bool
+	// final holds the URNs of the resources of the output, which are the
+	// resources that the output keeps (upstream undangleParentResources reads it).
+	final   map[string]bool
+	members map[string]jsontext.Value
+	pending []jsontext.Value
+}
+
+// addFeatures applies the rules of one resource to the feature set (upstream
+// GenerateDeployment calls ApplyFeatures for each resource it keeps). The
+// byteString feature is set for each resource once an entry reports byte strings.
+func (s *replayState) addFeatures(features map[string]bool, view resourceView) {
+	if s.byteString {
+		markByteString(features)
+	}
+	applyFeatures(view, features)
+}
+
+// removedIndices returns the indices of the new resources that a remove entry deletes.
+func (s *replayState) removedIndices() map[int64]struct{} {
+	removed := make(map[int64]struct{}, len(s.toRemove))
+	for op := range s.toRemove {
+		if idx, ok := s.opToIndex[op]; ok {
+			removed[idx] = struct{}{}
+		}
+	}
+	return removed
+}
+
+// scanBase runs the first pass over the base. It gives the features and the
+// final URNs, and it keeps the base members that the output needs.
+func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseScan, error) {
+	scan := &baseScan{
+		features: make(map[string]bool),
+		final:    make(map[string]bool),
+		members:  make(map[string]jsontext.Value),
+		pending:  nil,
+	}
+	s.scanNewResources(scan)
+	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		return s.scanBaseResource(scan, i, raw)
+	}, func(key string, raw jsontext.Value) error {
+		if key == "pending_operations" {
+			return s.addBasePending(scan, raw)
+		}
+		scan.members[key] = raw
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, op := range s.sortedIncomplete() {
+		var view operationView
+		if err := json.Unmarshal(op, &view); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read pending operation: %w", err)
+		}
+		s.addFeatures(scan.features, view.Resource)
+	}
+	count, cerr := s.snippetCountOut(scan)
+	if cerr != nil {
+		return nil, cerr
+	}
+	if count > 0 {
+		scan.features[snippetsFeature] = true
+	}
+	return scan, nil
+}
+
+// scanNewResources adds the features and the URNs of the new resources that the
+// update keeps.
+func (s *replayState) scanNewResources(scan *baseScan) {
+	removed := s.removedIndices()
+	for i := range s.newRecords {
+		if _, gone := removed[int64(i)]; gone {
+			continue
+		}
+		s.addFeatures(scan.features, s.newRecords[i].view)
+		scan.final[s.newRecords[i].links.URN] = true
+	}
+}
+
+// scanBaseResource adds the features and the URN of one base resource that the
+// update keeps. A resource that a refresh replaces counts as its replacement.
+func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value) error {
+	idx := int64(i)
+	if _, gone := s.toDeleteInSnapshot[idx]; gone {
+		return nil
+	}
+	rec, err := newStateRecord(raw)
+	if err != nil {
+		return err
+	}
+	if repl, ok := s.toReplaceInSnapshot[idx]; ok {
+		rec = repl
+	}
+	s.addFeatures(scan.features, rec.view)
+	scan.final[rec.links.URN] = true
+	return nil
+}
+
+// snippetCountOut returns the number of snippets in the output.
+func (s *replayState) snippetCountOut(scan *baseScan) (int, error) {
+	snippets, err := s.snippetsOut(scan)
+	return len(snippets), err
+}
+
+// addBasePending keeps the pending operations of the base that are being
+// created, and applies their features (upstream GenerateDeployment).
+func (s *replayState) addBasePending(scan *baseScan, raw jsontext.Value) error {
+	var ops []jsontext.Value
+	if err := json.Unmarshal(raw, &ops); err != nil {
+		return fmt.Errorf("pulumijournal: read base pending operations: %w", err)
+	}
+	for _, op := range ops {
+		var view struct {
+			operationView
+
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(op, &view); err != nil {
+			return fmt.Errorf("pulumijournal: read base pending operation: %w", err)
+		}
+		if view.Type != creatingOperation {
+			continue
+		}
+		scan.pending = append(scan.pending, op)
+		s.addFeatures(scan.features, view.Resource)
+	}
+	return nil
+}
+
+// creatingOperation is the type of a pending operation that creates a resource
+// (upstream apitype.OperationTypeCreating).
+const creatingOperation = "creating"
+
+// sortedIncomplete returns the operations that are begun and have an operation
+// body, in the order of their operation IDs. Upstream takes them from a map,
+// whose order is not defined, so the order here is a choice of this port.
+func (s *replayState) sortedIncomplete() []jsontext.Value {
+	ids := make([]int64, 0, len(s.incomplete))
+	for id, op := range s.incomplete {
+		if present(op) {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	ops := make([]jsontext.Value, 0, len(ids))
+	for _, id := range ids {
+		ops = append(ops, s.incomplete[id])
+	}
+	return ops
+}
+
+// walkBase reads the base document once. It calls onResource for each element
+// of the resources array, in order, and onMember for each other member, after
+// its value has been read. Neither the resources nor the other members are
+// held after their callback returns, except the members the caller keeps.
+func walkBase(
+	ctx context.Context,
+	openBase OpenBase,
+	onResource func(int, jsontext.Value) error,
+	onMember func(string, jsontext.Value) error,
+) (err error) {
+	rc, oerr := openBase(ctx)
+	if oerr != nil {
+		return fmt.Errorf("pulumijournal: open base: %w", oerr)
+	}
+	defer func() {
+		if cerr := rc.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("pulumijournal: close base: %w", cerr)
+		}
+	}()
+	dec := jsontext.NewDecoder(rc)
+	if err := readDelim(dec, '{'); err != nil {
+		return err
+	}
+	for dec.PeekKind() != '}' {
+		if err := walkBaseMember(dec, onResource, onMember); err != nil {
+			return err
+		}
+	}
+	return readDelim(dec, '}')
+}
+
+// walkBaseMember reads one member of the base document. The resources array is
+// walked element by element, and any other member is read whole.
+func walkBaseMember(
+	dec *jsontext.Decoder,
+	onResource func(int, jsontext.Value) error,
+	onMember func(string, jsontext.Value) error,
+) error {
+	key, err := dec.ReadToken()
+	if err != nil {
+		return fmt.Errorf("pulumijournal: read base member name: %w", err)
+	}
+	if key.Kind() != '"' {
+		return fmt.Errorf("pulumijournal: base member name is not a string: %w", ErrBatchShape)
+	}
+	// The token is void after the next read, so the name is copied first.
+	name := key.String()
+	if name == "resources" {
+		// Upstream reads a null resources member as no resources.
+		if dec.PeekKind() == 'n' {
+			return readDelim(dec, 'n')
+		}
+		return walkResources(dec, onResource)
+	}
+	var raw jsontext.Value
+	if err := json.UnmarshalDecode(dec, &raw); err != nil {
+		return fmt.Errorf("pulumijournal: read base member: %w", err)
+	}
+	return onMember(name, raw)
+}
+
+// walkResources reads the resources array of the base one element at a time.
+func walkResources(dec *jsontext.Decoder, onResource func(int, jsontext.Value) error) error {
+	if err := readDelim(dec, '['); err != nil {
+		return err
+	}
+	for i := 0; dec.PeekKind() != ']'; i++ {
+		var raw jsontext.Value
+		if err := json.UnmarshalDecode(dec, &raw); err != nil {
+			return fmt.Errorf("pulumijournal: read base resource: %w", err)
+		}
+		if err := onResource(i, raw); err != nil {
+			return err
+		}
+	}
+	return readDelim(dec, ']')
+}
+
+// manifestJSON is the manifest of a deployment as upstream writes it
+// (apitype.ManifestV1, without plugins).
+type manifestJSON struct {
+	Time    time.Time `json:"time"`
+	Magic   string    `json:"magic"`
+	Version string    `json:"version"`
+}
+
+// newManifest returns the manifest of a deployment. The magic is the hex SHA-256
+// of the version, and it is empty when the version is empty (upstream
+// deploy.Manifest.NewMagic).
+func newManifest(now time.Time, version string) manifestJSON {
+	magic := ""
+	if version != "" {
+		sum := sha256.Sum256([]byte(version))
+		magic = hex.EncodeToString(sum[:])
+	}
+	return manifestJSON{Time: now, Magic: magic, Version: version}
+}
+
+// write runs the second pass over the base and writes the deployment to out.
+// The version and the features come from the first pass, so the output can
+// start with them. The resources come first, the new ones and then the base
+// ones in the order of the base, as upstream GenerateDeployment writes them.
+func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Writer, scan *baseScan, r *Replayer) error {
+	enc := jsontext.NewEncoder(out)
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	if err := writeKeyValue(enc, "version", schemaVersion(scan.features)); err != nil {
+		return err
+	}
+	if len(scan.features) > 0 {
+		if err := writeKeyValue(enc, "features", slices.Sorted(maps.Keys(scan.features))); err != nil {
+			return err
+		}
+	}
+	if err := enc.WriteToken(jsontext.String("deployment")); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	if err := s.writeDeployment(ctx, openBase, enc, scan, r); err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	return nil
+}
+
+// writeDeployment writes the deployment object. The caller has written its key.
+func (s *replayState) writeDeployment(
+	ctx context.Context,
+	openBase OpenBase,
+	enc *jsontext.Encoder,
+	scan *baseScan,
+	r *Replayer,
+) error {
+	// Upstream normalizes the URN references here, in GenerateDeployment, with
+	// deployment.NormalizeURNReferences (pkg/backend/journal.go, line 507). This
+	// port does not do that yet: the output keeps the URNs of the entries. See
+	// issue #433, which blocks the corpus test of item 7 (#410).
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	if err := writeKeyValue(enc, "manifest", newManifest(r.now(), r.cliVersion)); err != nil {
+		return err
+	}
+	if secrets := s.secretsOut(scan); present(secrets) {
+		if err := writeKeyRaw(enc, "secrets_providers", secrets); err != nil {
+			return err
+		}
+	}
+	if err := s.writeResources(ctx, openBase, enc, scan); err != nil {
+		return err
+	}
+	if err := s.writeTail(enc, scan); err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	return nil
+}
+
+// writeTail writes the members of the deployment that follow the resources:
+// the pending operations, the metadata, the snippets and the extensions.
+func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
+	if ops := append(s.sortedIncomplete(), scan.pending...); len(ops) > 0 {
+		if err := writeKeyValue(enc, "pending_operations", ops); err != nil {
+			return err
+		}
+	}
+	if raw := scan.members["metadata"]; present(raw) {
+		if err := writeKeyRaw(enc, "metadata", raw); err != nil {
+			return err
+		}
+	}
+	snippets, serr := s.snippetsOut(scan)
+	if serr != nil {
+		return serr
+	}
+	if len(snippets) > 0 {
+		if err := writeKeyValue(enc, "snippets", snippets); err != nil {
+			return err
+		}
+	}
+	ext, eerr := s.extensionsOut(scan)
+	if eerr != nil {
+		return eerr
+	}
+	if len(ext) > 0 {
+		return writeKeyValue(enc, "extensions", ext)
+	}
+	return nil
+}
+
+// writeResources writes the resources array: the new resources the update keeps,
+// then the base resources that it keeps. It applies the dependency and parent
+// rebuild when the update has a refresh.
+func (s *replayState) writeResources(
+	ctx context.Context,
+	openBase OpenBase,
+	enc *jsontext.Encoder,
+	scan *baseScan,
+) error {
+	if err := enc.WriteToken(jsontext.String("resources")); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	if err := enc.WriteToken(jsontext.BeginArray); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	w := &resourceWriter{
+		enc:           enc,
+		hasRefresh:    s.hasRefresh,
+		final:         scan.final,
+		referenceable: make(map[string]bool),
+		available:     make(map[string]string),
+	}
+	removed := s.removedIndices()
+	for i := range s.newRecords {
+		if _, gone := removed[int64(i)]; gone {
+			continue
+		}
+		flags := resourceFlags{deleted: s.newRecords[i].deleted, pending: s.newRecords[i].pending}
+		if err := w.emit(&s.newRecords[i], flags); err != nil {
+			return err
+		}
+	}
+	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		idx := int64(i)
+		if _, gone := s.toDeleteInSnapshot[idx]; gone {
+			return nil
+		}
+		if repl, ok := s.toReplaceInSnapshot[idx]; ok {
+			return w.emit(&repl, resourceFlags{deleted: false, pending: false})
+		}
+		rec, err := newStateRecord(raw)
+		if err != nil {
+			return err
+		}
+		_, deleted := s.markAsDeletion[idx]
+		_, pending := s.markAsPending[idx]
+		return w.emit(&rec, resourceFlags{deleted: deleted, pending: pending})
+	}, func(string, jsontext.Value) error { return nil })
+	if err != nil {
+		return err
+	}
+	if err := enc.WriteToken(jsontext.EndArray); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment: %w", err)
+	}
+	return nil
+}
+
+// secretsOut returns the secrets provider of the output: the entry value when an
+// entry set one, else the base value.
+func (s *replayState) secretsOut(scan *baseScan) jsontext.Value {
+	if present(s.secrets) {
+		return s.secrets
+	}
+	return scan.members["secrets_providers"]
+}
+
+// snippetsOut returns the snippets of the output: the entry list when an entry
+// set one, else the base list.
+func (s *replayState) snippetsOut(scan *baseScan) ([]jsontext.Value, error) {
+	if s.snippetsSet {
+		return s.snippets, nil
+	}
+	var snippets []jsontext.Value
+	if raw := scan.members["snippets"]; present(raw) {
+		if err := json.Unmarshal(raw, &snippets); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read base snippets: %w", err)
+		}
+	}
+	return snippets, nil
+}
+
+// extensionsOut merges the extensions of the entries with those of the base.
+// The base value wins for a reference that both hold (upstream maps.Copy).
+func (s *replayState) extensionsOut(scan *baseScan) (map[string]jsontext.Value, error) {
+	merged := make(map[string]jsontext.Value, len(s.extensions))
+	maps.Copy(merged, s.extensions)
+	if raw := scan.members["extensions"]; present(raw) {
+		var base map[string]jsontext.Value
+		if err := json.Unmarshal(raw, &base); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read base extensions: %w", err)
+		}
+		maps.Copy(merged, base)
+	}
+	return merged, nil
+}
+
+// resourceWriter writes the resources of the output. With a refresh, it rebuilds
+// the links of each resource in the order of the output, as upstream
+// rebuildDependencies does.
+type resourceWriter struct {
+	enc        *jsontext.Encoder
+	hasRefresh bool
+	// final holds the URNs of all resources of the output.
+	final map[string]bool
+	// referenceable holds the URNs of the resources written before the current one.
+	referenceable map[string]bool
+	// available maps the URN of each written resource to its parent before the rebuild.
+	available map[string]string
+}
+
+// resourceFlags are the flags that an entry or a base marking sets on a resource.
+type resourceFlags struct {
+	deleted bool
+	pending bool
+}
+
+// emit writes one resource. Its state stays compact and unchanged, unless a flag
+// or a link changes; then only the members that change are rewritten.
+func (w *resourceWriter) emit(rec *stateRecord, flags resourceFlags) error {
+	patch := make(map[string]any)
+	if flags.deleted {
+		patch["delete"] = true
+	}
+	if flags.pending {
+		patch["pendingReplacement"] = true
+	}
+	if w.hasRefresh {
+		links := rec.links
+		rebuildLinks(&links, w.referenceable)
+		w.referenceable[links.URN] = true
+		undangleParent(&links, w.final, w.available)
+		addLinkPatch(patch, rec.links, links)
+	}
+	raw := rec.raw
+	if len(patch) > 0 {
+		var err error
+		raw, err = patchObject(raw, patch)
+		if err != nil {
+			return err
+		}
+	}
+	if err := w.enc.WriteValue(raw); err != nil {
+		return fmt.Errorf("pulumijournal: write resource: %w", err)
+	}
+	return nil
+}
+
+// addLinkPatch adds the members that a rebuild changed to the patch. A member
+// with no value is removed, as the omitempty tags of upstream do.
+func addLinkPatch(patch map[string]any, old, next linkFields) {
+	if !slices.Equal(old.Dependencies, next.Dependencies) {
+		patch["dependencies"] = nilIfEmpty(next.Dependencies)
+	}
+	if !maps.EqualFunc(old.PropertyDependencies, next.PropertyDependencies, slices.Equal) {
+		patch["propertyDependencies"] = nilIfEmptyMap(next.PropertyDependencies)
+	}
+	if !slices.Equal(old.ReplaceWith, next.ReplaceWith) {
+		patch["replaceWith"] = nilIfEmpty(next.ReplaceWith)
+	}
+	if old.DeletedWith != next.DeletedWith {
+		patch["deletedWith"] = nilIfEmptyString(next.DeletedWith)
+	}
+	if old.Parent != next.Parent {
+		patch["parent"] = nilIfEmptyString(next.Parent)
+	}
+}
+
+// nilIfEmpty returns nil for an empty slice, so that a patch removes the member.
+func nilIfEmpty(v []string) any {
+	if len(v) == 0 {
+		return nil
+	}
+	return v
+}
+
+// nilIfEmptyMap returns nil for an empty map, so that a patch removes the member.
+func nilIfEmptyMap(v map[string][]string) any {
+	if len(v) == 0 {
+		return nil
+	}
+	return v
+}
+
+// nilIfEmptyString returns nil for an empty string, so that a patch removes the member.
+func nilIfEmptyString(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// patchObject returns the JSON object raw with the members of patch set. A nil
+// value removes the member. The other members keep their raw values.
+func patchObject(raw jsontext.Value, patch map[string]any) (jsontext.Value, error) {
+	var members map[string]jsontext.Value
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return nil, fmt.Errorf("pulumijournal: read resource for patch: %w", err)
+	}
+	if members == nil {
+		members = make(map[string]jsontext.Value)
+	}
+	for key, value := range patch {
+		if value == nil {
+			delete(members, key)
+			continue
+		}
+		encoded, err := marshalDeterministic(value)
+		if err != nil {
+			return nil, fmt.Errorf("pulumijournal: encode resource member: %w", err)
+		}
+		members[key] = encoded
+	}
+	out, err := marshalDeterministic(members)
+	if err != nil {
+		return nil, fmt.Errorf("pulumijournal: encode resource for patch: %w", err)
+	}
+	return out, nil
+}
+
+// writeKeyValue writes an object member whose value is encoded with json.
+func writeKeyValue(enc *jsontext.Encoder, key string, value any) error {
+	encoded, err := marshalDeterministic(value)
+	if err != nil {
+		return fmt.Errorf("pulumijournal: encode deployment member %s: %w", key, err)
+	}
+	return writeKeyRaw(enc, key, encoded)
+}
+
+// marshalDeterministic encodes a value with its map keys in sorted order, so that
+// the same replay gives the same bytes (json.Deterministic).
+func marshalDeterministic(value any) (jsontext.Value, error) {
+	out, err := json.Marshal(value, json.Deterministic(true))
+	if err != nil {
+		return nil, fmt.Errorf("pulumijournal: encode value: %w", err)
+	}
+	return out, nil
+}
+
+// writeKeyRaw writes an object member whose value is already JSON.
+func writeKeyRaw(enc *jsontext.Encoder, key string, raw jsontext.Value) error {
+	if err := enc.WriteToken(jsontext.String(key)); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment member %s: %w", key, err)
+	}
+	if err := enc.WriteValue(raw); err != nil {
+		return fmt.Errorf("pulumijournal: write deployment member %s: %w", key, err)
+	}
+	return nil
+}
