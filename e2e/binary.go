@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -199,28 +201,88 @@ func writeBackendCert(tb testing.TB, dir string) backendCert {
 	return backendCert{cert: certFile, key: keyFile}
 }
 
-// freeBackendPort returns an unused loopback port for the backend.
-func freeBackendPort(ctx context.Context, tb testing.TB) string {
+// lockedBuffer is a goroutine-safe sink for the binary backend output:
+// the child process writes from exec copy goroutines while the test polls
+// for the listening line.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write log buffer: %w", err)
+	}
+
+	return n, nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+// listeningPortFromLogs answers the loopback port in the listening log
+// line the server writes after it binds on 127.0.0.1:0.
+func listeningPortFromLogs(logs string) (string, bool) {
+	const prefix = `"addr":"`
+
+	if _, after, found := strings.Cut(logs, prefix); found {
+		if addr, _, found := strings.Cut(after, `"`); found {
+			if _, port, err := net.SplitHostPort(addr); err == nil {
+				return port, true
+			}
+		}
+	}
+
+	const textPrefix = "addr="
+
+	_, after, found := strings.Cut(logs, textPrefix)
+	if !found {
+		return "", false
+	}
+
+	rest := strings.TrimSpace(after)
+	addr, _, _ := strings.Cut(rest, " ")
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", false
+	}
+
+	return port, true
+}
+
+// boundPortFromLogs waits until logs hold the listening line and answers
+// the bound port. It fails the test when the server never logs it.
+func boundPortFromLogs(ctx context.Context, tb testing.TB, logs *lockedBuffer) string {
 	tb.Helper()
 
-	//nolint:exhaustruct_v5 // The probe listens with defaults; only the port matters.
-	lc := &net.ListenConfig{}
+	deadline := time.Now().Add(binaryStartTimeout)
 
-	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		tb.Fatalf("listen: %v", err)
+	for time.Now().Before(deadline) {
+		if port, ok := listeningPortFromLogs(logs.String()); ok {
+			return port
+		}
+
+		timer := time.NewTimer(binaryStartPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			tb.Fatalf("context done while waiting for the server port\n%s", logs.String())
+		case <-timer.C:
+		}
 	}
 
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if err != nil {
-		tb.Fatalf("split address: %v", err)
-	}
+	tb.Fatalf("server binary did not log its bound port in time\n%s", logs.String())
 
-	if err := l.Close(); err != nil {
-		tb.Fatalf("close listener: %v", err)
-	}
-
-	return port
+	return ""
 }
 
 // backendEnv returns the backend process environment: the test tokens and
@@ -300,7 +362,7 @@ type BinaryResult struct {
 type binaryHandle struct {
 	cmd  *exec.Cmd
 	port string
-	logs *bytes.Buffer
+	logs *lockedBuffer
 	url  string
 }
 
@@ -338,8 +400,12 @@ func serveArgs(cfg backendConfig, port string) []string {
 }
 
 // launchBinaryBackend starts `opendustpan serve` for cfg on port and waits
-// until /health/live answers 204. It registers a cleanup that kills a child that
-// still runs, and logs the process output.
+// until /health/live answers 204. A port of 0 means serve binds an
+// ephemeral loopback port and the handle reports the bound port from the
+// listening log, so no test closes a listener and binds its port again. A
+// restart passes the bound port again, so the proxy target stays valid. It
+// registers a cleanup that kills a child that still runs, and logs the
+// process output.
 func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, port string) *binaryHandle {
 	tb.Helper()
 
@@ -347,7 +413,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = backendEnv(cfg.tokens)
 
-	var out bytes.Buffer
+	var out lockedBuffer
 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -362,6 +428,10 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 		tb.Logf("server binary output:\n%s", out.String())
 	})
 
+	if port == "0" {
+		port = boundPortFromLogs(ctx, tb, &out)
+	}
+
 	backendURL := "https://127.0.0.1:" + port
 
 	waitForBackend(ctx, tb, backendURL, &out)
@@ -369,14 +439,13 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	return &binaryHandle{cmd: cmd, port: port, logs: &out, url: backendURL}
 }
 
-// startBinaryBackend picks a loopback port, starts `opendustpan serve` with
-// TLS on it and returns the handle and its base URL. It fails the test when
-// /health/live never answers 204.
+// startBinaryBackend starts `opendustpan serve` with TLS on an ephemeral
+// loopback port and returns the handle and its base URL. It fails the test
+// when /health/live never answers 204.
 func startBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig) (*binaryHandle, string) {
 	tb.Helper()
 
-	port := freeBackendPort(ctx, tb)
-	handle := launchBinaryBackend(ctx, tb, cfg, port)
+	handle := launchBinaryBackend(ctx, tb, cfg, "0")
 
 	return handle, handle.url
 }
@@ -460,7 +529,6 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 	dir := tb.TempDir()
 	cert := writeBackendCert(tb, dir)
 	blobDir := filepath.Join(dir, "blobs")
-	port := freeBackendPort(ctx, tb)
 
 	cfg := backendConfig{
 		bin:          e.binPath,
@@ -475,7 +543,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		deltaCutoff:  0,
 	}
 
-	handle := launchBinaryBackend(ctx, tb, cfg, port)
+	handle := launchBinaryBackend(ctx, tb, cfg, "0")
 
 	runBinary(ctx, tb, cfg.bin, []string{
 		namespaceSubcommand, createSubcommand,
@@ -653,7 +721,7 @@ func (e *Env) StartServer(ctx context.Context, tb testing.TB) {
 }
 
 // waitForBackend waits until the backend answers /health/live with 204.
-func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs *bytes.Buffer) {
+func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs *lockedBuffer) {
 	tb.Helper()
 
 	//nolint:gosec // The wait dials the test backend on loopback; there is no other party to impersonate.

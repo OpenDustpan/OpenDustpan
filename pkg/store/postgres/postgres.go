@@ -76,8 +76,16 @@ func Open(ctx context.Context, url string) (*Store, error) {
 }
 
 // Close drops a live staging schema (best effort) and closes every connection
-// in the pool, so no scratch schema survives the handle.
+// in the pool, so no scratch schema survives the handle. A caller that holds
+// a context uses CloseContext instead.
 func (s *Store) Close() {
+	s.CloseContext(context.Background())
+}
+
+// CloseContext is Close with the caller's context. The staging cleanup runs
+// detached from ctx (context.WithoutCancel), so a canceled context still drops
+// the scratch schema.
+func (s *Store) CloseContext(ctx context.Context) {
 	s.stagingMu.Lock()
 	staging := s.stagingSchema
 	s.stagingSchema = ""
@@ -85,8 +93,7 @@ func (s *Store) Close() {
 
 	if staging != "" {
 		// Best-effort cleanup of the scratch schema after Close.
-		cleanup := context.WithoutCancel(context.Background())
-		_ = s.dropStagingSchema(cleanup, staging) //nolint:errcheck // Best-effort cleanup.
+		_ = s.dropStagingSchema(context.WithoutCancel(ctx), staging) //nolint:errcheck // Best-effort cleanup.
 	}
 
 	s.pool.Close()

@@ -157,9 +157,10 @@ The server keeps no copy of the key-encryption key.
 
 The server sends no telemetry. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
-`opendustpan namespace create` and `opendustpan backup` call only the server
-that `--server` names. `opendustpan health` calls only the listen address of
-the local server.
+`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
+check` and `opendustpan upgrade check` call only the server that `--server`
+names. `opendustpan health` calls only the listen address of the local
+server.
 
 ### What to back up
 
@@ -198,9 +199,10 @@ pulumi stack export --version 1 --file dev-v1.json
 tofu state pull > web.tfstate
 ```
 
-`pulumi stack import` and `tofu state push` can then load the file into another
-backend. A tested guide for each exit, with the full history of each unit,
-does not exist yet.
+The [migrate-out guide](docs/guides/migrate-out.md) moves each stack and
+each workspace to another backend, step by step, and marks the steps that
+the end-to-end suite does not test yet. It moves the latest state of each
+unit. A way out with the full history of each unit does not exist yet.
 
 ## Governance
 
@@ -215,6 +217,7 @@ How-to guides:
 
 - [Import existing state](docs/guides/import.md) from a Pulumi service
   backend, a file backend, or an OpenTofu backend.
+- [Migrate out](docs/guides/migrate-out.md) to another backend.
 - [Back up, restore and upgrade](docs/guides/backup-restore-upgrade.md) the
   installation.
 - [Use S3-compatible object storage](docs/guides/s3-blobs.md) for state

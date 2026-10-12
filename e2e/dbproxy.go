@@ -102,7 +102,7 @@ func openProxiedPostgresStore(
 	}
 
 	tb.Cleanup(func() {
-		st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
+		st.CloseContext(ctx)
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
