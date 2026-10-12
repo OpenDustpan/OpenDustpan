@@ -375,10 +375,9 @@ func TestWriteCSVWritesHeaderAndEmptyMissingValues(t *testing.T) {
 	}
 }
 
-func TestWriteReportWritesCSVAndSummary(t *testing.T) {
-	t.Parallel()
-
-	samples := []soak.Sample{
+// flatSamples is a six-sample run that passes every growth check.
+func flatSamples() []soak.Sample {
+	return []soak.Sample{
 		soakSample(0, 20, 8, 0),
 		soakSample(10, 20, 8, 0),
 		soakSample(20, 20, 8, 0),
@@ -386,6 +385,12 @@ func TestWriteReportWritesCSVAndSummary(t *testing.T) {
 		soakSample(40, 20, 8, 0),
 		soakSample(50, 20, 8, 0),
 	}
+}
+
+func TestWriteReportWritesCSVAndSummary(t *testing.T) {
+	t.Parallel()
+
+	samples := flatSamples()
 
 	assessed, err := soak.Assess("sqlite", samples)
 	if err != nil {
@@ -396,10 +401,11 @@ func TestWriteReportWritesCSVAndSummary(t *testing.T) {
 	csvPath := filepath.Join(dir, "samples.csv")
 	summaryPath := filepath.Join(dir, "verdict.md")
 
-	if err := soak.WriteReport(csvPath, summaryPath, samples, assessed); err != nil {
+	if err = soak.WriteReport(csvPath, summaryPath, samples, assessed); err != nil {
 		t.Fatalf("write report: %v", err)
 	}
 
+	//nolint:gosec // The path is inside t.TempDir, never input from outside the test.
 	csvData, err := os.ReadFile(csvPath)
 	if err != nil {
 		t.Fatalf("read csv: %v", err)
@@ -409,6 +415,7 @@ func TestWriteReportWritesCSVAndSummary(t *testing.T) {
 		t.Fatalf("csv does not start with the header: %q", csvData)
 	}
 
+	//nolint:gosec // The path is inside t.TempDir, never input from outside the test.
 	summary, err := os.ReadFile(summaryPath)
 	if err != nil {
 		t.Fatalf("read summary: %v", err)
@@ -424,7 +431,12 @@ func TestWriteReportFailsWhenDirectoryIsMissing(t *testing.T) {
 
 	missing := filepath.Join(t.TempDir(), "no-such-dir", "samples.csv")
 
-	err := soak.WriteReport(missing, missing, nil, soak.Assessment{})
+	assessed, err := soak.Assess("sqlite", flatSamples())
+	if err != nil {
+		t.Fatalf("assess: %v", err)
+	}
+
+	err = soak.WriteReport(missing, missing, flatSamples(), assessed)
 	if err == nil {
 		t.Fatal("write report into a missing directory returned no error")
 	}
