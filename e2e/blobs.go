@@ -304,20 +304,6 @@ func (e *Env) S3Args() []string {
 	return []string{"--s3-endpoint", e.s3Endpoint}
 }
 
-// RestoreBlobArgs returns the blob flags `restore` needs to load into the
-// destination of the environment: --blob-store with --s3-endpoint on the S3
-// store, or --blob-dir on the directory store. It needs E2E_SERVER=binary,
-// as the blob directory and the blob store value live in the backend config.
-func (e *Env) RestoreBlobArgs(tb testing.TB) []string {
-	tb.Helper()
-
-	if e.blobName != blobS3 {
-		return []string{"--blob-dir", e.BlobDir(tb)}
-	}
-
-	return []string{"--blob-store", e.backendCfg.blobStore, "--s3-endpoint", e.s3Endpoint}
-}
-
 // blobDirGone reports whether the directory blob store of the environment has
 // no blob directory. A missing directory counts as empty. It always reports
 // false on the S3 store.

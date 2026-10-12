@@ -67,12 +67,13 @@ next to the data does not protect a backup of that data.
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
-check` and `opendustpan upgrade check` call a running server.
-They read the server URL from `--server` or `DUSTPAN_SERVER`, and the token
-from `DUSTPAN_ADMIN_TOKEN` or `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a
-PEM bundle of CA certificates to the system store.
+check`, `opendustpan upgrade check` and `opendustpan restore` call a running
+server. They read the server URL from `--server` or
+`DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
+`DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
+to the system store.
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
-`opendustpan restore` is an offline command. The
-[backup guide](../guides/backup-restore-upgrade.md) shows its flags.
+The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
+the backup commands.

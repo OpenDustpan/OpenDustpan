@@ -85,7 +85,7 @@ func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile)
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan upgrade check again")
 	if err != nil {
 		return err
 	}

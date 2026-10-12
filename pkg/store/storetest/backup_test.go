@@ -66,6 +66,7 @@ type fakeData struct {
 	states       map[string]workspace.StateVersion
 	current      map[string]string
 	backups      map[string]backup.Record
+	restores     map[string]backup.RestoreRecord
 	// installation is the installation state. It starts normal, as the
 	// seeded row of the SQL adapters does.
 	installation maintenance.State
@@ -87,6 +88,7 @@ func newFakeData() *fakeData {
 		states:       map[string]workspace.StateVersion{},
 		current:      map[string]string{},
 		backups:      map[string]backup.Record{},
+		restores:     map[string]backup.RestoreRecord{},
 		installation: maintenance.StateNormal,
 	}
 }
@@ -124,12 +126,15 @@ type fakeBackupStore struct {
 
 var (
 	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
+	_ storetest.RestoreStore   = (*fakeBackupStore)(nil)
 	_ storetest.Reopener       = (*fakeBackupStore)(nil)
 	_ storetest.ExportTamperer = (*fakeBackupStore)(nil)
 	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
 	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
-	_ backup.RestoreStore      = (*fakeBackupStore)(nil)
 	_ backup.Stager            = (*fakeBackupStore)(nil)
+	_ backup.Applier           = (*fakeBackupStore)(nil)
+	_ backup.Fencer            = (*fakeBackupStore)(nil)
+	_ backup.RestoreRegistry   = (*fakeBackupStore)(nil)
 )
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
@@ -1704,6 +1709,214 @@ func (s *fakeBackupStore) FailRunningBackups(_ context.Context, endedAt time.Tim
 	return nil
 }
 
+// CreateRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) CreateRestore(_ context.Context, r backup.RestoreRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if _, ok := s.data.restores[r.ID.String()]; ok {
+		return backup.ErrRestoreExists
+	}
+
+	s.data.restores[r.ID.String()] = r
+
+	return nil
+}
+
+// FinishRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) FinishRestore(
+	_ context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
+) (backup.RestoreRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return backup.RestoreRecord{}, errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	if state != backup.RestoreSucceeded && state != backup.RestoreFailed {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	if r.State != backup.RestoreChecking && r.State != backup.RestoreApplying {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	r.State = state
+	r.Error = errText
+	r.EndedAt = endedAt
+	s.data.restores[id.String()] = r
+
+	return r, nil
+}
+
+// GetRestore implements backup.RestoreRegistry.
+func (s *fakeBackupStore) GetRestore(_ context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return backup.RestoreRecord{}, errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	return r, nil
+}
+
+// ListRestores implements backup.RestoreRegistry, newest first.
+func (s *fakeBackupStore) ListRestores(_ context.Context) ([]backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	out := make([]backup.RestoreRecord, 0, len(s.data.restores))
+	for i := range s.data.restores {
+		out = append(out, s.data.restores[i])
+	}
+
+	slices.SortFunc(out, func(a, b backup.RestoreRecord) int {
+		if a.StartedAt.Equal(b.StartedAt) {
+			switch {
+			case a.ID < b.ID:
+				return -1
+			case a.ID > b.ID:
+				return 1
+			default:
+				return 0
+			}
+		}
+
+		if a.StartedAt.After(b.StartedAt) {
+			return -1
+		}
+
+		return 1
+	})
+
+	return out, nil
+}
+
+// FailRunningRestores implements backup.RestoreRegistry.
+func (s *fakeBackupStore) FailRunningRestores(_ context.Context, endedAt time.Time, errText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	for _, id := range slices.Sorted(maps.Keys(s.data.restores)) {
+		r := s.data.restores[id]
+		if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+			r.State = backup.RestoreFailed
+			r.Error = errText
+			r.EndedAt = endedAt
+			s.data.restores[id] = r
+		}
+	}
+
+	return nil
+}
+
+// MarkRestoreApplying implements backup.RestoreRegistry.
+func (s *fakeBackupStore) MarkRestoreApplying(
+	_ context.Context, id backup.RestoreID, preBackupID backup.ID,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	r, ok := s.data.restores[id.String()]
+	if !ok {
+		return backup.ErrRestoreNotFound
+	}
+
+	if r.State != backup.RestoreChecking {
+		return backup.ErrRestoreNotRunning
+	}
+
+	r.State = backup.RestoreApplying
+	r.PreBackupID = preBackupID
+	s.data.restores[id.String()] = r
+
+	return nil
+}
+
+// ApplyStaging implements backup.Applier: it swaps the staged copy into the
+// live tables in one locked step, fences every namespace by one version, and
+// drops the staging area. With no staged copy it reports ErrCorrupt and
+// changes nothing.
+func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if s.staged == nil {
+		return backup.ErrCorrupt
+	}
+
+	s.data = s.staged
+	s.staged = nil
+
+	if s.stageCurrent != 0 {
+		delete(s.stageLive, s.stageCurrent)
+		s.stageCurrent = 0
+	}
+
+	for name, ns := range s.data.namespaces {
+		ns.FailoverVersion++
+		s.data.namespaces[name] = ns
+	}
+
+	s.rebuildIndexes()
+
+	return nil
+}
+
+// BumpFailoverVersions implements backup.Fencer: it increments the failover
+// version of every namespace by one, so writes with an older fence fail
+// fenced.
+func (s *fakeBackupStore) BumpFailoverVersions(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return 0, errFakeClosed
+	}
+
+	var n int64
+
+	for name, ns := range s.data.namespaces {
+		ns.FailoverVersion++
+		s.data.namespaces[name] = ns
+		n++
+	}
+
+	return n, nil
+}
+
 // SchemaTables implements backup.Inspector. It reports the tables the fake
 // implements, derived from the same table set the exporter covers, so both
 // drift directions can fail: extraSchemaTable adds a table the backup list
@@ -1883,6 +2096,7 @@ func rowCountsOf(data *fakeData) map[string]int64 {
 		"workspaces":     int64(len(data.workspaces)),
 		"state_versions": int64(len(data.states)),
 		"backups":        int64(len(data.backups)),
+		"restores":       int64(len(data.restores)),
 		// The installation table holds its one seeded row in every store,
 		// as in the SQL adapters.
 		"installation": 1,
@@ -2583,6 +2797,7 @@ func (s *fakeBackupStore) snapshotTables() map[string]any {
 		"workspaces":     fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
 		"state_versions": s.data.states,
 		"backups":        s.data.backups,
+		"restores":       s.data.restores,
 		"installation":   s.data.installation,
 	}
 }
@@ -2860,6 +3075,7 @@ func backupDecodeTargets(loaded *fakeData) map[string]any {
 		"inventory":      &loaded.entries,
 		"state_versions": &loaded.states,
 		"backups":        &loaded.backups,
+		"restores":       &loaded.restores,
 		"installation":   &loaded.installation,
 	}
 }
@@ -2899,6 +3115,18 @@ func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.RunBackup(t, fakeFactory)
+}
+
+// TestRestoreConformance runs the restore suite against the fake. The SQL
+// adapters run the same suite once they implement the ports.
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		return newFakeBackupStore()
+	})
 }
 
 // fakeNamespace creates a namespace homed in region.
