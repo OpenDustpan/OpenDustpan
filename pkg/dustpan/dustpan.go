@@ -467,26 +467,10 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
-	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
-	if !ok {
-		return adapters{}, errMaintenanceNeedsStore
-	}
-
-	maint, err := maintenance.NewService(maintenance.Config{
-		Store:      maintenanceStore,
-		Namespaces: svc.namespaces,
-		Stacks:     svc.stacks,
-		Updates:    svc.updates,
-		Workspaces: svc.workspaces,
-	})
+	maint, watcher, err := newMaintenance(svc, cfg)
 	if err != nil {
-		return adapters{}, fmt.Errorf("maintenance service: %w", err)
+		return adapters{}, err
 	}
-
-	// The watcher measures its cache limit in wall-clock time, not the
-	// injected domain clock: tests freeze the domain clock, and the limit
-	// must still expire.
-	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
 
 	api, err := newPulumiHandler(svc, cfg, base, observed)
 	if err != nil {
@@ -536,6 +520,33 @@ func newAdapters(
 		maintenance: watcher,
 		restores:    restores,
 	}, nil
+}
+
+// newMaintenance builds the maintenance service and the watcher that reads
+// the maintenance state for every request.
+func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintenance.Watcher, error) {
+	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
+	if !ok {
+		return nil, nil, errMaintenanceNeedsStore
+	}
+
+	maint, err := maintenance.NewService(maintenance.Config{
+		Store:      maintenanceStore,
+		Namespaces: svc.namespaces,
+		Stacks:     svc.stacks,
+		Updates:    svc.updates,
+		Workspaces: svc.workspaces,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("maintenance service: %w", err)
+	}
+
+	// The watcher measures its cache limit in wall-clock time, not the
+	// injected domain clock: tests freeze the domain clock, and the limit
+	// must still expire.
+	watcher := maintenance.NewWatcher(maintenanceStore, nil, 0)
+
+	return maint, watcher, nil
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
