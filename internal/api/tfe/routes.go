@@ -205,7 +205,7 @@ func (h *Handler) lockRoutes() []Route {
 // and 9). Every route needs unit:read. The download and the single output
 // route also need unit:read-secrets, as they answer plain secret values.
 func (h *Handler) stateRoutes() []Route {
-	return []Route{
+	routes := []Route{
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-versions",
@@ -298,6 +298,8 @@ func (h *Handler) stateRoutes() []Route {
 			Serve:   h.getStateResource,
 		},
 	}
+
+	return slices.Concat(routes, h.stateDiffRoutes())
 }
 
 // stateWriteRoutes returns the state write routes: create a state version,
