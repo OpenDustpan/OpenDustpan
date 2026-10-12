@@ -273,6 +273,8 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Error("delta traffic recorded with the capability off")
 	}
 
+	checkDeltaMaskedState(t, onEnv)
+
 	writeReport(t, e2e.NewRun(onEnv))
 	writeReport(t, e2e.NewRun(offEnv))
 }
@@ -362,6 +364,337 @@ func recordedPatch(env *e2e.Env, suffix string) bool {
 	}
 
 	return false
+}
+
+// checkDeltaMaskedState proves the masked state read after delta saves on
+// the delta-enabled server: two ups of a program with a secret output and
+// a stack reference, then the resource list, one resource detail and the
+// outputs on latest and on version 1. It runs on the delta-on server only,
+// so the default scenario does not change.
+func checkDeltaMaskedState(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	org := e2e.Namespace
+	qualified := fmt.Sprintf("%s/%s/masked-delta", org, e2e.Project)
+	base := fmt.Sprintf("/api/stacks/%s/%s/masked-delta", org, e2e.Project)
+
+	env.WritePulumiProject(t, maskedStateProgram(org, ""))
+	env.Step(ctx, t, step("stack init masked delta", nil, "stack", "init", qualified, "--no-select"))
+	env.Step(
+		ctx,
+		t,
+		step(
+			"config set secret for masked delta",
+			nil,
+			"config", "set", "--secret", "--stack", qualified, "apiKey", maskedStateSecret,
+		),
+	)
+	env.Step(ctx, t, step("up masked delta 1", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	env.WritePulumiProject(t, maskedStateProgram(org, "hello-again"))
+	env.Step(ctx, t, step("up masked delta 2", nil, "up", "--yes", "--non-interactive", "--stack", qualified))
+	exported := env.Step(
+		ctx,
+		t,
+		step("stack export masked delta", nil, "stack", "export", "--stack", qualified),
+	).Stdout
+	firstExported := env.Step(
+		ctx,
+		t,
+		step("stack export masked delta version 1", nil, "stack", "export", "--version", "1", "--stack", qualified),
+	).Stdout
+	env.Step(ctx, t, step(
+		"masked delta state read",
+		checkDeltaMaskedBodies(ctx, env, base, exported, firstExported),
+		"stack", "--show-name", "--stack", qualified,
+	))
+	env.Step(ctx, t, step("stack rm masked delta", nil, "stack", "rm", "--yes", "--force", "--stack", qualified))
+}
+
+// checkDeltaMaskedBodies proves the masked bodies on the delta stack: the
+// recorder shows checkpointdelta saves for the masked ups, the latest list
+// holds the same URNs as the export with no envelope fields, one resource
+// detail answers masked inputs and outputs, the outputs answer the secret
+// masked, and the version 1 reads answer the unwrapped deployment too.
+func checkDeltaMaskedBodies(
+	ctx context.Context, env *e2e.Env, base, exported, firstExported string,
+) func(e2e.Result) error {
+	return func(e2e.Result) error {
+		if !recordedDeltaPatchInSteps(env, []string{"up masked delta 1", "up masked delta 2"}) {
+			return fmt.Errorf("%w: no PATCH checkpointdelta answered 200 during the masked delta ups", errUnexpected)
+		}
+
+		stackURN, latestErr := checkDeltaMaskedLatest(ctx, env, base, exported)
+		if latestErr != nil {
+			return latestErr
+		}
+
+		outputs, outputsErr := maskedStateGet(ctx, env, base+"/state/latest/outputs")
+		if outputsErr != nil {
+			return outputsErr
+		}
+
+		if outputsErr := checkDeltaMaskedOutputs(outputs); outputsErr != nil {
+			return outputsErr
+		}
+
+		return checkDeltaMaskedVersionOne(ctx, env, base, firstExported, stackURN)
+	}
+}
+
+// checkDeltaMaskedLatest proves the latest reads: the list holds the same
+// URNs as the export with no envelope fields, and one resource detail
+// answers masked inputs and outputs. It returns the stack URN for the
+// version 1 reads.
+func checkDeltaMaskedLatest(ctx context.Context, env *e2e.Env, base, exported string) (string, error) {
+	latest, latestErr := maskedStateGet(ctx, env, base+"/state/latest/resources")
+	if latestErr != nil {
+		return "", latestErr
+	}
+
+	if listErr := checkDeltaListMatchesExport(latest, exported); listErr != nil {
+		return "", listErr
+	}
+
+	stackURN, urnErr := deltaMaskedStackURN(latest)
+	if urnErr != nil {
+		return "", urnErr
+	}
+
+	detail, detailErr := maskedStateGet(ctx, env, base+"/state/latest/resources/"+url.PathEscape(stackURN))
+	if detailErr != nil {
+		return "", detailErr
+	}
+
+	if detailErr := checkDeltaMaskedDetail(detail); detailErr != nil {
+		return "", detailErr
+	}
+
+	return stackURN, nil
+}
+
+// recordedDeltaPatchInSteps reports whether any of the named steps recorded
+// a PATCH checkpointdelta with a 200 answer.
+func recordedDeltaPatchInSteps(env *e2e.Env, steps []string) bool {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		if entries[i].Method == http.MethodPatch &&
+			strings.HasSuffix(entries[i].Path, "/checkpointdelta") &&
+			entries[i].Status == http.StatusOK &&
+			slices.Contains(steps, entries[i].Step) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkDeltaListMatchesExport proves the resource list holds the same URNs
+// as the stack export and neither holds envelope fields.
+func checkDeltaListMatchesExport(listBody, exported string) error {
+	if err := checkDeltaNoEnvelope(listBody); err != nil {
+		return err
+	}
+
+	listURNs, listErr := maskedListURNs(listBody)
+	if listErr != nil {
+		return listErr
+	}
+
+	if len(listURNs) < 2 {
+		return fmt.Errorf(
+			"%w: latest list holds %d resources, want at least the stack and a reference",
+			errUnexpected,
+			len(listURNs),
+		)
+	}
+
+	wantURNs, exportErr := exportURNs(exported)
+	if exportErr != nil {
+		return exportErr
+	}
+
+	slices.Sort(listURNs)
+	slices.Sort(wantURNs)
+
+	if !slices.Equal(listURNs, wantURNs) {
+		return fmt.Errorf("%w: latest list URNs %q differ from export URNs %q", errUnexpected, listURNs, wantURNs)
+	}
+
+	return nil
+}
+
+// maskedListURNs returns the URNs of the masked resource list body.
+func maskedListURNs(body string) ([]string, error) {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		return nil, fmt.Errorf("%w: decode latest list: %w", errUnexpected, err)
+	}
+
+	urns := make([]string, 0, len(list.Resources))
+	for _, res := range list.Resources {
+		urns = append(urns, res.URN)
+	}
+
+	return urns, nil
+}
+
+// deltaExportResource is one resource of a stack export in e2e checks.
+type deltaExportResource struct {
+	URN string `json:"urn"`
+}
+
+// deltaExportDeployment is the deployment of a stack export in e2e checks.
+type deltaExportDeployment struct {
+	Resources []deltaExportResource `json:"resources"`
+}
+
+// deltaExportDoc is a stack export in e2e checks.
+type deltaExportDoc struct {
+	Deployment deltaExportDeployment `json:"deployment"`
+}
+
+// exportURNs returns the URNs of the deployment resources in the stack
+// export.
+func exportURNs(exported string) ([]string, error) {
+	var doc deltaExportDoc
+
+	if err := json.Unmarshal([]byte(exported), &doc); err != nil {
+		return nil, fmt.Errorf("%w: decode stack export: %w", errUnexpected, err)
+	}
+
+	urns := make([]string, 0, len(doc.Deployment.Resources))
+	for _, res := range doc.Deployment.Resources {
+		urns = append(urns, res.URN)
+	}
+
+	return urns, nil
+}
+
+// deltaMaskedStackURN returns the URN of the stack resource in the list.
+func deltaMaskedStackURN(listBody string) (string, error) {
+	var list maskedStateList
+
+	if err := json.Unmarshal([]byte(listBody), &list); err != nil {
+		return "", fmt.Errorf("%w: decode latest list: %w", errUnexpected, err)
+	}
+
+	for _, res := range list.Resources {
+		if res.Type == "pulumi:pulumi:Stack" {
+			return res.URN, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: latest list holds no stack resource", errUnexpected)
+}
+
+// checkDeltaMaskedDetail proves one resource detail answers its inputs and
+// outputs with the secret masked and no envelope fields.
+func checkDeltaMaskedDetail(detail string) error {
+	if err := checkDeltaNoEnvelope(detail); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckLeaks(detail, maskedStateSecret); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckMarkers(detail); err != nil {
+		return err
+	}
+
+	var doc struct {
+		Inputs  map[string]any `json:"inputs"`
+		Outputs map[string]any `json:"outputs"`
+		Masked  []string       `json:"masked"`
+	}
+
+	if err := json.Unmarshal([]byte(detail), &doc); err != nil {
+		return fmt.Errorf("%w: decode resource detail: %w", errUnexpected, err)
+	}
+
+	if doc.Inputs == nil || doc.Outputs == nil {
+		return fmt.Errorf("%w: resource detail holds no inputs and outputs", errUnexpected)
+	}
+
+	if !maskedStateHasMaskedWith(detail, "/outputs/") {
+		return fmt.Errorf("%w: resource detail holds no masked secret in outputs", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkDeltaMaskedOutputs proves the stack outputs answer the secret masked
+// with no plain text, ciphertext or signature key.
+func checkDeltaMaskedOutputs(outputs string) error {
+	if err := checkDeltaNoEnvelope(outputs); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckLeaks(outputs, maskedStateSecret); err != nil {
+		return err
+	}
+
+	if err := maskedStateCheckMarkers(outputs); err != nil {
+		return err
+	}
+
+	if !maskedStateHasSecret(outputs) {
+		return fmt.Errorf("%w: outputs hold no masked secret", errUnexpected)
+	}
+
+	return nil
+}
+
+// checkDeltaMaskedVersionOne proves the version 1 reads answer the
+// unwrapped deployment: the list holds the same URNs as the export of
+// version 1, and the detail and outputs answer masked with no leaks.
+func checkDeltaMaskedVersionOne(
+	ctx context.Context, env *e2e.Env, base, firstExported, stackURN string,
+) error {
+	first, firstErr := maskedStateGet(ctx, env, base+"/state/1/resources")
+	if firstErr != nil {
+		return firstErr
+	}
+
+	if listErr := checkDeltaListMatchesExport(first, firstExported); listErr != nil {
+		return listErr
+	}
+
+	firstDetail, detailErr := maskedStateGet(ctx, env, base+"/state/1/resources/"+url.PathEscape(stackURN))
+	if detailErr != nil {
+		return detailErr
+	}
+
+	if detailErr := checkDeltaMaskedDetail(firstDetail); detailErr != nil {
+		return detailErr
+	}
+
+	firstOutputs, outputsErr := maskedStateGet(ctx, env, base+"/state/1/outputs")
+	if outputsErr != nil {
+		return outputsErr
+	}
+
+	return checkDeltaMaskedOutputs(firstOutputs)
+}
+
+// checkDeltaNoEnvelope fails when the masked body carries envelope fields
+// of the stored deployment: version, deployment or features.
+func checkDeltaNoEnvelope(body string) error {
+	var doc map[string]any
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("%w: decode masked body: %w", errUnexpected, err)
+	}
+
+	for _, field := range []string{"version", "deployment", "features"} {
+		if _, ok := doc[field]; ok {
+			return fmt.Errorf("%w: masked body holds envelope field %q", errUnexpected, field)
+		}
+	}
+
+	return nil
 }
 
 func writeReport(t *testing.T, r e2e.Run) {
@@ -9568,7 +9901,7 @@ func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.
 			t.Fatalf("open destination store: %v", err)
 		}
 
-		defer st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
+		defer st.Close()
 
 		sum, err := st.Export(ctx, io.Discard)
 		if err != nil {

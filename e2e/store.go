@@ -115,7 +115,7 @@ func openPostgresStoreWithURL(ctx context.Context, tb testing.TB, base string) (
 	}
 
 	tb.Cleanup(func() {
-		st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
+		st.Close()
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
