@@ -255,6 +255,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 			Logger:        slog.New(slog.DiscardHandler),
 			Namespaces:    newTestNamespaces(t),
 			Backups:       nil,
+			Restores:      nil,
 			Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 			Metrics:       stubMetrics{},
 			Version:       "test",

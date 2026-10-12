@@ -1517,30 +1517,6 @@ func loadKeyEncryptionKeyFrom(lookup func(key string) (string, bool)) ([]byte, e
 	return nil, nil
 }
 
-// keyWrapper loads the key-encryption key and returns its wrapper, or nil
-// when no key is configured.
-//
-//nolint:ireturn // No key is a valid state, so the result must stay an interface to hold nil.
-func keyWrapper() (secret.Wrapper, error) {
-	key, err := loadKeyEncryptionKey()
-	if err != nil {
-		return nil, err
-	}
-
-	if key == nil {
-		//nolint:nilnil // A nil wrapper without an error means no key is configured.
-		return nil, nil
-	}
-
-	wrapper, err := secret.NewBuiltinWrapper(key)
-	if err != nil {
-		// Unreachable: loadKeyEncryptionKey already checked the size.
-		return nil, fmt.Errorf("key-encryption key: %w", err)
-	}
-
-	return wrapper, nil
-}
-
 // decodeKey decodes a base64 key-encryption key from setting source and
 // checks its size.
 func decodeKey(source, raw string) ([]byte, error) {
