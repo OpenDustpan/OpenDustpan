@@ -6017,8 +6017,10 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 		t.Fatalf("decode state versions after restore: %v", err)
 	}
 
-	if len(doc.Data) != 6 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 6", len(doc.Data))
+	// The restore adds one version. The apply after it changes nothing, so it
+	// adds none.
+	if len(doc.Data) != 5 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 5", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
@@ -6060,7 +6062,9 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("list holds %d versions, want 4 before the restore", len(doc.Data))
 	}
 
-	newest, oldest := doc.Data[0].ID, doc.Data[1].ID
+	// The first version is the oldest. The fence of the maintenance enter and
+	// the stale-job step sit between it and the newest, so it is not Data[1].
+	newest, oldest := doc.Data[0].ID, doc.Data[len(doc.Data)-1].ID
 	firstDownload := downloadStateVersion(ctx, t, env, oldest)
 	firstMD5 := md5Hex(firstDownload)
 
