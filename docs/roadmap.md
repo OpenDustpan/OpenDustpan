@@ -77,7 +77,7 @@ Its gate:
 - [x] The binary refuses to start on a database schema that is newer than it
   knows ([ADR 33](adr/0033-upgrade-checks.md), amendment to ADR 21).
 - [ ] Install docs, with TLS ([RFC 35](rfc/0035-packaging.md) accepted first).
-- [ ] The e2e suite passes for both tools on SQLite and on PostgreSQL.
+- [x] The e2e suite passes for both tools on SQLite and on PostgreSQL.
 
 ## Milestone 3. Move in and run it for real
 
@@ -102,6 +102,17 @@ stops (ADR 32, ADR 34). The upgrade test starts the current binary on a database
 previous tag. Data, secrets and the held lock survive. The previous binary
 refuses to start on the upgraded database (ADR 33). The full Pulumi and
 OpenTofu scenarios still pass on the same server.
+
+**Status.** Met on 2026-10-12 on main 60f8163, with the upgrade exception
+below. The e2e suite passes the exit-test steps for both tools, on each
+version in the matrix, on SQLite and on PostgreSQL, through the real binary over TLS. The backup and
+restore steps also pass with the blobs on an S3-compatible server, and
+the upgrade test passes on both stores for the empty-database case: data,
+secrets and the held lock survive a restart of the current binary (issue
+#184). No `v*` tag exists yet, so the two steps that need a previous tag
+did not run: the start of the current binary on a database of the previous
+tag, and the refusal of the previous binary on the upgraded database. They
+run from the first tag on.
 
 | Where | Item | Part | State |
 | --- | --- | --- | --- |

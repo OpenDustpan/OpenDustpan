@@ -130,6 +130,15 @@ type StateStore interface {
 	RecordUploadAttempt(
 		ctx context.Context, id StateVersionID, key blob.Key, fence namespace.Fence,
 	) (blob.Key, error)
+	// SaveSensitiveMarks stores the secret paths of the json-state rendering
+	// of id, by resource instance address. It holds no value, only paths. It
+	// works on a pending and on a finalized version: the rendering may land
+	// after the state upload finalizes. It returns ErrStateVersionNotFound
+	// when id does not exist, namespace.ErrNotFound when the namespace does
+	// not exist, or namespace.ErrFenced when fence is stale.
+	SaveSensitiveMarks(
+		ctx context.Context, id StateVersionID, marks SensitiveMarks, fence namespace.Fence,
+	) error
 	// DeleteExpiredPendingStateVersions deletes the pending versions of
 	// workspace whose capability expired before before, oldest expiry
 	// first with ties by version ID, and returns them with their attempted
@@ -482,15 +491,16 @@ func (s *Service) Upload(
 }
 
 // DiscardJSONRendering accepts the JSON rendering the CLI uploads alongside
-// a state version and discards it: the server keeps the state itself and the
-// outputs declared at creation, never the rendering. The capability rules
-// match Upload, except that a retry of a finalized version with the same
-// capability succeeds whatever the rendering holds: the two PUTs of one
-// upload carry other content by design. A rendering over the size limit
-// fails with ErrTooLarge, and an expired capability fails whatever the
-// version status. Unlike Upload it never finalizes and
-// never consumes the capability, so the state upload with the same
-// capability still works afterwards.
+// a state version: it keeps only the JSON Pointer paths that sensitive_values
+// marks, by resource instance address, and discards the rest of the rendering.
+// It never keeps a value from it. The capability rules match Upload, except
+// that a retry of a finalized version with the same capability succeeds
+// whatever the rendering holds: the two PUTs of one upload carry other
+// content by design. A rendering without marks keeps nothing: the read then
+// masks every attribute value. A rendering over the size limit fails with
+// ErrTooLarge, and an expired capability fails whatever the version status.
+// Unlike Upload it never finalizes and never consumes the capability, so the
+// state upload with the same capability still works afterwards.
 func (s *Service) DiscardJSONRendering(
 	ctx context.Context,
 	id StateVersionID,
@@ -510,13 +520,40 @@ func (s *Service) DiscardJSONRendering(
 		return fmt.Errorf("%w: capability for state version %s expired", ErrUploadDenied, id)
 	}
 
-	n, err := io.Copy(io.Discard, io.LimitReader(content, s.maxState+1))
+	raw, err := io.ReadAll(io.LimitReader(content, s.maxState+1))
 	if err != nil {
 		return fmt.Errorf("read JSON rendering of %s: %w", id, err)
 	}
 
-	if n > s.maxState {
+	if int64(len(raw)) > s.maxState {
 		return fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+	}
+
+	marks, err := ExtractSensitiveMarks(raw)
+	if err != nil {
+		// A rendering the server cannot parse keeps nothing: the read then
+		// masks every attribute value, so no secret value ever leaks.
+		marks = SensitiveMarks{}
+	}
+
+	// An empty parse over stored marks keeps the stored ones: a retry with
+	// other content must never wipe the marks of the version.
+	if len(marks) == 0 {
+		return nil
+	}
+
+	w, err := s.GetByID(ctx, sv.Workspace)
+	if err != nil {
+		return err
+	}
+
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return err
+	}
+
+	if err := s.states.SaveSensitiveMarks(ctx, id, marks, fence); err != nil {
+		return fmt.Errorf("keep sensitive marks of %s: %w", id, err)
 	}
 
 	return nil
@@ -660,6 +697,115 @@ func (s *Service) History(ctx context.Context, id ID, page Page) ([]StateVersion
 	return list, total, nil
 }
 
+// ReadResources returns one page of the masked resource list of the
+// finalized state version id. It reads the state through Open, the same path
+// the download uses, so sealed state opens before the read and the blob
+// store never serves callers directly. Each secret value answers as a marker
+// with its value path, never as plain text. A state the client encrypted
+// fails with ErrClientEncrypted: the outputs list still works for it. Size
+// is the page size, or zero for the default page; cursor is "" or the
+// NextCursor of an earlier page.
+func (s *Service) ReadResources(
+	ctx context.Context, id StateVersionID, cursor string, size int,
+) (StatePage, error) {
+	state, sv, err := s.openStateBytes(ctx, id)
+	if err != nil {
+		return StatePage{}, err
+	}
+
+	if encryptedErr := rejectEncryptedState(state, id); encryptedErr != nil {
+		return StatePage{}, encryptedErr
+	}
+
+	previous, err := s.predecessorBytes(ctx, sv)
+	if err != nil {
+		return StatePage{}, err
+	}
+
+	page, err := ListStateResources(state, previous, cursor, size)
+	if err != nil {
+		return StatePage{}, fmt.Errorf("read resources of %s: %w", id, err)
+	}
+
+	return page, nil
+}
+
+// ReadResource returns one resource of the finalized state version id with
+// its instances masked. It reads the state through Open, the same path the
+// download uses. The address matches verbatim. A state the client encrypted
+// fails with ErrClientEncrypted.
+func (s *Service) ReadResource(
+	ctx context.Context, id StateVersionID, address string,
+) (StateDetail, error) {
+	state, sv, err := s.openStateBytes(ctx, id)
+	if err != nil {
+		return StateDetail{}, err
+	}
+
+	if encryptedErr := rejectEncryptedState(state, id); encryptedErr != nil {
+		return StateDetail{}, encryptedErr
+	}
+
+	detail, err := ReadStateResource(state, sv.SensitiveMarks, address)
+	if err != nil {
+		return StateDetail{}, fmt.Errorf("read resource of %s: %w", id, err)
+	}
+
+	return detail, nil
+}
+
+// DiffStates returns the diff of two finalized state versions: to is the
+// newer side, from is the older one. Both versions must belong to the same
+// workspace; a from version of another workspace fails with
+// ErrStateVersionNotFound as if it did not exist, so no workspace leaks. It
+// reads both states through Open, the same path the download uses, so sealed
+// state opens before the diff and the blob store never serves callers
+// directly. It compares the plain values in memory only to compute paths; no
+// value leaves the diff. A state either side encrypted fails with
+// ErrClientEncrypted. Cursor is "" or the NextCursor of an earlier page;
+// size is the page size, or zero for the default page.
+func (s *Service) DiffStates(
+	ctx context.Context, to, from StateVersionID, cursor string, size int,
+) (StateDiff, error) {
+	toState, toVersion, err := s.openStateBytes(ctx, to)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	fromVersion, err := s.ReadState(ctx, from)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	if fromVersion.Workspace != toVersion.Workspace {
+		return StateDiff{}, fmt.Errorf("%w: state version %s", ErrStateVersionNotFound, from)
+	}
+
+	fromState, _, err := s.openStateBytes(ctx, from)
+	if err != nil {
+		return StateDiff{}, err
+	}
+
+	if encryptedErr := rejectEncryptedState(toState, to); encryptedErr != nil {
+		return StateDiff{}, encryptedErr
+	}
+
+	if encryptedErr := rejectEncryptedState(fromState, from); encryptedErr != nil {
+		return StateDiff{}, encryptedErr
+	}
+
+	diff, err := DiffStates(
+		StateWithMarks{State: fromState, Marks: fromVersion.SensitiveMarks},
+		StateWithMarks{State: toState, Marks: toVersion.SensitiveMarks},
+		cursor, size,
+	)
+	if err != nil {
+		return StateDiff{}, fmt.Errorf("diff states %s from %s: %w", to, from, err)
+	}
+
+	return diff, nil
+}
+
 // Restore makes the finalized state version from current again as a new,
 // forced version, so OpenTofu reads the old bytes with the next apply. The
 // workspace must be unlocked or locked by holder; a lock that another
@@ -720,6 +866,160 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// rejectEncryptedState fails with ErrClientEncrypted when state is a state
+// file the client encrypted: the resource routes cannot read it, while the
+// outputs list still works.
+func rejectEncryptedState(state []byte, id StateVersionID) error {
+	encrypted, err := IsClientEncrypted(state)
+	if err != nil {
+		return fmt.Errorf("read state %s: %w", id, err)
+	}
+
+	if encrypted {
+		return fmt.Errorf("read state %s: %w", id, ErrClientEncrypted)
+	}
+
+	return nil
+}
+
+// openStateBytes returns the plain content of the finalized state version
+// id with its version. It opens the sealed blob through Open, so callers
+// read the same bytes the CLI sent, and it reads at most the state size
+// limit.
+func (s *Service) openStateBytes(ctx context.Context, id StateVersionID) ([]byte, StateVersion, error) {
+	sv, err := s.ReadState(ctx, id)
+	if err != nil {
+		return nil, StateVersion{}, err
+	}
+
+	r, err := s.Open(ctx, sv)
+	if err != nil {
+		return nil, StateVersion{}, err
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(r, s.maxState+1))
+	closeErr := r.Close()
+
+	if err != nil {
+		return nil, StateVersion{}, fmt.Errorf("read state %s: %w", id, errors.Join(err, closeErr))
+	}
+
+	if closeErr != nil {
+		return nil, StateVersion{}, fmt.Errorf("read state %s: %w", id, closeErr)
+	}
+
+	if int64(len(raw)) > s.maxState {
+		return nil, StateVersion{}, fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+	}
+
+	return raw, sv, nil
+}
+
+// predecessorBytes returns the plain content of the finalized version before
+// sv in its workspace, or nil when sv is the first version. A previous
+// version the client encrypted reads as no previous version: every resource
+// then counts as new, while the current version still answers.
+func (s *Service) predecessorBytes(ctx context.Context, sv StateVersion) ([]byte, error) {
+	previous, found, err := s.predecessor(ctx, sv)
+	if err != nil {
+		return nil, err
+	}
+
+	if !found {
+		return nil, nil
+	}
+
+	r, err := s.Open(ctx, previous)
+	if err != nil {
+		return nil, fmt.Errorf("read previous state of %s: %w", sv.ID, err)
+	}
+
+	raw, readErr := io.ReadAll(io.LimitReader(r, s.maxState+1))
+	closeErr := r.Close()
+
+	if readErr != nil {
+		return nil, fmt.Errorf("read previous state of %s: %w", sv.ID, errors.Join(readErr, closeErr))
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("read previous state of %s: %w", sv.ID, closeErr)
+	}
+
+	encrypted, encErr := IsClientEncrypted(raw)
+	if encErr != nil {
+		return nil, fmt.Errorf("read previous state of %s: %w", sv.ID, encErr)
+	}
+
+	if encrypted {
+		return nil, nil
+	}
+
+	return raw, nil
+}
+
+// predecessor returns the finalized version before sv in its workspace,
+// newest first. Found reports whether sv has a previous version: the first
+// version has none. It pages through the history until it finds sv.
+func (s *Service) predecessor(
+	ctx context.Context, sv StateVersion,
+) (StateVersion, bool, error) {
+	const pageSize = 100
+
+	var none StateVersion
+
+	for offset := 0; ; offset += pageSize {
+		list, total, err := s.History(ctx, sv.Workspace, Page{Limit: pageSize, Offset: offset})
+		if err != nil {
+			return none, false, fmt.Errorf("history of %s: %w", sv.Workspace, err)
+		}
+
+		previous, found, err := s.predecessorIn(ctx, sv, list, offset, total)
+		if err != nil || found {
+			return previous, found, err
+		}
+
+		if offset+len(list) >= total {
+			return none, false, nil
+		}
+	}
+}
+
+// predecessorIn looks for sv in one history page and returns the version
+// before it: the next entry of the page, or the lead of the next page when
+// sv ends it. Found reports whether a previous version exists.
+func (s *Service) predecessorIn(
+	ctx context.Context, sv StateVersion, list []StateVersion, offset, total int,
+) (StateVersion, bool, error) {
+	var none StateVersion
+
+	for i := range list {
+		if list[i].ID != sv.ID {
+			continue
+		}
+
+		if i+1 < len(list) {
+			return list[i+1], true, nil
+		}
+
+		if offset+len(list) >= total {
+			return none, false, nil
+		}
+
+		next, _, err := s.History(ctx, sv.Workspace, Page{Limit: 1, Offset: offset + len(list)})
+		if err != nil {
+			return none, false, fmt.Errorf("history of %s: %w", sv.Workspace, err)
+		}
+
+		if len(next) == 0 {
+			return none, false, nil
+		}
+
+		return next[0], true, nil
+	}
+
+	return none, false, nil
 }
 
 // takeRestoreLock holds w for holder: it takes the lock when w is free and
@@ -840,6 +1140,15 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return StateVersion{}, err
+	}
+
+	// A restore copies the content, so it copies the kept marks too: the new
+	// version masks like the version it restores.
+	if len(src.SensitiveMarks) > 0 {
+		marksErr := s.states.SaveSensitiveMarks(ctx, pending.Version.ID, src.SensitiveMarks, fence)
+		if marksErr != nil {
+			return StateVersion{}, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, marksErr)
+		}
 	}
 
 	// Like an upload, the row names the attempt before the bytes land, so a
@@ -1228,6 +1537,7 @@ func (s *Service) createPending(
 		Force:           in.Force,
 		Sealed:          sealed,
 		RestoredFrom:    restoredFrom,
+		SensitiveMarks:  nil,
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {

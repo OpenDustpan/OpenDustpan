@@ -38,7 +38,7 @@ No flag takes these values, because flags show in process lists.
 | Environment | Value |
 | --- | --- |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | The S3 credentials. |
-| `DUSTPAN_ADMIN_TOKEN` | Required when you set no token file. At least 32 bytes. Comma-separated tokens sign in as distinct administrators: `admin`, `admin-2`, and so on. The server clears the variable from its environment after the read. |
+| `DUSTPAN_ADMIN_TOKEN` | Required when you set no token file. At least 32 bytes. Comma-separated tokens sign in as distinct administrators: `admin`, `admin-2`, and so on. Give each CI job or runner that writes OpenTofu state its own token, because the server checks the lock holder by subject. Each token is a full administrator, and a change to the list needs a restart. The server clears the variable from its environment after the read. |
 | `DUSTPAN_ADMIN_TOKEN_FILE` | A file that holds the tokens, one per line or comma-separated. Only its owner can read it. When you set both, `DUSTPAN_ADMIN_TOKEN` wins. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
@@ -72,6 +72,17 @@ server. They read the server URL from `--server` or
 `DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
 to the system store.
+
+Each client command takes only the flags in its row:
+
+| Command | Flags |
+| --- | --- |
+| `opendustpan namespace create <name>` | `--server`, `--ca-file` |
+| `opendustpan backup` | `--server`, `--ca-file` |
+| `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
+| `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
+| `opendustpan upgrade check` | `--server`, `--ca-file` |
+| `opendustpan health` | `--listen`, `--tls-cert` |
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.

@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/backup"
 )
 
@@ -44,19 +45,9 @@ type backupCheckFlags struct {
 }
 
 func (f *backupCheckFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.server,
-		"server",
-		env(BackupServerEnvVar, ""),
-		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
-	)
-	fs.StringVar(
-		&f.caFile,
-		"ca-file",
-		"",
-		"PEM bundle of extra CA certificates to trust with the system store",
-	)
-	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
+	cli.ByFlag("server").String(fs, &f.server)
+	cli.ByFlag("ca-file").String(fs, &f.caFile)
+	cli.ByFlag("backup").String(fs, &f.id)
 }
 
 // CheckBackupAnswer is the server answer the backup check reads: whether the

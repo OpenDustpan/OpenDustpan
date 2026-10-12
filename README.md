@@ -153,7 +153,9 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is sealed with the key-encryption key. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
-The server keeps no copy of the key-encryption key.
+The database and the backups hold no copy of the key-encryption key. It
+lives in `DUSTPAN_KEY_ENCRYPTION_KEY` or in a key file that only its owner
+can read.
 
 The server sends no telemetry. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
@@ -164,13 +166,51 @@ address of the local server.
 
 ### What to back up
 
-1. **The key-encryption key.** A lost key means lost secrets and lost OpenTofu state. With secrets in
-   the database, the server refuses to start without the key. Keep the key in
-   a different place from the backups.
+1. **The key-encryption key.** A lost key means lost secrets and lost
+   OpenTofu state. The server refuses to start without a key, and with a key
+   that does not open the wrapped keys in the database. Keep a copy of the
+   key in a different place from the backups. The default key file sits next
+   to the SQLite database, so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
    and the blobs to a backup target. A backup holds sealed OpenTofu state, so protect the target.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
+
+## Milestone 3: move in and run it
+
+The milestone 3 exit test passes for both tools, on each version in the
+matrix, on SQLite and on PostgreSQL. The upgrade steps that need a previous
+tag run from the first tag on (see the [roadmap](docs/roadmap.md)).
+
+Move state in with the [import guide](docs/guides/import.md). It moves
+state and secrets from a Pulumi service backend, a Pulumi file backend,
+an OpenTofu backend, or a TFE-compatible API. The source stays unchanged.
+
+List OpenTofu state versions with
+`GET /api/v2/state-versions` and restore one with
+`POST /api/v2/state-versions/{state_version_id}/actions/restore`.
+Restore a Pulumi checkpoint with
+`POST /api/stacks/{namespace}/{project}/{stack}/restore/{version}`.
+
+`opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
+`opendustpan upgrade check` and `opendustpan namespace create` are API
+clients. Each takes `--server` and `--ca-file`, and reads the token from
+`DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
+maintenance mode, with `--backup`, `--check-only` and `--force`. The
+[backup guide](docs/guides/backup-restore-upgrade.md) shows each command
+and its routes: `/api/server/backups`, `/api/server/restores`, and the
+upgrade check route.
+
+The server refuses to start without a key-encryption key. Set it in
+`DUSTPAN_KEY_ENCRYPTION_KEY`. A backup never holds the key, and a
+restore with a wrong key stops before it writes.
+
+Set storage with `--backup-target` and `--blob-store`, including
+S3-compatible storage with `--s3-endpoint` and `--s3-region` (see
+[Use S3-compatible object storage](docs/guides/s3-blobs.md)). Set request
+logging with `--log-level` and `--log-format`. Check readiness at
+`GET /health/ready` and scrape metrics at `GET /api/server/metrics`
+(see [Observe the server](docs/guides/observe.md)).
 
 ## When not to use OpenDustpan
 
@@ -223,6 +263,8 @@ How-to guides:
   content.
 - [Observe the server](docs/guides/observe.md): probes, metrics and request
   logs.
+- [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
+  layout of an installation, and how to measure its size.
 
 Reference:
 
@@ -233,6 +275,8 @@ Reference:
 
 Explanation:
 
+- [Security model](docs/explanation/security-model.md): what the server
+  protects, how, and what it does not protect.
 - [Concepts](#concepts) below.
 - [Roadmap](docs/roadmap.md): the milestones and their exit tests.
 - [Architecture decisions](docs/adr/) and [open proposals](docs/rfc/).

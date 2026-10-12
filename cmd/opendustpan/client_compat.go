@@ -55,18 +55,6 @@ func backupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	return client.BackupCommand(ctx, args, stdout, stderr)
 }
 
-// backupCheck runs `opendustpan backup check` through the client package.
-func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return client.BackupCheck(ctx, args, stdout, stderr)
-}
-
-// upgradeCheck runs `opendustpan upgrade check` through the client package.
-// It passes the stamped version, so the report names the same version as
-// --version.
-func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return client.UpgradeCheck(ctx, args, stdout, stderr, version)
-}
-
 // createNamespace runs `opendustpan namespace create` through the client package.
 func createNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return client.CreateNamespace(ctx, args, stdout, stderr)
@@ -75,11 +63,6 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 // restoreCommand runs `opendustpan restore` through the client package.
 func restoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return client.RestoreCommand(ctx, args, stdout, stderr)
-}
-
-// runHealth runs `opendustpan health` through the client package.
-func runHealth(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return client.RunHealth(ctx, args, stdout, stderr)
 }
 
 // healthURL answers the readiness address through the client package.

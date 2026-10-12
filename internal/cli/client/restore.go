@@ -29,6 +29,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 // Sentinel errors of the restore subcommand. Each error text names what
@@ -70,21 +72,11 @@ type restoreFlags struct {
 }
 
 func (f *restoreFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.server,
-		"server",
-		env(BackupServerEnvVar, ""),
-		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
-	)
-	fs.StringVar(
-		&f.caFile,
-		"ca-file",
-		"",
-		"PEM bundle of extra CA certificates to trust with the system store",
-	)
-	fs.StringVar(&f.backup, "backup", "", "backup ID to restore, for example bkp-aaa")
-	fs.BoolVar(&f.checkOnly, "check-only", false, "run the restore checks and apply nothing")
-	fs.BoolVar(&f.force, "force", false, "cancel active updates and runs first, then restore")
+	cli.ByFlag("server").String(fs, &f.server)
+	cli.ByFlag("ca-file").String(fs, &f.caFile)
+	cli.ByFlag("backup").String(fs, &f.backup)
+	cli.ByFlag("check-only").Bool(fs, &f.checkOnly)
+	cli.ByFlag("force").Bool(fs, &f.force)
 }
 
 // RestoreStartRequest asks the server for one restore: the backup ID from

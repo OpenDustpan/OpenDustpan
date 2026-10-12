@@ -343,6 +343,12 @@ func (fakeStates) RecordUploadAttempt(
 	return "", nil
 }
 
+func (fakeStates) SaveSensitiveMarks(
+	context.Context, workspace.StateVersionID, workspace.SensitiveMarks, namespace.Fence,
+) error {
+	return nil
+}
+
 func (fakeStates) DeleteExpiredPendingStateVersions(
 	context.Context, workspace.ID, time.Time, namespace.Fence,
 ) ([]workspace.StateVersion, error) {
