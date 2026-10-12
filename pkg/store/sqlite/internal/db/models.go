@@ -135,6 +135,7 @@ type StateVersion struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
 }
 
 type Update struct {

@@ -89,11 +89,11 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 }
 
 const backupBlobs = `-- name: BackupBlobs :many
-SELECT content_key, size, md5
+SELECT content_key, size, md5, sealed
 FROM state_versions
 WHERE content_key <> ''
 UNION ALL
-SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5
+SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key
@@ -103,10 +103,13 @@ type BackupBlobsRow struct {
 	ContentKey string
 	Size       int64
 	Md5        []byte
+	Sealed     bool
 }
 
 // Every blob key the state versions and the checkpoints name, with the size
-// and MD5 of the stored bytes, ordered by key.
+// and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
+// state blobs are stored sealed: the backup opens them to check and stores
+// the sealed bytes.
 func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	rows, err := q.db.Query(ctx, backupBlobs)
 	if err != nil {
@@ -116,7 +119,12 @@ func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	var items []BackupBlobsRow
 	for rows.Next() {
 		var i BackupBlobsRow
-		if err := rows.Scan(&i.ContentKey, &i.Size, &i.Md5); err != nil {
+		if err := rows.Scan(
+			&i.ContentKey,
+			&i.Size,
+			&i.Md5,
+			&i.Sealed,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -403,9 +411,9 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
+    restored_from, sealed
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 `
 
@@ -427,6 +435,7 @@ type CreateStateVersionParams struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -448,6 +457,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.CreatedAtMs,
 		arg.FinalizedAtMs,
 		arg.RestoredFrom,
+		arg.Sealed,
 	)
 	return err
 }
@@ -603,6 +613,37 @@ WHERE id = $1 AND status = 'pending'
 // concurrent finalize wins over a sweep: the sweep then skips the version.
 func (q *Queries) DeleteStateVersion(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStateVersion, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteStateVersionsOfWorkspace = `-- name: DeleteStateVersionsOfWorkspace :exec
+DELETE FROM state_versions
+WHERE workspace_id = $1
+`
+
+// Removes every state version of one workspace, pending and finalized.
+func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, deleteStateVersionsOfWorkspace, workspaceID)
+	return err
+}
+
+const deleteWorkspace = `-- name: DeleteWorkspace :execrows
+DELETE FROM workspaces
+WHERE namespace = $1 AND name = $2
+`
+
+type DeleteWorkspaceParams struct {
+	Namespace string
+	Name      string
+}
+
+// Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+// the data key through DeleteSecretKeysOfStack with the workspace ID.
+func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspace, arg.Namespace, arg.Name)
 	if err != nil {
 		return 0, err
 	}
@@ -855,7 +896,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -884,6 +925,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
 	)
 	return i, err
 }
@@ -1142,7 +1184,7 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE id = $1
 `
@@ -1168,6 +1210,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
 	)
 	return i, err
 }
@@ -1704,7 +1747,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -1744,6 +1787,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
 		); err != nil {
 			return nil, err
 		}
@@ -2040,7 +2084,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) 
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -2082,6 +2126,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
 		); err != nil {
 			return nil, err
 		}

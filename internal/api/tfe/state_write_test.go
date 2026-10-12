@@ -139,12 +139,12 @@ type createTestDoc struct {
 }
 
 // decodeCreateDoc decodes a create document and fails the test when the
-// status or shape is wrong.
-func decodeCreateDoc(t *testing.T, rec *httptest.ResponseRecorder, want int) createTestDoc {
+// status is not 201.
+func decodeCreateDoc(t *testing.T, rec *httptest.ResponseRecorder) createTestDoc {
 	t.Helper()
 
-	if rec.Code != want {
-		t.Fatalf("request answers %d, want %d: %s", rec.Code, want, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("request answers %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
 	if got := rec.Header().Get("Content-Type"); got != "application/vnd.api+json" {
@@ -198,7 +198,8 @@ func TestCreateStateVersion(t *testing.T) {
 		),
 	)
 
-	doc := decodeCreateDoc(t, rec, http.StatusCreated)
+	doc := decodeCreateDoc(t, rec)
+
 	got := doc.Data
 
 	if got.ID != "sv-new123" || got.Type != "state-versions" {
@@ -237,7 +238,7 @@ func TestCreateStateVersionAcceptsWrappedOutputs(t *testing.T) {
 		),
 	)
 
-	decodeCreateDoc(t, rec, http.StatusCreated)
+	decodeCreateDoc(t, rec)
 }
 
 // uploadToken returns the token in an upload URL path.
@@ -739,7 +740,7 @@ func TestStateUploadUsesPublicURL(t *testing.T) {
 		stateCreateBody(4, stateCreateOutputs()),
 	))
 
-	doc := decodeCreateDoc(t, rec, http.StatusCreated)
+	doc := decodeCreateDoc(t, rec)
 
 	for _, raw := range []string{doc.Data.Attributes.UploadURL, doc.Data.Attributes.JSONUploadURL} {
 		if !strings.HasPrefix(raw, "https://dustpan.example.test/") {

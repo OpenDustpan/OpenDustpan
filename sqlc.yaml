@@ -21,6 +21,8 @@ sql:
             go_type: bool
           - column: state_versions.force
             go_type: bool
+          - column: state_versions.sealed
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql
