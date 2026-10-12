@@ -830,6 +830,23 @@ func (e *Env) StackID(
 // Checks that expect an error status use it: a decrypt with a foreign
 // ciphertext returns 400 with no test failure.
 func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, string, error) {
+	resp, err := e.APIStatusHeaders(ctx, method, path, body)
+
+	return resp.Status, resp.Body, err
+}
+
+// APIResponse is the status, headers and body of one harness request.
+// Reveal checks read the headers: the value must travel with
+// Cache-Control: no-store.
+type APIResponse struct {
+	Status int
+	Header http.Header
+	Body   string
+}
+
+// APIStatusHeaders sends one authenticated request and returns its status,
+// headers and body.
+func (e *Env) APIStatusHeaders(ctx context.Context, method, path, body string) (APIResponse, error) {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
@@ -837,7 +854,7 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 
 	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
 	if err != nil {
-		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+		return APIResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 
 	req.Header.Set("Authorization", "token "+e.token)
@@ -847,7 +864,7 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+		return APIResponse{}, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 
 	defer func() {
@@ -856,10 +873,10 @@ func (e *Env) APIStatus(ctx context.Context, method, path, body string) (int, st
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+		return APIResponse{}, fmt.Errorf("read %s %s: %w", method, path, err)
 	}
 
-	return resp.StatusCode, string(respBody), nil
+	return APIResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(respBody)}, nil
 }
 
 // ServerAPIStatus sends one request to the installation API with the
@@ -917,7 +934,44 @@ func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (
 // TFEStatusA sends one TFE API request as principal A, the default principal
 // that the CLI configuration uses.
 func (e *Env) TFEStatusA(ctx context.Context, method, path, body string) (int, string, error) {
-	return e.TFEStatus(ctx, e.token, method, path, body)
+	resp, err := e.TFEStatusHeaders(ctx, e.token, method, path, body)
+
+	return resp.Status, resp.Body, err
+}
+
+// TFEStatusHeaders sends one TFE API request as token and returns its
+// status, headers and body.
+func (e *Env) TFEStatusHeaders(ctx context.Context, token, method, path, body string) (APIResponse, error) {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return APIResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(respBody)}, nil
 }
 
 // TFEStatusB sends one TFE API request as principal B, the second principal

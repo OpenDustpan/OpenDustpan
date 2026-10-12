@@ -68,6 +68,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 			RequestID:  e.RequestID,
 			PrevHash:   e.PrevHash,
 			Hash:       e.Hash,
+			ValueCount: toNullInt64(e.ValueCount),
 		})
 		if insertErr != nil {
 			return fmt.Errorf("insert audit entry: %w", insertErr)
@@ -161,6 +162,7 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
 // without validation: it was validated on write and the foreign key holds.
+// A NULL value count reads as nil: only a decrypt call stores a count.
 func fromAuditRow(row db.AuditEntry) audit.Entry {
 	ns := namespace.Name(row.Namespace)
 
@@ -174,6 +176,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Object:     row.Object,
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
+		ValueCount: fromNullInt64(row.ValueCount),
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
 		Channel:    audit.Channel(row.Channel),
@@ -184,4 +187,24 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Hash:       row.Hash,
 		Sequence:   row.Sequence,
 	}
+}
+
+// toNullInt64 maps a nil count to NULL: only a decrypt call stores a count.
+func toNullInt64(count *int64) sql.NullInt64 {
+	if count == nil {
+		return sql.NullInt64{Int64: 0, Valid: false}
+	}
+
+	return sql.NullInt64{Int64: *count, Valid: true}
+}
+
+// fromNullInt64 maps a NULL count to nil.
+func fromNullInt64(count sql.NullInt64) *int64 {
+	if !count.Valid {
+		return nil
+	}
+
+	out := count.Int64
+
+	return &out
 }

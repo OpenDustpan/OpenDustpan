@@ -94,12 +94,14 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stubWorkspaces{},
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stubWorkspaces{},
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -775,12 +777,14 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	t.Helper()
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    newPagingWorkspaces(t),
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     newPagingWorkspaces(t),
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -3,11 +3,12 @@
 //
 // Service discovery, ping, the entitlement set, the workspace read, create
 // and list routes, the state read routes (current state, one state
-// version, its download, its outputs and the state version list) and the
-// state write routes (create a state version and upload its content through
-// a capability) exist so far. Every further endpoint lands with its e2e step
-// first, so no other route is served until its issue adds it with the CLI
-// coverage.
+// version, its download, its outputs, the masked resource list with one
+// masked resource, and the reveal of one masked value with its audit entry)
+// and the state write routes (create a state version and upload its content
+// through a capability) exist so far. Every further endpoint lands with its
+// e2e step first, so no other route is served until its issue adds it with
+// the CLI coverage.
 package tfe
 
 import (
@@ -22,6 +23,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -168,19 +170,29 @@ type Config struct {
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
+	// Audit is the audit store that the reveal call, the state download and
+	// the single output route append to. Nil means no audit store is
+	// configured: the routes answer without an entry.
+	Audit audit.Store
+	// OnAuditFailure runs when an audit append fails. The server wires it
+	// to the dustpan_audit_append_failures_total counter. Nil means no
+	// counter: the routes still fail closed with a 500 and no value.
+	OnAuditFailure func()
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
 // discovery at /.well-known/terraform.json.
 type Handler struct {
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	logger     *slog.Logger
-	namespaces *namespace.Service
-	workspaces WorkspaceService
-	baseURL    baseurl.Resolver
-	mux        *patternMux
-	routes     []Route
+	authn          identity.Authenticator
+	authz          identity.Authorizer
+	logger         *slog.Logger
+	namespaces     *namespace.Service
+	workspaces     WorkspaceService
+	baseURL        baseurl.Resolver
+	audit          audit.Store
+	onAuditFailure func()
+	mux            *patternMux
+	routes         []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -199,14 +211,16 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		authn:      cfg.Authenticator,
-		authz:      cfg.Authorizer,
-		logger:     cfg.Logger,
-		namespaces: cfg.Namespaces,
-		workspaces: cfg.Workspaces,
-		baseURL:    cfg.BaseURL,
-		mux:        newPatternMux(),
-		routes:     nil,
+		authn:          cfg.Authenticator,
+		authz:          cfg.Authorizer,
+		logger:         cfg.Logger,
+		namespaces:     cfg.Namespaces,
+		workspaces:     cfg.Workspaces,
+		baseURL:        cfg.BaseURL,
+		audit:          cfg.Audit,
+		onAuditFailure: cfg.OnAuditFailure,
+		mux:            newPatternMux(),
+		routes:         nil,
 	}
 
 	h.routes = h.buildRoutes()

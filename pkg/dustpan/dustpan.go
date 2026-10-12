@@ -496,7 +496,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -559,8 +559,18 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 }
 
 // newTFEHandler returns the TFE-compatible API handler that OpenTofu speaks
-// to. base reports the external base URL for absolute URLs.
-func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Handler, error) {
+// to. base reports the external base URL for absolute URLs. observed counts
+// failed audit appends: the reveal call, the state download and the single
+// output route fail closed with a 500 when the append fails, so the counter
+// is the alert for lost entries.
+func newTFEHandler(
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+) (*tfe.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -568,6 +578,10 @@ func newTFEHandler(cfg settings, svc services, base baseurl.Resolver) (*tfe.Hand
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
+		Audit:         entries,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -966,14 +980,9 @@ func (s *Server) startUp(ctx context.Context) error {
 
 // sealUnsealedStates seals the OpenTofu state versions that still hold plain
 // content (ADR 41 decision 11). It runs after the fencing recovery of
-// failStoppedRestores, so its writes carry current fences. Without a
-// key-encryption key it seals nothing: rows stay readable as before until an
-// operator configures one.
+// failStoppedRestores, so its writes carry current fences. NewServer refuses
+// to build without a key-encryption key (#367), so the server always seals.
 func (s *Server) sealUnsealedStates(ctx context.Context) error {
-	if s.secretWrapper == nil {
-		return nil
-	}
-
 	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
 		return fmt.Errorf("seal unsealed state: %w", err)
 	}
@@ -1114,17 +1123,16 @@ func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:    cfg.authenticator,
-		Authorizer:       cfg.authorizer,
-		Logger:           cfg.logger,
-		Namespaces:       deps.services.namespaces,
-		Backups:          deps.backups,
-		Restores:         restores,
-		Maintenance:      deps.maint,
-		Metrics:          deps.observed,
-		Version:          cfg.version,
-		Schema:           schemaReporterOf(cfg.namespaceStore),
-		KeyEncryptionKey: cfg.secretWrapper != nil,
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		Namespaces:    deps.services.namespaces,
+		Backups:       deps.backups,
+		Restores:      restores,
+		Maintenance:   deps.maint,
+		Metrics:       deps.observed,
+		Version:       cfg.version,
+		Schema:        schemaReporterOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1229,7 +1237,7 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  sealAfterRestore(cfg, deps),
+		AfterApply:  sealAfterRestore(deps),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -1242,16 +1250,10 @@ func newRestoreService(
 
 // sealAfterRestore returns the after-apply step of a restore: it seals the
 // OpenTofu state versions that the restored backup holds unsealed (ADR 41
-// decision 11), with the same job the server runs at start-up. Nil means
-// no key-encryption key is configured: the restore seals nothing, and the
-// restored rows stay readable until a key is configured.
-func sealAfterRestore(
-	cfg settings, deps installationDeps,
-) func(ctx context.Context) error {
-	if cfg.secretWrapper == nil {
-		return nil
-	}
-
+// decision 11), with the same job the server runs at start-up. NewServer
+// refuses to build without a key-encryption key (#367), so the step is
+// always set.
+func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
 			return fmt.Errorf("seal unsealed state: %w", err)

@@ -35,12 +35,14 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	handler, err := tfe.NewHandler(tfe.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    allowAll(),
-		Logger:        logger,
-		Namespaces:    newTestNamespaces(t),
-		Workspaces:    stores,
-		BaseURL:       baseurl.Resolver{},
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     allowAll(),
+		Logger:         logger,
+		Namespaces:     newTestNamespaces(t),
+		Workspaces:     stores,
+		BaseURL:        baseurl.Resolver{},
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

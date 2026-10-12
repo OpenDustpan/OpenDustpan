@@ -12,8 +12,10 @@
 // resources of two versions with their changed value paths). Each secret
 // value answers as a marker with its value path, never as plain or
 // ciphertext; the diff answers no value at all, only URNs and value paths.
-// Clients path-escape the URN in the one-resource route, so that "/" in a
-// type token or a resource name becomes "%2F" and the URN stays one segment.
+// POST .../state/{version}/reveal answers the plain value at one masked
+// value path, with an audit entry of the kind reveal. Clients path-escape
+// the URN in the one-resource route, so that "/" in a resource name becomes
+// "%2F" and the URN stays one segment.
 //
 // Only the endpoints needed to log in and manage stacks exist so far. The CLI's
 // API is not a published, versioned specification, so every endpoint here must
@@ -843,7 +845,8 @@ func classify(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):
 		return http.StatusBadRequest, hasResourcesMessage
-	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced):
+	case errors.Is(err, stack.ErrAlreadyExists), errors.Is(err, namespace.ErrFenced),
+		errors.Is(err, stack.ErrOtherSecretsProvider):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, namespace.ErrNotHome):
 		return http.StatusMisdirectedRequest, err.Error()
