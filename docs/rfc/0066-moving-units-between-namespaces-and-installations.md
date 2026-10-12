@@ -1,11 +1,11 @@
 ---
-rfc: 65
+rfc: 66
 title: Tooling to move units between namespaces and installations
 status: draft
 created: 2026-10-12
 ---
 
-# RFC 65. Tooling to move units between namespaces and installations
+# RFC 66. Tooling to move units between namespaces and installations
 
 Status: draft. The project owner asked for this RFC on 2026-10-12, in the
 answers to RFC 17. ADR 47 decided that a unit never moves between

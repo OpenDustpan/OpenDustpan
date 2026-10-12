@@ -1,11 +1,11 @@
 ---
-rfc: 66
+rfc: 67
 title: Integration with spend and cost tools (FinOps)
 status: draft
 created: 2026-10-12
 ---
 
-# RFC 66. Integration with spend and cost tools (FinOps)
+# RFC 67. Integration with spend and cost tools (FinOps)
 
 Status: draft. The project owner asked for this RFC on 2026-10-12, in the
 answers to RFC 45 and RFC 52. It decides nothing.
