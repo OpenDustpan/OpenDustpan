@@ -3,7 +3,9 @@ package postgres_test
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,7 +21,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -45,6 +49,21 @@ func TestConformance(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestSchemaConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunSchema(t, func(t *testing.T) storetest.SchemaStore {
 		t.Helper()
 
 		return open(t, base)
@@ -1855,5 +1874,485 @@ func TestPeekKeyReadsOneWrappedKey(t *testing.T) {
 	_, peekErr := s.PeekKey(ctx, bytes.NewReader(buf.Bytes()), "kek-2")
 	if !errors.Is(peekErr, backup.ErrCorrupt) {
 		t.Fatalf("peek missing wrapper: err = %v, want ErrCorrupt", peekErr)
+	}
+}
+
+// TestBackupCopyColumnsMatchSchema compares the COPY column list of every
+// table of backup.Tables with its live schema columns: a migration that
+// adds a column fails here until its author extends the COPY list.
+func TestBackupCopyColumnsMatchSchema(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL backup coverage test", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	listed := postgres.CopyColumnsForTest()
+
+	for _, table := range backup.Tables {
+		columns, ok := listed[table]
+		if !ok {
+			t.Fatalf("backup table %q misses its COPY column list", table)
+		}
+
+		live := readTableColumns(t, conn, table)
+
+		if checkErr := postgres.CheckCopyColumnsForTest(table, columns, live); checkErr != nil {
+			t.Fatal(checkErr)
+		}
+	}
+}
+
+// readTableColumns returns the column names of table in the current schema,
+// in ordinal order.
+func readTableColumns(t *testing.T, conn *pgx.Conn, table string) []string {
+	t.Helper()
+
+	const query = `SELECT column_name FROM information_schema.columns` +
+		` WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`
+
+	rows, err := conn.Query(t.Context(), query, table)
+	if err != nil {
+		t.Fatalf("read columns of table %q: %v", table, err)
+	}
+
+	defer rows.Close()
+
+	var columns []string
+
+	for rows.Next() {
+		var column string
+
+		if scanErr := rows.Scan(&column); scanErr != nil {
+			rows.Close()
+			t.Fatalf("scan column of table %q: %v", table, scanErr)
+		}
+
+		columns = append(columns, column)
+	}
+
+	rows.Close()
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read columns of table %q: %v", table, iterErr)
+	}
+
+	if len(columns) == 0 {
+		t.Fatalf("table %q holds no columns, want the migrated schema", table)
+	}
+
+	return columns
+}
+
+// TestBackupCopyColumnMismatchNamesTableAndColumn proves the coverage check
+// names the table and the column, for a missing column and an unknown one.
+func TestBackupCopyColumnMismatchNamesTableAndColumn(t *testing.T) {
+	t.Parallel()
+
+	missing := postgres.CheckCopyColumnsForTest("updates", []string{"id"}, []string{"id", "created_by"})
+	if missing == nil || !strings.Contains(missing.Error(), `"updates"`) ||
+		!strings.Contains(missing.Error(), `"created_by"`) {
+		t.Fatalf("missing column error = %v, want the table %q and the column %q", missing, "updates", "created_by")
+	}
+
+	unknown := postgres.CheckCopyColumnsForTest("checkpoints", []string{"id", "nope"}, []string{"id"})
+	if unknown == nil || !strings.Contains(unknown.Error(), `"checkpoints"`) ||
+		!strings.Contains(unknown.Error(), `"nope"`) {
+		t.Fatalf("unknown column error = %v, want the table %q and the column %q", unknown, "checkpoints", "nope")
+	}
+}
+
+// TestBackupRoundTripKeepsAddedColumns exports a store whose update,
+// checkpoint and state version carry non-default values in the columns that
+// later migrations added, imports into an empty store, and proves the values
+// survived: through the ports for the update creator, the restore marks, and
+// through SQL for the checkpoint resource count, which no port exposes.
+func TestBackupRoundTripKeepsAddedColumns(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL backup round trip test", envURL)
+	}
+
+	srcURL := isolatedURL(t, base)
+	dstURL := isolatedURL(t, base)
+
+	src, err := postgres.Open(t.Context(), srcURL)
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+
+	t.Cleanup(src.Close)
+
+	dst, err := postgres.Open(t.Context(), dstURL)
+	if err != nil {
+		t.Fatalf("open destination store: %v", err)
+	}
+
+	t.Cleanup(dst.Close)
+
+	seeded := seedAddedColumns(t, src)
+
+	var buf bytes.Buffer
+
+	sum, err := src.Export(t.Context(), &buf)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	if _, err := dst.Import(t.Context(), bytes.NewReader(buf.Bytes()), sum); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	checkAddedUpdate(t, dst, seeded.ref)
+	checkAddedCheckpointCount(t, dstURL)
+	checkAddedStateVersion(t, dst, seeded.restoredID, seeded.sourceID)
+}
+
+// addedSeed holds the references of the rows that seedAddedColumns wrote.
+type addedSeed struct {
+	ref        stack.Ref
+	restoredID workspace.StateVersionID
+	sourceID   workspace.StateVersionID
+}
+
+// resourcedDeployment holds one managed resource beyond the automatic stack
+// resource, so the stored checkpoint resource count is 1, not 0 or NULL.
+const resourcedDeployment = `{"resources":[` +
+	`{"type":"pulumi:pulumi:Stack"},` +
+	`{"type":"custom:resource:Type"}]}`
+
+// seedAddedColumns writes one update with a creator and a restore source, one
+// checkpoint with a managed resource, and one state version restored from
+// another, all through the real ports.
+func seedAddedColumns(t *testing.T, s *postgres.Store) addedSeed {
+	t.Helper()
+
+	ctx := t.Context()
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            namespace.Name("acme"),
+		HomeRegion:      namespace.Region("eu-west"),
+		FailoverVersion: 1,
+	}
+
+	if err := s.CreateNamespace(ctx, ns); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	ref, err := stack.ParseRef("acme", "web", "prod")
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+
+	st := stack.Stack{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Tags:      map[string]string{},
+		Ref:       ref,
+		ID:        stack.ID(ident.NewID("stk-")),
+		Version:   0,
+	}
+
+	if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	seedAddedUpdate(t, s, ns, ref, now)
+
+	states := seedAddedStates(t, s, ns, now)
+
+	return addedSeed{ref: ref, restoredID: states.restored, sourceID: states.source}
+}
+
+// seedAddedUpdate creates, starts, checkpoints and ends one restore update
+// with a creator.
+func seedAddedUpdate(t *testing.T, s *postgres.Store, ns namespace.Namespace, ref stack.Ref, now time.Time) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	u := stack.Update{
+		CreatedAt:       now,
+		StartedAt:       time.Time{},
+		EndedAt:         time.Time{},
+		Lease:           stack.Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}},
+		ID:              "u1",
+		Kind:            stack.KindRestore,
+		Status:          stack.StatusNotStarted,
+		Ref:             ref,
+		DryRun:          false,
+		Version:         0,
+		Revision:        1,
+		CreatedBy:       "alice@example.com",
+		RestoredFrom:    1,
+		CheckpointBytes: 0,
+	}
+
+	if err := s.CreateUpdate(ctx, u, ns.Fence()); err != nil {
+		t.Fatalf("create update: %v", err)
+	}
+
+	tok, err := token.New()
+	if err != nil {
+		t.Fatalf("new lease token: %v", err)
+	}
+
+	u.Status = stack.StatusRunning
+	u.StartedAt = now.Add(time.Second)
+	u.Lease = stack.Lease{ExpiresAt: now.Add(stack.DefaultLease), Digest: tok.Digest()}
+	u.Revision++
+
+	started, err := s.StartUpdate(ctx, u, ns.Fence())
+	if err != nil {
+		t.Fatalf("start update: %v", err)
+	}
+
+	deployment := []byte(resourcedDeployment)
+
+	cp := stack.Checkpoint{
+		SavedAt:       now.Add(2 * time.Second),
+		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
+		Deployment:    deployment,
+		Update:        started.ID,
+		Ref:           ref,
+		Lease:         tok.Digest(),
+		SchemaVersion: 3,
+		Sequence:      0,
+		Digest:        sha256.Sum256(deployment),
+		Invalid:       false,
+		BlobKey:       "",
+		BlobSize:      0,
+		BlobMD5:       [md5.Size]byte{},
+	}
+
+	if err := s.PutCheckpoint(ctx, cp, ns.Fence()); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	started.Status = stack.StatusSucceeded
+	started.EndedAt = now.Add(time.Minute)
+	started.Lease = stack.Lease{ExpiresAt: time.Time{}, Digest: token.Digest{}}
+	started.Revision++
+
+	if err := s.SaveUpdate(ctx, started, ns.Fence()); err != nil {
+		t.Fatalf("end update: %v", err)
+	}
+}
+
+// addedStates holds a restored state version with the version it was
+// restored from.
+type addedStates struct {
+	restored workspace.StateVersionID
+	source   workspace.StateVersionID
+}
+
+// seedAddedStates writes one finalized state version and one version restored
+// from it, and returns the restored version with its source.
+func seedAddedStates(
+	t *testing.T, s *postgres.Store, ns namespace.Namespace, now time.Time,
+) addedStates {
+	t.Helper()
+
+	ctx := t.Context()
+
+	name, err := workspace.ParseName("network")
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID(ident.NewID("ws-")),
+		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
+		Revision:  1,
+	}
+
+	if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	locked := w
+	locked.Lock = workspace.Lock{
+		LockedAt: now,
+		ID:       "lock-alice",
+		Holder:   "alice",
+		Reason:   "apply",
+	}
+	locked.UpdatedAt = now.Add(time.Hour)
+	locked.Revision++
+
+	if err := s.SaveWorkspace(ctx, locked, ns.Fence()); err != nil {
+		t.Fatalf("lock workspace: %v", err)
+	}
+
+	source := declareAddedVersion(t, locked, "v1", false, "")
+
+	if err := s.CreateStateVersion(ctx, source, ns.Fence(), 1<<30); err != nil {
+		t.Fatalf("create state version: %v", err)
+	}
+
+	finalizeAddedVersion(t, s, ns, source, "v1")
+
+	restored := declareAddedVersion(t, locked, "v1", true, source.ID)
+
+	if err := s.CreateStateVersion(ctx, restored, ns.Fence(), 1<<30); err != nil {
+		t.Fatalf("create restored state version: %v", err)
+	}
+
+	finalizeAddedVersion(t, s, ns, restored, "v1")
+
+	return addedStates{restored: restored.ID, source: source.ID}
+}
+
+// declareAddedVersion returns a pending state version with content, ready to
+// create. A restore repeats the source content with force and names its
+// source. The version is declared under the lock the workspace holds.
+func declareAddedVersion(
+	t *testing.T, w workspace.Workspace, content string, force bool, from workspace.StateVersionID,
+) workspace.StateVersion {
+	t.Helper()
+
+	tok, err := token.New()
+	if err != nil {
+		t.Fatalf("new upload capability: %v", err)
+	}
+
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+
+	return workspace.StateVersion{
+		CreatedAt:       now,
+		FinalizedAt:     time.Time{},
+		UploadExpiresAt: now.Add(workspace.UploadWindow),
+		Upload:          tok.Digest(),
+		ID:              workspace.StateVersionID(ident.NewID("sv-")),
+		Workspace:       w.ID,
+		Holder:          w.Lock.Holder,
+		LockID:          w.Lock.ID,
+		Lineage:         "l1",
+		Status:          workspace.StatusPending,
+		Content:         "",
+		Outputs:         nil,
+		MD5:             sum,
+		Serial:          1,
+		Size:            0,
+		Force:           force,
+		RestoredFrom:    from,
+	}
+}
+
+// finalizeAddedVersion records the upload attempt of sv and finalizes it with
+// content.
+func finalizeAddedVersion(
+	t *testing.T, s *postgres.Store, ns namespace.Namespace, sv workspace.StateVersion, content string,
+) {
+	t.Helper()
+
+	ctx := t.Context()
+	key := blob.Key("tofu/" + sv.Workspace.String() + "/" + sv.ID.String() + "/a1")
+
+	if _, err := s.RecordUploadAttempt(ctx, sv.ID, key, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt of %s: %v", sv.ID, err)
+	}
+
+	sv.Status = workspace.StatusFinalized
+	sv.FinalizedAt = time.Date(2026, time.October, 11, 14, 0, 0, 0, time.UTC)
+	sv.Content = key
+	sv.Size = int64(len(content))
+
+	if err := s.FinalizeStateVersion(ctx, sv, ns.Fence()); err != nil {
+		t.Fatalf("finalize state version %s: %v", sv.ID, err)
+	}
+}
+
+// checkAddedUpdate proves the imported update keeps its creator and restore
+// source.
+func checkAddedUpdate(t *testing.T, dst *postgres.Store, ref stack.Ref) {
+	t.Helper()
+
+	got, err := dst.GetUpdate(t.Context(), ref, "u1")
+	if err != nil {
+		t.Fatalf("get update after import: %v", err)
+	}
+
+	if got.CreatedBy != "alice@example.com" || got.RestoredFrom != 1 {
+		t.Fatalf(
+			"update after import = creator %q restored %d, want %q and 1",
+			got.CreatedBy,
+			got.RestoredFrom,
+			"alice@example.com",
+		)
+	}
+}
+
+// checkAddedCheckpointCount proves the imported checkpoint keeps its stored
+// resource count: 1 for the one managed resource, read through SQL, as no
+// port exposes the count.
+func checkAddedCheckpointCount(t *testing.T, dstURL string) {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), dstURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var count *int64
+
+	if err := conn.QueryRow(t.Context(), `SELECT resource_count FROM checkpoints`).Scan(&count); err != nil {
+		t.Fatalf("read checkpoint resource count after import: %v", err)
+	}
+
+	if count == nil || *count != 1 {
+		t.Fatalf("checkpoint resource count after import = %v, want 1", count)
+	}
+}
+
+// checkAddedStateVersion proves the imported state version keeps the version
+// it was restored from.
+func checkAddedStateVersion(
+	t *testing.T, dst *postgres.Store, restoredID, sourceID workspace.StateVersionID,
+) {
+	t.Helper()
+
+	got, err := dst.GetStateVersion(t.Context(), restoredID)
+	if err != nil {
+		t.Fatalf("get restored state version after import: %v", err)
+	}
+
+	if got.RestoredFrom != sourceID {
+		t.Fatalf("restored-from after import = %q, want %q", got.RestoredFrom, sourceID)
 	}
 }

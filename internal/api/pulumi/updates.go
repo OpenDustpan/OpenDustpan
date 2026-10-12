@@ -92,6 +92,132 @@ type checkpointRequest struct {
 	Deployment json.RawMessage `json:"deployment,omitempty"`
 }
 
+// verbatimCheckpointRequest is the first save of an update with the delta
+// capability: the whole deployment in the schema named by version, kept
+// byte for byte, with the client's sequence number.
+type verbatimCheckpointRequest struct {
+	Version           int             `json:"version"`
+	UntypedDeployment json.RawMessage `json:"untypedDeployment,omitempty"`
+	// SequenceNumber counts the saves of the update from 1. Later deltas
+	// name the next number.
+	SequenceNumber int `json:"sequenceNumber"`
+}
+
+// deltaCheckpointRequest is a later save of an update with the delta
+// capability: the edits that turn the last saved deployment into the new
+// one, with the hash of the result and the next sequence number.
+type deltaCheckpointRequest struct {
+	Version         int             `json:"version"`
+	CheckpointHash  string          `json:"checkpointHash"`
+	SequenceNumber  int             `json:"sequenceNumber"`
+	DeploymentDelta json.RawMessage `json:"deploymentDelta,omitempty"`
+}
+
+// saveCheckpointVerbatim stores the running update's checkpoint exactly as
+// its client sent it, through the same blob-first path as saveCheckpoint.
+// The sequence number makes retried saves idempotent. A sequence number below
+// 1 answers 409 and saves nothing, so the CLI falls back to a full save.
+func (h *Handler) saveCheckpointVerbatim(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+	releaseHold, ok := h.hold(w, r, limit)
+	if !ok {
+		return
+	}
+
+	defer releaseHold()
+
+	var req verbatimCheckpointRequest
+	if !h.decodeLargeBody(w, r, limit, &req) {
+		return
+	}
+
+	if req.SequenceNumber < 1 {
+		h.writeError(ctx, w, fmt.Errorf("%w: checkpoint sequence %d", stack.ErrInvalidDelta, req.SequenceNumber))
+
+		return
+	}
+
+	in := stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(req.UntypedDeployment),
+		SchemaVersion: req.Version,
+		Sequence:      int64(req.SequenceNumber),
+		Invalid:       false,
+	}
+
+	if err := h.updates.SaveCheckpoint(ctx, ref, id, tok, in); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// saveCheckpointDelta applies the edits in the request to the last saved
+// checkpoint of the running update and stores the result, through the same
+// blob-first path as saveCheckpoint. An invalid delta answers 409 and saves
+// nothing, so the CLI falls back to a full verbatim save. A delta whose
+// result is over the checkpoint size limit answers 409 too: the verbatim
+// fallback then meets the normal limit.
+func (h *Handler) saveCheckpointDelta(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+	releaseHold, ok := h.hold(w, r, limit)
+	if !ok {
+		return
+	}
+
+	defer releaseHold()
+
+	var req deltaCheckpointRequest
+	if !h.decodeLargeBody(w, r, limit, &req) {
+		return
+	}
+
+	in := stack.DeltaInput{
+		SchemaVersion: req.Version,
+		Sequence:      int64(req.SequenceNumber),
+		Hash:          req.CheckpointHash,
+		Delta:         []byte(req.DeploymentDelta),
+	}
+
+	if err := h.updates.SaveCheckpointDelta(ctx, ref, id, tok, in); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
 // importStackRequest is one deployment as `stack import` sends it: the
 // export shape with the schema version and the opaque deployment. The CLI
 // may gzip the body.

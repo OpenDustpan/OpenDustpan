@@ -883,10 +883,10 @@ func TestConsoleDir(t *testing.T) {
 
 // openBackupTarget opens a file-system backup target under a temporary
 // directory, for the backup wiring tests.
-func openBackupTarget(t *testing.T, name string) *fs.Store {
+func openBackupTarget(t *testing.T) *fs.Store {
 	t.Helper()
 
-	target, err := fs.Open(filepath.Join(t.TempDir(), name))
+	target, err := fs.Open(filepath.Join(t.TempDir(), "backup-target"))
 	if err != nil {
 		t.Fatalf("open backup target: %v", err)
 	}
@@ -933,7 +933,7 @@ func TestBackupTargetS3SetsObjectLimit(t *testing.T) {
 			t.Parallel()
 
 			st, blobs, authn := requireServerPorts(t)
-			target := openBackupTarget(t, "backup-target")
+			target := openBackupTarget(t)
 
 			srv, err := dustpan.NewServer(append(
 				fullServerOptions(st, blobs, authn),
@@ -962,7 +962,7 @@ func TestBackupTargetComesOnlyFromTheOption(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	target := openBackupTarget(t, "backup-target")
+	target := openBackupTarget(t)
 
 	srv, err := dustpan.NewServer(append(
 		fullServerOptions(st, blobs, authn),
@@ -1031,7 +1031,7 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	target := openBackupTarget(t, "backup-target")
+	target := openBackupTarget(t)
 
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	seedRunningBackup(t, st, now)
@@ -1061,6 +1061,37 @@ func TestRunMarksRunningBackupsFailed(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Fatalf("run server: %v", err)
+	}
+}
+
+// TestRunReturnsNilWhenCanceledBeforeStart proves Run treats a done ctx as a
+// stop, not a failure: with ctx canceled before Run starts, the start-up
+// steps (key check, running backups) see the canceled ctx and Run returns
+// nil.
+func TestRunReturnsNilWhenCanceledBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	target := openBackupTarget(t)
+
+	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+	seedRunningBackup(t, st, now)
+
+	srv, err := dustpan.NewServer(append(
+		fullServerOptions(st, blobs, authn),
+		dustpan.WithBackupTarget(target, "dir:/var/backups"),
+		dustpan.WithClock(func() time.Time { return now }),
+		dustpan.WithListenAddr("127.0.0.1:0"),
+	)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := srv.Run(ctx); err != nil {
+		t.Fatalf("run server with a canceled context: %v, want nil", err)
 	}
 }
 

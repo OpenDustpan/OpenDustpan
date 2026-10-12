@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -54,6 +55,8 @@ const (
 	databaseFlag = "--database"
 	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
+	// deltaCutoffFlag names the checkpoint delta cutoff flag serve takes.
+	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -76,6 +79,10 @@ type envInput struct {
 	token  string
 	tokenB string
 	rec    *Recorder
+	// deltaCutoff is the checkpoint size in bytes from which the CLI sends
+	// delta uploads. Zero hides the delta capability, so the CLI sends
+	// whole checkpoints.
+	deltaCutoff int
 }
 
 // backendConfig groups the settings of one backend process.
@@ -89,6 +96,10 @@ type backendConfig struct {
 	certFile     string
 	keyFile      string
 	tokens       string
+	// deltaCutoff is the checkpoint delta cutoff serve runs with. serveArgs
+	// always passes it explicitly, so an inherited
+	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
+	deltaCutoff int
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -300,6 +311,8 @@ type binaryHandle struct {
 // instead of --blob-dir, so the server keeps its live blobs on the
 // S3-compatible server. Credentials never join them: they travel in the
 // environment only.
+// The delta cutoff always joins them explicitly, so the flag default never
+// changes a test backend.
 func serveArgs(cfg backendConfig, port string) []string {
 	args := []string{
 		"serve",
@@ -308,6 +321,7 @@ func serveArgs(cfg backendConfig, port string) []string {
 		"--tls-cert", cfg.certFile,
 		"--tls-key", cfg.keyFile,
 		regionFlag, region,
+		deltaCutoffFlag, strconv.Itoa(cfg.deltaCutoff),
 	}
 
 	if cfg.blobStore != "" {
@@ -458,6 +472,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		certFile:     cert.cert,
 		keyFile:      cert.key,
 		tokens:       e.backendCfg.tokens,
+		deltaCutoff:  0,
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, port)
@@ -487,6 +502,24 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 	}
 
 	tb.Logf("migration server output:\n%s", handle.logs.String())
+}
+
+// BackupTargetDir returns the backup target directory of the binary
+// environment, so a test can corrupt the target after a backup. It needs
+// E2E_SERVER=binary.
+func (e *Env) BackupTargetDir(tb testing.TB) string {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("BackupTargetDir needs E2E_SERVER=binary")
+	}
+
+	dir, ok := strings.CutPrefix(e.backendCfg.backupTarget, "dir:")
+	if !ok || dir == "" {
+		tb.Fatalf("BackupTargetDir: the server has no dir: backup target")
+	}
+
+	return dir
 }
 
 // RunBinary runs `opendustpan <args>` as a child process with the environment
@@ -798,6 +831,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		certFile:     cert.cert,
 		keyFile:      cert.key,
 		tokens:       in.token + "," + in.tokenB,
+		deltaCutoff:  in.deltaCutoff,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 
