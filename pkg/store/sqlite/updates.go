@@ -222,13 +222,10 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 // PutCheckpoint implements stack.CheckpointStore. A row with a blob key keeps
 // the key with the size, the digest and the sequence, and no content; a row
 // without a key keeps the content as given. Each write of the running update
-// overwrites the row of that update.
+// overwrites the row of that update. The row stores a NULL resource count, so
+// the save path never scans the deployment; the delete guard counts the
+// latest deployment when it needs the count.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
-	// The resource count scans the deployment bytes, about one second for a
-	// large checkpoint under the race detector. Compute it before the fenced
-	// transaction, so the write lock covers only SQL statements.
-	resourceCount := stack.CountManagedResources(cp.Deployment)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
 		if errors.Is(err, stack.ErrNotFound) {
@@ -239,7 +236,7 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence na
 			return err
 		}
 
-		row, rowErr := codec.ToCheckpointRowCounted(cp, stack.ID(stackID), resourceCount)
+		row, rowErr := codec.ToCheckpointRow(cp, stack.ID(stackID))
 		if rowErr != nil {
 			return rowErr
 		}
@@ -279,7 +276,10 @@ func writeCheckpoint(
 		FeaturesJson:  string(row.Features),
 		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
-		ResourceCount: sql.NullInt64{Int64: row.ResourceCount, Valid: true},
+		// The row stores no resource count, so the save path never scans
+		// the deployment; the delete guard counts the latest deployment
+		// when it needs the count.
+		ResourceCount: sql.NullInt64{Int64: 0, Valid: false},
 		BlobKey:       sql.NullString{String: row.BlobKey, Valid: row.BlobKey != ""},
 		// Size is always stored: rows from before blobs hold the content
 		// length, so history needs no fallback for new rows, while reads
@@ -720,9 +720,9 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		// A NULL count predates the count column; the domain checkpoint
-		// holds no count, and the delete guard handles NULL itself.
-		ResourceCount: row.ResourceCount.Int64,
+		// The domain checkpoint holds no count; the delete guard reads the
+		// stored count itself and counts the latest deployment when it is
+		// NULL.
 		// A NULL key predates blobs; the row keeps content instead. A NULL
 		// size reads as 0 here; history falls back to the content length in
 		// SQL itself.

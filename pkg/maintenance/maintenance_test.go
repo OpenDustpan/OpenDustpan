@@ -128,7 +128,7 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard) error {
 	return stack.ErrNotFound
 }
 
@@ -407,7 +407,9 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		service:      nil,
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -544,7 +546,9 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}

@@ -441,7 +441,10 @@ type uncountedStore struct {
 	path string
 }
 
-var _ storetest.CountNullifier = (*uncountedStore)(nil)
+var (
+	_ storetest.CountNullifier = (*uncountedStore)(nil)
+	_ storetest.CountSetter    = (*uncountedStore)(nil)
+)
 
 // openUncounted returns a fresh store in a temporary directory that the
 // uncounted-checkpoint case can NULL through SQL.
@@ -479,6 +482,27 @@ func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
 
 	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
 		return fmt.Errorf("nullify the checkpoint count: %w", err)
+	}
+
+	return nil
+}
+
+// SetResourceCount implements storetest.CountSetter: it plants a stored
+// count from before saves stopped counting.
+func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
+	conn, err := sql.Open("sqlite", "file:"+s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
+		return fmt.Errorf("set the checkpoint count: %w", err)
 	}
 
 	return nil
