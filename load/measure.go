@@ -911,14 +911,13 @@ type startOutcome struct {
 	latency  float64
 }
 
-// tryStartUpdate creates and starts one update on the contention stack. An
-// update left running holds the stack lock for the later attempts, which is
-// the contention the report measures.
-func (t *target) tryStartUpdate(ctx context.Context) (startOutcome, error) {
+// tryStartUpdate creates and starts one update on the stack name. An update
+// left running holds the stack lock for the later attempts on the same stack.
+func (t *target) tryStartUpdate(ctx context.Context, name string) (startOutcome, error) {
 	start := time.Now()
 	latency := func() float64 { return ms(time.Since(start)) }
 
-	base := t.firstURL(stacksPath + t.ns + "/" + loadProject + "/" + contentionStack)
+	base := t.firstURL(stacksPath + t.ns + "/" + loadProject + "/" + name)
 
 	createResp, createErr := t.do(ctx, request{
 		method:    http.MethodPost,
@@ -980,20 +979,51 @@ type updateAttempt struct {
 	failed  error
 }
 
-// measureNamespaceUpdates starts many updates on one stack at once: the
-// stack lock serializes them into starts and conflicts.
-func (t *target) measureNamespaceUpdates(ctx context.Context, attempts int) (UpdateResult, error) {
+// measureUpdateConflicts starts many updates on one stack at once. The stack
+// lock lets one start and refuses the others with 409, so this run measures
+// the conflict path.
+func (t *target) measureUpdateConflicts(ctx context.Context, attempts int) (UpdateResult, error) {
 	if stackErr := t.createStack(ctx, contentionStack); stackErr != nil {
 		return UpdateResult{}, stackErr
 	}
 
+	names := make([]string, attempts)
+	for i := range names {
+		names[i] = contentionStack
+	}
+
+	return t.startUpdatesAtOnce(ctx, names)
+}
+
+// measureNamespaceUpdates creates one stack for each attempt in the same
+// namespace, then starts one update on each stack at once. No stack lock
+// refuses a start, so this run measures contention on the namespace fence and
+// the store.
+func (t *target) measureNamespaceUpdates(ctx context.Context, attempts int) (UpdateResult, error) {
+	names := make([]string, attempts)
+
+	for i := range names {
+		names[i] = namespaceStackPrefix + padNumber(i)
+
+		if stackErr := t.createStack(ctx, names[i]); stackErr != nil {
+			return UpdateResult{}, stackErr
+		}
+	}
+
+	return t.startUpdatesAtOnce(ctx, names)
+}
+
+// startUpdatesAtOnce starts one update for each entry of names, all at once,
+// and tallies the starts, the 409 refusals and the median attempt latency.
+func (t *target) startUpdatesAtOnce(ctx context.Context, names []string) (UpdateResult, error) {
+	attempts := len(names)
 	outcomes := make(chan updateAttempt, attempts)
 
 	var wg sync.WaitGroup
 
-	for range attempts {
+	for _, name := range names {
 		wg.Go(func() {
-			outcome, err := t.tryStartUpdate(ctx)
+			outcome, err := t.tryStartUpdate(ctx, name)
 			outcomes <- updateAttempt{outcome: outcome, failed: err}
 		})
 	}
@@ -1123,9 +1153,14 @@ func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
 		return Report{}, importsErr
 	}
 
-	updates, updatesErr := t.measureNamespaceUpdates(ctx, cfg.ContentionAttempts)
-	if updatesErr != nil {
-		return Report{}, updatesErr
+	conflicts, conflictsErr := t.measureUpdateConflicts(ctx, cfg.ContentionAttempts)
+	if conflictsErr != nil {
+		return Report{}, conflictsErr
+	}
+
+	namespaceUpdates, namespaceErr := t.measureNamespaceUpdates(ctx, cfg.ContentionAttempts)
+	if namespaceErr != nil {
+		return Report{}, namespaceErr
 	}
 
 	seedStart := time.Now()
@@ -1152,17 +1187,18 @@ func Execute(ctx context.Context, cfg Config, urls []string) (Report, error) {
 	}
 
 	return Report{
-		Time:           time.Now().UTC().Format(time.RFC3339),
-		Store:          cfg.Store,
-		Namespace:      cfg.Namespace,
-		Units:          cfg.Units,
-		DurationMs:     ms(time.Since(start)),
-		SeedMs:         ms(seedTook),
-		Checkpoints:    checkpoints,
-		Imports:        imports,
-		WorkspaceLocks: locks,
-		Updates:        updates,
-		Database:       database,
-		Lists:          lists,
+		Time:             time.Now().UTC().Format(time.RFC3339),
+		Store:            cfg.Store,
+		Namespace:        cfg.Namespace,
+		Units:            cfg.Units,
+		DurationMs:       ms(time.Since(start)),
+		SeedMs:           ms(seedTook),
+		Checkpoints:      checkpoints,
+		Imports:          imports,
+		WorkspaceLocks:   locks,
+		UpdateConflicts:  conflicts,
+		NamespaceUpdates: namespaceUpdates,
+		Database:         database,
+		Lists:            lists,
 	}, nil
 }

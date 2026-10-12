@@ -55,8 +55,10 @@ const (
 	stackNameWidth  = 6
 	workspacePrefix = "ws-"
 	contentionStack = "contend"
-	importStackName = "import"
-	checkpointStack = "checkpoint"
+	// namespaceStackPrefix names the stacks of the namespace update run.
+	namespaceStackPrefix = "ns-update-"
+	importStackName      = "import"
+	checkpointStack      = "checkpoint"
 )
 
 // emptyJSONBody is the create and unlock body the CLIs send when they carry
@@ -159,18 +161,19 @@ type ListResult struct {
 // PeakAllocBytes values are process heap bytes sampled while the server runs
 // in-process, so they cover the server and the client together.
 type Report struct {
-	Time           string             `json:"time"`
-	Store          string             `json:"store"`
-	Namespace      string             `json:"namespace"`
-	Units          int                `json:"units"`
-	DurationMs     float64            `json:"durationMs"`
-	SeedMs         float64            `json:"seedMs"`
-	Checkpoints    []CheckpointResult `json:"checkpoints"`
-	Imports        []ImportResult     `json:"imports"`
-	WorkspaceLocks LockResult         `json:"workspaceLocks"`
-	Updates        UpdateResult       `json:"updates"`
-	Database       DatabaseResult     `json:"database"`
-	Lists          ListResult         `json:"lists"`
+	Time             string             `json:"time"`
+	Store            string             `json:"store"`
+	Namespace        string             `json:"namespace"`
+	Units            int                `json:"units"`
+	DurationMs       float64            `json:"durationMs"`
+	SeedMs           float64            `json:"seedMs"`
+	Checkpoints      []CheckpointResult `json:"checkpoints"`
+	Imports          []ImportResult     `json:"imports"`
+	WorkspaceLocks   LockResult         `json:"workspaceLocks"`
+	UpdateConflicts  UpdateResult       `json:"updateConflicts"`
+	NamespaceUpdates UpdateResult       `json:"namespaceUpdates"`
+	Database         DatabaseResult     `json:"database"`
+	Lists            ListResult         `json:"lists"`
 }
 
 // target is one harness run: the server URLs it measures with its credentials.

@@ -75,7 +75,8 @@ Top-level fields of `Report`:
 | `checkpoints` | One entry per checkpoint size, see below |
 | `imports` | One entry per import size, see below |
 | `workspaceLocks` | Lock contention result, see below |
-| `updates` | Update contention result, see below |
+| `updateConflicts` | Update starts on one stack at once, see below |
+| `namespaceUpdates` | Update starts on many stacks in one namespace at once, see below |
 | `database` | Multi-instance result, see below |
 | `lists` | List latency result, see below |
 
@@ -111,7 +112,11 @@ Each entry of `imports` holds one body size:
 | `conflicts` | 409 answers counted as refused |
 | `p50Ms` | Median lock attempt latency |
 
-`updates` holds the concurrent update run on one stack:
+`updateConflicts` and `namespaceUpdates` have the same fields.
+
+`updateConflicts` starts all its updates on one stack. The stack lock lets one update start and refuses the others with 409, so this run measures the conflict path.
+
+`namespaceUpdates` starts one update on each of many stacks in one namespace. No stack lock refuses a start, so this run measures contention on the namespace fence and on the store. Every update starts.
 
 | Field | Meaning |
 | --- | --- |

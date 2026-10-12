@@ -84,9 +84,7 @@ func TestHarnessSmoke(t *testing.T) {
 		t.Fatalf("no lock won: %+v", report.WorkspaceLocks)
 	}
 
-	if report.Updates.Started == 0 {
-		t.Fatalf("no update started: %+v", report.Updates)
-	}
+	checkUpdateRuns(t, report, cfg.ContentionAttempts)
 
 	wantInstances := 1
 	if os.Getenv(postgresURLEnv) != "" {
@@ -142,5 +140,20 @@ func TestRecordedFixtures(t *testing.T) {
 
 	if unlockErr := fx.unlockWorkspace(ctx, id); unlockErr != nil {
 		t.Fatalf("unlock workspace: %v", unlockErr)
+	}
+}
+
+// checkUpdateRuns checks both update runs: on one stack the stack lock lets
+// one update start, and on one stack per attempt every update starts.
+func checkUpdateRuns(t *testing.T, report Report, attempts int) {
+	t.Helper()
+
+	if report.UpdateConflicts.Started != 1 {
+		t.Fatalf("update conflicts started = %d, want 1: %+v", report.UpdateConflicts.Started, report.UpdateConflicts)
+	}
+
+	if report.NamespaceUpdates.Started != attempts {
+		t.Fatalf("namespace updates started = %d, want %d: %+v",
+			report.NamespaceUpdates.Started, attempts, report.NamespaceUpdates)
 	}
 }
