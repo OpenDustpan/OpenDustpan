@@ -6,9 +6,12 @@
 // /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources (a
 // paged resource list with a changed marker per resource, where {version} is
 // a stack version or "latest"), GET .../state/{version}/resources/{urn} (one
-// resource with masked inputs and outputs) and GET
-// .../state/{version}/outputs (the masked stack outputs). Each secret value
-// answers as a marker with its value path, never as plain or ciphertext.
+// resource with masked inputs and outputs), GET
+// .../state/{version}/outputs (the masked stack outputs) and GET
+// .../state/diff?from=<version>&to=<version> (the added, removed and changed
+// resources of two versions with their changed value paths). Each secret
+// value answers as a marker with its value path, never as plain or
+// ciphertext; the diff answers no value at all, only URNs and value paths.
 // Clients path-escape the URN in the one-resource route, so that "/" in a
 // type token or a resource name becomes "%2F" and the URN stays one segment.
 //
