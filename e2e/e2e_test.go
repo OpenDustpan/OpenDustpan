@@ -1222,6 +1222,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 	// through the API, prove the CLI reports the conflict, then release it.
 	// The stack is the renamed one, which up, refresh and destroy ran on.
 	held := env.StartHeldUpdate(ctx, t, org, e2e.Project, "renamed")
+	// The running update holds the stack lock: the inventory entry of the
+	// stack holds it with the holder and the update kind.
+	checkInventoryLock(ctx, t, env, lockedUnit{
+		ref:       "pulumi:" + org + "/" + e2e.Project + "/renamed",
+		holder:    e2e.Subject,
+		operation: "update",
+	})
 	env.Step(ctx, t, failStep(
 		"second up while one runs",
 		outputContains("another update of this stack is in progress"),
@@ -1233,6 +1240,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		"stack", "import", "--file", importPath,
 	))
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+	// The ended update releases the lock: the inventory entry holds none.
+	checkInventoryUnlocked(ctx, t, env, "pulumi:"+org+"/"+e2e.Project+"/renamed")
 
 	// A crashed CLI leaves its update running: hold the stack through the
 	// API as the orphaned update, save the up's checkpoint with the crash
@@ -3726,6 +3735,123 @@ func statePullLacksGreeting(r e2e.Result) error {
 	return nil
 }
 
+// inventoryLockDoc decodes the lock object of GET /api/inventory/units: the
+// holder, the take time in Unix seconds, and the operation.
+type inventoryLockDoc struct {
+	Holder    string `json:"holder"`
+	Since     int64  `json:"since"`
+	Operation string `json:"operation"`
+}
+
+// inventoryUnitDoc decodes one unit of GET /api/inventory/units.
+type inventoryUnitDoc struct {
+	Tool       string            `json:"tool"`
+	Reference  string            `json:"reference"`
+	Namespace  string            `json:"namespace"`
+	Name       string            `json:"name"`
+	LastChange int64             `json:"lastChange"`
+	Lock       *inventoryLockDoc `json:"lock"`
+}
+
+// readInventoryUnits reads the inventory units of ns through the API as
+// principal A.
+func readInventoryUnits(ctx context.Context, t *testing.T, env *e2e.Env, ns string) []inventoryUnitDoc {
+	t.Helper()
+
+	got, err := env.StatusWithHeader(
+		ctx, "token "+env.TokenA(), http.MethodGet, "/api/inventory/units?organization="+ns, "",
+	)
+	if err != nil {
+		t.Fatalf("GET /api/inventory/units: %v", err)
+	}
+
+	if got.Status != http.StatusOK {
+		t.Fatalf("GET /api/inventory/units answers %d, want %d (%s)", got.Status, http.StatusOK, got.Body)
+	}
+
+	var doc struct {
+		Units []inventoryUnitDoc `json:"units"`
+	}
+
+	if err := json.Unmarshal([]byte(got.Body), &doc); err != nil {
+		t.Fatalf("decode inventory units: %v (%s)", err, got.Body)
+	}
+
+	return doc.Units
+}
+
+// findInventoryUnit returns the unit with reference, or nil when the list
+// holds none.
+func findInventoryUnit(units []inventoryUnitDoc, ref string) *inventoryUnitDoc {
+	for i := range units {
+		if units[i].Reference == ref {
+			return &units[i]
+		}
+	}
+
+	return nil
+}
+
+// namespaceOf returns the namespace of an inventory reference
+// ("tool:namespace/name").
+func namespaceOf(ref string) string {
+	_, rest, _ := strings.Cut(ref, ":")
+	ns, _, _ := strings.Cut(rest, "/")
+
+	return ns
+}
+
+// lockedUnit is one unit with the lock the test expects: its reference,
+// the holder and the operation.
+type lockedUnit struct {
+	ref       string
+	holder    string
+	operation string
+}
+
+// checkInventoryLock proves the inventory entry of want.ref holds a lock
+// with its holder and operation, and a take time. It fails the test
+// otherwise.
+func checkInventoryLock(ctx context.Context, t *testing.T, env *e2e.Env, want lockedUnit) {
+	t.Helper()
+
+	unit := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(want.ref)), want.ref)
+
+	if unit == nil {
+		t.Fatalf("inventory holds no entry %q", want.ref)
+	}
+
+	if unit.Lock == nil {
+		t.Fatalf("inventory entry %q holds no lock", want.ref)
+	}
+
+	if unit.Lock.Holder != want.holder || unit.Lock.Operation != want.operation || unit.Lock.Since <= 0 {
+		t.Fatalf(
+			"inventory lock of %q = %+v, want holder %q operation %q with a take time",
+			want.ref,
+			unit.Lock,
+			want.holder,
+			want.operation,
+		)
+	}
+}
+
+// checkInventoryUnlocked proves the inventory entry of ref holds no lock. It
+// fails the test otherwise.
+func checkInventoryUnlocked(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	unit := findInventoryUnit(readInventoryUnits(ctx, t, env, namespaceOf(ref)), ref)
+
+	if unit == nil {
+		t.Fatalf("inventory holds no entry %q", ref)
+	}
+
+	if unit.Lock != nil {
+		t.Fatalf("inventory entry %q holds %+v, want no lock", ref, unit.Lock)
+	}
+}
+
 // tofuLockScenario proves workspace locks across two principals: A locks
 // through the API, B cannot plan until it force-unlocks.
 func tofuLockScenario(t *testing.T, env *e2e.Env) {
@@ -3741,6 +3867,36 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  nil,
 		Name:   "lock by A",
+		Method: http.MethodPost,
+		Path:   lockPath,
+		Body:   `{"data":{}}`,
+		Want:   http.StatusOK,
+	})
+
+	// The inventory entry of the workspace holds the lock: holder A, no
+	// operation named, so "lock".
+	checkInventoryLock(ctx, t, env, lockedUnit{
+		ref:       "opentofu:" + e2e.Namespace + "/" + e2e.Workspace,
+		holder:    e2e.Subject,
+		operation: "lock",
+	})
+
+	// An unlock by A releases it, and the inventory entry holds no lock
+	// after. A relocks for the steps below.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "unlock by A",
+		Method: http.MethodPost,
+		Path:   unlockPath,
+		Body:   "",
+		Want:   http.StatusOK,
+	})
+
+	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:  nil,
+		Name:   "lock by A again",
 		Method: http.MethodPost,
 		Path:   lockPath,
 		Body:   `{"data":{}}`,
@@ -3792,6 +3948,9 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: false,
 	})
+
+	// The force-unlock releases the lock: the inventory entry holds none.
+	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	// A plan as B now passes.
 	env.Step(ctx, t, e2e.StepSpec{

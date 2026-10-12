@@ -49,6 +49,9 @@ type Inventory struct {
 	LastChangedMs int64
 	Status        string
 	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
 }
 
 type Namespace struct {

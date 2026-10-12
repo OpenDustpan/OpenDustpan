@@ -532,7 +532,23 @@ func (m *memStore) publish(w workspace.Workspace) {
 		DisplayName:   name,
 		Status:        "",
 		ResourceCount: nil,
+		Lock:          memLock(w.Lock),
 	}
+}
+
+// memLock returns the inventory lock a workspace holds, or nil when it is
+// unlocked, as the store adapters publish it.
+func memLock(lock workspace.Lock) *inventory.Lock {
+	if !lock.Locked() {
+		return nil
+	}
+
+	operation := lock.Reason
+	if operation == "" {
+		operation = "lock"
+	}
+
+	return &inventory.Lock{Since: lock.LockedAt, Holder: lock.Holder, Operation: operation}
 }
 
 type fixture struct {

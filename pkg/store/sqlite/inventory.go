@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -24,7 +25,9 @@ func stackUnitName(ref stack.Ref) string {
 
 // publishStackInventory writes the Pulumi entry for ref with the given unit
 // ID and change time. Status and resource count stay unknown: the Pulumi CLI
-// reports no status vocabulary and the server never reads deployments.
+// reports no status vocabulary and the server never reads deployments. The
+// lock columns stay untouched: only UpdateInventoryLock changes them, in the
+// same transaction as the update start or end that they describe.
 func publishStackInventory(
 	ctx context.Context, q *db.Queries, ref stack.Ref, unitID string, lastChangedMs int64,
 ) error {
@@ -45,6 +48,67 @@ func publishStackInventory(
 	}
 
 	return nil
+}
+
+// inventoryLockKey names one inventory row: its namespace, tool and name.
+type inventoryLockKey struct {
+	namespace string
+	tool      string
+	name      string
+}
+
+// stackInventoryKey returns the inventory key of the stack of u.
+func stackInventoryKey(u stack.Update) inventoryLockKey {
+	return inventoryLockKey{namespace: u.Ref.Namespace.String(), tool: inventoryTool, name: stackUnitName(u.Ref)}
+}
+
+// writeInventoryLock publishes the lock change of one unit in the caller's
+// transaction: lock to set it, nil to clear it. The holder is the subject of
+// the principal that holds the lock, never a token or a secret.
+func writeInventoryLock(
+	ctx context.Context, q *db.Queries, key inventoryLockKey, lock *inventory.Lock,
+) error {
+	// The lock columns stay NULL to clear; the set below fills them when
+	// the unit is locked.
+	params := db.UpdateInventoryLockParams{ //nolint:exhaustruct_v5 // The lock columns stay NULL to clear.
+		Namespace: key.namespace,
+		Tool:      key.tool,
+		Name:      key.name,
+	}
+
+	if lock != nil {
+		params.LockHolder = sql.NullString{String: lock.Holder, Valid: true}
+		params.LockSinceMs = sql.NullInt64{Int64: codec.Millis(lock.Since), Valid: true}
+		params.LockOperation = sql.NullString{String: lock.Operation, Valid: true}
+	}
+
+	if err := q.UpdateInventoryLock(ctx, params); err != nil {
+		return fmt.Errorf("update inventory lock: %w", err)
+	}
+
+	return nil
+}
+
+// publishStartLock publishes the lock a started update holds, in the
+// caller's transaction. A preview or a dry run publishes none: only a
+// mutating update holds the stack.
+func publishStartLock(ctx context.Context, q *db.Queries, u stack.Update) error {
+	lock := stackLock(u)
+	if lock == nil {
+		return nil
+	}
+
+	return writeInventoryLock(ctx, q, stackInventoryKey(u), lock)
+}
+
+// stackLock returns the inventory lock a running mutating update holds: its
+// creator with its kind, since its start. Previews and dry runs never lock.
+func stackLock(u stack.Update) *inventory.Lock {
+	if !u.Mutates() {
+		return nil
+	}
+
+	return &inventory.Lock{Since: u.StartedAt, Holder: u.CreatedBy, Operation: string(u.Kind)}
 }
 
 // removeStackInventory removes the Pulumi entry for ref.
@@ -70,15 +134,21 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 	}
 
 	out := make([]inventory.Entry, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, inventoryEntry(row))
+	for i := range rows {
+		out = append(out, inventoryEntry(rows[i]))
 	}
 
 	return out, nil
 }
 
 // inventoryEntry converts an inventory row into a domain entry. A null
-// resource count reads as nil, meaning unknown.
+// resource count reads as nil, meaning unknown. A lock reads as set only
+// when a holder is stored: an empty holder means unlocked, and the entry
+// holds no lock. A lock stays stored while its update runs, even after its
+// lease expires: an expired lease still holds the stack lock until someone
+// cancels the update, so only the terminal transition clears it. Since
+// carries the take time, so the console can show the age of a lock held too
+// long.
 func inventoryEntry(row db.Inventory) inventory.Entry {
 	var count *int64
 
@@ -96,5 +166,36 @@ func inventoryEntry(row db.Inventory) inventory.Entry {
 		DisplayName:   row.DisplayName,
 		Status:        row.Status,
 		ResourceCount: count,
+		Lock:          inventoryLock(row),
 	}
+}
+
+// inventoryLock converts the lock columns of an inventory row into a domain
+// lock, or nil when the unit is not locked. The writer stores all three
+// columns together or clears all three, so a row with any of them set holds
+// a lock. The holder may be empty: an update created without a subject still
+// locks its stack, and the entry reports the lock with no holder rather than
+// hiding it.
+func inventoryLock(row db.Inventory) *inventory.Lock {
+	holder := ""
+	if row.LockHolder.Valid {
+		holder = row.LockHolder.String
+	}
+
+	operation := ""
+	if row.LockOperation.Valid {
+		operation = row.LockOperation.String
+	}
+
+	if holder == "" && !row.LockSinceMs.Valid && operation == "" {
+		return nil
+	}
+
+	lock := &inventory.Lock{Holder: holder, Operation: operation, Since: time.Time{}}
+
+	if row.LockSinceMs.Valid {
+		lock.Since = codec.FromMillis(row.LockSinceMs.Int64)
+	}
+
+	return lock
 }
