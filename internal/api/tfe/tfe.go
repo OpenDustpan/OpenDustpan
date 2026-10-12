@@ -87,6 +87,20 @@ type StateReader interface {
 	// History returns the finalized state versions of the workspace, newest
 	// first, with the total count of finalized versions.
 	History(ctx context.Context, id workspace.ID, page workspace.Page) ([]workspace.StateVersion, int, error)
+	// ReadResources returns one page of the masked resource list of the
+	// finalized state version id. A state the client encrypted fails with
+	// workspace.ErrClientEncrypted. Size is the page size, or zero for the
+	// default page; cursor is "" or the NextCursor of an earlier page.
+	ReadResources(
+		ctx context.Context, id workspace.StateVersionID, cursor string, size int,
+	) (workspace.StatePage, error)
+	// ReadResource returns one resource of the finalized state version id
+	// with its instances masked. The address matches verbatim. A state the
+	// client encrypted fails with workspace.ErrClientEncrypted; an unknown
+	// address fails with workspace.ErrResourceNotFound.
+	ReadResource(
+		ctx context.Context, id workspace.StateVersionID, address string,
+	) (workspace.StateDetail, error)
 }
 
 // StateWriter is what the state write routes need: declare a version,

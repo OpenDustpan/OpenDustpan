@@ -403,6 +403,18 @@ func (coverageWorkspaces) ReadState(
 	return none, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) ReadResources(
+	_ context.Context, _ workspace.StateVersionID, _ string, _ int,
+) (workspace.StatePage, error) {
+	return workspace.StatePage{}, workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) ReadResource(
+	_ context.Context, _ workspace.StateVersionID, _ string,
+) (workspace.StateDetail, error) {
+	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
+}
+
 func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
 	return nil, workspace.ErrStateVersionNotFound
 }
@@ -768,6 +780,18 @@ func stateAllowEntries() []AllowEntry {
 			Reason: "Console route (ADR 41): the CLI never diffs state. " +
 				"The harness step diffs two ups with an added, a removed and a changed " +
 				"resource and a changed secret, and checks that no secret value appears.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/resources",
+			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
+			Reason: "Console route (ADR 41): the CLI never lists masked resources. " +
+				"The harness step reads the list after two applies and checks masking and changed markers.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/v2/state-versions/{state_version_id}/resources/{address}",
+			CoveringTest: "TestCLIs (tofuMaskedStateScenario)",
+			Reason: "Console route (ADR 41): the CLI never reads one masked resource. " +
+				"The harness step reads it after two applies and checks masking.",
 		},
 	}
 }
