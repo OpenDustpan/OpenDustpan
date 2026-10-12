@@ -744,7 +744,7 @@ func testBackupStagingKeepsCheckpointBlobs(t *testing.T, newStore BackupFactory)
 
 	sum, data := exportBackup(t, src)
 
-	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize}}
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize, Sealed: false}}
 	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
 		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
 	}
