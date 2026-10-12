@@ -148,6 +148,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testSealedFlagRoundTrip,
 		},
 		{
+			name: "sensitive marks are stored and read back by get, current and list",
+			test: testSensitiveMarksRoundTrip,
+		},
+		{
 			name: "delete removes the workspace with its versions and entry",
 			test: testDeleteWorkspace,
 		},
@@ -291,6 +295,7 @@ func newPendingVersion(
 		Force:           in.force,
 		Sealed:          false,
 		RestoredFrom:    "",
+		SensitiveMarks:  nil,
 	}
 }
 
@@ -358,7 +363,25 @@ func sameStateContent(got, want workspace.StateVersion) bool {
 	return got.Content == want.Content && bytes.Equal(got.Outputs, want.Outputs) &&
 		got.MD5 == want.MD5 && got.Serial == want.Serial && got.Size == want.Size &&
 		got.Force == want.Force && got.Sealed == want.Sealed &&
-		got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom
+		got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom &&
+		sameSensitiveMarks(got.SensitiveMarks, want.SensitiveMarks)
+}
+
+// sameSensitiveMarks reports whether two mark sets hold the same paths. An
+// empty and a missing set read the same: the read masks every attribute
+// value for both.
+func sameSensitiveMarks(got, want workspace.SensitiveMarks) bool {
+	if len(got) != len(want) {
+		return false
+	}
+
+	for address, paths := range want {
+		if !slices.Equal(got[address], paths) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func sameStateTimes(got, want workspace.StateVersion) bool {
@@ -2671,6 +2694,92 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 	}
 
 	assertHistory(t, list, total, []workspace.StateVersion{finalized})
+}
+
+// testSensitiveMarksRoundTrip proves SaveSensitiveMarks stores the secret
+// paths of a version and GetStateVersion, CurrentStateVersion and
+// ListStateVersions read them back, on a pending and on a finalized version.
+// A missing version reports ErrStateVersionNotFound, and a stale fence
+// reports ErrFenced with nothing written.
+func testSensitiveMarksRoundTrip(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	marks := workspace.SensitiveMarks{"terraform_data.smoke": {"/input"}}
+
+	if err := s.SaveSensitiveMarks(t.Context(), pending.ID, marks, ns.Fence()); err != nil {
+		t.Fatalf("save sensitive marks of a pending version: %v", err)
+	}
+
+	want := pending
+	want.SensitiveMarks = marks
+
+	got, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get state version with marks: %v", err)
+	}
+
+	assertStateVersion(t, got, want)
+
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+	finalized.SensitiveMarks = marks
+
+	if finalizeErr := finalizeRecorded(t, s, ns.Fence(), finalized); finalizeErr != nil {
+		t.Fatalf("finalize state version: %v", finalizeErr)
+	}
+
+	// The rendering may land after the state upload finalizes, so saving on
+	// a finalized version overwrites the marks.
+	updated := workspace.SensitiveMarks{"terraform_data.smoke": {"/input", "/id"}}
+
+	if saveErr := s.SaveSensitiveMarks(t.Context(), pending.ID, updated, ns.Fence()); saveErr != nil {
+		t.Fatalf("save sensitive marks of a finalized version: %v", saveErr)
+	}
+
+	finalized.SensitiveMarks = updated
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	assertStateVersion(t, current, finalized)
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{finalized})
+
+	missing := workspace.StateVersionID(ident.NewID("sv-"))
+
+	if missingErr := s.SaveSensitiveMarks(t.Context(), missing, marks, ns.Fence()); !errors.Is(
+		missingErr, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("save marks of a missing version: err = %v, want ErrStateVersionNotFound", missingErr)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if fenceErr := s.SaveSensitiveMarks(t.Context(), pending.ID, marks, stale); !errors.Is(
+		fenceErr, namespace.ErrFenced,
+	) {
+		t.Fatalf("save marks with a stale fence: err = %v, want ErrFenced", fenceErr)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get state version after a fenced save: %v", err)
+	}
+
+	assertStateVersion(t, stored, finalized)
 }
 
 // testDeleteWorkspace proves the final delete removes the workspace with
