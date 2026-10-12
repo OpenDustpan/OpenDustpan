@@ -263,6 +263,8 @@ How-to guides:
   content.
 - [Observe the server](docs/guides/observe.md): probes, metrics and request
   logs.
+- [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
+  layout of an installation, and how to measure its size.
 
 Reference:
 
