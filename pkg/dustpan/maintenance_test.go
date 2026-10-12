@@ -389,6 +389,7 @@ func TestNewServerRequiresMaintenanceStore(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
