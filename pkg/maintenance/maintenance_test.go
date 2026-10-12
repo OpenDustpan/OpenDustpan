@@ -349,6 +349,18 @@ func (fakeStates) DeleteExpiredPendingStateVersions(
 	return nil, nil
 }
 
+func (fakeStates) ListUnsealedStateVersions(
+	context.Context,
+) ([]workspace.StateVersion, error) {
+	return nil, nil
+}
+
+func (fakeStates) SealStateVersion(
+	context.Context, workspace.StateVersionID, blob.Key, []byte, namespace.Fence,
+) error {
+	return nil
+}
+
 // fakeBlobs answers no content. The force-unlock path reads none.
 type fakeBlobs struct{}
 

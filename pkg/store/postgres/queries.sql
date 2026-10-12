@@ -457,6 +457,25 @@ UPDATE state_versions
 SET content_key = $1
 WHERE id = $2 AND status = 'pending';
 
+-- name: ListUnsealedStateVersions :many
+-- Finalized versions that still hold plain content, ordered by ID, so the
+-- seal job seals them in a stable order. A version without content stays
+-- out: a pending row names no content yet.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC;
+
+-- name: SealStateVersion :execrows
+-- Moves one unsealed version to its sealed blob with its sealed outputs and
+-- marks it sealed. The write matches only an unsealed row, so a retry after
+-- a crash succeeds and changes nothing.
+UPDATE state_versions
+SET content_key = @content_key, outputs = @outputs, sealed = TRUE
+WHERE id = @id AND NOT sealed;
+
 -- name: GetCurrentStateVersion :one
 -- Follows the workspace pointer: a forced upload may carry a lower serial and
 -- still be current, so the highest serial is not always the current state.

@@ -512,6 +512,60 @@ func (m *memStore) DeleteExpiredPendingStateVersions(
 	return out, nil
 }
 
+// ListUnsealedStateVersions implements workspace.StateStore.
+func (m *memStore) ListUnsealedStateVersions(
+	_ context.Context,
+) ([]workspace.StateVersion, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []workspace.StateVersion
+
+	for vid := range m.versions {
+		if sv := m.versions[vid]; !sv.Sealed && sv.Status == workspace.StatusFinalized && sv.Content != "" {
+			out = append(out, sv)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
+		return strings.Compare(a.ID.String(), b.ID.String())
+	})
+
+	return out, nil
+}
+
+// SealStateVersion implements workspace.StateStore.
+func (m *memStore) SealStateVersion(
+	_ context.Context,
+	id workspace.StateVersionID,
+	content blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	sv, ok := m.versions[id]
+	if !ok {
+		return workspace.ErrStateVersionNotFound
+	}
+
+	if sv.Sealed {
+		return nil
+	}
+
+	sv.Content = content
+	sv.Outputs = outputs
+	sv.Sealed = true
+	m.versions[id] = sv
+
+	return nil
+}
+
 // ListStateVersions implements workspace.StateStore: finalized versions of
 // the workspace, newest first by finalize time, with the total count.
 func (m *memStore) ListStateVersions(

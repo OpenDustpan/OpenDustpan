@@ -52,7 +52,8 @@ Restore loads a backup from the configured backup target into the running
 installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key, the same dialect, and the same schema version as
-the backup source.
+the backup source. A backup from before the seal change still restores.
+After the apply, the server seals the rows that the backup holds unsealed.
 
 Run the restore command. It calls the server and waits until the restore
 leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from

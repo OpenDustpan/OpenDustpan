@@ -537,6 +537,32 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 	return s.inner.DeleteExpiredPendingStateVersions(ctx, id, expiredBefore, fence)
 }
 
+// ListUnsealedStateVersions returns the finalized versions that still hold
+// plain content, unless a fault fires first.
+func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
+	if err := s.before(ctx, "ListUnsealedStateVersions"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListUnsealedStateVersions(ctx)
+}
+
+// SealStateVersion moves one unsealed version to its sealed blob, unless a
+// fault fires first.
+func (s *Store) SealStateVersion(
+	ctx context.Context,
+	id workspace.StateVersionID,
+	content blob.Key,
+	outputs []byte,
+	fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "SealStateVersion"); err != nil {
+		return err
+	}
+
+	return s.inner.SealStateVersion(ctx, id, content, outputs, fence)
+}
+
 // ListUnits returns the inventory entries of ns, unless a fault fires first.
 func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	if err := s.before(ctx, "ListUnits"); err != nil {
