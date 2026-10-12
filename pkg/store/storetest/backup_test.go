@@ -2924,6 +2924,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 		DisplayName:   name,
 		Status:        "",
 		ResourceCount: nil,
+		Lock:          nil,
 	}
 }
 
@@ -2940,6 +2941,7 @@ func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, cha
 		DisplayName:   name,
 		Status:        "",
 		ResourceCount: nil,
+		Lock:          nil,
 	}
 }
 

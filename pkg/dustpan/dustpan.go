@@ -114,6 +114,7 @@ type settings struct {
 	now                  func() time.Time
 	region               namespace.Region
 	listenAddr           string
+	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
 	tlsCertFile          string
@@ -213,8 +214,17 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithListenAddr sets the address Run listens on. Defaults to ":8080".
+// It is ignored when WithListener is set: the passed listener wins.
 func WithListenAddr(addr string) Option {
 	return func(o *settings) { o.listenAddr = addr }
+}
+
+// WithListener sets the listener Run serves on. The listener must already
+// be bound, for example on 127.0.0.1:0, and stay open until Run starts.
+// Run serves plain HTTP or TLS on it and closes it on shutdown. When set,
+// it wins over WithListenAddr: Run never dials or binds another address.
+func WithListener(l net.Listener) Option {
+	return func(o *settings) { o.listener = l }
 }
 
 // WithConsoleDir serves a built web console from dir at "/". The console is a
@@ -301,6 +311,7 @@ type Server struct {
 	handler         http.Handler
 	logger          *slog.Logger
 	listenAddr      string
+	listener        net.Listener
 	secrets         *secret.Service
 	secretKeys      secret.KeyStore
 	secretWrapper   secret.Wrapper
@@ -345,6 +356,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		now:                   time.Now,
 		region:                "",
 		listenAddr:            defaultListenAddr,
+		listener:              nil,
 		consoleDir:            "",
 		allowedOrigins:        nil,
 		tlsCertFile:           "",
@@ -355,9 +367,9 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxSecretBatchBytes:   0,
 		maxStateBytes:         0,
 		maxBodyBytesInFlight:  0,
-		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
 		backupTarget:          nil,
 		backupTargetName:      "",
+		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
 	}
 
 	for _, opt := range opts {
@@ -415,6 +427,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		handler:         handler,
 		logger:          cfg.logger,
 		listenAddr:      cfg.listenAddr,
+		listener:        cfg.listener,
 		secrets:         svc.secrets,
 		secretKeys:      cfg.secretKeys,
 		secretWrapper:   cfg.secretWrapper,
@@ -679,32 +692,117 @@ func (s *Server) Metrics() *metrics.ServerMetrics {
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
 // WithTLS it serves HTTPS; without it, it warns when the listen address is
-// not loopback and serves plain HTTP anyway. Run first runs the start-up
-// check that refuses a key-encryption key that opens less than every wrapped
-// key in the database (ADR 23), so a program that embeds the server cannot
-// start with the wrong key. It then marks every running backup failed: the
-// server stopped during it (ADR 30 decision 9). When ctx is done before
-// these start-up steps end, Run returns nil: the caller asked it to stop,
-// and an error caused by that stop is not a failure.
+// not loopback and serves plain HTTP anyway. With WithListener it serves on
+// the passed listener, which wins over WithListenAddr. Without it, Run binds
+// WithListenAddr itself. Either way it logs the bound address in the
+// listening line, so a server on :0 reports the port it holds. Run first
+// runs the start-up check that refuses a key-encryption key that opens less
+// than every wrapped key in the database (ADR 23), so a program that embeds
+// the server cannot start with the wrong key. It then marks every running
+// backup and every running restore failed: the server stopped during them
+// (ADR 30 decision 9, ADR 38 decision 9). When ctx
+// is done before these start-up steps end, Run returns nil: the caller asked
+// it to stop, and an error caused by that stop is not a failure.
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.runStartUp(ctx); err != nil {
-		return err
+		return startUpResult(ctx, err)
 	}
 
-	srv, err := s.newHTTPServer(ctx)
+	tlsCfg, err := s.tlsConfig()
 	if err != nil {
 		return err
 	}
 
+	ln, err := s.listen(ctx)
+	if err != nil {
+		return err
+	}
+
+	srv := &http.Server{
+		Addr:              ln.Addr().String(),
+		Handler:           s.handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+		TLSConfig:         tlsCfg,
+	}
+
+	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
+
+	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// startUpResult answers the result of Run when a start-up step fails with
+// err: nil when ctx is done, because the caller asked Run to stop and an
+// error caused by that stop is not a failure, else err.
+func startUpResult(ctx context.Context, err error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		return err
+	}
+}
+
+// tlsConfig loads the TLS configuration when a certificate is set, else
+// returns nil without an error for plain HTTP.
+func (s *Server) tlsConfig() (*tls.Config, error) {
+	if s.tlsCertFile == "" {
+		//nolint:nilnil // No certificate without an error means plain HTTP.
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate: %w", err)
+	}
+
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}, nil
+}
+
+// listen answers the listener Run serves on: the passed listener when
+// WithListener is set, else a new binding of the listen address.
+func (s *Server) listen(ctx context.Context) (net.Listener, error) {
+	if s.listener != nil {
+		return s.listener, nil
+	}
+
+	//nolint:exhaustruct_v5 // The server listens with defaults; only the network and address matter.
+	lc := &net.ListenConfig{}
+
+	ln, err := lc.Listen(ctx, "tcp", s.listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	return ln, nil
+}
+
+// warnPlainHTTP logs a warning when addr serves plain HTTP off loopback.
+func warnPlainHTTP(ctx context.Context, logger *slog.Logger, addr string, tlsCfg *tls.Config) {
+	if tlsCfg != nil || isLoopbackListenAddr(addr) {
+		return
+	}
+
+	logger.WarnContext(ctx, "serving plain HTTP on a non-loopback address", slog.String("addr", addr))
+}
+
+// serveUntilDone serves srv on ln until ctx is done, then shuts down
+// gracefully. It logs the bound address, so a server on :0 reports the
+// port it holds.
+func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener) error {
+	boundAddr := ln.Addr().String()
 	serveErr := make(chan error, 1)
 
 	go func() {
-		s.logger.InfoContext(ctx, "listening", slog.String("addr", s.listenAddr))
+		s.logger.InfoContext(ctx, "listening", slog.String("addr", boundAddr))
 
 		if srv.TLSConfig != nil {
-			serveErr <- srv.ListenAndServeTLS("", "")
+			// ServeTLS, not Serve on a tls listener, so the server keeps
+			// HTTP/2. The certificate is already in TLSConfig, so the file
+			// arguments stay empty.
+			serveErr <- srv.ServeTLS(ln, "", "")
 		} else {
-			serveErr <- srv.ListenAndServe()
+			serveErr <- srv.Serve(ln)
 		}
 	}()
 
@@ -715,38 +813,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	return shutdownServer(ctx, srv, serveErr)
-}
-
-// newHTTPServer builds the HTTP server: HTTPS with the configured
-// certificate, else plain HTTP with a warning off loopback.
-func (s *Server) newHTTPServer(ctx context.Context) (*http.Server, error) {
-	srv := &http.Server{
-		Addr:              s.listenAddr,
-		Handler:           s.handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-		IdleTimeout:       idleTimeout,
-	}
-
-	if s.tlsCertFile == "" {
-		if !isLoopbackListenAddr(s.listenAddr) {
-			s.logger.WarnContext(
-				ctx,
-				"serving plain HTTP on a non-loopback address",
-				slog.String("addr", s.listenAddr),
-			)
-		}
-
-		return srv, nil
-	}
-
-	cert, err := tls.LoadX509KeyPair(s.tlsCertFile, s.tlsKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load TLS certificate: %w", err)
-	}
-
-	srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
-
-	return srv, nil
 }
 
 // shutdownServer shuts down srv after ctx is done and reports the serve
@@ -948,16 +1014,17 @@ func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		Namespaces:    deps.services.namespaces,
-		Backups:       deps.backups,
-		Restores:      restores,
-		Maintenance:   deps.maint,
-		Metrics:       deps.observed,
-		Version:       cfg.version,
-		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Authenticator:    cfg.authenticator,
+		Authorizer:       cfg.authorizer,
+		Logger:           cfg.logger,
+		Namespaces:       deps.services.namespaces,
+		Backups:          deps.backups,
+		Restores:         restores,
+		Maintenance:      deps.maint,
+		Metrics:          deps.observed,
+		Version:          cfg.version,
+		Schema:           schemaReporterOf(cfg.namespaceStore),
+		KeyEncryptionKey: cfg.secretWrapper != nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

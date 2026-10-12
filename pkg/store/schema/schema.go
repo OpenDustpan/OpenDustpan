@@ -141,6 +141,7 @@ var embeddedMigrationNames = []string{
 	"0014_checkpoint_resource_count.sql",
 	"0015_maintenance.sql",
 	"0016_checkpoint_blobs.sql",
+	"0017_inventory_lock.sql",
 	"0018_restores.sql",
 }
 

@@ -49,6 +49,9 @@ type Inventory struct {
 	LastChangedMs int64
 	Status        string
 	ResourceCount pgtype.Int8
+	LockHolder    pgtype.Text
+	LockSinceMs   pgtype.Int8
+	LockOperation pgtype.Text
 }
 
 type Namespace struct {

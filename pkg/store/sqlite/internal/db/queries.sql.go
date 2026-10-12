@@ -1417,7 +1417,8 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 }
 
 const listInventory = `-- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = ?
 ORDER BY tool, name
@@ -1441,6 +1442,9 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 			&i.LastChangedMs,
 			&i.Status,
 			&i.ResourceCount,
+			&i.LockHolder,
+			&i.LockSinceMs,
+			&i.LockOperation,
 		); err != nil {
 			return nil, err
 		}
@@ -2197,6 +2201,36 @@ func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	return err
 }
 
+const updateInventoryLock = `-- name: UpdateInventoryLock :exec
+UPDATE inventory
+SET lock_holder = ?, lock_since_ms = ?, lock_operation = ?
+WHERE namespace = ? AND tool = ? AND name = ?
+`
+
+type UpdateInventoryLockParams struct {
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
+	Namespace     string
+	Tool          string
+	Name          string
+}
+
+// Publishes a lock change of one unit: holder with take time and operation
+// to set it, all NULL to clear it. The caller writes it in the same
+// transaction as the lock itself.
+func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLockParams) error {
+	_, err := q.db.ExecContext(ctx, updateInventoryLock,
+		arg.LockHolder,
+		arg.LockSinceMs,
+		arg.LockOperation,
+		arg.Namespace,
+		arg.Tool,
+		arg.Name,
+	)
+	return err
+}
+
 const upsertInstallationState = `-- name: UpsertInstallationState :exec
 INSERT INTO installation (id, state)
 VALUES (1, ?)
@@ -2231,6 +2265,9 @@ type UpsertInventoryParams struct {
 	ResourceCount sql.NullInt64
 }
 
+// The lock columns stay out of the upsert: other writes keep the lock a
+// running update or a held workspace published, and only UpdateInventoryLock
+// changes it.
 func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams) error {
 	_, err := q.db.ExecContext(ctx, upsertInventory,
 		arg.Namespace,

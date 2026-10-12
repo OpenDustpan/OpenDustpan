@@ -56,6 +56,10 @@ type Config struct {
 	// means the upgrade check answers 500: every production server wires its
 	// store.
 	Schema SchemaReporter
+	// KeyEncryptionKey reports whether the server runs with a key-encryption
+	// key. The upgrade check answers it, so that the command can warn about
+	// a server that still runs without one (ADR 41 decision 12).
+	KeyEncryptionKey bool
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -79,6 +83,7 @@ type Handler struct {
 	metrics     MetricsWriter
 	version     string
 	schema      SchemaReporter
+	keyed       bool
 	mux         *patternMux
 	routes      []Route
 }
@@ -113,6 +118,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		metrics:     cfg.Metrics,
 		version:     cfg.Version,
 		schema:      cfg.Schema,
+		keyed:       cfg.KeyEncryptionKey,
 		mux:         newPatternMux(),
 		routes:      nil,
 	}

@@ -165,6 +165,7 @@ func pgCopyScopeTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, "tool", pgColName, "unit_id", "display_name",
 				"last_changed_ms", pgColStatus, "resource_count",
+				"lock_holder", "lock_since_ms", "lock_operation",
 			},
 			orderBy: []string{pgColNamespace, "tool", pgColName},
 		},

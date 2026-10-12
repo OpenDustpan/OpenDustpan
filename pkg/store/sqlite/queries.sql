@@ -273,6 +273,9 @@ DELETE FROM secret_keys
 WHERE stack_id = ?;
 
 -- name: UpsertInventory :exec
+-- The lock columns stay out of the upsert: other writes keep the lock a
+-- running update or a held workspace published, and only UpdateInventoryLock
+-- changes it.
 INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (namespace, tool, name) DO UPDATE SET
@@ -282,12 +285,21 @@ ON CONFLICT (namespace, tool, name) DO UPDATE SET
     status = excluded.status,
     resource_count = excluded.resource_count;
 
+-- name: UpdateInventoryLock :exec
+-- Publishes a lock change of one unit: holder with take time and operation
+-- to set it, all NULL to clear it. The caller writes it in the same
+-- transaction as the lock itself.
+UPDATE inventory
+SET lock_holder = ?, lock_since_ms = ?, lock_operation = ?
+WHERE namespace = ? AND tool = ? AND name = ?;
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = ?
 ORDER BY tool, name;

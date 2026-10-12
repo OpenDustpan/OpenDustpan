@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -135,7 +136,19 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 		}
 
 		if n > 0 {
-			return publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs)
+			if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+				return pubErr
+			}
+
+			// The lock moves with the write in the same transaction: lock,
+			// unlock and force-unlock all save here.
+			return writeInventoryLock(
+				ctx, q, inventoryLockKey{
+					namespace: w.Ref.Namespace.String(),
+					tool:      workspaceInventoryTool,
+					name:      w.Ref.Name.String(),
+				}, workspaceLock(w.Lock),
+			)
 		}
 
 		_, err = q.GetWorkspaceByID(ctx, row.ID)
@@ -674,7 +687,9 @@ func workspaceRef(row db.Workspace) workspace.Ref {
 
 // publishWorkspaceInventory writes the OpenTofu entry for a workspace with
 // the given change time. Status and resource count stay unknown: OpenTofu
-// reports no status vocabulary and the server never reads state.
+// reports no status vocabulary and the server never reads state. The lock
+// columns stay untouched: only writeInventoryLock changes them, in the same
+// transaction as the lock, unlock or force-unlock that they describe.
 func publishWorkspaceInventory(
 	ctx context.Context, q *db.Queries, ref workspace.Ref, unitID string, lastChangedMs int64,
 ) error {
@@ -695,4 +710,26 @@ func publishWorkspaceInventory(
 	}
 
 	return nil
+}
+
+// workspaceLock returns the inventory lock a workspace holds, or nil when it
+// is unlocked. The holder is the subject of the principal that took the
+// lock, never a token or a secret.
+func workspaceLock(lock workspace.Lock) *inventory.Lock {
+	if !lock.Locked() {
+		return nil
+	}
+
+	return &inventory.Lock{Since: lock.LockedAt, Holder: lock.Holder, Operation: lockOperation(lock.Reason)}
+}
+
+// lockOperation maps a workspace lock reason to the inventory operation: the
+// CLI's own word when it locked with one, else "lock". The TFE protocol
+// carries only the reason, so the reason is the operation word.
+func lockOperation(reason string) string {
+	if reason == "" {
+		return "lock"
+	}
+
+	return reason
 }
