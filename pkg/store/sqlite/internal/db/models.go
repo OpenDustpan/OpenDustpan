@@ -58,6 +58,17 @@ type Namespace struct {
 	CreatedAtMs     int64
 }
 
+type Restore struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   int64
+	Error       string
+}
+
 type SecretKey struct {
 	Namespace   string
 	StackID     string

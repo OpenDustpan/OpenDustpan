@@ -64,6 +64,9 @@ func removeStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref) err
 // ListUnits implements inventory.Reader: entries of one namespace, ordered by
 // tool, then name. A namespace with no units reads as an empty list.
 func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	rows, err := s.queries.ListInventory(ctx, ns.String())
 	if err != nil {
 		return nil, fmt.Errorf("select inventory: %w", err)

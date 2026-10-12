@@ -41,6 +41,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.Importer
 	backup.KeyPeeker
 	backup.Registry
+	backup.RestoreRegistry
 	backup.Inspector
 	maintenance.Store
 	backup.Stager
@@ -110,6 +111,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 		{name: "staging loads a backup without touching live data", test: testBackupStagingKeepsLive},
+		{name: "staging keeps a checkpoint held in blobs", test: testBackupStagingKeepsCheckpointBlobs},
 		{name: "a new stage discards the previous staging area", test: testBackupStagingReplacesPrevious},
 		{name: "staging refuses a manifest that omits a table", test: testBackupStagingRefusesOmittedTable},
 		{name: "staging refuses another dialect", test: testBackupStagingRefusesDialect},
@@ -319,10 +321,11 @@ func importBackup(t *testing.T, dst BackupStore, data []byte, want backup.Summar
 	return got
 }
 
-// assertBackupEmpty fails when s holds any namespace, secret key, or backup
-// row. Namespaces own every other row through foreign keys, so an empty
-// namespace and backup list means an empty store; the wrapper-ID check names
-// the secret_keys table directly, matching the fake's full-table empty check.
+// assertBackupEmpty fails when s holds any namespace, secret key, backup
+// row or restore row. Namespaces own every other row through foreign keys,
+// so an empty namespace and backup list means an empty store; the wrapper-ID
+// check names the secret_keys table directly, matching the fake's
+// full-table empty check.
 func assertBackupEmpty(t *testing.T, s BackupStore) {
 	t.Helper()
 
@@ -351,6 +354,15 @@ func assertBackupEmpty(t *testing.T, s BackupStore) {
 
 	if len(rows) != 0 {
 		t.Fatalf("backups = %+v, want none", rows)
+	}
+
+	restores, err := s.ListRestores(t.Context())
+	if err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+
+	if len(restores) != 0 {
+		t.Fatalf("restores = %+v, want none", restores)
 	}
 }
 
@@ -560,6 +572,18 @@ func mustListBackups(t *testing.T, s BackupStore) []backup.Record {
 	return got
 }
 
+// mustListRestores lists every restore row, failing on error.
+func mustListRestores(t *testing.T, s BackupStore) []backup.RestoreRecord {
+	t.Helper()
+
+	got, err := s.ListRestores(t.Context())
+	if err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+
+	return got
+}
+
 // mustCreateBackup stores a running backup row, failing on error.
 func mustCreateBackup(t *testing.T, s BackupStore, r backup.Record) backup.Record {
 	t.Helper()
@@ -674,6 +698,46 @@ func testBackupCheckpointBlob(t *testing.T, newStore BackupFactory) {
 		got.Sequence != want.Sequence || got.Digest != want.Digest {
 		t.Fatalf("checkpoint after import = %+v, want key %q with the stored size and digest", got, key)
 	}
+}
+
+// testBackupStagingKeepsCheckpointBlobs stages an export that holds a
+// checkpoint kept in blobs into an empty store: the staged summary names the
+// blob, like the export does. A stager that reads blob references from state
+// versions alone reports corrupt here, while the export names the checkpoint
+// blob.
+func testBackupStagingKeepsCheckpointBlobs(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	st := mustGetStack(t, src, f.ref)
+
+	key, err := blob.ParseKey("pulumi/" + st.ID.String() + "/" + u.ID.String() + "/0")
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
+
+	if putErr := src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+		t.Fatalf("put checkpoint: %v", putErr)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	sum, data := exportBackup(t, src)
+
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize}}
+	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
+	}
+
+	dst := newStore(t)
+	staged := stageBackup(t, dst, data, sum)
+	assertSummary(t, staged, sum)
+	discardStaging(t, dst)
 }
 
 // assertSummary compares two summaries field by field.
@@ -845,6 +909,7 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     int64(len(acmeWorkspaces) + len(otherWorkspaces)),
 		"state_versions": 2,
 		"backups":        int64(len(mustListBackups(t, s))),
+		"restores":       int64(len(mustListRestores(t, s))),
 		// The installation table holds its one seeded row in every store:
 		// no port lists it, so the count is the schema constant.
 		"installation": 1,
@@ -862,6 +927,7 @@ func expectedRowCounts(t *testing.T, s BackupStore, seed *backupSeed) map[string
 		"workspaces":     2,
 		"state_versions": 2,
 		"backups":        1,
+		"restores":       0,
 		"installation":   1,
 	}
 
@@ -887,6 +953,7 @@ func compareBackupStores(t *testing.T, dst, want BackupStore, seed *backupSeed) 
 	compareBackupWorkspaces(t, dst, want, seed)
 	compareBackupStates(t, dst, want, seed)
 	compareBackupRecord(t, dst, seed)
+	compareBackupRestores(t, dst, want)
 	compareBackupInstallation(t, dst, want)
 }
 
@@ -1028,6 +1095,26 @@ func compareBackupRecord(t *testing.T, dst BackupStore, seed *backupSeed) {
 
 	if got := mustGetBackup(t, dst, seed.backedUp.ID); got != seed.backedUp {
 		t.Fatalf("backup after import = %+v, want %+v", got, seed.backedUp)
+	}
+}
+
+// compareBackupRestores compares the restore rows after import: the seed
+// holds none, so the destination must hold none either. The dedicated
+// RunRestore suite covers the restores table itself.
+func compareBackupRestores(t *testing.T, dst, want BackupStore) {
+	t.Helper()
+
+	got := mustListRestores(t, dst)
+	all := mustListRestores(t, want)
+
+	if len(got) != len(all) {
+		t.Fatalf("restores after import = %+v, want %+v", got, all)
+	}
+
+	for i := range all {
+		if got[i] != all[i] {
+			t.Fatalf("restore %d after import = %+v, want %+v", i, got[i], all[i])
+		}
 	}
 }
 

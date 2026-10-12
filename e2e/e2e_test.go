@@ -10,12 +10,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -38,8 +36,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 const (
@@ -7859,10 +7855,6 @@ func backupCheckpointBlobSize(manifest backupManifestDoc) int64 {
 	return largest
 }
 
-// restoreRegion is the region the restore test passes. It matches the region
-// of the harness environment, so no region warning appears.
-const restoreRegion = "e2e"
-
 // restoreSecret is the Pulumi config secret the test writes before the
 // backup and reads back after the restore.
 const restoreSecret = "s3cr3t"
@@ -7870,15 +7862,18 @@ const restoreSecret = "s3cr3t"
 // TestBackupRestore proves the backup exit test of ADR 30 consequence 5 with
 // the real binary. Server A serves with --backup-target. Both CLIs write
 // first, then background writers churn other stacks while `opendustpan
-// backup` runs, and `backup check` exits 0. The test stops A, restores the
-// backup into an empty destination with the same key, starts server B on it,
-// and proves both CLIs read the same state: the Pulumi export and the OpenTofu
-// pull match server A, the secret decrypts, and the history and state version
-// counts match. A restore with a wrong key exits 1, names
-// DUSTPAN_KEY_ENCRYPTION_KEY and writes nothing. Restores into a loaded
-// destination and into another schema version exit 1. It runs for every CLI
-// version of both tools, paired, on SQLite and on PostgreSQL, and only with
-// E2E_SERVER=binary on Linux.
+// backup` runs, and `backup check` exits 0. The test stops A, wipes the
+// destination, starts the server on the empty database, and restores the
+// backup into the empty installation through `opendustpan restore` against
+// the running server (ADR 38, ADR 39), then proves both CLIs read the same
+// state: the Pulumi export and the OpenTofu pull match server A, the secret
+// decrypts, and the history and state version counts match. It then restores
+// over live data, runs a check-only restore, proves a failed check changes
+// nothing, proves a lease from before a restore is fenced after it, undoes
+// the restore with the backup taken before it, and proves a wrong-key and a
+// schema-mismatch restore name their cause and change nothing. It runs for
+// every CLI version of both tools, paired, on SQLite and on PostgreSQL, and
+// only with E2E_SERVER=binary on Linux.
 func TestBackupRestore(t *testing.T) {
 	t.Parallel()
 
@@ -7975,7 +7970,11 @@ func pairBackupCLIs(pulumi, tofu []e2e.Install) []backupPair {
 // backup check exits 0, the backup restores into an empty destination with
 // the same key, server B reads the same state, a wrong-key restore names the
 // key and writes nothing, and loaded-destination and schema-mismatch restores
-// exit 1.
+// exit 1. Restores run through `opendustpan restore` against the running
+// server (ADR 38, ADR 39): restore into an empty installation, restore over
+// live data, check-only, a failed check that changes nothing, a lease from
+// before the restore fenced after it, and an undo with the backup taken
+// before the restore.
 func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	t.Helper()
 
@@ -7998,21 +7997,78 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	after := captureExitState(ctx, t, env, tools, "after backup")
 	checkExitStateStable(t, before, after)
 	runBackupCheck(ctx, t, env, target, id)
+	backupVersions := readFailoverVersions(ctx, t, env, store)
 
+	// Restore into an empty installation through the API: stop A, wipe the
+	// destination, start the server on the empty database, and restore
+	// through the new client command.
 	env.StopServer(ctx, t)
 	wipeRestoreDestination(ctx, t, env, store)
-	runRestoreBinary(ctx, t, env, target, id)
 	env.StartServer(ctx, t)
+	runRestoreCommand(ctx, t, env, id)
+	env.NoteStep(t, "restore into an empty installation", "restored "+id+" through the API")
 
 	restored := captureExitState(ctx, t, env, tools, "after restore")
 	checkExitStateMatches(t, after, restored)
-	checkRestoreRefusesLoaded(ctx, t, env, target, id)
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
 
-	env.StopServer(ctx, t)
-	wipeRestoreDestination(ctx, t, env, store)
-	runRestoreWrongKey(ctx, t, env, target, id)
-	checkRestoreDestinationEmpty(ctx, t, env, store)
-	runRestoreSchemaMismatch(ctx, t, env, tamperManifestSchema(t, target, id), id)
+	// Restore over live data: back up the restored state, restore the
+	// first backup over it, and prove the state matches the first backup.
+	liveID := runBackupCommand(ctx, t, env)
+	runRestoreCommand(ctx, t, env, id)
+	overRestored := captureExitState(ctx, t, env, tools, "after over-live restore")
+	checkExitStateMatches(t, after, overRestored)
+
+	// Check-only changes nothing.
+	runRestoreCheckOnly(ctx, t, env, liveID)
+	checkOnlyUnchanged := captureExitState(ctx, t, env, tools, "after check-only")
+	checkExitStateMatches(t, overRestored, checkOnlyUnchanged)
+
+	// A failed check changes nothing: restore a missing backup and prove
+	// the state stays.
+	runRestoreMissing(ctx, t, env)
+	failedUnchanged := captureExitState(ctx, t, env, tools, "after failed check")
+	checkExitStateMatches(t, overRestored, failedUnchanged)
+
+	// A lease from before the restore is fenced after it: hold an update,
+	// prove a restore without --force is refused while work is active, then
+	// restore with --force and prove the old lease no longer writes and every
+	// namespace moved exactly one failover version.
+	held := env.StartHeldUpdate(ctx, t, e2e.Namespace, e2e.Project, stackName)
+	heldBaseline := captureExitState(ctx, t, env, tools, "with held update")
+	runRestoreRefused(ctx, t, env, id, "active")
+	runRestoreCommandForced(ctx, t, env, id)
+	checkHeldLeaseFenced(ctx, t, env, held)
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	env.NoteStep(t, "lease fenced after restore", "old lease from before the restore no longer writes")
+
+	// Undo with the backup taken before the restore: the restore names its
+	// pre-backup, and restoring it brings back the state from before the
+	// forced restore, held update included.
+	preID := restorePreBackupID(ctx, t, env, id)
+	runRestoreCommand(ctx, t, env, preID)
+	undone := captureExitState(ctx, t, env, tools, "after undo")
+	checkExitStateMatches(t, heldBaseline, undone)
+
+	// A restore with a key that matches no wrapper stops before it writes
+	// and names DUSTPAN_KEY_ENCRYPTION_KEY: tamper the manifest wrappers in
+	// place, restore, prove the failure and the unchanged state, then put
+	// the manifest back.
+	saved := readTargetManifest(t, target, id)
+	rewriteTargetManifest(t, target, id, func(m *backup.Manifest) { m.WrapperIDs = []string{"kek-unknown"} })
+	runRestoreRefused(ctx, t, env, id, "DUSTPAN_KEY_ENCRYPTION_KEY")
+	wrongKeyUnchanged := captureExitState(ctx, t, env, tools, "after wrong-key restore")
+	checkExitStateMatches(t, undone, wrongKeyUnchanged)
+	writeTargetManifest(t, target, id, saved)
+
+	// A restore of another schema version stops before it writes and names
+	// the versions: tamper the schema version in place, restore, prove the
+	// failure and the unchanged state, then put the manifest back.
+	rewriteTargetManifest(t, target, id, func(m *backup.Manifest) { m.SchemaVersion += 1000 })
+	runRestoreRefused(ctx, t, env, id, "schema version")
+	schemaUnchanged := captureExitState(ctx, t, env, tools, "after schema-mismatch restore")
+	checkExitStateMatches(t, undone, schemaUnchanged)
+	writeTargetManifest(t, target, id, saved)
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack
@@ -8574,207 +8630,27 @@ func restoreSchema(t *testing.T, schemaURL string) string {
 	return ""
 }
 
-// restoreBinaryArgs returns the restore arguments the test runs: the backup
-// id from target into the database and blob directory of the environment.
-func restoreBinaryArgs(t *testing.T, env *e2e.Env, target, id string) []string {
+// runRestoreRefused runs `opendustpan restore` for id against the running
+// server and proves it exits 1 with output naming want, for restores the
+// server refuses before it writes anything.
+func runRestoreRefused(ctx context.Context, t *testing.T, env *e2e.Env, id, want string) {
 	t.Helper()
 
-	return []string{
-		"restore",
-		"--from", target,
-		"--backup", id,
-		"--database", env.DatabaseURL(t),
-		"--blob-dir", env.BlobDir(t),
-		"--region", restoreRegion,
-	}
-}
-
-// runRestoreBinary restores the backup id from target into the empty
-// destination with the same key and proves the steps with the row counts.
-func runRestoreBinary(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
-	t.Helper()
-
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
-
-	if res.ExitCode != 0 {
-		t.Fatalf("restore exits with status %d:\n%s%s", res.ExitCode, res.Stdout, res.Stderr)
-	}
-
-	for _, want := range []string{
-		"restored backup " + id,
-		"table namespaces: 1 rows",
-		"table state_versions: 1 rows",
-	} {
-		if !strings.Contains(res.Stdout, want) {
-			t.Fatalf("restore output lacks %q:\n%s%s", want, res.Stdout, res.Stderr)
-		}
-	}
-}
-
-// checkRestoreRefusesLoaded proves a second restore into the loaded
-// destination exits 1 and names the refusal.
-func checkRestoreRefusesLoaded(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
-	t.Helper()
-
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, target, id)...)
+	res := env.RunBinary(ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id)
 
 	if res.ExitCode != 1 {
-		t.Fatalf("restore into a loaded destination exits with status %d, want 1:\n%s%s",
+		t.Fatalf("refused restore exits with status %d, want 1:\n%s%s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "not empty") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "not empty", out)
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, want) {
+		t.Fatalf("restore refusal lacks %q:\n%s", want, out)
 	}
 }
 
-// wrongRestoreKeyBytes is the size of the wrong key-encryption key the
-// wrong-key step restores with: a full builtin wrapper key, so the key loads
-// and the restore refuses on the mismatch instead of the key size.
-const wrongRestoreKeyBytes = 32
-
-// runRestoreWrongKey restores the backup id from target with a different
-// key-encryption key and proves it exits 1 naming DUSTPAN_KEY_ENCRYPTION_KEY.
-func runRestoreWrongKey(ctx context.Context, t *testing.T, env *e2e.Env, target, id string) {
-	t.Helper()
-
-	raw := make([]byte, wrongRestoreKeyBytes)
-	if _, err := rand.Read(raw); err != nil {
-		t.Fatalf("generate wrong key: %v", err)
-	}
-
-	key := base64.StdEncoding.EncodeToString(raw)
-	res := env.RunBinaryWithEnv(
-		ctx,
-		t,
-		[]string{"DUSTPAN_KEY_ENCRYPTION_KEY=" + key},
-		restoreBinaryArgs(t, env, target, id)...,
-	)
-
-	if res.ExitCode != 1 {
-		t.Fatalf("restore with a wrong key exits with status %d, want 1:\n%s%s",
-			res.ExitCode, res.Stdout, res.Stderr)
-	}
-
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "DUSTPAN_KEY_ENCRYPTION_KEY") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "DUSTPAN_KEY_ENCRYPTION_KEY", out)
-	}
-}
-
-// installationTable is the backup table that the migration seeds with the
-// installation state row.
-const installationTable = "installation"
-
-// checkRestoreDestinationEmpty proves a refused restore wrote nothing: every
-// data table holds no rows except the seeded installation row, and the blob
-// directory holds no files.
-func checkRestoreDestinationEmpty(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
-	t.Helper()
-
-	counts := exportRowCounts(ctx, t, env, store)
-
-	for _, table := range backup.Tables {
-		// The migration seeds the one installation row (ADR 38): an empty
-		// installation holds it, and a refused restore keeps it.
-		want := int64(0)
-		if table == installationTable {
-			want = 1
-		}
-
-		if got := counts[table]; got != want {
-			t.Fatalf("table %s holds %d rows after the refused restore, want %d", table, got, want)
-		}
-	}
-
-	if got := countBlobFiles(t, env); got != 0 {
-		t.Fatalf("blob directory holds %d files after the refused restore, want none", got)
-	}
-}
-
-// exportRowCounts returns the row count of each data table in the destination
-// the environment serves, read straight from the store.
-func exportRowCounts(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) map[string]int64 {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
-		if !ok {
-			t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
-		}
-
-		st, err := sqlite.Open(ctx, path)
-		if err != nil {
-			t.Fatalf("open destination store: %v", err)
-		}
-
-		defer func() {
-			if closeErr := st.Close(); closeErr != nil {
-				t.Errorf("close destination store: %v", closeErr)
-			}
-		}()
-
-		sum, err := st.Export(ctx, io.Discard)
-		if err != nil {
-			t.Fatalf("export destination: %v", err)
-		}
-
-		return sum.RowCounts
-	case e2e.StorePostgres:
-		st, err := postgres.Open(ctx, env.DatabaseURL(t))
-		if err != nil {
-			t.Fatalf("open destination store: %v", err)
-		}
-
-		defer st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
-
-		sum, err := st.Export(ctx, io.Discard)
-		if err != nil {
-			t.Fatalf("export destination: %v", err)
-		}
-
-		return sum.RowCounts
-	default:
-		t.Fatalf("unknown store: %s", store)
-
-		return nil
-	}
-}
-
-// countBlobFiles returns the number of files in the blob directory of the
-// environment, or 0 when the directory is gone.
-func countBlobFiles(t *testing.T, env *e2e.Env) int {
-	t.Helper()
-
-	files := 0
-
-	err := filepath.WalkDir(env.BlobDir(t), func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-
-			return err
-		}
-
-		if !entry.IsDir() {
-			files++
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk blob directory: %v", err)
-	}
-
-	return files
-}
-
-// tamperManifestSchema copies the backup target to a new directory and moves
-// its manifest to a schema version the binary never wrote, so a restore from
-// the copy names the schema versions and exits 1. The backup target stays
-// intact.
-func tamperManifestSchema(t *testing.T, target, id string) string {
+// targetManifestPath returns the path of backups/<id>/manifest.json in the
+// file backup target, failing the test when the target is not a directory.
+func targetManifestPath(t *testing.T, target, id string) string {
 	t.Helper()
 
 	dir, ok := strings.CutPrefix(target, "dir:")
@@ -8782,92 +8658,353 @@ func tamperManifestSchema(t *testing.T, target, id string) string {
 		t.Fatalf("backup target = %q, want dir:<path>", target)
 	}
 
-	dst := filepath.Join(t.TempDir(), "tampered-target")
-	copyDir(t, dir, dst)
+	return filepath.Join(strings.TrimSpace(dir), "backups", id, "manifest.json")
+}
 
-	manifestPath := filepath.Join(dst, "backups", id, "manifest.json")
+// readTargetManifest reads backups/<id>/manifest.json from the file backup
+// target of the running server.
+func readTargetManifest(t *testing.T, target, id string) backup.Manifest {
+	t.Helper()
 
-	// The test reads the manifest it copied from its own backup target.
-	raw, err := os.ReadFile(manifestPath) //nolint:gosec // Test file copied from the own backup target.
+	// The test reads the manifest the server wrote into its own backup target.
+	raw, err := os.ReadFile(targetManifestPath(t, target, id))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
 
 	var manifest backup.Manifest
 
-	if decodeErr := json.Unmarshal(raw, &manifest); decodeErr != nil {
-		t.Fatalf("decode manifest: %v", decodeErr)
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
 	}
 
-	manifest.SchemaVersion += 1000
+	return manifest
+}
+
+// rewriteTargetManifest edits backups/<id>/manifest.json in the file backup
+// target of the running server, so the next restore meets the tampered
+// manifest. Callers write the saved manifest back after the refused restore.
+func rewriteTargetManifest(t *testing.T, target, id string, edit func(*backup.Manifest)) {
+	t.Helper()
+
+	manifest := readTargetManifest(t, target, id)
+	edit(&manifest)
+	writeTargetManifest(t, target, id, manifest)
+}
+
+// writeTargetManifest writes manifest as backups/<id>/manifest.json in the
+// file backup target of the running server.
+func writeTargetManifest(t *testing.T, target, id string, manifest backup.Manifest) {
+	t.Helper()
 
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatalf("encode manifest: %v", err)
 	}
 
-	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+	if err := os.WriteFile(targetManifestPath(t, target, id), data, 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-
-	return "dir:" + dst
 }
 
-// copyDir copies the directory tree src to dst, so a test tampers the copy
-// while the backup target stays intact.
-func copyDir(t *testing.T, src, dst string) {
+// runRestoreCommand runs `opendustpan restore` against the running server
+// (ADR 38, ADR 39): it starts a restore of id, waits until it leaves
+// running, and proves it succeeded. The server reads its own configured
+// backup target and its own live stores: the command takes no --from,
+// --database, --blob-dir or --blob-store.
+func runRestoreCommand(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	checkRestoreSucceeded(t, id, env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id,
+	))
+}
 
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
+// runRestoreCommandForced restores id with --force, canceling active work
+// first, and proves it succeeded.
+func runRestoreCommandForced(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
+	t.Helper()
 
-		out := filepath.Join(dst, rel)
+	checkRestoreSucceeded(t, id, env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id, "--force",
+	))
+}
 
-		if entry.IsDir() {
-			return os.MkdirAll(out, 0o700)
-		}
+// checkRestoreSucceeded proves a restore invocation exited 0 with the
+// succeeded state.
+func checkRestoreSucceeded(t *testing.T, id string, res e2e.BinaryResult) {
+	t.Helper()
 
-		// The test copies its own backup target, so the walked paths stay
-		// inside it.
-		raw, err := os.ReadFile(path) //nolint:gosec // Test file inside the own backup target.
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan restore %s exits with status %d:\n%s%s", id, res.ExitCode, res.Stdout, res.Stderr)
+	}
 
-		// The destination holds the copied backup, so it stays owner-only.
-		if err := os.WriteFile(out, raw, 0o600); err != nil { //nolint:gosec // Test file inside the copied target.
-			return fmt.Errorf("copy %s: %w", src, err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("copy %s: %v", src, err)
+	if !strings.Contains(res.Stdout, "succeeded") {
+		t.Fatalf("opendustpan restore %s output lacks the succeeded state:\n%s%s", id, res.Stdout, res.Stderr)
 	}
 }
 
-// runRestoreSchemaMismatch restores the backup id from the tampered copy into
-// the empty destination and proves it exits 1 naming the schema versions.
-func runRestoreSchemaMismatch(ctx context.Context, t *testing.T, env *e2e.Env, tampered, id string) {
+// runRestoreCheckOnly runs `opendustpan restore --check-only` and proves it
+// exits 0 without applying anything.
+func runRestoreCheckOnly(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
 	t.Helper()
 
-	res := env.RunBinary(ctx, t, restoreBinaryArgs(t, env, tampered, id)...)
+	res := env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", id, "--check-only",
+	)
+	if res.ExitCode != 0 {
+		t.Fatalf("opendustpan restore --check-only %s exits with status %d:\n%s%s",
+			id, res.ExitCode, res.Stdout, res.Stderr)
+	}
+}
 
+// runRestoreMissing restores a backup ID the target never held and proves it
+// exits 1 without changing the live data.
+func runRestoreMissing(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	res := env.RunBinary(
+		ctx, t, "restore", "--server", env.URL, "--ca-file", env.CABundle(), "--backup", "bkp-missing000000000001",
+	)
 	if res.ExitCode != 1 {
-		t.Fatalf("restore into another schema version exits with status %d, want 1:\n%s%s",
+		t.Fatalf("restore of a missing backup exits with status %d, want 1:\n%s%s",
 			res.ExitCode, res.Stdout, res.Stderr)
 	}
+}
 
-	if out := res.Stdout + res.Stderr; !strings.Contains(out, "schema version") {
-		t.Fatalf("restore refusal lacks %q:\n%s", "schema version", out)
+// checkHeldLeaseFenced proves the lease held from before the restore no
+// longer writes: completing it with the old lease token fails, while a new
+// update starts at once. The restore replaced the update row, so the old
+// lease answers an error either way; checkRestoreFenced proves the fencing
+// itself by reading the failover version of every namespace.
+func checkHeldLeaseFenced(ctx context.Context, t *testing.T, env *e2e.Env, held e2e.HeldUpdate) {
+	t.Helper()
+
+	prefix := "/api/stacks/" + held.Namespace + "/" + held.Project + "/" + held.Name
+
+	got, err := env.StatusWithHeader(
+		ctx,
+		"update-token "+held.Lease,
+		http.MethodPost,
+		prefix+"/update/"+held.ID+"/complete",
+		`{"status":"succeeded"}`,
+	)
+	if err != nil {
+		t.Fatalf("complete old update after restore: %v", err)
 	}
+
+	if got.Status < 400 {
+		t.Fatalf("complete with a lease from before the restore answers %d, want an error (%s)",
+			got.Status, got.Body)
+	}
+
+	fresh := env.StartHeldUpdate(ctx, t, held.Namespace, held.Project, held.Name)
+	env.EndHeldUpdate(ctx, t, fresh, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
+}
+
+// readFailoverVersions returns the failover version of every namespace in the
+// live database, read directly: the server API exposes no namespace read, and
+// the fencing proof needs the stored versions before and after the restore.
+func readFailoverVersions(
+	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store,
+) map[string]int64 {
+	t.Helper()
+
+	switch store {
+	case e2e.StoreSQLite:
+		return readSQLiteFailoverVersions(ctx, t, env)
+	case e2e.StorePostgres:
+		return readPostgresFailoverVersions(ctx, t, env)
+	default:
+		t.Fatalf("unknown store: %s", store)
+	}
+
+	return nil
+}
+
+// readSQLiteFailoverVersions reads the failover version of every namespace
+// from the live SQLite file while the server runs: a single ordered select,
+// so a concurrent write only waits out the read.
+func readSQLiteFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
+	t.Helper()
+
+	path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
+	if !ok {
+		t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
+	}
+
+	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
+	if err != nil {
+		t.Fatalf("open database for failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	}()
+
+	return queryFailoverVersions(ctx, t, conn)
+}
+
+// queryFailoverVersions returns the failover version of every namespace
+// through conn, which reads the live database of the running server.
+func queryFailoverVersions(ctx context.Context, t *testing.T, conn *sql.DB) map[string]int64 {
+	t.Helper()
+
+	rows, err := conn.QueryContext(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close failover versions: %v", closeErr)
+		}
+	}()
+
+	out := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			name    string
+			version int64
+		)
+
+		if scanErr := rows.Scan(&name, &version); scanErr != nil {
+			t.Fatalf("scan failover version: %v", scanErr)
+		}
+
+		out[name] = version
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read failover versions: %v", iterErr)
+	}
+
+	return out
+}
+
+// readPostgresFailoverVersions reads the failover version of every namespace
+// from the live PostgreSQL schema of the running server.
+func readPostgresFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
+	t.Helper()
+
+	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
+	if err != nil {
+		t.Fatalf("connect to postgres for failover versions: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close postgres connection: %v", closeErr)
+		}
+	}()
+
+	rows, err := conn.Query(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
+	if err != nil {
+		t.Fatalf("read failover versions: %v", err)
+	}
+
+	defer rows.Close()
+
+	out := map[string]int64{}
+
+	for rows.Next() {
+		var (
+			name    string
+			version int64
+		)
+
+		if scanErr := rows.Scan(&name, &version); scanErr != nil {
+			t.Fatalf("scan failover version: %v", scanErr)
+		}
+
+		out[name] = version
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		t.Fatalf("read failover versions: %v", iterErr)
+	}
+
+	return out
+}
+
+// checkRestoreFenced proves the restore fenced every namespace the backup
+// holds: each version after the restore sits exactly one above the version
+// the backup captured. A restore that swaps the data without the bump leaves
+// the captured versions and fails here, while the replaced update rows alone
+// would still answer that the old lease is gone.
+func checkRestoreFenced(t *testing.T, backupVersions, after map[string]int64) {
+	t.Helper()
+
+	if len(after) == 0 {
+		t.Fatal("no namespaces after the restore, want the fenced namespaces")
+	}
+
+	for name, captured := range backupVersions {
+		got, ok := after[name]
+		if !ok {
+			t.Fatalf("namespace %q is missing after the restore", name)
+		}
+
+		if got != captured+1 {
+			t.Fatalf(
+				"failover version of %q after the restore is %d, want one above the backed-up %d",
+				name,
+				got,
+				captured,
+			)
+		}
+	}
+
+	for name := range after {
+		if _, ok := backupVersions[name]; !ok {
+			t.Fatalf("namespace %q appeared during the restore", name)
+		}
+	}
+}
+
+// restoreListEntry is one row of the restores list in tests.
+type restoreListEntry struct {
+	BackupID    string `json:"backupID"`
+	PreBackupID string `json:"preBackupID"`
+}
+
+// restoreListDoc decodes the restores list in tests.
+type restoreListDoc struct {
+	Restores []restoreListEntry `json:"restores"`
+}
+
+// restorePreBackupID reads the restore of id and returns the backup taken
+// before it, failing when the restore names none.
+func restorePreBackupID(ctx context.Context, t *testing.T, env *e2e.Env, id string) string {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/restores", "")
+	if err != nil {
+		t.Fatalf("list restores: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list restores answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc restoreListDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode restores %q: %v", body, err)
+	}
+
+	for _, r := range doc.Restores {
+		if r.BackupID == id && r.PreBackupID != "" {
+			return r.PreBackupID
+		}
+	}
+
+	t.Fatalf("restores list holds no pre-backup for %s (%s)", id, body)
+
+	return ""
 }
 
 // maintenanceStateDoc decodes the installation state in tests.

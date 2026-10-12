@@ -143,6 +143,7 @@ func newBackupFixture(
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})
@@ -553,6 +554,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
 	})

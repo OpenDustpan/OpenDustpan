@@ -1,0 +1,286 @@
+package sqlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"path/filepath"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
+)
+
+var (
+	_ backup.RestoreRegistry = (*Store)(nil)
+	_ backup.Applier         = (*Store)(nil)
+	_ backup.Fencer          = (*Store)(nil)
+)
+
+// CreateRestore implements backup.RestoreRegistry: it stores r as a running
+// restore. The row carries no fence: it describes the installation, not one
+// namespace.
+func (s *Store) CreateRestore(ctx context.Context, r backup.RestoreRecord) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := codec.ToRestoreRow(r)
+
+	n, err := s.queries.CreateRestore(ctx, db.CreateRestoreParams{
+		ID:          row.ID,
+		State:       row.State,
+		BackupID:    row.BackupID,
+		PreBackupID: row.PreBackupID,
+		RequestedBy: row.RequestedBy,
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   row.EndedAtMs,
+		Error:       row.Error,
+	})
+	if err != nil {
+		return fmt.Errorf("insert restore: %w", err)
+	}
+
+	if n == 0 {
+		return backup.ErrRestoreExists
+	}
+
+	return nil
+}
+
+// GetRestore implements backup.RestoreRegistry.
+func (s *Store) GetRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.fetchRestore(ctx, id)
+}
+
+// fetchRestore reads one restore row. The caller holds the store lock.
+func (s *Store) fetchRestore(ctx context.Context, id backup.RestoreID) (backup.RestoreRecord, error) {
+	row, err := s.queries.GetRestore(ctx, id.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotFound
+	}
+
+	if err != nil {
+		return backup.RestoreRecord{}, fmt.Errorf("select restore: %w", err)
+	}
+
+	return restoreFromRow(row)
+}
+
+// ListRestores implements backup.RestoreRegistry: every restore row, newest
+// first.
+func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListRestores(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select restores: %w", err)
+	}
+
+	out := make([]backup.RestoreRecord, 0, len(rows))
+
+	for _, row := range rows {
+		r, err := restoreFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, r)
+	}
+
+	return out, nil
+}
+
+// FinishRestore implements backup.RestoreRegistry: it moves the running
+// restore id to state with the error text and the end time.
+//
+//nolint:dupl // The backup and restore registries mirror by design: separate tables with distinct domain types.
+func (s *Store) FinishRestore(
+	ctx context.Context, id backup.RestoreID, state backup.RestoreState, errText string, endedAt time.Time,
+) (backup.RestoreRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := s.fetchRestore(ctx, id); err != nil {
+		return backup.RestoreRecord{}, err
+	}
+
+	if state != backup.RestoreSucceeded && state != backup.RestoreFailed {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	n, err := s.queries.FinishRestore(ctx, db.FinishRestoreParams{
+		State:     string(state),
+		Error:     errText,
+		EndedAtMs: codec.OptionalMillis(endedAt),
+		ID:        id.String(),
+	})
+	if err != nil {
+		return backup.RestoreRecord{}, fmt.Errorf("finish restore: %w", err)
+	}
+
+	if n == 0 {
+		return backup.RestoreRecord{}, backup.ErrRestoreNotRunning
+	}
+
+	return s.fetchRestore(ctx, id)
+}
+
+// FailRunningRestores implements backup.RestoreRegistry: it marks every
+// running row failed with the error text and the end time. The server calls
+// it at start, after a stop during a restore.
+func (s *Store) FailRunningRestores(ctx context.Context, endedAt time.Time, errText string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	err := s.queries.FailRunningRestores(ctx, db.FailRunningRestoresParams{
+		Error:     errText,
+		EndedAtMs: codec.OptionalMillis(endedAt),
+	})
+	if err != nil {
+		return fmt.Errorf("fail running restores: %w", err)
+	}
+
+	return nil
+}
+
+// MarkRestoreApplying implements backup.RestoreRegistry: it moves the restore
+// id from checking to applying and records the backup taken before the apply.
+func (s *Store) MarkRestoreApplying(ctx context.Context, id backup.RestoreID, preBackupID backup.ID) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if _, err := s.fetchRestore(ctx, id); err != nil {
+		return err
+	}
+
+	n, err := s.queries.MarkRestoreApplying(ctx, db.MarkRestoreApplyingParams{
+		PreBackupID: preBackupID.String(),
+		ID:          id.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("mark restore applying: %w", err)
+	}
+
+	if n == 0 {
+		return backup.ErrRestoreNotRunning
+	}
+
+	return nil
+}
+
+// restoreFromRow converts a restore row into a domain record. Unknown states
+// report a corrupt row: every writer validates the state first.
+func restoreFromRow(row db.Restore) (backup.RestoreRecord, error) {
+	return codec.FromRestoreRow(codec.RestoreRow{
+		ID:          row.ID,
+		State:       row.State,
+		BackupID:    row.BackupID,
+		PreBackupID: row.PreBackupID,
+		RequestedBy: row.RequestedBy,
+		Error:       row.Error,
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   row.EndedAtMs,
+	})
+}
+
+// ApplyStaging implements backup.Applier: it increments the failover version
+// of every namespace inside the staged file (ADR 38 decisions 6 and 7), then
+// swaps the staged restore file into the live database with one file rename
+// and drops the staging area. The staged file passed every check in
+// StageRestore, so the rename cannot mix two installations. With no staged
+// file it reports ErrCorrupt and changes nothing. The swap holds the store
+// lock exclusive, so concurrent readers wait out the rename instead of
+// reading a closed handle. Fencing the staged image before the rename means
+// the atomic rename carries fenced versions: a crash after the rename cannot
+// leave restored data with old failover versions. The staging path clears
+// only after a successful swap, so a failed apply keeps the staged file for
+// DiscardStaging.
+func (s *Store) ApplyStaging(ctx context.Context) error {
+	s.stagingMu.Lock()
+	defer s.stagingMu.Unlock()
+
+	if s.stagingPath == "" {
+		return backup.ErrCorrupt
+	}
+
+	staged := s.stagingPath
+
+	if err := fenceStagedFile(ctx, staged); err != nil {
+		return err
+	}
+
+	if err := s.swapDatabase(ctx, staged); err != nil {
+		return err
+	}
+
+	s.stagingPath = ""
+
+	return nil
+}
+
+// fenceStagedFile increments the failover version of every namespace in the
+// staged file at path, so the rename carries fenced versions. It opens the
+// file in rollback-journal mode, so no write-ahead-log sidecar survives the
+// fence to leak beside the renamed database.
+func fenceStagedFile(ctx context.Context, path string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	query := url.Values{}
+	query.Set("_txlock", "immediate")
+	query.Add("_pragma", "busy_timeout(10000)")
+	query.Add("_pragma", "journal_mode(delete)")
+	query.Add("_pragma", "foreign_keys(on)")
+
+	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
+
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	if err := conn.PingContext(ctx); err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return nil
+}
+
+// BumpFailoverVersions implements backup.Fencer: it increments the failover
+// version of every namespace by one (ADR 38 decision 7) and returns the count
+// of namespaces bumped, so leases and locks from before the restore stop
+// working.
+func (s *Store) BumpFailoverVersions(ctx context.Context) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n, err := s.queries.BumpFailoverVersions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("bump failover versions: %w", err)
+	}
+
+	return n, nil
+}

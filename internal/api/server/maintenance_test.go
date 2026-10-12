@@ -81,6 +81,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   fake,
 		Metrics:       stubMetrics{},
 	})
@@ -392,6 +393,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    newTestNamespaces(t),
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   nil,
 		Metrics:       stubMetrics{},
 	})

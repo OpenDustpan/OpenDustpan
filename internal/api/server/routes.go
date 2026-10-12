@@ -61,6 +61,16 @@ type Route struct {
 // console and operators read only this API, and they update on their own
 // schedule.
 func (h *Handler) buildRoutes() []Route {
+	routes := append([]Route{}, h.namespaceRoutes()...)
+	routes = append(routes, h.backupRoutes()...)
+	routes = append(routes, h.restoreRoutes()...)
+	routes = append(routes, h.maintenanceRoutes()...)
+
+	return routes
+}
+
+// namespaceRoutes returns the namespace rows of the route table.
+func (h *Handler) namespaceRoutes() []Route {
 	return []Route{
 		{
 			Method:  http.MethodPost,
@@ -78,6 +88,12 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveServer,
 			Serve:   h.serveMetrics,
 		},
+	}
+}
+
+// backupRoutes returns the backup rows of the route table (ADR 30).
+func (h *Handler) backupRoutes() []Route {
+	return []Route{
 		{
 			Method:  http.MethodPost,
 			Path:    "/api/server/backups",
@@ -102,6 +118,43 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveServer,
 			Serve:   h.getBackup,
 		},
+	}
+}
+
+// restoreRoutes returns the restore rows of the route table (ADR 38
+// decision 1): start a restore, list restores, and read one restore.
+func (h *Handler) restoreRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/server/restores",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerRestore},
+			Resolve: resolveServer,
+			Serve:   h.startRestore,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/restores",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerRestore},
+			Resolve: resolveServer,
+			Serve:   h.listRestores,
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/restores/{id}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerRestore},
+			Resolve: resolveServer,
+			Serve:   h.getRestore,
+		},
+	}
+}
+
+// maintenanceRoutes returns the maintenance rows of the route table.
+func (h *Handler) maintenanceRoutes() []Route {
+	return []Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/maintenance",

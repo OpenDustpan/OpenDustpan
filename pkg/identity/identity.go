@@ -68,6 +68,9 @@ const (
 	// state between normal operation and maintenance mode. Its object is
 	// ServerObject.
 	ActionServerMaintenance Action = "server:maintenance"
+	// ActionServerRestore allows starting and reading installation restores.
+	// Its object is ServerObject.
+	ActionServerRestore Action = "server:restore"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

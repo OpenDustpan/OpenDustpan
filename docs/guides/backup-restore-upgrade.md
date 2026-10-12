@@ -1,6 +1,6 @@
 # Backup, restore and upgrade
 
-This guide shows how to back up a whole installation, restore it, and upgrade the server. It follows ADR 30 and ADR 33. The end-to-end suite ran each command in this guide.
+This guide shows how to back up a whole installation, restore it, and upgrade the server. It follows ADR 30, ADR 33, ADR 38 and ADR 39. The end-to-end suite ran each command in this guide.
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
 
@@ -48,27 +48,67 @@ A complete backup prints `backup bkp-aaa is complete` and exits with status 0. A
 
 ## Restore a backup
 
-Restore loads a backup into an empty installation. Stop the server first. Restore is an offline command with no REST route. Use the same key, the same dialect, and the same schema version as the backup source.
+Restore loads a backup from the configured backup target into the running
+installation. Restore is an API operation: the server checks the backup,
+backs up the live data, enters maintenance mode, and only then applies the
+backup. Use the same key, the same dialect, and the same schema version as
+the backup source.
 
-Empty the destination before the restore. For SQLite, delete the database file with its journals and delete the blob directory. For PostgreSQL, drop the schema and create it again empty, and delete the blob directory.
-
-Run the restore command. It opens the destination store, reads the manifest, checks the key, copies the blobs, loads the SQL data, and compares the row counts.
+Run the restore command. It calls the server and waits until the restore
+leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from
+the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
 ```sh
-opendustpan restore --from dir:/var/backups/dustpan --backup bkp-aaa --database sqlite:/var/data/dustpan.db --blob-dir /var/data/blobs --region local
+opendustpan restore --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
 ```
 
-The command prints the steps with the row count of each table. It ends with `restored backup bkp-aaa`. Then start the server on the restored data and read back state with both tools.
+The command prints the restore ID, the state, and the backup taken before
+the restore. It ends with `restore rst-aaa succeeded`. Only one restore runs
+at a time. A second start while one runs answers 409.
 
-The command refuses a destination that is not empty. It writes nothing in that case. Use a new `--database` with a new `--blob-dir` and run the command again.
+Before the server applies anything, it checks the manifest, the
+key-encryption key, every named blob, and the SQL part, then loads the SQL
+data into a staging area and checks the staged data. A failed check stops
+the restore and leaves the live data as it was. A check-only request runs
+the same checks and applies nothing:
 
-The command checks the key before it writes anything. With no key or with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore with a wrong key leaves an empty database. It never leaves a database that names missing blobs.
+```sh
+opendustpan restore --server https://dustpan.example --backup bkp-aaa --check-only
+```
 
-The command refuses a backup of another dialect or another schema version. The error names both versions. Restore into the same dialect and the same schema version only. To change version, upgrade the server instead.
+Before the apply, the server takes a backup of the live data and names it in
+the restore result. To undo the restore, restore that backup. The restore
+list names it:
 
-The command refuses a backup with no manifest or with an unknown format number. The manifest is internal in this milestone.
+```sh
+opendustpan restore --server https://dustpan.example --backup bkp-bbb
+```
 
-Restore keeps the home region and the failover version of each namespace. It warns when the `--region` flag is not among the regions of the manifest. The warning names the flag value and the backup regions.
+While the restore applies, the server holds maintenance mode: the tool APIs
+answer 503 and the installation API stays available. The server leaves
+maintenance mode when the restore ends, also after a failure. The server
+does not enter maintenance mode while an update or a run is active, unless
+the request sets `--force`, which cancels them first and names them.
+
+The restore increments the failover version of every namespace. Leases,
+update tokens, locks and upload capabilities from before the restore stop
+working, so no client can write data from before the restore into the
+restored data.
+
+The command checks the key before the server writes anything. With no key or
+with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore
+with a wrong key leaves the live data unchanged.
+
+The command refuses a backup of another dialect or another schema version.
+The error names both versions. Restore into the same dialect and the same
+schema version only. To change version, upgrade the server instead.
+
+The command refuses a backup with no manifest or with an unknown format
+number. The manifest is internal in this milestone.
+
+Disaster recovery on a new machine: start the server on an empty database
+with the same key-encryption key, then restore through the API. The
+bootstrap admin token can restore into the empty installation.
 
 ## Upgrade the server
 
@@ -84,7 +124,7 @@ Back up the database before each upgrade. `serve` applies pending migrations at 
 
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails because the schema is newer than the binary knows. Then start the other new nodes.
 
-The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade into an empty database. Then start the older binary. The older binary refuses to start on the newer schema. It names the schema version of the database, the schema version of the binary, and the version of the binary.
+The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. The older binary refuses to start on the newer schema. It names the schema version of the database, the schema version of the binary, and the version of the binary.
 
 ## What this guide does not cover
 

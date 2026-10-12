@@ -39,6 +39,10 @@ type Config struct {
 	// means no backup target is configured. The target comes only from this
 	// service: no request field, header or query value sets it.
 	Backups *backup.Service
+	// Restores runs installation restores from the configured target. Nil
+	// means no backup target is configured. The backup comes only from this
+	// service: no request field, header or query value sets the target.
+	Restores *backup.RestoreService
 	// Maintenance enters, leaves and reads maintenance mode (ADR 38).
 	// Required: the installation state lives in the database.
 	Maintenance Maintenance
@@ -53,6 +57,7 @@ type Handler struct {
 	logger      *slog.Logger
 	namespaces  *namespace.Service
 	backups     *backup.Service
+	restores    *backup.RestoreService
 	maintenance Maintenance
 	metrics     MetricsWriter
 	mux         *patternMux
@@ -84,6 +89,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		logger:      cfg.Logger,
 		namespaces:  cfg.Namespaces,
 		backups:     cfg.Backups,
+		restores:    cfg.Restores,
 		maintenance: cfg.Maintenance,
 		metrics:     cfg.Metrics,
 		mux:         newPatternMux(),
@@ -102,6 +108,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 // no backup target is configured.
 func (h *Handler) Backups() *backup.Service {
 	return h.backups
+}
+
+// Restores returns the restore service the handler was wired with, or nil
+// when no backup target is configured.
+func (h *Handler) Restores() *backup.RestoreService {
+	return h.restores
 }
 
 // ServeHTTP implements http.Handler. A path the route table does not hold
@@ -213,15 +225,32 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, errInvalidBody.Error()
-	case errors.Is(err, backup.ErrAlreadyRunning):
-		return http.StatusConflict, "a backup is already running"
-	case errors.Is(err, backup.ErrAlreadyExists):
-		return http.StatusConflict, "backup already exists"
-	case errors.Is(err, backup.ErrNotFound):
-		return http.StatusNotFound, "backup not found"
 	case errors.Is(err, errNoBackupTarget):
 		// No target is a setup problem of the server, not a bad request.
 		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target"
+	default:
+		return classifyRegistry(err)
+	}
+}
+
+// classifyRegistry maps the backup and restore registry errors to their
+// status and message. Registry and target failures may hold driver text, so
+// only the sentinel decides the status and the message. A missing backup
+// answers 404 and a second start 409.
+func classifyRegistry(err error) (int, string) {
+	switch {
+	case errors.Is(err, backup.ErrAlreadyRunning):
+		return http.StatusConflict, "a backup is already running"
+	case errors.Is(err, backup.ErrRestoreRunning):
+		return http.StatusConflict, "a restore is already running"
+	case errors.Is(err, backup.ErrAlreadyExists):
+		return http.StatusConflict, "backup already exists"
+	case errors.Is(err, backup.ErrRestoreExists):
+		return http.StatusConflict, "restore already exists"
+	case errors.Is(err, backup.ErrNotFound):
+		return http.StatusNotFound, "backup not found"
+	case errors.Is(err, backup.ErrRestoreNotFound):
+		return http.StatusNotFound, "restore not found"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
