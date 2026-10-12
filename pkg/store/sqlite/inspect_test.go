@@ -1,210 +1,21 @@
 package sqlite_test
 
 import (
-	"bytes"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
-
-func TestInspect(t *testing.T) {
-	t.Parallel()
-
-	t.Run("fresh database", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "dustpan.db")
-
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			t.Fatalf("write empty database: %v", err)
-		}
-
-		names, newest := listMigrationNames(t)
-
-		checkInspectState(t, path, wantInspection{database: 0, binary: newest, pending: names, unknown: nil})
-	})
-
-	t.Run("old database", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "dustpan.db")
-
-		seedAt0008WithStacks(t, path)
-
-		names, newest := listMigrationNames(t)
-
-		checkInspectState(t, path, wantInspection{database: 8, binary: newest, pending: names[8:], unknown: nil})
-	})
-
-	t.Run("up-to-date database", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "dustpan.db")
-
-		s, err := sqlite.Open(t.Context(), path)
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		if err := s.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
-
-		_, newest := listMigrationNames(t)
-
-		checkInspectState(t, path, wantInspection{database: newest, binary: newest, pending: nil, unknown: nil})
-	})
-
-	t.Run("newer database", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "dustpan.db")
-
-		s, err := sqlite.Open(t.Context(), path)
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		if err := s.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
-
-		_, newest := listMigrationNames(t)
-
-		insertFutureVersion(t, path, newest+1)
-		checkInspectState(t, path, wantInspection{
-			database: newest + 1,
-			binary:   newest,
-			pending:  nil,
-			unknown:  []int64{newest + 1},
-		})
-	})
-
-	t.Run("missing file", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "missing.db")
-
-		if _, err := sqlite.Inspect(t.Context(), path); err == nil {
-			t.Fatal("inspect missing file: err = nil, want an error")
-		} else if !strings.Contains(err.Error(), path) {
-			t.Fatalf("inspect missing file error = %q, want it to name %q", err, path)
-		}
-
-		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-			t.Fatalf("stat missing file: err = %v, want file to stay absent", statErr)
-		}
-	})
-}
-
-// wantInspection holds the expected schema state of one database.
-type wantInspection struct {
-	database int64
-	binary   int64
-	pending  []string
-	unknown  []int64
-}
-
-// checkInspectState runs Inspect on path, checks the four reported values
-// and proves the call wrote nothing: versions, tables and file bytes match
-// the snapshot taken before the call.
-func checkInspectState(t *testing.T, path string, want wantInspection) {
-	t.Helper()
-
-	beforeVersions, beforeTables := inspectSnapshot(t, path)
-	beforeBytes := readDatabaseFile(t, path)
-
-	got, err := sqlite.Inspect(t.Context(), path)
-	if err != nil {
-		t.Fatalf("inspect: %v", err)
-	}
-
-	if got.DatabaseVersion != want.database || got.BinaryVersion != want.binary {
-		t.Fatalf(
-			"versions = %d/%d, want %d/%d",
-			got.DatabaseVersion,
-			got.BinaryVersion,
-			want.database,
-			want.binary,
-		)
-	}
-
-	if !slices.Equal(got.Pending, want.pending) {
-		t.Fatalf("pending = %v, want %v", got.Pending, want.pending)
-	}
-
-	if !slices.Equal(got.Unknown, want.unknown) {
-		t.Fatalf("unknown = %v, want %v", got.Unknown, want.unknown)
-	}
-
-	afterVersions, afterTables := inspectSnapshot(t, path)
-	afterBytes := readDatabaseFile(t, path)
-
-	if !slices.Equal(afterVersions, beforeVersions) {
-		t.Fatalf("versions after inspect = %v, want %v", afterVersions, beforeVersions)
-	}
-
-	if !slices.Equal(afterTables, beforeTables) {
-		t.Fatalf("tables after inspect = %v, want %v", afterTables, beforeTables)
-	}
-
-	if !bytes.Equal(afterBytes, beforeBytes) {
-		t.Fatal("database file changed after inspect, want it unchanged")
-	}
-
-	if want.database == 0 && slices.Contains(afterTables, "schema_migrations") {
-		t.Fatal("inspect created schema_migrations, want no such table")
-	}
-}
-
-// listMigrationNames returns the embedded migration file names in version
-// order with the newest version.
-func listMigrationNames(t *testing.T) ([]string, int64) {
-	t.Helper()
-
-	entries, err := os.ReadDir("migrations")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
-	}
-
-	var names []string
-
-	var newest int64
-
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
-		}
-
-		version, parseErr := strconv.ParseInt(strings.SplitN(entry.Name(), "_", 2)[0], 10, 64)
-		if parseErr != nil {
-			t.Fatalf("parse migration version %q: %v", entry.Name(), parseErr)
-		}
-
-		names = append(names, entry.Name())
-
-		if version > newest {
-			newest = version
-		}
-	}
-
-	slices.Sort(names)
-
-	return names, newest
-}
 
 // inspectSnapshot reads the recorded versions (nil when schema_migrations is
 // absent) and the table names of the database at path.
 func inspectSnapshot(t *testing.T, path string) ([]int64, []string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -234,14 +45,169 @@ func inspectSnapshot(t *testing.T, path string) ([]int64, []string) {
 	return versions, readSchemaTables(t, conn)
 }
 
-// readDatabaseFile returns the raw bytes of the database file at path.
-func readDatabaseFile(t *testing.T, path string) []byte {
+// TestAppliedMigrations proves the store reports the applied rows ordered by
+// version without migrating: an empty schema_migrations table means no rows,
+// and a missing table reports nothing while staying missing.
+func TestAppliedMigrations(t *testing.T) {
+	t.Parallel()
+
+	t.Run("migrated database", func(t *testing.T) {
+		t.Parallel()
+		checkAppliedMigrated(t)
+	})
+
+	t.Run("missing table", func(t *testing.T) {
+		t.Parallel()
+		checkAppliedMissingTable(t)
+	})
+}
+
+// checkAppliedMigrated proves AppliedMigrations on a migrated database
+// reports the embedded rows ordered, with names matching their versions,
+// and changes nothing.
+func checkAppliedMigrated(t *testing.T) {
 	t.Helper()
 
-	data, err := os.ReadFile(path) //nolint:gosec // The test reads the database file it created.
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("read database file: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
 
-	return data
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	beforeVersions, beforeTables := inspectSnapshot(t, path)
+
+	applied, err := s.AppliedMigrations(t.Context())
+	if err != nil {
+		t.Fatalf("applied migrations: %v", err)
+	}
+
+	wantNames, wantNewest := schema.EmbeddedMigrationNames()
+
+	if len(applied) != len(wantNames) {
+		t.Fatalf("applied holds %d rows, want the embedded %d", len(applied), len(wantNames))
+	}
+
+	checkAppliedRows(t, applied, wantNames)
+
+	if got := applied[len(applied)-1].Version; got != wantNewest {
+		t.Fatalf("newest applied version = %d, want %d", got, wantNewest)
+	}
+
+	afterVersions, afterTables := inspectSnapshot(t, path)
+	if !slices.Equal(afterVersions, beforeVersions) || !slices.Equal(afterTables, beforeTables) {
+		t.Fatal("applied migrations changed the database, want a read-only report")
+	}
+}
+
+// checkAppliedRows proves every applied row names the embedded name at its
+// position with the version its name parses to.
+func checkAppliedRows(t *testing.T, applied []schema.AppliedMigration, wantNames []string) {
+	t.Helper()
+
+	for i, migration := range applied {
+		if migration.Name != wantNames[i] {
+			t.Fatalf("applied row %d = %q, want %q", i, migration.Name, wantNames[i])
+		}
+
+		version, err := schema.ParseMigrationVersion(migration.Name)
+		if err != nil {
+			t.Fatalf("applied name %q: %v", migration.Name, err)
+		}
+
+		if version != migration.Version {
+			t.Fatalf("applied row %q records version %d, want %d",
+				migration.Name, migration.Version, version)
+		}
+	}
+}
+
+// checkAppliedMissingTable proves AppliedMigrations without the
+// schema_migrations table reports nothing and creates no table.
+func checkAppliedMissingTable(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := openRawDB(path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	if _, dropErr := conn.ExecContext(t.Context(), `DROP TABLE schema_migrations`); dropErr != nil {
+		t.Fatalf("drop schema_migrations: %v", dropErr)
+	}
+
+	applied, err := s.AppliedMigrations(t.Context())
+	if err != nil {
+		t.Fatalf("applied migrations without the table: %v", err)
+	}
+
+	if len(applied) != 0 {
+		t.Fatalf("applied migrations = %v, want nothing without the table", applied)
+	}
+
+	if _, tables := inspectSnapshot(t, path); slices.Contains(tables, "schema_migrations") {
+		t.Fatal("applied migrations created schema_migrations, want no such table")
+	}
+}
+
+// TestEmbeddedMigrationsMatchSchema proves the adapter embeds exactly the
+// shared schema list: the upgrade check verdict never depends on the
+// dialect. Add a migration to both dialects and to the schema list together.
+func TestEmbeddedMigrationsMatchSchema(t *testing.T) {
+	t.Parallel()
+
+	names, newest := schema.EmbeddedMigrationNames()
+
+	got, gotNewest, err := sqlite.EmbeddedMigrations()
+	if err != nil {
+		t.Fatalf("embedded migrations: %v", err)
+	}
+
+	if !slices.Equal(got, names) || gotNewest != newest {
+		t.Fatalf("embedded = %v/%d, want the schema list %v/%d", got, gotNewest, names, newest)
+	}
+
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations: %v", err)
+	}
+
+	var files []string
+
+	for _, entry := range entries {
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sql" {
+			files = append(files, entry.Name())
+		}
+	}
+
+	slices.Sort(files)
+
+	if !slices.Equal(files, names) {
+		t.Fatalf("migration files = %v, want the schema list %v", files, names)
+	}
 }

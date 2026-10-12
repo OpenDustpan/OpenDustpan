@@ -1,4 +1,4 @@
-package main
+package client
 
 // Namespace create subcommand of the installation API (ADR 39): a client of
 // POST /api/server/namespaces (ADR 17).
@@ -25,17 +25,19 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 // Sentinel errors of the namespace create subcommand. Each error text names
 // what failed and the one command that helps.
 var (
-	// errNamespaceNeedsServer reports a namespace create run without --server.
-	errNamespaceNeedsServer = errors.New("namespace create needs --server")
-	// errNamespaceNoToken reports a namespace create run without an admin token.
-	errNamespaceNoToken = errors.New("no admin token is set")
-	// errNamespaceCreate reports a namespace that never arrived.
-	errNamespaceCreate = errors.New("create namespace failed")
+	// ErrNamespaceNeedsServer reports a namespace create run without --server.
+	ErrNamespaceNeedsServer = errors.New("namespace create needs --server")
+	// ErrNamespaceNoToken reports a namespace create run without an admin token.
+	ErrNamespaceNoToken = errors.New("no admin token is set")
+	// ErrNamespaceCreate reports a namespace that never arrived.
+	ErrNamespaceCreate = errors.New("create namespace failed")
 )
 
 // namespaceRequestTimeout bounds one namespace API request.
@@ -48,18 +50,8 @@ type namespaceFlags struct {
 }
 
 func (f *namespaceFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.server,
-		"server",
-		env(backupServerEnvVar, ""),
-		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
-	)
-	fs.StringVar(
-		&f.caFile,
-		"ca-file",
-		"",
-		"PEM bundle of extra CA certificates to trust with the system store",
-	)
+	cli.ByFlag("server").String(fs, &f.server)
+	cli.ByFlag("ca-file").String(fs, &f.caFile)
 }
 
 // namespaceCreateRequest is the create body: the name of the namespace.
@@ -81,10 +73,10 @@ type namespaceErrorResponse struct {
 	Message string `json:"message"`
 }
 
-// createNamespace runs `opendustpan namespace create --server <url> <name>`:
+// CreateNamespace runs `opendustpan namespace create --server <url> <name>`:
 // it creates a namespace through the installation API and prints it. It opens
 // no database and no store: only the server opens the data (ADR 39).
-func createNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var f namespaceFlags
 
 	fs := flag.NewFlagSet("namespace create", flag.ContinueOnError)
@@ -96,20 +88,20 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 
 	if fs.NArg() != 1 {
-		return errUsage
+		return ErrUsage
 	}
 
 	name := strings.TrimSpace(fs.Arg(0))
 	if name == "" {
-		return errUsage
+		return ErrUsage
 	}
 
 	server := strings.TrimSpace(f.server)
 	if server == "" {
 		return fmt.Errorf(
 			"%w: set --server (%s) to the server base URL and run opendustpan namespace create again",
-			errNamespaceNeedsServer,
-			backupServerEnvVar,
+			ErrNamespaceNeedsServer,
+			BackupServerEnvVar,
 		)
 	}
 
@@ -118,7 +110,7 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile)
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan namespace create again")
 	if err != nil {
 		return err
 	}
@@ -140,8 +132,8 @@ func createNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 // token, as the server signs each token in as a distinct administrator. No
 // token is an error that names both settings and the one command that helps.
 func namespaceToken() (string, error) {
-	tokens, err := loadAdminTokensFrom(os.LookupEnv)
-	if err != nil && !errors.Is(err, errAdminTokenMissing) {
+	tokens, err := LoadAdminTokensFrom(os.LookupEnv)
+	if err != nil && !errors.Is(err, ErrAdminTokenMissing) {
 		return "", err
 	}
 
@@ -153,9 +145,9 @@ func namespaceToken() (string, error) {
 
 	return "", fmt.Errorf(
 		"%w: set %s or %s and run opendustpan namespace create again",
-		errNamespaceNoToken,
-		adminTokenEnvVar,
-		adminTokenFileEnvVar,
+		ErrNamespaceNoToken,
+		AdminTokenEnvVar,
+		AdminTokenFileEnvVar,
 	)
 }
 
@@ -168,7 +160,7 @@ func postNamespace(
 	if err != nil {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: %w: check the name and run opendustpan namespace create --server %s again",
-			errNamespaceCreate,
+			ErrNamespaceCreate,
 			name,
 			err,
 			server,
@@ -187,7 +179,7 @@ func postNamespace(
 	if err != nil {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: %w: check --server and run opendustpan namespace create --server %s again",
-			errNamespaceCreate,
+			ErrNamespaceCreate,
 			name,
 			err,
 			server,
@@ -230,7 +222,7 @@ func decodeNamespaceResponse(
 	if resp.StatusCode != http.StatusCreated {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: %s: check the server log and run opendustpan namespace create --server %s again",
-			errNamespaceCreate,
+			ErrNamespaceCreate,
 			name,
 			decodeNamespaceError(resp),
 			server,
@@ -242,7 +234,7 @@ func decodeNamespaceResponse(
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: %w: check the server log and run opendustpan namespace create --server %s again",
-			errNamespaceCreate,
+			ErrNamespaceCreate,
 			name,
 			err,
 			server,
@@ -252,7 +244,7 @@ func decodeNamespaceResponse(
 	if strings.TrimSpace(doc.Name) == "" || strings.TrimSpace(doc.HomeRegion) == "" {
 		return namespaceCreateResponse{}, fmt.Errorf(
 			"%w %q: the server answered no namespace: check the server log and run opendustpan namespace create --server %s again",
-			errNamespaceCreate,
+			ErrNamespaceCreate,
 			name,
 			server,
 		)

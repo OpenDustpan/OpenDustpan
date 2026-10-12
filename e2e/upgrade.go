@@ -152,7 +152,17 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 	token := newToken(tb)
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{tb: tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec}
+	in := envInput{
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               dir,
+		token:             token,
+		tokenB:            tokenB,
+		rec:               rec,
+		deltaCutoff:       0,
+		disableJournaling: false,
+	}
 
 	return newBinaryEnvWithBin(ctx, in, binPath)
 }
@@ -203,13 +213,17 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	}, os.Environ())
 
 	cfg := backendConfig{
-		bin:          binPath,
-		dbURL:        dbURL,
-		blobDir:      blobDir,
-		backupTarget: "",
-		certFile:     cert.cert,
-		keyFile:      cert.key,
-		tokens:       in.token + "," + in.tokenB,
+		disableJournaling: false,
+		bin:               binPath,
+		dbURL:             dbURL,
+		blobDir:           blobDir,
+		blobStore:         "",
+		s3Endpoint:        "",
+		backupTarget:      "",
+		certFile:          cert.cert,
+		keyFile:           cert.key,
+		tokens:            in.token + "," + in.tokenB,
+		deltaCutoff:       0,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 	proxy := startRecordingProxy(tb, in.rec, backendURL)
@@ -226,6 +240,8 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		client:        client,
 		workspaces:    nil,
 		blobs:         openBlobStoreAt(tb, blobDir),
+		blobName:      blobFS,
+		s3Endpoint:    "",
 		token:         in.token,
 		tokenB:        in.tokenB,
 		home:          filepath.Join(in.dir, "home"),

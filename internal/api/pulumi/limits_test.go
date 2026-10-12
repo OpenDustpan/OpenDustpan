@@ -34,7 +34,9 @@ func newUpdateFixtureWithGate(
 
 	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
 
-	stacks, err := stack.NewService(stack.Config{Store: stores, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -57,15 +59,19 @@ func newUpdateFixtureWithGate(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              updates,
-		Secrets:              newTestSecrets(t, namespaces),
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: inFlight,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 updates,
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    inFlight,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -91,7 +97,9 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -124,15 +132,19 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:               stacks,
-		Updates:              newEnforcingUpdates(t, namespaces),
-		Secrets:              secrets,
-		Namespaces:           namespaces,
-		Authenticator:        tokenAuthenticator{},
-		Authorizer:           authz,
-		Logger:               slog.New(slog.DiscardHandler),
-		BaseURL:              baseurl.Resolver{},
-		MaxBodyBytesInFlight: inFlight,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 secrets,
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    inFlight,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

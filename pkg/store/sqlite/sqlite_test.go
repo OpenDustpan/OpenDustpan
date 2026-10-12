@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -33,6 +34,127 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestAuditConformance runs the audit store suite: append, list order,
+// paging, fencing, isolation, concurrent appends and the chain check. The
+// tamper hooks change or remove a row through SQL: the port has no update
+// or delete path, so only SQL plants a changed field or a deleted entry.
+func TestAuditConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.Run(t, func(t *testing.T) audittest.TestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.TestStore{
+			Store: s,
+			TamperEntry: func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error {
+				return tamperAuditEntry(ctx, path, ns, seq, auditFieldChange{field: field, value: value})
+			},
+			DeleteEntry: func(ctx context.Context, ns namespace.Name, seq int64) error {
+				return deleteAuditEntry(ctx, path, ns, seq)
+			},
+		}
+	})
+}
+
+// errUnknownAuditField reports a tamper hook field outside the whitelist.
+var errUnknownAuditField = errors.New("unknown audit field")
+
+// tamperAuditColumn maps a tamper hook field to its column. The column
+// equals the field; the switch keeps the field name out of SQL unless it
+// names one of the five whitelisted columns.
+func tamperAuditColumn(field string) (string, bool) {
+	switch field {
+	case "subject", "action", "object", "outcome", "kind":
+		return field, true
+	default:
+		return "", false
+	}
+}
+
+// auditFieldChange names one column change of the tamper hook.
+type auditFieldChange struct {
+	field string
+	value string
+}
+
+// tamperAuditEntry changes one column of one audit entry through a second
+// database handle: the port has no update path.
+func tamperAuditEntry(
+	ctx context.Context, path string, ns namespace.Name, seq int64, change auditFieldChange,
+) error {
+	column, ok := tamperAuditColumn(change.field)
+	if !ok {
+		return fmt.Errorf("%w: %q", errUnknownAuditField, change.field)
+	}
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		return fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	_, execErr := conn.ExecContext(
+		ctx,
+		`UPDATE audit_entries SET `+column+` = ? WHERE namespace = ? AND sequence = ?`, //nolint:gosec // Column comes from the tamperAuditColumn allowlist, never from the caller.
+		change.value,
+		ns.String(),
+		seq,
+	)
+	if execErr != nil {
+		return fmt.Errorf("change audit entry: %w", execErr)
+	}
+
+	return nil
+}
+
+// deleteAuditEntry removes one audit entry through a second database handle:
+// the port has no delete path.
+func deleteAuditEntry(ctx context.Context, path string, ns namespace.Name, seq int64) error {
+	conn, err := openRawDB(path)
+	if err != nil {
+		return fmt.Errorf("open sqlite database: %w", err)
+	}
+
+	defer func() {
+		_ = conn.Close() //nolint:errcheck // Test helper: the Exec result below carries the verdict.
+	}()
+
+	_, execErr := conn.ExecContext(
+		ctx, `DELETE FROM audit_entries WHERE namespace = ? AND sequence = ?`, ns.String(), seq,
+	)
+	if execErr != nil {
+		return fmt.Errorf("delete audit entry: %w", execErr)
+	}
+
+	return nil
+}
+
+func TestSchemaConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunSchema(t, func(t *testing.T) storetest.SchemaStore {
 		t.Helper()
 
 		return open(t)
@@ -90,7 +212,7 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 		}
 	})
 
-	conn, connErr := sql.Open("sqlite", "file:"+path)
+	conn, connErr := openRawDB(path)
 	if connErr != nil {
 		t.Fatalf("open raw database: %v", connErr)
 	}
@@ -170,6 +292,21 @@ func TestBackupConformance(t *testing.T) {
 		t.Helper()
 
 		return openBackup(t)
+	})
+}
+
+func TestRestoreConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunRestore(t, func(t *testing.T) storetest.RestoreStore {
+		t.Helper()
+
+		restorable, ok := openBackup(t).(storetest.RestoreStore)
+		if !ok {
+			t.Fatal("backup store keeps no restore ports")
+		}
+
+		return restorable
 	})
 }
 
@@ -431,7 +568,10 @@ type uncountedStore struct {
 	path string
 }
 
-var _ storetest.CountNullifier = (*uncountedStore)(nil)
+var (
+	_ storetest.CountNullifier = (*uncountedStore)(nil)
+	_ storetest.CountSetter    = (*uncountedStore)(nil)
+)
 
 // openUncounted returns a fresh store in a temporary directory that the
 // uncounted-checkpoint case can NULL through SQL.
@@ -456,7 +596,7 @@ func openUncounted(t *testing.T) *uncountedStore {
 
 // NullifyResourceCount implements storetest.CountNullifier.
 func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
-	conn, err := sql.Open("sqlite", "file:"+s.path)
+	conn, err := openRawDB(s.path)
 	if err != nil {
 		return fmt.Errorf("open raw database: %w", err)
 	}
@@ -469,6 +609,27 @@ func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
 
 	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
 		return fmt.Errorf("nullify the checkpoint count: %w", err)
+	}
+
+	return nil
+}
+
+// SetResourceCount implements storetest.CountSetter: it plants a stored
+// count from before saves stopped counting.
+func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
+		return fmt.Errorf("set the checkpoint count: %w", err)
 	}
 
 	return nil
@@ -776,7 +937,7 @@ func checkMigratedEntry(t *testing.T, e *inventory.Entry) {
 func seedAt0008WithStacks(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -877,7 +1038,7 @@ func seedInventoryStacks(t *testing.T, conn *sql.DB) {
 func seedAt0006WithTags(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -996,7 +1157,7 @@ func TestMigration0006KeepsOneRowData(t *testing.T) {
 func seedAt0005WithOneRow(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1113,7 +1274,7 @@ func seedOneRowCheckpoint(t *testing.T, conn *sql.DB) {
 func seedAt0003WithHistory(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1246,7 +1407,7 @@ func seedHistoryEvents(t *testing.T, conn *sql.DB) {
 func seedAt0002(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1374,7 +1535,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 func newerSchemaSnapshot(t *testing.T, path string) ([]int64, []string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1461,7 +1622,7 @@ func readSchemaTables(t *testing.T, conn *sql.DB) []string {
 func insertFutureVersion(t *testing.T, path string, version int64) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1559,7 +1720,7 @@ func checkMigratedStateVersions(t *testing.T, s *sqlite.Store) {
 func seedAt0010WithStateVersions(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1779,7 +1940,7 @@ func checkMigratedHistoryDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) 
 func seedAt0011WithUpdates(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -2054,7 +2215,7 @@ func breakExportedNamespace(t *testing.T, data []byte) []byte {
 		t.Fatalf("write exported file: %v", err)
 	}
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open exported file: %v", err)
 	}

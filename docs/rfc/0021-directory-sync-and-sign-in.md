@@ -1,14 +1,15 @@
 ---
 rfc: 21
 title: Directory sync and sign-in hardening
-status: draft
+status: discussing
 created: 2026-10-10
 ---
 
 # RFC 21. Directory sync and sign-in hardening
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: discussing. Opened as a stub from the competitor review in the
+research doc "IaC and TACOS landscape". The project owner chose
+the built-in MFA below on 2026-10-11.
 
 ## Problem
 
@@ -25,11 +26,55 @@ only.
 - Trusted-header sign-in behind an identity-aware proxy, as an Authenticator
   adapter.
 - IP allowlists, though self-hosters can also do this at their own proxy.
+- Built-in MFA for installs that have no identity provider (see Proposal).
+
+## Proposal
+
+### Built-in MFA for installs with no identity provider
+
+The project owner chose this MFA. It protects installs that sign people in
+without an identity provider.
+
+- WebAuthn comes first: passkeys, Touch ID, Windows Hello and hardware keys.
+  TOTP is the fallback. Recovery codes are shown once at enrollment.
+- MFA is off by default, for any number of users. An administrator turns it
+  on. Then the administrator can require it for all users.
+- MFA covers console sign-in, the creation of access tokens, and the reveal
+  of a secret value (ADR 41).
+  - Edit: requiring MFA to reveal secrets should be a separate admin toggle.
+- CLI and CI access tokens stay bearer tokens, with no MFA step on each use.
+  A CLI access token of a person is created after an MFA sign-in, and it has
+  an expiry (RFC 20).
+- An administrator can reset the MFA of a user. Each reset writes an audit
+  entry (ADR 41).
+- With an SSO identity provider (ADR 6), MFA is the job of the identity
+  provider. OpenDustpan does not add its own MFA step on top.
+- Each MFA operation has a REST API and an action (ADR 17).
 
 ## Open questions
 
 - Which of these belong in the binary, and which are better left to the
   operator's proxy?
+- How does a user sign in when they lose every factor and every recovery
+  code?
+- Does "require MFA" apply to the bootstrap admin token?
+- How long does an MFA sign-in stay valid for the creation of access tokens
+  and for the reveal of a secret value?
+
+## Owner direction (2026-10-11)
+
+The project owner chose built-in MFA for installs that have no identity
+provider (e.g. username+password, ldap, etc). WebAuthn: passkeys, Touch ID, Windows Hello and hardware
+keys and TOTP are the options. Recovery codes are shown once at enrollment. An
+administrator can reset the MFA of a user. Each reset writes an audit entry
+(ADR 41). MFA covers console sign-in, the creation of access tokens, and the
+reveal of a secret value (ADR 41). CLI and CI access tokens stay bearer
+tokens, with no MFA step on each use. A CLI access token of a person is
+created after an MFA sign-in, and it has an expiry. MFA is off by default, for
+any number of users. An administrator turns it on. Then the administrator can
+require it for all users. With an SSO identity provider (ADR 6), MFA is the
+job of the identity provider. OpenDustpan does not add its own MFA step on
+top. The related ADRs are ADR 6, ADR 13, ADR 17 and ADR 41.
 
 ## Outcome
 

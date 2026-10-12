@@ -1,6 +1,6 @@
 # 42. A portable backup format
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-12
 
 ## Context
 
@@ -74,6 +74,10 @@ shared cores. Each number comes from one run.
    PostgreSQL gives the same result. A covered column that the schema does not
    hold fails too.
 
+The project owner decided on 2026-10-12 that the portable format is the only
+format, and that the native format goes away as soon as possible. There is
+no release yet, so no backup in the native format needs to restore.
+
 The spike also found these risks:
 
 - The import writes all tables in one long transaction (3.2 s on PostgreSQL).
@@ -91,13 +95,16 @@ The spike also found these risks:
 
 ## Decision
 
-This ADR extends ADR 30 and RFC 8. It does not change them.
+This ADR replaces the SQL part of ADR 30 (decisions 1, 3 and 4 for the
+format of the data) and the same-dialect rule of ADR 38. ADR 1 forbids edits,
+so those ADRs keep their text, and this ADR is in force where they disagree.
+It extends RFC 8.
 
-1. **Two formats.** A backup has a SQL part in one of two formats. The
-   `native` format is the format of ADR 30. The `portable` format is the format
-   of this ADR. The server writes `portable` by default. The setting
-   `--backup-format` (`DUSTPAN_BACKUP_FORMAT`) selects `native`. Restore
-   reads both formats.
+1. **One format.** The SQL part of a backup is in the `portable` format of
+   this ADR. The server writes no other format, and it has no setting to select
+   one. The native format of ADR 30 (the `VACUUM INTO` file and the PostgreSQL
+   `COPY` files as the backup) goes away from the code. Restore reads only the
+   portable format.
 2. **The portable layout.** The SQL part is one file
    `backups/<id>/sql/<table>.jsonl.gz` for each table in `backup.Tables`. Each
    line is one row: a JSON object with one member for each column. The export
@@ -117,11 +124,12 @@ This ADR extends ADR 30 and RFC 8. It does not change them.
    rows that still hold their content in SQL (ADR 37 decision 10) carry it as
    a byte value.
 4. **The manifest.** The manifest format number goes to 2. The manifest gets
-   the member `sqlFormat` (`native` or `portable`). For `portable`, it holds
-   the column list, the row count, the size and the SHA-256 of each table
-   file. A manifest with format 1 has no `sqlFormat`, and restore reads it as
-   `native`. The dialect in a portable manifest names the source. It does not
-   limit the destination.
+   the member `sqlFormat`, with the one value `portable`, so that a later
+   format can have a new value. It holds the column list, the row count, the
+   size and the SHA-256 of each table file. Restore refuses a manifest with
+   format 1, before it changes anything, with an error that says the backup
+   uses the native format and that a new backup is necessary. The dialect in
+   the manifest names the source. It does not limit the destination.
 5. **Coverage.** Each dialect keeps a constant column list for each table: the
    portable name and the dialect column of each column. The export compares
    that list with the live schema (`information_schema` on PostgreSQL,
@@ -130,8 +138,9 @@ This ADR extends ADR 30 and RFC 8. It does not change them.
    `ErrCoverage`. A conformance test runs the same comparison in both
    dialects. So a migration that adds a column fails the build until its
    author adds the column to the list.
-6. **A consistent read.** The SQLite export reads from the file that
-   `VACUUM INTO` writes (ADR 30 decision 3), and then deletes the file. The
+6. **A consistent read.** The SQLite export reads from a file that
+   `VACUUM INTO` writes to a temporary path, and then removes the file. That
+   file is never part of the backup. The
    PostgreSQL export reads in the one repeatable-read, read-only transaction of
    ADR 30 decision 4. Both read every table at one point in time.
 7. **Only in the server.** The export runs in the server, behind the backup
@@ -145,17 +154,15 @@ This ADR extends ADR 30 and RFC 8. It does not change them.
    statements. The staged data is not live, so a batch that fails only stops
    the restore. The one atomic step stays the swap of ADR 38 decision 6. The
    checks of ADR 38 decision 3 run on the staged data before the swap.
-9. **Across dialects.** A portable backup of one dialect restores into the
-   other dialect. This changes ADR 30 decision 1 ("the same dialect") for the
-   portable format only. A native backup still restores into its own dialect
-   only.
+9. **Across dialects.** A backup of one dialect restores into the other
+   dialect. This replaces the "same dialect" rule of ADR 30 decision 1 and of
+   ADR 38.
 10. **Older schema versions.** A portable backup of an older schema version
     restores. The server migrates the staging area to the schema version of the
     backup, loads the rows, and then runs the remaining migrations on the
     staged data. So a migration that computes a new value runs on the restored
     rows, and no column trusts a default. A backup of a newer schema version
-    fails with an error that names the version that the operator needs. A
-    native backup keeps the rule of ADR 30: the same schema version only.
+    fails with an error that names the version that the operator needs.
 
 ## Consequences
 
@@ -170,11 +177,10 @@ This ADR extends ADR 30 and RFC 8. It does not change them.
   and puts the numbers in the sizing guide.
 - Two exports of the same data are byte-identical, so an operator can compare
   two backups by their hashes.
-- Each migration that adds, renames or deletes a column must change the column
+- Each migration that adds, renames or removes a column must change the column
   list of its dialect. The conformance test enforces this.
-- The native PostgreSQL `COPY` list must get the four missing columns. A
-  conformance test that compares each copy list with the live schema, as in
-  decision 5, keeps it complete. That fix does not wait for this ADR.
+- The native format, its code and its tests go away. Until the removal lands,
+  the native format stays as it is, so main keeps a working backup.
 - Restore of an older schema version needs the migrations from that version
   on. A migration that drops data stays a one-way step.
 - Open work:
@@ -183,11 +189,13 @@ This ADR extends ADR 30 and RFC 8. It does not change them.
   2. The portable export and the manifest format 2 in the `backup` package.
   3. The batched import into the ADR 38 staging area, with the forward
      migration of decision 10.
-  4. The setting `--backup-format`.
+  4. Remove the native format: its export, its import, its manifest handling
+     and its tests. This lands after item 3, so the server always has one
+     working backup format. Restore refuses a format 1 manifest (decision 4).
   5. An e2e step: back up a SQLite installation in the portable format,
      restore it into a PostgreSQL installation, and back. Both CLIs read the
      same state, the Pulumi secret decrypts, and the history is whole.
-  6. The backup guide: the two formats, and the move between dialects.
+  6. The backup guide: the format, and the move between dialects.
 - This ADR defers:
   - an incremental SQL part (a row-level difference for each table),
   - a published specification of the format, so that other tools can read

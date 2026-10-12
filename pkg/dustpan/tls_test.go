@@ -132,6 +132,7 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
@@ -148,9 +149,9 @@ func newServerWithOptions(t *testing.T, addr string, opts ...dustpan.Option) *du
 	return srv
 }
 
-// freeLocalPort returns an unused loopback port, for tests that must know
-// the address before the server starts.
-func freeLocalPort(t *testing.T) string {
+// openTestListener binds loopback on an ephemeral port and keeps it open,
+// so the server serves on it without another process taking the port.
+func openTestListener(t *testing.T) net.Listener {
 	t.Helper()
 
 	//nolint:exhaustruct_v5 // The test listens with defaults; only the context matters.
@@ -161,16 +162,7 @@ func freeLocalPort(t *testing.T) string {
 		t.Fatalf("listen: %v", err)
 	}
 
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if err != nil {
-		t.Fatalf("split address: %v", err)
-	}
-
-	if err := l.Close(); err != nil {
-		t.Fatalf("close listener: %v", err)
-	}
-
-	return port
+	return l
 }
 
 // waitForTCP waits until addr accepts TCP connections.
@@ -229,13 +221,14 @@ func TestRunTLSVersions(t *testing.T) {
 	dir := t.TempDir()
 	cert := writeTestCertificate(t, filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"))
 
-	port := freeLocalPort(t)
-	addr := "127.0.0.1:" + port
+	ln := openTestListener(t)
+	addr := ln.Addr().String()
 
 	srv := newServerWithOptions(
 		t,
 		addr,
 		dustpan.WithTLS(filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")),
+		dustpan.WithListener(ln),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -329,6 +322,134 @@ func checkHandshakeFailed(t *testing.T, resp *http.Response, err error) {
 	}
 }
 
+// TestRunWithListener proves Run serves on a passed listener for plain
+// HTTP and TLS, and stops when the context ends. The listen address stays
+// at another value, so the probe proves the listener wins.
+func TestRunWithListener(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plain HTTP", func(t *testing.T) {
+		t.Parallel()
+		checkRunWithListenerPlain(t)
+	})
+
+	t.Run("TLS", func(t *testing.T) {
+		t.Parallel()
+		checkRunWithListenerTLS(t)
+	})
+}
+
+// checkRunWithListenerPlain proves Run serves plain HTTP on a passed
+// listener and stops when the context ends.
+func checkRunWithListenerPlain(t *testing.T) {
+	t.Helper()
+
+	ln := openTestListener(t)
+	addr := ln.Addr().String()
+
+	srv := newServerWithOptions(t, "127.0.0.1:0", dustpan.WithListener(ln))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := runServer(ctx, srv)
+
+	defer cancel()
+
+	waitForTCP(t, addr)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/health/live", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /health/live: %v", err)
+	}
+
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("GET /health/live status %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run after cancel: %v", err)
+	}
+}
+
+// checkRunWithListenerTLS proves Run serves HTTPS on a passed listener
+// and stops when the context ends.
+func checkRunWithListenerTLS(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	cert := writeTestCertificate(t, filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"))
+
+	ln := openTestListener(t)
+	addr := ln.Addr().String()
+
+	srv := newServerWithOptions(
+		t,
+		"127.0.0.1:0",
+		dustpan.WithTLS(filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")),
+		dustpan.WithListener(ln),
+	)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := runServer(ctx, srv)
+
+	defer cancel()
+
+	waitForTCP(t, addr)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2: true,
+		},
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/health/live", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /health/live: %v", err)
+	}
+
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("GET /health/live status %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	// A TLS listener keeps HTTP/2, as the server had before WithListener.
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("GET /health/live protocol %s, want HTTP/2", resp.Proto)
+	}
+
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("run after cancel: %v", err)
+	}
+}
+
 func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +488,7 @@ func TestNewServerRejectsSingleTLSFile(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
@@ -425,6 +547,7 @@ func TestNewServerRejectsBadPublicURL(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),

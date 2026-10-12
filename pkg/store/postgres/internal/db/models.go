@@ -8,6 +8,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditEntry struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+	ValueCount pgtype.Int8
+}
+
 type Backup struct {
 	ID          string
 	State       string
@@ -49,6 +71,9 @@ type Inventory struct {
 	LastChangedMs int64
 	Status        string
 	ResourceCount pgtype.Int8
+	LockHolder    pgtype.Text
+	LockSinceMs   pgtype.Int8
+	LockOperation pgtype.Text
 }
 
 type Namespace struct {
@@ -56,6 +81,17 @@ type Namespace struct {
 	HomeRegion      string
 	FailoverVersion int64
 	CreatedAtMs     int64
+}
+
+type Restore struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
 }
 
 type SecretKey struct {
@@ -100,6 +136,8 @@ type StateVersion struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
+	SensitiveMarks    []byte
 }
 
 type Update struct {
@@ -117,6 +155,7 @@ type Update struct {
 	StackID          string
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 }
 
 type UpdateEvent struct {

@@ -39,6 +39,13 @@ func TestFrozenMigrations(t *testing.T) {
 		"0014_checkpoint_resource_count.sql": "c679dde7df1f391e322fa8ff5ba398b105bfa400a14331f220a871c32d3d9af2",
 		"0015_maintenance.sql":               "dd34cbf7f918f2c0282a9e4bbd5ffa7bcef4444ded393bf7268086c3527488d8",
 		"0016_checkpoint_blobs.sql":          "ca9d54e8ad8d1569a41a071ce694098f24c35945055dc1b17b3dac4563a2df77",
+		"0017_inventory_lock.sql":            "c8a5cb4ba39f9dee84629ff5e004d70da5c4b2f84ab56e4f1daa40a373c197e2",
+		"0018_restores.sql":                  "969dcd5e80a58822244a937de4aafeac485982dc40905566a5b79f0e3ea94aba",
+		"0019_audit_entries.sql":             "07fda9683ac6fe7d0479e1eb6a8dc16711a5eaf1afa42c2097afd337f04cba35",
+		"0020_sealed_state.sql":              "f7d97d88a2afcfa287ea6c2b20dda2f4263dfa0faea2ba286d4f03c304f6e5fe",
+		"0021_sensitive_marks.sql":           "cb509db8b4a8b99f8b06a635316914a0b234aed33fb12207fce246fd123dad3c",
+		"0022_audit_value_count.sql":         "c07731db226c2fb9c5814d6319aebfb7f7b91853ad3d7b3d7b10aa6728cbc833",
+		"0023_update_journal_version.sql":    "d48f5f9309335b60985b15329c37041ee6bd5ac75425b2db8dc4bdc3de21e3d8",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

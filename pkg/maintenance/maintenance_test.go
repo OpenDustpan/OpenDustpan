@@ -128,7 +128,7 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard) error {
 	return stack.ErrNotFound
 }
 
@@ -297,6 +297,11 @@ func (f *fakeWorkspaces) SaveWorkspace(
 	return nil
 }
 
+// DeleteWorkspace implements workspace.Store.
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence) error {
+	return workspace.ErrNotFound
+}
+
 // fakeStates answers no state version. The force-unlock path reads none.
 type fakeStates struct{}
 
@@ -338,10 +343,28 @@ func (fakeStates) RecordUploadAttempt(
 	return "", nil
 }
 
+func (fakeStates) SaveSensitiveMarks(
+	context.Context, workspace.StateVersionID, workspace.SensitiveMarks, namespace.Fence,
+) error {
+	return nil
+}
+
 func (fakeStates) DeleteExpiredPendingStateVersions(
 	context.Context, workspace.ID, time.Time, namespace.Fence,
 ) ([]workspace.StateVersion, error) {
 	return nil, nil
+}
+
+func (fakeStates) ListUnsealedStateVersions(
+	context.Context,
+) ([]workspace.StateVersion, error) {
+	return nil, nil
+}
+
+func (fakeStates) SealStateVersion(
+	context.Context, workspace.StateVersionID, blob.Key, []byte, namespace.Fence,
+) error {
+	return nil
 }
 
 // fakeBlobs answers no content. The force-unlock path reads none.
@@ -407,7 +430,9 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		service:      nil,
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -432,6 +457,7 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -492,6 +518,7 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 	})
 
 	f.updates.updates[id] = stack.Update{
+		JournalVersion:  0,
 		CreatedAt:       time.Now(),
 		StartedAt:       time.Now(),
 		EndedAt:         time.Now(),
@@ -544,7 +571,9 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
 	}
@@ -569,6 +598,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
+		Sealer:             nil,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,

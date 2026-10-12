@@ -23,16 +23,21 @@ const (
 )
 
 // DBProxy is a small TCP proxy between the server and PostgreSQL. The server
-// connects through it, so closing the proxy stops the database for that
-// server only. The shared PostgreSQL server keeps running. Reopening the
-// proxy lets the pool connect again.
+// connects through it, so pausing the proxy stops the database for that
+// server only. The shared PostgreSQL server keeps running. Resuming the proxy
+// lets the pool connect again. The listener stays bound from the start to the
+// end of the test: the server's database URL names its port, and a port that
+// the proxy released could be taken by another process (issue 391).
 type DBProxy struct {
 	mu       sync.Mutex
 	listener net.Listener
 	target   string
 	port     string
 	conns    map[net.Conn]struct{}
-	closed   bool
+	// paused makes the proxy close each accepted connection at once.
+	paused bool
+	// shut marks the end of the test: the listener is closed.
+	shut bool
 }
 
 // startDBProxy listens on loopback, forwards to the host and port of
@@ -63,7 +68,8 @@ func startDBProxy(ctx context.Context, tb testing.TB, directURL string) (*DBProx
 		target:   target,
 		port:     port,
 		conns:    map[net.Conn]struct{}{},
-		closed:   false,
+		paused:   false,
+		shut:     false,
 	}
 
 	go proxy.serve(ctx, listener)
@@ -102,7 +108,7 @@ func openProxiedPostgresStore(
 	}
 
 	tb.Cleanup(func() {
-		st.Close() //nolint:contextcheck // Close takes no context; staging cleanup runs detached.
+		st.CloseContext(ctx)
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
@@ -161,55 +167,34 @@ func dialDatabase(ctx context.Context, target string) (net.Conn, error) {
 	return conn, nil
 }
 
-// Close stops the database for the server: it closes the listener and every
-// forwarded connection, so pooled connections break and new dials are
-// refused. It is idempotent.
-func (p *DBProxy) Close() {
+// Pause stops the database for the server: it drops every forwarded
+// connection, so pooled connections break, and it closes each new connection
+// at once. The listener stays bound, so no other process can take the port.
+// It is idempotent.
+func (p *DBProxy) Pause() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed {
-		return
-	}
+	p.paused = true
+	p.dropConnsLocked()
+}
 
-	p.closed = true
+// Resume forwards new connections again on the same listener, so the pool can
+// connect. It is idempotent.
+func (p *DBProxy) Resume() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	if p.listener != nil {
-		_ = p.listener.Close() //nolint:errcheck // The listener is discarded after Close.
-		p.listener = nil
-	}
+	p.paused = false
+}
 
+// dropConnsLocked closes every forwarded connection. The caller holds p.mu.
+func (p *DBProxy) dropConnsLocked() {
 	for conn := range p.conns {
-		_ = conn.Close() //nolint:errcheck // The proxy is closed; the result is not checked.
+		_ = conn.Close() //nolint:errcheck // The connection is dropped; the result is not checked.
 	}
 
 	p.conns = map[net.Conn]struct{}{}
-}
-
-// Reopen listens on the same port again, so the pool can connect. It fails
-// the test when the port is no longer free.
-func (p *DBProxy) Reopen(ctx context.Context, tb testing.TB) {
-	tb.Helper()
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if !p.closed {
-		return
-	}
-
-	//nolint:exhaustruct_v5 // The probe listens with defaults; only the network and address matter.
-	lc := &net.ListenConfig{}
-
-	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:"+p.port)
-	if err != nil {
-		tb.Fatalf("reopen database proxy: %v", err)
-	}
-
-	p.listener = listener
-	p.closed = false
-
-	go p.serve(ctx, listener)
 }
 
 // serve accepts connections until the listener closes.
@@ -222,9 +207,9 @@ func (p *DBProxy) serve(ctx context.Context, listener net.Listener) {
 
 		p.mu.Lock()
 
-		if p.closed {
+		if p.paused || p.shut {
 			p.mu.Unlock()
-			_ = client.Close() //nolint:errcheck // The proxy is closed; the client cannot proceed.
+			_ = client.Close() //nolint:errcheck // The proxy is paused; the client cannot proceed.
 
 			continue
 		}
@@ -252,6 +237,16 @@ func (p *DBProxy) forward(ctx context.Context, client net.Conn) {
 	}
 
 	p.mu.Lock()
+
+	_, live := p.conns[client]
+	if !live {
+		// A pause dropped the client while the dial ran.
+		p.mu.Unlock()
+		_ = upstream.Close() //nolint:errcheck // The client is gone; the result is not checked.
+
+		return
+	}
+
 	p.conns[upstream] = struct{}{}
 	p.mu.Unlock()
 
@@ -282,22 +277,19 @@ func (p *DBProxy) shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.closed = true
+	p.shut = true
 
 	if p.listener != nil {
 		_ = p.listener.Close() //nolint:errcheck // The test ends; the result is not checked.
 		p.listener = nil
 	}
 
-	for conn := range p.conns {
-		_ = conn.Close() //nolint:errcheck // The test ends; the result is not checked.
-	}
-
-	p.conns = map[net.Conn]struct{}{}
+	p.dropConnsLocked()
 }
 
-// StopDatabase closes the database proxy, so the database stops for this
-// environment only. It needs a PostgreSQL environment with a proxy.
+// StopDatabase pauses the database proxy, so the database stops for this
+// environment only. The proxy keeps its port. It needs a PostgreSQL
+// environment with a proxy.
 func (e *Env) StopDatabase(tb testing.TB) {
 	tb.Helper()
 
@@ -305,19 +297,19 @@ func (e *Env) StopDatabase(tb testing.TB) {
 		tb.Fatalf("StopDatabase needs a PostgreSQL environment with a proxy")
 	}
 
-	e.dbProxy.Close()
+	e.dbProxy.Pause()
 }
 
-// StartDatabase reopens the database proxy, so the pool can connect again.
-// It needs a PostgreSQL environment with a proxy.
-func (e *Env) StartDatabase(ctx context.Context, tb testing.TB) {
+// StartDatabase resumes the database proxy on the same port, so the pool can
+// connect again. It needs a PostgreSQL environment with a proxy.
+func (e *Env) StartDatabase(tb testing.TB) {
 	tb.Helper()
 
 	if e.dbProxy == nil {
 		tb.Fatalf("StartDatabase needs a PostgreSQL environment with a proxy")
 	}
 
-	e.dbProxy.Reopen(ctx, tb)
+	e.dbProxy.Resume()
 }
 
 // AddStep records one custom scenario step for the report, so helpers

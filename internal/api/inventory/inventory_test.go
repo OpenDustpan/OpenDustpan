@@ -59,11 +59,11 @@ func (m *memNamespaceStore) Ping(_ context.Context) error {
 	return nil
 }
 
-// seedNamespace creates one namespace homed in the test region.
-func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
+// seedNamespace creates the acme namespace homed in the test region.
+func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 	t.Helper()
 
-	n, err := namespace.ParseName(name)
+	n, err := namespace.ParseName("acme")
 	if err != nil {
 		t.Fatalf("parse namespace: %v", err)
 	}
@@ -209,13 +209,21 @@ func authorizedGet(
 
 // unitBody is one decoded unit entry.
 type unitBody struct {
-	Tool          string `json:"tool"`
-	Reference     string `json:"reference"`
-	Namespace     string `json:"namespace"`
-	Name          string `json:"name"`
-	LastChange    int64  `json:"lastChange"`
-	Status        string `json:"status"`
-	ResourceCount *int64 `json:"resourceCount"`
+	Tool          string    `json:"tool"`
+	Reference     string    `json:"reference"`
+	Namespace     string    `json:"namespace"`
+	Name          string    `json:"name"`
+	LastChange    int64     `json:"lastChange"`
+	Status        string    `json:"status"`
+	ResourceCount *int64    `json:"resourceCount"`
+	Lock          *lockBody `json:"lock"`
+}
+
+// lockBody is one decoded lock object.
+type lockBody struct {
+	Holder    string `json:"holder"`
+	Since     int64  `json:"since"`
+	Operation string `json:"operation"`
 }
 
 // unitsBody is the decoded GET /api/inventory/units response.
@@ -273,6 +281,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			DisplayName:   "web/prod",
 			Status:        "",
 			ResourceCount: nil,
+			Lock:          nil,
 		},
 		{
 			LastChanged:   changeTime(),
@@ -283,6 +292,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			DisplayName:   "network",
 			Status:        "",
 			ResourceCount: nil,
+			Lock:          nil,
 		},
 		{
 			LastChanged:   changeTime(),
@@ -293,6 +303,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			DisplayName:   "api/dev",
 			Status:        "deployed",
 			ResourceCount: &count,
+			Lock:          nil,
 		},
 	}
 }
@@ -359,6 +370,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			LastChange:    changeTime().Unix(),
 			Status:        "",
 			ResourceCount: nil,
+			Lock:          nil,
 		},
 		{
 			Tool:          "Pulumi",
@@ -368,6 +380,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			LastChange:    changeTime().Unix(),
 			Status:        "deployed",
 			ResourceCount: &count,
+			Lock:          nil,
 		},
 		{
 			Tool:          "Pulumi",
@@ -377,6 +390,7 @@ func TestListUnitsBothTools(t *testing.T) {
 			LastChange:    changeTime().Unix(),
 			Status:        "",
 			ResourceCount: nil,
+			Lock:          nil,
 		},
 	}
 
@@ -386,8 +400,8 @@ func TestListUnitsBothTools(t *testing.T) {
 }
 
 // checkUnit proves one listed unit matches its want: the tool label, the
-// reference, the namespace, the name, the change time, the status and the
-// resource count.
+// reference, the namespace, the name, the change time, the status, the
+// resource count and the lock.
 func checkUnit(t *testing.T, got, want unitBody, i int) {
 	t.Helper()
 
@@ -401,6 +415,24 @@ func checkUnit(t *testing.T, got, want unitBody, i int) {
 	}
 
 	checkCount(t, got.ResourceCount, want.ResourceCount, i)
+	checkLock(t, got.Lock, want.Lock)
+}
+
+// checkLock proves a listed lock matches its want: omitted when the unit is
+// not locked, the holder with the take time and the operation otherwise.
+func checkLock(t *testing.T, got, want *lockBody) {
+	t.Helper()
+
+	switch {
+	case want == nil && got != nil:
+		t.Fatalf("lock = %+v, want omitted", got)
+	case want != nil && got == nil:
+		t.Fatalf("lock is omitted, want %+v", want)
+	case want != nil && got != nil && *got != *want:
+		t.Fatalf("lock = %+v, want %+v", got, want)
+	default:
+		return
+	}
 }
 
 // checkCount proves a listed resource count matches its want: omitted when
@@ -475,13 +507,173 @@ func TestListUnitsOmitsUnknown(t *testing.T) {
 	}
 }
 
+// TestListUnitsLockField proves a locked unit answers its lock with the
+// holder, the take time in Unix seconds and the operation.
+func TestListUnitsLockField(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	seedNamespace(t, nsStore)
+
+	ns := namespace.Name("acme")
+	since := changeTime()
+
+	reader := &memReader{
+		entries: map[namespace.Name][]coreinventory.Entry{
+			ns: {
+				{
+					LastChanged:   changeTime(),
+					Namespace:     ns,
+					Tool:          "pulumi",
+					Name:          "web/prod",
+					UnitID:        "stk-1",
+					DisplayName:   "web/prod",
+					Status:        "",
+					ResourceCount: nil,
+					Lock: &coreinventory.Lock{
+						Since:     since,
+						Holder:    "admin",
+						Operation: "update",
+					},
+				},
+			},
+		},
+		err: nil,
+	}
+
+	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := decodeUnits(t, rec)
+	if len(got.Units) != 1 {
+		t.Fatalf("units = %+v, want 1", got.Units)
+	}
+
+	locked := got.Units[0]
+	if locked.Reference != "pulumi:acme/web/prod" {
+		t.Fatalf("unit reference = %q, want the locked stack", locked.Reference)
+	}
+
+	checkLock(t, locked.Lock, &lockBody{Holder: "admin", Since: since.Unix(), Operation: "update"})
+}
+
+// TestListUnitsOmitsLock proves an unlocked unit omits the lock field from
+// the JSON, instead of answering it empty or null.
+func TestListUnitsOmitsLock(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	seedNamespace(t, nsStore)
+
+	ns := namespace.Name("acme")
+
+	reader := &memReader{
+		entries: map[namespace.Name][]coreinventory.Entry{
+			ns: {
+				{
+					LastChanged:   changeTime(),
+					Namespace:     ns,
+					Tool:          "opentofu",
+					Name:          "network",
+					UnitID:        "ws-1",
+					DisplayName:   "network",
+					Status:        "",
+					ResourceCount: nil,
+					Lock:          nil,
+				},
+			},
+		},
+		err: nil,
+	}
+
+	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var doc struct {
+		Units []map[string]any `json:"units"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode units: %v", err)
+	}
+
+	if len(doc.Units) != 1 {
+		t.Fatalf("units = %s, want one", rec.Body.String())
+	}
+
+	if _, present := doc.Units[0]["lock"]; present {
+		t.Fatalf("unlocked entry holds a lock (%s)", rec.Body.String())
+	}
+}
+
+// TestListUnitsLockHoldsNoToken proves the holder answers the principal
+// subject, never the token that signed the request in.
+func TestListUnitsLockHoldsNoToken(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	seedNamespace(t, nsStore)
+
+	ns := namespace.Name("acme")
+
+	reader := &memReader{
+		entries: map[namespace.Name][]coreinventory.Entry{
+			ns: {
+				{
+					LastChanged:   changeTime(),
+					Namespace:     ns,
+					Tool:          "opentofu",
+					Name:          "network",
+					UnitID:        "ws-1",
+					DisplayName:   "network",
+					Status:        "",
+					ResourceCount: nil,
+					Lock: &coreinventory.Lock{
+						Since:     changeTime(),
+						Holder:    "tester",
+						Operation: "lock",
+					},
+				},
+			},
+		},
+		err: nil,
+	}
+
+	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	rec := authorizedGet(t, handler, "/api/inventory/units?organization=acme", "test-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	got := decodeUnits(t, rec)
+	if len(got.Units) != 1 || got.Units[0].Lock == nil {
+		t.Fatalf("units = %+v, want one locked unit", got.Units)
+	}
+
+	if holder := got.Units[0].Lock.Holder; holder != "tester" {
+		t.Fatalf("lock holder = %q, want the principal subject %q", holder, "tester")
+	}
+
+	if strings.Contains(rec.Body.String(), "test-token") {
+		t.Fatalf("response holds the request token (%s)", rec.Body.String())
+	}
+}
+
 // TestListUnitsEmptyNamespace proves a namespace with no units reads as an
 // empty array, not null.
 func TestListUnitsEmptyNamespace(t *testing.T) {
 	t.Parallel()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
-	seedNamespace(t, nsStore, "acme")
+	seedNamespace(t, nsStore)
 	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
 	handler := newBehaviorHandler(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}})
 

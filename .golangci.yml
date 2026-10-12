@@ -16,6 +16,7 @@ run:
   build-tags:
     - e2e # Lint the end-to-end package too; make test excludes it.
     - upgrade # Lint the upgrade test with the e2e harness; make check excludes it.
+    - soak # Lint the soak run with the e2e harness; make check excludes it.
   modules-download-mode: readonly
 
 linters:
@@ -80,6 +81,24 @@ linters:
               desc: Use math/rand/v2 or crypto/rand.
             - pkg: io/ioutil
               desc: Deprecated; use io and os.
+        journal:
+          # The journal takes bytes and gives bytes (ADR 43, decision 3.3). It
+          # imports no part of the server, so a later move to a separate module
+          # is a move of files. The glob matches the absolute path of a file.
+          files:
+            - "**/internal/pulumijournal/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/pkg
+              desc: The journal takes bytes and gives bytes; it never imports a pkg/ package (ADR 43, decision 3.3).
+            - pkg: opendustpan.org/opendustpan/internal/api
+              desc: The journal never imports an API adapter (ADR 43, decision 3.3).
+            - pkg: net/http
+              desc: HTTP belongs in api/, not in the journal (ADR 43, decision 3.3).
+            - pkg: database/sql
+              desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
+            - pkg: github.com/jackc/pgx
+              desc: SQL belongs in store/, not in the journal (ADR 43, decision 3.3).
         domain:
           # Domain packages must not depend on adapters, transports or drivers.
           # api/inventory is an HTTP adapter, not the domain package
@@ -94,6 +113,7 @@ linters:
             - "**/pkg/secret/**"
             - "**/pkg/workspace/**"
             - "**/pkg/inventory/**"
+            - "**/pkg/audit/**"
             - "**/pkg/backup/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
@@ -114,6 +134,34 @@ linters:
               desc: SQL belongs in store/, not in the domain.
             - pkg: opendustpan.org/opendustpan/internal/metrics
               desc: Domain code must not import metrics; only dustpan.go and HTTP middleware do.
+        clientpkg:
+          # Client commands live in internal/cli/client and take --server:
+          # they never open the database, a blob adapter, a backup target or
+          # the key-encryption key (ADR 39 decision 4). Only the serve wiring
+          # in cmd/opendustpan may import them. The globs match the absolute
+          # path of a file. pkg/store/schema stays allowed: it is the neutral
+          # migration list both dialects and the clients share, with no driver
+          # in it.
+          files:
+            - "**/internal/cli/client/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: opendustpan.org/opendustpan/pkg/store/sqlite
+              desc: Client commands read schema state through the API, never through a store adapter.
+            - pkg: opendustpan.org/opendustpan/pkg/store/postgres
+              desc: Client commands read schema state through the API, never through a store adapter.
+            - pkg: opendustpan.org/opendustpan/pkg/store/internal
+              desc: Client commands share the neutral pkg/store/schema list, never the adapter internals.
+            - pkg: opendustpan.org/opendustpan/pkg/blob/fs
+              desc: Only the server reads a backup target or blob directory.
+            - pkg: opendustpan.org/opendustpan/pkg/blob/s3
+              desc: Only the server reads a backup target or blob directory.
+            - pkg: opendustpan.org/opendustpan/pkg/secret
+              desc: Only the server holds the key-encryption key.
+            - pkg: opendustpan.org/opendustpan/internal/api
+              desc: Client commands meet the server through its REST API, never through route code.
+            - pkg: opendustpan.org/opendustpan/cmd/opendustpan
+              desc: Client commands never import the serve wiring that opens the data.
 
     dupl:
       threshold: 120
@@ -332,7 +380,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/)
         linters:
           - mnd
           - funlen

@@ -29,9 +29,20 @@ export DUSTPAN_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ```
 
 The administrator signs in with the admin token. The key-encryption key
-protects secret values. Keep both values outside the server's data directory.
+protects secret values and OpenTofu state. Keep both values outside the server's data directory.
 The server keeps its data in `./dustpan.db` and `./blobs`, and listens on
 `:8080`.
+
+Without `DUSTPAN_KEY_ENCRYPTION_KEY`, the server uses a key file. The default
+file is `dustpan.key` next to the database. On a terminal, `serve` asks for an
+explicit yes before it makes the file. Without a terminal, set
+`--generate-key-encryption-key`
+(`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`) to make the file with no prompt.
+The server never makes a key silently. An operator who loses the key file
+loses every secret and every OpenTofu state that the key encrypts, and nobody can recover them. The
+default key file is in the data directory, so for production set
+`--key-encryption-key-file` to a path outside it, or set
+`DUSTPAN_KEY_ENCRYPTION_KEY`.
 
 ### Pulumi CLI
 
@@ -139,27 +150,67 @@ The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 | Data | Where | Protection |
 | --- | --- | --- |
 | Namespaces, stacks, workspaces, locks, history | The SQL database: a SQLite file, or PostgreSQL | None of its own. Protect the database. |
-| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is plain text. |
+| Pulumi checkpoints and OpenTofu state | The blob store: a directory, or an S3-compatible bucket | OpenTofu state is sealed with the key-encryption key. |
 | Data keys of Pulumi secret config values | The SQL database | Wrapped with the key-encryption key. The encrypted values stay in your stack configuration. |
 
-The server keeps no copy of the key-encryption key.
+The database and the backups hold no copy of the key-encryption key. It
+lives in `DUSTPAN_KEY_ENCRYPTION_KEY` or in a key file that only its owner
+can read.
 
 The server sends no telemetry. It connects out only to the PostgreSQL
 database and the S3-compatible storage that you configure.
-`opendustpan namespace create` and `opendustpan backup` call only the server
-that `--server` names. `opendustpan health` calls only the listen address of
-the local server.
+`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
+check`, `opendustpan upgrade check` and `opendustpan restore` call only the
+server that `--server` names. `opendustpan health` calls only the listen
+address of the local server.
 
 ### What to back up
 
-1. **The key-encryption key.** A lost key means lost secrets. With secrets in
-   the database, the server refuses to start without the key. Keep the key in
-   a different place from the backups.
+1. **The key-encryption key.** A lost key means lost secrets and lost
+   OpenTofu state. The server refuses to start without a key, and with a key
+   that does not open the wrapped keys in the database. Keep a copy of the
+   key in a different place from the backups. The default key file sits next
+   to the SQLite database, so a copy of that directory also copies the key.
 2. **A backup of the installation.** `opendustpan backup` writes the SQL data
-   and the blobs to a backup target. A backup holds OpenTofu state in plain
-   text, so protect the target.
+   and the blobs to a backup target. A backup holds sealed OpenTofu state, so protect the target.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
+
+## Milestone 3: move in and run it
+
+The milestone 3 exit test passes for both tools, on each version in the
+matrix, on SQLite and on PostgreSQL. The upgrade steps that need a previous
+tag run from the first tag on (see the [roadmap](docs/roadmap.md)).
+
+Move state in with the [import guide](docs/guides/import.md). It moves
+state and secrets from a Pulumi service backend, a Pulumi file backend,
+an OpenTofu backend, or a TFE-compatible API. The source stays unchanged.
+
+List OpenTofu state versions with
+`GET /api/v2/state-versions` and restore one with
+`POST /api/v2/state-versions/{state_version_id}/actions/restore`.
+Restore a Pulumi checkpoint with
+`POST /api/stacks/{namespace}/{project}/{stack}/restore/{version}`.
+
+`opendustpan backup`, `opendustpan backup check`, `opendustpan restore`,
+`opendustpan upgrade check` and `opendustpan namespace create` are API
+clients. Each takes `--server` and `--ca-file`, and reads the token from
+`DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
+maintenance mode, with `--backup`, `--check-only` and `--force`. The
+[backup guide](docs/guides/backup-restore-upgrade.md) shows each command
+and its routes: `/api/server/backups`, `/api/server/restores`, and the
+upgrade check route.
+
+The server refuses to start without a key-encryption key. Set it in
+`DUSTPAN_KEY_ENCRYPTION_KEY`. A backup never holds the key, and a
+restore with a wrong key stops before it writes.
+
+Set storage with `--backup-target` and `--blob-store`, including
+S3-compatible storage with `--s3-endpoint` and `--s3-region` (see
+[Use S3-compatible object storage](docs/guides/s3-blobs.md)). Set request
+logging with `--log-level` and `--log-format`. Check readiness at
+`GET /health/ready` and scrape metrics at `GET /api/server/metrics`
+(see [Observe the server](docs/guides/observe.md)).
 
 ## When not to use OpenDustpan
 
@@ -187,9 +238,10 @@ pulumi stack export --version 1 --file dev-v1.json
 tofu state pull > web.tfstate
 ```
 
-`pulumi stack import` and `tofu state push` can then load the file into another
-backend. A tested guide for each exit, with the full history of each unit,
-does not exist yet.
+The [migrate-out guide](docs/guides/migrate-out.md) moves each stack and
+each workspace to another backend, step by step, and marks the steps that
+the end-to-end suite does not test yet. It moves the latest state of each
+unit. A way out with the full history of each unit does not exist yet.
 
 ## Governance
 
@@ -204,12 +256,15 @@ How-to guides:
 
 - [Import existing state](docs/guides/import.md) from a Pulumi service
   backend, a file backend, or an OpenTofu backend.
+- [Migrate out](docs/guides/migrate-out.md) to another backend.
 - [Back up, restore and upgrade](docs/guides/backup-restore-upgrade.md) the
   installation.
 - [Use S3-compatible object storage](docs/guides/s3-blobs.md) for state
   content.
 - [Observe the server](docs/guides/observe.md): probes, metrics and request
   logs.
+- [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
+  layout of an installation, and how to measure its size.
 
 Reference:
 
@@ -220,6 +275,8 @@ Reference:
 
 Explanation:
 
+- [Security model](docs/explanation/security-model.md): what the server
+  protects, how, and what it does not protect.
 - [Concepts](#concepts) below.
 - [Roadmap](docs/roadmap.md): the milestones and their exit tests.
 - [Architecture decisions](docs/adr/) and [open proposals](docs/rfc/).
@@ -271,6 +328,21 @@ docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
 docker exec -e DUSTPAN_ADMIN_TOKEN dustpan /opendustpan namespace create --server http://localhost:8080 acme
 ```
 
+For the reference container deployment, mount a key file or pass the
+environment variable. A mounted file outside the data volume needs the file
+flag to point at it:
+
+```sh
+docker run -d --name dustpan -p 127.0.0.1:8080:8080 -v ./data:/data \
+  -v ./dustpan.key:/run/secrets/dustpan.key:ro \
+  -e DUSTPAN_ADMIN_TOKEN -e DUSTPAN_KEY_ENCRYPTION_KEY_FILE=/run/secrets/dustpan.key \
+  opendustpan:dev
+```
+
+A key file next to the data does not protect a backup of that data. A backup
+without the key cannot restore secrets or OpenTofu state. Keep the key apart
+from the data and the backups.
+
 `make image-smoke` builds the image and runs the local smoke test. The test
 starts the container over TLS, checks the API (`/api/capabilities`) and the
 console page, waits until the container reports `healthy`, and checks that
@@ -300,9 +372,13 @@ golangci-lint, NilAway, govulncheck, Semgrep, Trivy, TruffleHog, the license
 check, the docs lint and the tests with the race detector. goleak fails a test
 package that leaves a goroutine running. The `Makefile` lists the tool
 versions to install. NilAway and govulncheck need no install. Set
-`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make e2e` drives
-real CLI versions against the server. It downloads them first, as
-`e2e/doc.go` describes.
+`DUSTPAN_TEST_POSTGRES_URL` to include the PostgreSQL suite. `make test-s3`
+runs the S3 blob suite. It needs `DUSTPAN_TEST_S3_ENDPOINT`,
+`DUSTPAN_TEST_S3_BUCKET`, `DUSTPAN_TEST_S3_ACCESS_KEY` and
+`DUSTPAN_TEST_S3_SECRET_KEY`. `make e2e` drives real CLI versions against the
+server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
+with the four S3 variables drives the runs with the live blobs on the
+S3-compatible server.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
 agents and contributors) and `docs/adr/` (why things are the way they are).

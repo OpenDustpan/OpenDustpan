@@ -20,6 +20,15 @@ FROM namespaces
 WHERE name = $1
 FOR SHARE;
 
+-- name: GetFailoverVersionForUpdate :one
+-- Locks the namespace row FOR UPDATE so concurrent audit appends of one
+-- namespace wait for each other: the next append reads the new last entry.
+-- A promotion still waits the same way, so the fence still holds.
+SELECT failover_version
+FROM namespaces
+WHERE name = $1
+FOR UPDATE;
+
 -- name: CreateStack :execrows
 INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -94,7 +103,7 @@ INSERT INTO updates (
 -- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -106,7 +115,8 @@ WHERE u.stack_id = $1 AND u.id = $2;
 UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
-    started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms
+    started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
+    journal_version = @journal_version
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -130,7 +140,7 @@ WHERE namespace = $3 AND project = $4 AND name = $5;
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -140,7 +150,7 @@ WHERE u.stack_id = $1
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -283,6 +293,9 @@ DELETE FROM secret_keys
 WHERE stack_id = $1;
 
 -- name: UpsertInventory :exec
+-- The lock columns stay out of the upsert: other writes keep the lock a
+-- running update or a held workspace published, and only UpdateInventoryLock
+-- changes it.
 INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (namespace, tool, name) DO UPDATE SET
@@ -292,12 +305,21 @@ ON CONFLICT (namespace, tool, name) DO UPDATE SET
     status = excluded.status,
     resource_count = excluded.resource_count;
 
+-- name: UpdateInventoryLock :exec
+-- Publishes a lock change of one unit: holder with take time and operation
+-- to set it, all NULL to clear it. The caller writes it in the same
+-- transaction as the lock itself.
+UPDATE inventory
+SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
+WHERE namespace = $4 AND tool = $5 AND name = $6;
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = $1
 ORDER BY tool, name;
@@ -350,19 +372,30 @@ SELECT EXISTS (
     SELECT 1 FROM workspaces WHERE id = $1
 );
 
+-- name: DeleteWorkspace :execrows
+-- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+-- the data key through DeleteSecretKeysOfStack with the workspace ID.
+DELETE FROM workspaces
+WHERE namespace = $1 AND name = $2;
+
+-- name: DeleteStateVersionsOfWorkspace :exec
+-- Removes every state version of one workspace, pending and finalized.
+DELETE FROM state_versions
+WHERE workspace_id = $1;
+
 -- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
+    restored_from, sealed, sensitive_marks
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE id = $1;
 
@@ -371,7 +404,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -407,7 +440,7 @@ WHERE workspace_id = $1 AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -425,12 +458,40 @@ UPDATE state_versions
 SET content_key = $1
 WHERE id = $2 AND status = 'pending';
 
+-- name: ListUnsealedStateVersions :many
+-- Finalized versions that still hold plain content, ordered by ID, so the
+-- seal job seals them in a stable order. A version without content stays
+-- out: a pending row names no content yet.
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC;
+
+-- name: SealStateVersion :execrows
+-- Moves one unsealed version to its sealed blob with its sealed outputs and
+-- marks it sealed. The write matches only an unsealed row, so a retry after
+-- a crash succeeds and changes nothing.
+UPDATE state_versions
+SET content_key = @content_key, outputs = @outputs, sealed = TRUE
+WHERE id = @id AND NOT sealed;
+
+-- name: SaveSensitiveMarks :execrows
+-- Stores the secret paths of the json-state rendering of one version. It
+-- works on a pending and on a finalized version: the rendering may land
+-- after the state upload finalizes. A missing version matches no row.
+UPDATE state_versions
+SET sensitive_marks = $1
+WHERE id = $2;
+
 -- name: GetCurrentStateVersion :one
 -- Follows the workspace pointer: a forced upload may carry a lower serial and
 -- still be current, so the highest serial is not always the current state.
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
+       sv.sensitive_marks
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -495,6 +556,44 @@ UPDATE installation
 SET state = $1
 WHERE id = 1 AND state = $2;
 
+-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = $1;
+
+-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC;
+
+-- name: FinishRestore :execrows
+UPDATE restores
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state IN ('checking', 'applying');
+
+-- name: MarkRestoreApplying :execrows
+-- Moves one checking restore to applying with the backup taken before the
+-- apply. Any other state matches no row, so a retry reports no change.
+UPDATE restores
+SET state = 'applying', pre_backup_id = $1
+WHERE id = $2 AND state = 'checking';
+
+-- name: FailRunningRestores :exec
+UPDATE restores
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state IN ('checking', 'applying');
+
+-- name: BumpFailoverVersions :execrows
+-- Increments the failover version of every namespace by one (ADR 38
+-- decision 7), so leases and locks from before the restore stop working.
+UPDATE namespaces
+SET failover_version = failover_version + 1;
+
 -- name: BackupHomeRegions :many
 SELECT DISTINCT home_region
 FROM namespaces
@@ -507,12 +606,57 @@ ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
 -- Every blob key the state versions and the checkpoints name, with the size
--- and MD5 of the stored bytes, ordered by key.
-SELECT content_key, size, md5
+-- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
+-- state blobs are stored sealed: the backup opens them to check and stores
+-- the sealed bytes.
+SELECT content_key, size, md5, sealed
 FROM state_versions
 WHERE content_key <> ''
 UNION ALL
-SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5
+SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key;
+
+-- name: LastAuditEntry :one
+-- The entry with the highest sequence of a namespace, for the next append.
+-- A namespace with no entries matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT 1;
+
+-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
+
+-- name: ListAuditEntries :many
+-- One page of the entries of a namespace, newest first. Ties on time break
+-- by sequence, as the port comment promises.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = $1;
+
+-- name: ListAuditChainPage :many
+-- One bounded page of the chain of a namespace oldest first, for the chain
+-- check. The check reads the chain with this query in pages of
+-- audit.CheckPageSize entries after the last sequence it saw, so a namespace
+-- with a large log never grows the check without a bound.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1 AND sequence > $2
+ORDER BY sequence ASC
+LIMIT $3;

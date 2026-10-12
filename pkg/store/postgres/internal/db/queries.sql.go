@@ -14,7 +14,7 @@ import (
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -37,6 +37,7 @@ type ActiveUpdateRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -58,6 +59,7 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 		&i.EndedAtMs,
 		&i.CreatedBy,
 		&i.RestoredFrom,
+		&i.JournalVersion,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -89,11 +91,11 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 }
 
 const backupBlobs = `-- name: BackupBlobs :many
-SELECT content_key, size, md5
+SELECT content_key, size, md5, sealed
 FROM state_versions
 WHERE content_key <> ''
 UNION ALL
-SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5
+SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
 ORDER BY content_key
@@ -103,10 +105,13 @@ type BackupBlobsRow struct {
 	ContentKey string
 	Size       int64
 	Md5        []byte
+	Sealed     bool
 }
 
 // Every blob key the state versions and the checkpoints name, with the size
-// and MD5 of the stored bytes, ordered by key.
+// and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
+// state blobs are stored sealed: the backup opens them to check and stores
+// the sealed bytes.
 func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	rows, err := q.db.Query(ctx, backupBlobs)
 	if err != nil {
@@ -116,7 +121,12 @@ func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	var items []BackupBlobsRow
 	for rows.Next() {
 		var i BackupBlobsRow
-		if err := rows.Scan(&i.ContentKey, &i.Size, &i.Md5); err != nil {
+		if err := rows.Scan(
+			&i.ContentKey,
+			&i.Size,
+			&i.Md5,
+			&i.Sealed,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -177,6 +187,34 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
+UPDATE namespaces
+SET failover_version = failover_version + 1
+`
+
+// Increments the failover version of every namespace by one (ADR 38
+// decision 7), so leases and locks from before the restore stop working.
+func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpFailoverVersions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const countAuditEntries = `-- name: CountAuditEntries :one
+SELECT COUNT(*)
+FROM audit_entries
+WHERE namespace = $1
+`
+
+func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEntries, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
@@ -254,6 +292,40 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createRestore = `-- name: CreateRestore :execrows
+INSERT INTO restores (id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT DO NOTHING
+`
+
+type CreateRestoreParams struct {
+	ID          string
+	State       string
+	BackupID    string
+	PreBackupID string
+	RequestedBy string
+	StartedAtMs int64
+	EndedAtMs   pgtype.Int8
+	Error       string
+}
+
+func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createRestore,
+		arg.ID,
+		arg.State,
+		arg.BackupID,
+		arg.PreBackupID,
+		arg.RequestedBy,
+		arg.StartedAtMs,
+		arg.EndedAtMs,
+		arg.Error,
 	)
 	if err != nil {
 		return 0, err
@@ -341,9 +413,9 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from
+    restored_from, sealed, sensitive_marks
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
 )
 `
 
@@ -365,6 +437,8 @@ type CreateStateVersionParams struct {
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	RestoredFrom      string
+	Sealed            bool
+	SensitiveMarks    []byte
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -386,6 +460,8 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.CreatedAtMs,
 		arg.FinalizedAtMs,
 		arg.RestoredFrom,
+		arg.Sealed,
+		arg.SensitiveMarks,
 	)
 	return err
 }
@@ -547,6 +623,37 @@ func (q *Queries) DeleteStateVersion(ctx context.Context, id string) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const deleteStateVersionsOfWorkspace = `-- name: DeleteStateVersionsOfWorkspace :exec
+DELETE FROM state_versions
+WHERE workspace_id = $1
+`
+
+// Removes every state version of one workspace, pending and finalized.
+func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.Exec(ctx, deleteStateVersionsOfWorkspace, workspaceID)
+	return err
+}
+
+const deleteWorkspace = `-- name: DeleteWorkspace :execrows
+DELETE FROM workspaces
+WHERE namespace = $1 AND name = $2
+`
+
+type DeleteWorkspaceParams struct {
+	Namespace string
+	Name      string
+}
+
+// Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
+// the data key through DeleteSecretKeysOfStack with the workspace ID.
+func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspace, arg.Namespace, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failRunningBackups = `-- name: FailRunningBackups :exec
 UPDATE backups
 SET state = 'failed', error = $1, ended_at_ms = $2
@@ -560,6 +667,22 @@ type FailRunningBackupsParams struct {
 
 func (q *Queries) FailRunningBackups(ctx context.Context, arg FailRunningBackupsParams) error {
 	_, err := q.db.Exec(ctx, failRunningBackups, arg.Error, arg.EndedAtMs)
+	return err
+}
+
+const failRunningRestores = `-- name: FailRunningRestores :exec
+UPDATE restores
+SET state = 'failed', error = $1, ended_at_ms = $2
+WHERE state IN ('checking', 'applying')
+`
+
+type FailRunningRestoresParams struct {
+	Error     string
+	EndedAtMs pgtype.Int8
+}
+
+func (q *Queries) FailRunningRestores(ctx context.Context, arg FailRunningRestoresParams) error {
+	_, err := q.db.Exec(ctx, failRunningRestores, arg.Error, arg.EndedAtMs)
 	return err
 }
 
@@ -608,6 +731,32 @@ type FinishBackupParams struct {
 
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
 	result, err := q.db.Exec(ctx, finishBackup,
+		arg.State,
+		arg.Error,
+		arg.EndedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const finishRestore = `-- name: FinishRestore :execrows
+UPDATE restores
+SET state = $1, error = $2, ended_at_ms = $3
+WHERE id = $4 AND state IN ('checking', 'applying')
+`
+
+type FinishRestoreParams struct {
+	State     string
+	Error     string
+	EndedAtMs pgtype.Int8
+	ID        string
+}
+
+func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishRestore,
 		arg.State,
 		arg.Error,
 		arg.EndedAtMs,
@@ -751,7 +900,8 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
-       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from
+       sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
+       sv.sensitive_marks
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -780,6 +930,8 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
+		&i.SensitiveMarks,
 	)
 	return i, err
 }
@@ -794,6 +946,23 @@ FOR SHARE
 // Locks the namespace row so a concurrent promotion waits for this write.
 func (q *Queries) GetFailoverVersionForShare(ctx context.Context, name string) (int64, error) {
 	row := q.db.QueryRow(ctx, getFailoverVersionForShare, name)
+	var failover_version int64
+	err := row.Scan(&failover_version)
+	return failover_version, err
+}
+
+const getFailoverVersionForUpdate = `-- name: GetFailoverVersionForUpdate :one
+SELECT failover_version
+FROM namespaces
+WHERE name = $1
+FOR UPDATE
+`
+
+// Locks the namespace row FOR UPDATE so concurrent audit appends of one
+// namespace wait for each other: the next append reads the new last entry.
+// A promotion still waits the same way, so the fence still holds.
+func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, getFailoverVersionForUpdate, name)
 	var failover_version int64
 	err := row.Scan(&failover_version)
 	return failover_version, err
@@ -880,6 +1049,28 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 		&i.HomeRegion,
 		&i.FailoverVersion,
 		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
+const getRestore = `-- name: GetRestore :one
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+WHERE id = $1
+`
+
+func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
+	row := q.db.QueryRow(ctx, getRestore, id)
+	var i Restore
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.BackupID,
+		&i.PreBackupID,
+		&i.RequestedBy,
+		&i.StartedAtMs,
+		&i.EndedAtMs,
+		&i.Error,
 	)
 	return i, err
 }
@@ -999,7 +1190,7 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE id = $1
 `
@@ -1025,6 +1216,8 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.CreatedAtMs,
 		&i.FinalizedAtMs,
 		&i.RestoredFrom,
+		&i.Sealed,
+		&i.SensitiveMarks,
 	)
 	return i, err
 }
@@ -1032,7 +1225,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -1059,6 +1252,7 @@ type GetUpdateRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -1080,6 +1274,7 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.EndedAtMs,
 		&i.CreatedBy,
 		&i.RestoredFrom,
+		&i.JournalVersion,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -1206,6 +1401,98 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 	return column_1, err
 }
 
+const insertAuditEntry = `-- name: InsertAuditEntry :exec
+INSERT INTO audit_entries (
+    namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+`
+
+type InsertAuditEntryParams struct {
+	Namespace  string
+	Sequence   int64
+	Subject    string
+	IdpSubject string
+	TokenID    string
+	Action     string
+	Object     string
+	Version    string
+	ValuePath  string
+	AtMs       int64
+	SourceIp   string
+	UserAgent  string
+	Channel    string
+	Kind       string
+	Outcome    string
+	RequestID  string
+	PrevHash   string
+	Hash       string
+	ValueCount pgtype.Int8
+}
+
+func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
+	_, err := q.db.Exec(ctx, insertAuditEntry,
+		arg.Namespace,
+		arg.Sequence,
+		arg.Subject,
+		arg.IdpSubject,
+		arg.TokenID,
+		arg.Action,
+		arg.Object,
+		arg.Version,
+		arg.ValuePath,
+		arg.AtMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.Channel,
+		arg.Kind,
+		arg.Outcome,
+		arg.RequestID,
+		arg.PrevHash,
+		arg.Hash,
+		arg.ValueCount,
+	)
+	return err
+}
+
+const lastAuditEntry = `-- name: LastAuditEntry :one
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT 1
+`
+
+// The entry with the highest sequence of a namespace, for the next append.
+// A namespace with no entries matches no row.
+func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEntry, error) {
+	row := q.db.QueryRow(ctx, lastAuditEntry, namespace)
+	var i AuditEntry
+	err := row.Scan(
+		&i.Namespace,
+		&i.Sequence,
+		&i.Subject,
+		&i.IdpSubject,
+		&i.TokenID,
+		&i.Action,
+		&i.Object,
+		&i.Version,
+		&i.ValuePath,
+		&i.AtMs,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Channel,
+		&i.Kind,
+		&i.Outcome,
+		&i.RequestID,
+		&i.PrevHash,
+		&i.Hash,
+		&i.ValueCount,
+	)
+	return i, err
+}
+
 const latestDeployment = `-- name: LatestDeployment :one
 SELECT c.deployment
 FROM checkpoints AS c
@@ -1244,6 +1531,122 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgty
 	var resource_count pgtype.Int8
 	err := row.Scan(&resource_count)
 	return resource_count, err
+}
+
+const listAuditChainPage = `-- name: ListAuditChainPage :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1 AND sequence > $2
+ORDER BY sequence ASC
+LIMIT $3
+`
+
+type ListAuditChainPageParams struct {
+	Namespace string
+	Sequence  int64
+	Limit     int32
+}
+
+// One bounded page of the chain of a namespace oldest first, for the chain
+// check. The check reads the chain with this query in pages of
+// audit.CheckPageSize entries after the last sequence it saw, so a namespace
+// with a large log never grows the check without a bound.
+func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPageParams) ([]AuditEntry, error) {
+	rows, err := q.db.Query(ctx, listAuditChainPage, arg.Namespace, arg.Sequence, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+			&i.ValueCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditEntries = `-- name: ListAuditEntries :many
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1
+ORDER BY sequence DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListAuditEntriesParams struct {
+	Namespace string
+	Limit     int32
+	Offset    int32
+}
+
+// One page of the entries of a namespace, newest first. Ties on time break
+// by sequence, as the port comment promises.
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditEntry, error) {
+	rows, err := q.db.Query(ctx, listAuditEntries, arg.Namespace, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEntry
+	for rows.Next() {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+			&i.ValueCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listBackups = `-- name: ListBackups :many
@@ -1358,7 +1761,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -1398,6 +1801,8 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
+			&i.SensitiveMarks,
 		); err != nil {
 			return nil, err
 		}
@@ -1410,7 +1815,8 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 }
 
 const listInventory = `-- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count
+SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
+       lock_holder, lock_since_ms, lock_operation
 FROM inventory
 WHERE namespace = $1
 ORDER BY tool, name
@@ -1434,6 +1840,9 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 			&i.LastChangedMs,
 			&i.Status,
 			&i.ResourceCount,
+			&i.LockHolder,
+			&i.LockSinceMs,
+			&i.LockOperation,
 		); err != nil {
 			return nil, err
 		}
@@ -1465,6 +1874,41 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 			&i.HomeRegion,
 			&i.FailoverVersion,
 			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRestores = `-- name: ListRestores :many
+SELECT id, state, backup_id, pre_backup_id, requested_by, started_at_ms, ended_at_ms, error
+FROM restores
+ORDER BY started_at_ms DESC, id ASC
+`
+
+func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
+	rows, err := q.db.Query(ctx, listRestores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Restore
+	for rows.Next() {
+		var i Restore
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.BackupID,
+			&i.PreBackupID,
+			&i.RequestedBy,
+			&i.StartedAtMs,
+			&i.EndedAtMs,
+			&i.Error,
 		); err != nil {
 			return nil, err
 		}
@@ -1655,7 +2099,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, workspaceID string) 
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from
+       restored_from, sealed, sensitive_marks
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1697,6 +2141,60 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.CreatedAtMs,
 			&i.FinalizedAtMs,
 			&i.RestoredFrom,
+			&i.Sealed,
+			&i.SensitiveMarks,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
+SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
+       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
+       restored_from, sealed, sensitive_marks
+FROM state_versions
+WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
+ORDER BY id ASC
+`
+
+// Finalized versions that still hold plain content, ordered by ID, so the
+// seal job seals them in a stable order. A version without content stays
+// out: a pending row names no content yet.
+func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
+	rows, err := q.db.Query(ctx, listUnsealedStateVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateVersion
+	for rows.Next() {
+		var i StateVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Status,
+			&i.Serial,
+			&i.Lineage,
+			&i.Md5,
+			&i.Size,
+			&i.ContentKey,
+			&i.Outputs,
+			&i.Force,
+			&i.UploadDigest,
+			&i.UploadExpiresAtMs,
+			&i.Holder,
+			&i.LockID,
+			&i.CreatedAtMs,
+			&i.FinalizedAtMs,
+			&i.RestoredFrom,
+			&i.Sealed,
+			&i.SensitiveMarks,
 		); err != nil {
 			return nil, err
 		}
@@ -1711,7 +2209,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from,
+       u.created_by, u.restored_from, u.journal_version,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -1742,6 +2240,7 @@ type ListUpdatesRow struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -1769,6 +2268,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.EndedAtMs,
 			&i.CreatedBy,
 			&i.RestoredFrom,
+			&i.JournalVersion,
 			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
@@ -1906,6 +2406,27 @@ func (q *Queries) LockWorkspaceForFinalize(ctx context.Context, id string) (Work
 	return i, err
 }
 
+const markRestoreApplying = `-- name: MarkRestoreApplying :execrows
+UPDATE restores
+SET state = 'applying', pre_backup_id = $1
+WHERE id = $2 AND state = 'checking'
+`
+
+type MarkRestoreApplyingParams struct {
+	PreBackupID string
+	ID          string
+}
+
+// Moves one checking restore to applying with the backup taken before the
+// apply. Any other state matches no row, so a retry reports no change.
+func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markRestoreApplying, arg.PreBackupID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -2005,13 +2526,36 @@ func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (i
 	return count, err
 }
 
+const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows
+UPDATE state_versions
+SET sensitive_marks = $1
+WHERE id = $2
+`
+
+type SaveSensitiveMarksParams struct {
+	SensitiveMarks []byte
+	ID             string
+}
+
+// Stores the secret paths of the json-state rendering of one version. It
+// works on a pending and on a finalized version: the rendering may land
+// after the state upload finalizes. A missing version matches no row.
+func (q *Queries) SaveSensitiveMarks(ctx context.Context, arg SaveSensitiveMarksParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveSensitiveMarks, arg.SensitiveMarks, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const saveUpdate = `-- name: SaveUpdate :execrows
 UPDATE updates
 SET status = $1, version = $2, revision = $3,
     lease_digest = $4, lease_expires_at_ms = $5,
-    started_at_ms = $6, ended_at_ms = $7
-WHERE stack_id = $8 AND id = $9
-  AND revision = $10
+    started_at_ms = $6, ended_at_ms = $7,
+    journal_version = $8
+WHERE stack_id = $9 AND id = $10
+  AND revision = $11
 `
 
 type SaveUpdateParams struct {
@@ -2022,6 +2566,7 @@ type SaveUpdateParams struct {
 	LeaseExpiresAtMs int64
 	StartedAtMs      int64
 	EndedAtMs        int64
+	JournalVersion   int64
 	StackID          string
 	ID               string
 	ExpectedRevision int64
@@ -2038,6 +2583,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.LeaseExpiresAtMs,
 		arg.StartedAtMs,
 		arg.EndedAtMs,
+		arg.JournalVersion,
 		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,
@@ -2079,6 +2625,29 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.ID,
 		arg.ExpectedRevision,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sealStateVersion = `-- name: SealStateVersion :execrows
+UPDATE state_versions
+SET content_key = $1, outputs = $2, sealed = TRUE
+WHERE id = $3 AND NOT sealed
+`
+
+type SealStateVersionParams struct {
+	ContentKey string
+	Outputs    []byte
+	ID         string
+}
+
+// Moves one unsealed version to its sealed blob with its sealed outputs and
+// marks it sealed. The write matches only an unsealed row, so a retry after
+// a crash succeeds and changes nothing.
+func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -2204,6 +2773,36 @@ func (q *Queries) UpdateExists(ctx context.Context, arg UpdateExistsParams) (boo
 	return exists, err
 }
 
+const updateInventoryLock = `-- name: UpdateInventoryLock :exec
+UPDATE inventory
+SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
+WHERE namespace = $4 AND tool = $5 AND name = $6
+`
+
+type UpdateInventoryLockParams struct {
+	LockHolder    pgtype.Text
+	LockSinceMs   pgtype.Int8
+	LockOperation pgtype.Text
+	Namespace     string
+	Tool          string
+	Name          string
+}
+
+// Publishes a lock change of one unit: holder with take time and operation
+// to set it, all NULL to clear it. The caller writes it in the same
+// transaction as the lock itself.
+func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLockParams) error {
+	_, err := q.db.Exec(ctx, updateInventoryLock,
+		arg.LockHolder,
+		arg.LockSinceMs,
+		arg.LockOperation,
+		arg.Namespace,
+		arg.Tool,
+		arg.Name,
+	)
+	return err
+}
+
 const upsertInstallationState = `-- name: UpsertInstallationState :exec
 INSERT INTO installation (id, state)
 VALUES (1, $1)
@@ -2238,6 +2837,9 @@ type UpsertInventoryParams struct {
 	ResourceCount pgtype.Int8
 }
 
+// The lock columns stay out of the upsert: other writes keep the lock a
+// running update or a held workspace published, and only UpdateInventoryLock
+// changes it.
 func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams) error {
 	_, err := q.db.Exec(ctx, upsertInventory,
 		arg.Namespace,

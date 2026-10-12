@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,6 +73,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testWorkspaceInventoryAfterCreate,
 		},
 		{name: "lock, unlock and finalize move the inventory entry", test: testInventoryFollowsWrites},
+		{name: "a stale fence on lock writes no lock", test: testWorkspaceInventoryLockFenced},
 		{name: "a failed write leaves the inventory unchanged", test: testWorkspaceInventoryFailedWrite},
 		{name: "list returns only finalized versions, newest first", test: testListStateVersionsNewestFirst},
 		{
@@ -141,6 +143,26 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{
 			name: "referenced content keys lists every named blob of one workspace",
 			test: testReferencedContentKeys,
+		},
+		{
+			name: "list unsealed returns only finalized unsealed versions with content",
+			test: testListUnsealedStateVersions,
+		},
+		{
+			name: "seal moves one unsealed version to its sealed blob in one fenced write",
+			test: testSealStateVersion,
+		},
+		{
+			name: "sealed flag is stored and read back by get, current and list",
+			test: testSealedFlagRoundTrip,
+		},
+		{
+			name: "sensitive marks are stored and read back by get, current and list",
+			test: testSensitiveMarksRoundTrip,
+		},
+		{
+			name: "delete removes the workspace with its versions and entry",
+			test: testDeleteWorkspace,
 		},
 	}
 
@@ -280,7 +302,9 @@ func newPendingVersion(
 		Serial:          in.serial,
 		Size:            0,
 		Force:           in.force,
+		Sealed:          false,
 		RestoredFrom:    "",
+		SensitiveMarks:  nil,
 	}
 }
 
@@ -347,7 +371,26 @@ func sameStateReference(got, want workspace.StateVersion) bool {
 func sameStateContent(got, want workspace.StateVersion) bool {
 	return got.Content == want.Content && bytes.Equal(got.Outputs, want.Outputs) &&
 		got.MD5 == want.MD5 && got.Serial == want.Serial && got.Size == want.Size &&
-		got.Force == want.Force && got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom
+		got.Force == want.Force && got.Sealed == want.Sealed &&
+		got.Upload == want.Upload && got.RestoredFrom == want.RestoredFrom &&
+		sameSensitiveMarks(got.SensitiveMarks, want.SensitiveMarks)
+}
+
+// sameSensitiveMarks reports whether two mark sets hold the same paths. An
+// empty and a missing set read the same: the read masks every attribute
+// value for both.
+func sameSensitiveMarks(got, want workspace.SensitiveMarks) bool {
+	if len(got) != len(want) {
+		return false
+	}
+
+	for address, paths := range want {
+		if !slices.Equal(got[address], paths) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func sameStateTimes(got, want workspace.StateVersion) bool {
@@ -375,6 +418,39 @@ func assertWorkspaceEntry(t *testing.T, got inventory.Entry, w workspace.Workspa
 		!got.LastChanged.Equal(changed) || got.Status != "" || got.ResourceCount != nil ||
 		got.Reference() != wantRef {
 		t.Fatalf("inventory entry = %+v, want opentofu unit %q changed %v", got, wantRef, changed)
+	}
+
+	assertWorkspaceLock(t, got.Lock, w.Lock)
+}
+
+// assertWorkspaceLock checks a projection lock against a workspace lock: an
+// unlocked workspace reads no lock, a held one reads its holder with its
+// take time and its reason as the operation, or "lock" without one. It fails
+// the test on a mismatch, so the holder is always the subject that took the
+// lock, never a token or a secret.
+func assertWorkspaceLock(t *testing.T, got *inventory.Lock, want workspace.Lock) {
+	t.Helper()
+
+	if !want.Locked() {
+		if got != nil {
+			t.Fatalf("inventory lock = %+v, want none", got)
+		}
+
+		return
+	}
+
+	operation := want.Reason
+	if operation == "" {
+		operation = "lock"
+	}
+
+	if got == nil {
+		t.Fatalf("inventory lock is missing, want holder %q operation %q", want.Holder, operation)
+	}
+
+	if got.Holder != want.Holder || !got.Since.Equal(want.LockedAt) || got.Operation != operation {
+		t.Fatalf("inventory lock = %+v, want holder %q operation %q since %v",
+			got, want.Holder, operation, want.LockedAt)
 	}
 }
 
@@ -1296,6 +1372,39 @@ func testInventoryFollowsWrites(t *testing.T, s WorkspaceStore) {
 	}
 
 	assertWorkspaceEntry(t, entries[0], stored, finalized.FinalizedAt)
+}
+
+// testWorkspaceInventoryLockFenced checks a stale fence fails the lock write and
+// writes nothing: the entry holds no lock after. Unlock and force-unlock
+// save through the same path, so the fence guards their clear too.
+func testWorkspaceInventoryLockFenced(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	locked := w
+	locked.Lock = workspace.Lock{
+		LockedAt: now(),
+		ID:       "lock-alice",
+		Holder:   "alice",
+		Reason:   "apply",
+	}
+	locked.UpdatedAt = now().Add(time.Hour)
+	locked.Revision++
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.SaveWorkspace(t.Context(), locked, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("lock with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	entries := listWorkspaceInventory(t, s, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("inventory entries after a fenced lock = %+v, want one", entries)
+	}
+
+	assertWorkspaceEntry(t, entries[0], w, w.UpdatedAt)
 }
 
 func testWorkspaceInventoryFailedWrite(t *testing.T, s WorkspaceStore) {
@@ -2536,5 +2645,403 @@ func assertReferencedContentKeys(t *testing.T, s WorkspaceStore, id workspace.ID
 
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Fatalf("referenced content keys of %s = %v, want %v", id, gotKeys, wantKeys)
+	}
+}
+
+// testSealedFlagRoundTrip proves the sealed flag of ADR 41 decision 10 is
+// stored and read back: a sealed version reads sealed by get, current and
+// list, and an unsealed version reads unsealed.
+func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	sealed := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
+	sealed.Sealed = true
+	createPendingVersion(t, s, ns, sealed)
+
+	got, err := s.GetStateVersion(t.Context(), sealed.ID)
+	if err != nil {
+		t.Fatalf("get sealed state version: %v", err)
+	}
+
+	if !got.Sealed {
+		t.Fatal("sealed state version reads unsealed, want sealed")
+	}
+
+	plain := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
+	createPendingVersion(t, s, ns, plain)
+
+	gotPlain, err := s.GetStateVersion(t.Context(), plain.ID)
+	if err != nil {
+		t.Fatalf("get unsealed state version: %v", err)
+	}
+
+	if gotPlain.Sealed {
+		t.Fatal("unsealed state version reads sealed, want unsealed")
+	}
+
+	finalized := finalizedVersion(sealed, now().Add(2*time.Hour), "v1")
+
+	finalizeErr := finalizeRecorded(t, s, ns.Fence(), finalized)
+	if finalizeErr != nil {
+		t.Fatalf("finalize sealed state: %v", finalizeErr)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	assertStateVersion(t, current, finalized)
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{finalized})
+}
+
+// testSensitiveMarksRoundTrip proves SaveSensitiveMarks stores the secret
+// paths of a version and GetStateVersion, CurrentStateVersion and
+// ListStateVersions read them back, on a pending and on a finalized version.
+// A missing version reports ErrStateVersionNotFound, and a stale fence
+// reports ErrFenced with nothing written.
+func testSensitiveMarksRoundTrip(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	marks := workspace.SensitiveMarks{"terraform_data.smoke": {"/input"}}
+
+	if err := s.SaveSensitiveMarks(t.Context(), pending.ID, marks, ns.Fence()); err != nil {
+		t.Fatalf("save sensitive marks of a pending version: %v", err)
+	}
+
+	want := pending
+	want.SensitiveMarks = marks
+
+	got, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get state version with marks: %v", err)
+	}
+
+	assertStateVersion(t, got, want)
+
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+	finalized.SensitiveMarks = marks
+
+	if finalizeErr := finalizeRecorded(t, s, ns.Fence(), finalized); finalizeErr != nil {
+		t.Fatalf("finalize state version: %v", finalizeErr)
+	}
+
+	// The rendering may land after the state upload finalizes, so saving on
+	// a finalized version overwrites the marks.
+	updated := workspace.SensitiveMarks{"terraform_data.smoke": {"/input", "/id"}}
+
+	if saveErr := s.SaveSensitiveMarks(t.Context(), pending.ID, updated, ns.Fence()); saveErr != nil {
+		t.Fatalf("save sensitive marks of a finalized version: %v", saveErr)
+	}
+
+	finalized.SensitiveMarks = updated
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	assertStateVersion(t, current, finalized)
+
+	list, total, err := s.ListStateVersions(t.Context(), w.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	assertHistory(t, list, total, []workspace.StateVersion{finalized})
+
+	missing := workspace.StateVersionID(ident.NewID("sv-"))
+
+	if missingErr := s.SaveSensitiveMarks(t.Context(), missing, marks, ns.Fence()); !errors.Is(
+		missingErr, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("save marks of a missing version: err = %v, want ErrStateVersionNotFound", missingErr)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if fenceErr := s.SaveSensitiveMarks(t.Context(), pending.ID, marks, stale); !errors.Is(
+		fenceErr, namespace.ErrFenced,
+	) {
+		t.Fatalf("save marks with a stale fence: err = %v, want ErrFenced", fenceErr)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get state version after a fenced save: %v", err)
+	}
+
+	assertStateVersion(t, stored, finalized)
+}
+
+// testListUnsealedStateVersions proves the seal listing holds only the
+// finalized unsealed versions with content, ordered by version ID: sealed
+// versions, pending versions and rows without content stay out.
+func testListUnsealedStateVersions(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	second := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
+	))
+
+	sealedPending := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v3", 3))
+	sealedPending.Sealed = true
+	createPendingVersion(t, s, ns, sealedPending)
+
+	firstFinal := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+	secondFinal := finalizedVersion(second, now().Add(3*time.Hour), "v2")
+	sealedFinal := finalizedVersion(sealedPending, now().Add(4*time.Hour), "v3")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), firstFinal); err != nil {
+		t.Fatalf("finalize first state: %v", err)
+	}
+
+	if err := finalizeRecorded(t, s, ns.Fence(), secondFinal); err != nil {
+		t.Fatalf("finalize second state: %v", err)
+	}
+
+	if err := finalizeRecorded(t, s, ns.Fence(), sealedFinal); err != nil {
+		t.Fatalf("finalize sealed state: %v", err)
+	}
+
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v4", 4),
+	))
+
+	got, err := s.ListUnsealedStateVersions(t.Context())
+	if err != nil {
+		t.Fatalf("list unsealed state versions: %v", err)
+	}
+
+	want := []workspace.StateVersionID{firstFinal.ID, secondFinal.ID}
+	slices.SortFunc(want, func(a, b workspace.StateVersionID) int {
+		return strings.Compare(a.String(), b.String())
+	})
+
+	if len(got) != len(want) {
+		t.Fatalf("unsealed state versions = %d, want %d", len(got), len(want))
+	}
+
+	for i := range want {
+		if got[i].ID != want[i] {
+			t.Fatalf("unsealed state version %d = %s, want %s", i, got[i].ID, want[i])
+		}
+
+		if got[i].Sealed {
+			t.Fatalf("unsealed state version %s reads sealed", got[i].ID)
+		}
+	}
+
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); err != nil {
+		t.Fatalf("get pending state version: %v", err)
+	}
+}
+
+// testSealStateVersion proves the seal write moves one unsealed version to
+// its sealed blob with its sealed outputs in one fenced transaction: the row
+// reads sealed afterwards, a second seal changes nothing, a missing version
+// reports ErrStateVersionNotFound, and a stale fence reports ErrFenced and
+// writes nothing.
+func testSealStateVersion(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	sealedKey := blob.Key("tofu/" + w.ID.String() + "/" + pending.ID.String() + "/sealed")
+	sealedOutputs := []byte("sealed-outputs")
+
+	if err := s.SealStateVersion(t.Context(), pending.ID, sealedKey, sealedOutputs, ns.Fence()); err != nil {
+		t.Fatalf("seal state version: %v", err)
+	}
+
+	assertSealedRow(t, s, sealExpectation{
+		id:            pending.ID,
+		finalized:     finalized,
+		sealedKey:     sealedKey,
+		sealedOutputs: sealedOutputs,
+	})
+	checkSealKeepsSealedRow(t, s, ns, w, sealExpectation{
+		id:            pending.ID,
+		finalized:     finalized,
+		sealedKey:     sealedKey,
+		sealedOutputs: sealedOutputs,
+	})
+}
+
+// sealExpectation holds one sealed row with the content it must serve: its
+// ID, the finalized version it seals, the sealed blob key and the sealed
+// outputs document.
+type sealExpectation struct {
+	finalized     workspace.StateVersion
+	sealedKey     blob.Key
+	sealedOutputs []byte
+	id            workspace.StateVersionID
+}
+
+// assertSealedRow proves id reads sealed with content sealedKey, outputs
+// sealedOutputs and the MD5 and size it held unsealed.
+func assertSealedRow(t *testing.T, s WorkspaceStore, want sealExpectation) {
+	t.Helper()
+
+	got, err := s.GetStateVersion(t.Context(), want.id)
+	if err != nil {
+		t.Fatalf("get sealed state version: %v", err)
+	}
+
+	if !got.Sealed || got.Content != want.sealedKey || !bytes.Equal(got.Outputs, want.sealedOutputs) {
+		t.Fatalf("sealed state version = %+v, want sealed with content %q", got, want.sealedKey)
+	}
+
+	if got.MD5 != want.finalized.MD5 || got.Size != want.finalized.Size {
+		t.Fatalf("sealed state version changed its MD5 or size: %+v", got)
+	}
+}
+
+// checkSealKeepsSealedRow proves a second seal changes nothing, a missing
+// version reports ErrStateVersionNotFound, and a stale fence reports
+// ErrFenced and writes nothing.
+func checkSealKeepsSealedRow(
+	t *testing.T, s WorkspaceStore, ns namespace.Namespace, w workspace.Workspace, want sealExpectation,
+) {
+	t.Helper()
+
+	otherKey := blob.Key("tofu/" + w.ID.String() + "/" + want.id.String() + "/sealed-retry")
+
+	err := s.SealStateVersion(t.Context(), want.id, otherKey, []byte("other"), ns.Fence())
+	if err != nil {
+		t.Fatalf("reseal state version: %v", err)
+	}
+
+	assertSealedRow(t, s, want)
+
+	missing := workspace.StateVersionID(ident.NewID("sv-"))
+	err = s.SealStateVersion(t.Context(), missing, want.sealedKey, nil, ns.Fence())
+
+	if !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("seal a missing version: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	err = s.SealStateVersion(t.Context(), want.id, otherKey, nil, stale)
+
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("seal with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	after, err := s.GetStateVersion(t.Context(), want.id)
+	if err != nil {
+		t.Fatalf("get state version after a fenced seal: %v", err)
+	}
+
+	if after.Content != want.sealedKey {
+		t.Fatalf("fenced seal changed the row: %+v", after)
+	}
+
+	unlisted, err := s.ListUnsealedStateVersions(t.Context())
+	if err != nil {
+		t.Fatalf("list unsealed after the seal: %v", err)
+	}
+
+	if len(unlisted) != 0 {
+		t.Fatalf("unsealed state versions after the seal = %d, want none", len(unlisted))
+	}
+}
+
+// testDeleteWorkspace proves the final delete removes the workspace with
+// its state versions and its inventory entry, and that a second delete and
+// a delete of a missing workspace report ErrNotFound.
+func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	finalized := finalizedVersion(pending, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if _, err := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get deleted workspace: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.GetWorkspaceByID(t.Context(), w.ID); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get deleted workspace by ID: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get version of a deleted workspace: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("current state of a deleted workspace: err = %v, want ErrNoState", err)
+	}
+
+	if entries := listWorkspaceInventory(t, s, ns.Name); len(entries) != 0 {
+		t.Fatalf("inventory entries after delete = %+v, want none", entries)
+	}
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("delete a deleted workspace: err = %v, want ErrNotFound", err)
+	}
+
+	ghost := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "ghost")}
+	if err := s.DeleteWorkspace(t.Context(), ghost, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("delete a missing workspace: err = %v, want ErrNotFound", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	other := createTestWorkspace(t, s, ns, "other")
+
+	if err := s.DeleteWorkspace(t.Context(), other.Ref, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("delete with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	if _, err := s.GetWorkspace(t.Context(), other.Ref); err != nil {
+		t.Fatalf("get workspace after a fenced delete: %v", err)
 	}
 }

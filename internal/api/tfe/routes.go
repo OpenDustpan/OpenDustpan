@@ -200,10 +200,12 @@ func (h *Handler) lockRoutes() []Route {
 }
 
 // stateRoutes returns the state read routes: the current state version, one
-// state version, its download, its outputs and the state version list. Every
-// route needs unit:read.
+// state version, its download, its outputs, the state version list, and the
+// masked resource list with one masked resource (ADR 41 decisions 1 to 3, 8
+// and 9). Every route needs unit:read. The download and the single output
+// route also need unit:read-secrets, as they answer plain secret values.
 func (h *Handler) stateRoutes() []Route {
-	return []Route{
+	routes := []Route{
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-versions",
@@ -241,10 +243,10 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-versions/{state_version_id}/download",
-			// A download is a normal authorized route: the CLI sends its
-			// token, so it needs unit:read on the unit of the workspace.
+			// A download answers plain secret values, so it needs unit:read
+			// and unit:read-secrets on the unit of the workspace.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			Resolve: h.resolveStateVersionID,
 			Serve:   h.downloadState,
 		},
@@ -262,14 +264,43 @@ func (h *Handler) stateRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/v2/state-version-outputs/{output_id}",
-			// A state read needs unit:read. The resolver maps the output to
-			// the unit of its workspace. Unknown outputs answer 404.
+			// A single output answers a plain secret value, so it needs
+			// unit:read and unit:read-secrets. The resolver maps the output
+			// to the unit of its workspace. Unknown outputs answer 404.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead},
+			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadSecrets},
 			Resolve: h.resolveStateOutputID,
 			Serve:   h.readStateOutput,
 		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-versions/{state_version_id}/resources",
+			// A masked resource list answers the structure with each secret
+			// value as a marker, so it needs unit:read on the unit of the
+			// workspace. The resolver maps the version to that unit. Unknown
+			// versions answer 404; a state the client encrypted answers 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveStateVersionID,
+			Serve:   h.listStateResources,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/v2/state-versions/{state_version_id}/resources/{address}",
+			// One masked resource answers its instances with each secret
+			// value as a marker, so it needs unit:read on the unit of the
+			// workspace. The address in the path is path-escaped and matches
+			// verbatim. Unknown versions and addresses answer 404; a state
+			// the client encrypted answers 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRead},
+			Resolve: h.resolveStateVersionID,
+			Serve:   h.getStateResource,
+		},
+		h.revealRoute(),
 	}
+
+	return slices.Concat(routes, h.stateDiffRoutes())
 }
 
 // stateWriteRoutes returns the state write routes: create a state version,

@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -86,6 +87,13 @@ func loggedServer(
 		t.Fatalf("authenticator: %v", err)
 	}
 
+	// The logged server seals OpenTofu state, so it holds a
+	// key-encryption key like a server with a key set does.
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: level}))
 
 	srv, err := dustpan.NewServer(
@@ -96,6 +104,7 @@ func loggedServer(
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
@@ -584,6 +593,7 @@ func TestRequestLogTextFormat(t *testing.T) {
 		dustpan.WithCheckpointStore(st),
 		dustpan.WithEventStore(st),
 		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
 		dustpan.WithWorkspaceStore(st),
 		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),

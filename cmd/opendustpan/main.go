@@ -15,12 +15,15 @@
 // not appear in process listings; serve clears DUSTPAN_ADMIN_TOKEN from its
 // environment after the read. The
 // key-encryption key comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
-// DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag, and the server
-// never generates it.
+// DUSTPAN_KEY_ENCRYPTION_KEY_FILE only, never from a flag. Serve makes the
+// key file after a terminal prompt or with --generate-key-encryption-key, and
+// never makes a key silently.
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -30,11 +33,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
-	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -51,10 +53,6 @@ import (
 )
 
 var (
-	errUsage = errors.New(
-		"usage: opendustpan --version | opendustpan serve | opendustpan health | opendustpan namespace create <name> | " +
-			"opendustpan upgrade check | opendustpan backup check | opendustpan backup | opendustpan restore",
-	)
 	errUnknownBackend     = errors.New("database must start with sqlite: or postgres://")
 	errKeyFilePermissions = errors.New("key file allows group or other access")
 	// errTLSCertMissing reports --tls-key without --tls-cert.
@@ -77,6 +75,11 @@ var (
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
+	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
+	// the delta capability off, so only negative values fail.
+	errDeltaCutoff = errors.New(
+		"checkpoint delta cutoff must not be negative: set --checkpoint-delta-cutoff (DUSTPAN_CHECKPOINT_DELTA_CUTOFF) to 0 or more",
+	)
 	// errBackupTarget reports a backup target with an unknown form. It shows
 	// the allowed forms, so the operator knows what to set. Only the serve
 	// flag --backup-target takes it.
@@ -93,33 +96,27 @@ var (
 	errS3Endpoint = errors.New(
 		"s3 endpoint must be an http(s) URL with a host: set --s3-endpoint (DUSTPAN_S3_ENDPOINT)",
 	)
-	// errBackupID reports a backup check without a backup ID. It names the
-	// flag, so the operator knows what to set.
-	errBackupID = errors.New("backup id is missing: set --backup <id>")
-	// errRestoreSource reports a restore source with an unknown form. It
-	// shows the allowed forms, so the operator knows what to set. Only the
-	// restore flag --from takes it.
-	errRestoreSource = errors.New(
-		"backup source must be dir:/path: set --from (DUSTPAN_BACKUP_TARGET)",
+	// errKeyGenerateRequired reports serve with no key, no key file, no
+	// terminal and no opt-in. It names each setting that helps, so the
+	// operator knows what to set. Serve returns it before it opens the
+	// database, and never makes a key silently.
+	errKeyGenerateRequired = errors.New(
+		"no key-encryption key is configured: set --generate-key-encryption-key " +
+			"(DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true) to make a key file with no prompt, " +
+			"or set --key-encryption-key-file (DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or " +
+			"DUSTPAN_KEY_ENCRYPTION_KEY",
 	)
-	// errRestoreSourceMissing reports a restore source that does not exist.
-	// It names the flag, so the operator knows what to set.
-	errRestoreSourceMissing = errors.New(
-		"backup source does not exist: set --from to an existing directory (DUSTPAN_BACKUP_TARGET)",
+	// errKeyPromptDeclined reports serve where the operator did not answer
+	// yes to the key file prompt. Serve made no file.
+	errKeyPromptDeclined = errors.New(
+		"no key-encryption key file was made: the operator did not answer yes",
 	)
-	// errRestoreSourceNotDir reports a restore source that is not a
-	// directory. It names the flag, so the operator knows what to set.
-	errRestoreSourceNotDir = errors.New(
-		"backup source is not a directory: set --from to an existing directory (DUSTPAN_BACKUP_TARGET)",
+	// errKeyFileMissing reports serve with no key and no key file while the
+	// database already holds wrapped keys (issue 355). A new key cannot open
+	// them, so serve makes no key file and stops before the database is used.
+	errKeyFileMissing = errors.New(
+		"key-encryption key file does not exist, and the database holds secrets that a new key cannot open",
 	)
-	// errRestoreFrom reports a restore without a backup source. It names the
-	// flag, so the operator knows what to set.
-	errRestoreFrom = errors.New(
-		"backup source is missing: set --from to dir:/path (DUSTPAN_BACKUP_TARGET)",
-	)
-	// errRestoreBackup reports a restore without a backup ID. It names the
-	// flag, so the operator knows what to set.
-	errRestoreBackup = errors.New("backup id is missing: set --backup <id>")
 )
 
 // version is the server version. The build stamps it with
@@ -132,9 +129,22 @@ const (
 	keyEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY"
 	// keyFileEnvVar names a file holding the base64 key-encryption key.
 	keyFileEnvVar = "DUSTPAN_KEY_ENCRYPTION_KEY_FILE"
+	// generateKeyEnvVar opts in to making the key file with no prompt.
+	generateKeyEnvVar = "DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY"
+	// defaultKeyFileName is the key file name next to the SQLite database, as
+	// --blob-dir defaults, or in the working directory with PostgreSQL.
+	defaultKeyFileName = "dustpan.key"
+	// generatedKeyBytes is the size of a made key-encryption key: 32 random
+	// bytes in base64 (ADR 23 decision 2, ADR 41 decision 12).
+	generatedKeyBytes = 32
+	// keyFileMode is the mode a made key file gets: owner only.
+	keyFileMode = 0o600
 	// keyFilePrivateBits are the permission bits the key file must not set:
 	// group or other access of any kind.
 	keyFilePrivateBits = 0o077
+	// maxKeyAnswerBytes caps the prompt answer serve reads, so the read never
+	// grows without a bound. A longer answer counts as not yes.
+	maxKeyAnswerBytes = 1024
 	// blobDirPerm is the mode the server creates the blob directory with:
 	// owner only, so state content does not leak through shared directories.
 	blobDirPerm = 0o700
@@ -160,54 +170,6 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return errUsage
-	}
-
-	switch args[0] {
-	case "--version":
-		_, err := fmt.Fprintln(stdout, version)
-		if err != nil {
-			return fmt.Errorf("write version: %w", err)
-		}
-
-		return nil
-	case "serve":
-		return serve(ctx, args[1:], stderr)
-	case "health":
-		return runHealth(ctx, args[1:], stdout, stderr)
-	case "namespace":
-		return runNamespaceCommand(ctx, args[1:], stdout, stderr)
-	case "upgrade":
-		return runUpgradeCommand(ctx, args[1:], stdout, stderr)
-	case "backup":
-		return runBackup(ctx, args[1:], stdout, stderr)
-	case "restore":
-		return runRestore(ctx, args[1:], stdout, stderr)
-	default:
-		return errUsage
-	}
-}
-
-// runNamespaceCommand runs the namespace subcommands: create only.
-func runNamespaceCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "create" {
-		return createNamespace(ctx, args[1:], stdout, stderr)
-	}
-
-	return errUsage
-}
-
-// runUpgradeCommand runs the upgrade subcommands: check only.
-func runUpgradeCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "check" {
-		return upgradeCheck(ctx, args[1:], stdout, stderr)
-	}
-
-	return errUsage
-}
-
 // common holds the flags shared by every subcommand.
 type common struct {
 	database string
@@ -215,13 +177,19 @@ type common struct {
 }
 
 func (c *common) register(fs *flag.FlagSet) {
-	fs.StringVar(&c.database, "database", env("DUSTPAN_DATABASE", "sqlite:dustpan.db"),
-		"sqlite:<path> or postgres://... (DUSTPAN_DATABASE)")
-	fs.StringVar(&c.region, "region", env("DUSTPAN_REGION", "local"),
-		"region this server is authoritative for (DUSTPAN_REGION)")
+	cli.ByFlag("database").String(fs, &c.database)
+	cli.ByFlag("region").String(fs, &c.region)
 }
 
 func serve(ctx context.Context, args []string, stderr io.Writer) error {
+	return serveWithIO(ctx, args, os.Stdin, stderr, isTerminal(os.Stdin, stderr))
+}
+
+// serveWithIO runs serve with an explicit standard input and terminal flag,
+// so tests drive the key file prompt with a fake terminal.
+func serveWithIO(
+	ctx context.Context, args []string, stdin io.Reader, stderr io.Writer, terminal bool,
+) error {
 	var f serveFlags
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -252,30 +220,38 @@ func serve(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 
-	return f.run(ctx, stderr)
+	if f.checkpointDeltaCutoff < 0 {
+		return errDeltaCutoff
+	}
+
+	return f.run(ctx, stdin, stderr, terminal)
 }
 
 // serveFlags holds the settings of the serve subcommand.
 type serveFlags struct {
 	common
 
-	listen               string
-	consoleDir           string
-	origins              string
-	tlsCert              string
-	tlsKey               string
-	publicURL            string
-	blobDir              string
-	blobStore            string
-	s3Endpoint           string
-	s3Region             string
-	backupTarget         string
-	logLevel             string
-	logFormat            string
-	maxCheckpointBytes   int64
-	maxSecretBatchBytes  int64
-	maxStateBytes        int64
-	maxBodyBytesInFlight int64
+	listen                  string
+	consoleDir              string
+	origins                 string
+	tlsCert                 string
+	tlsKey                  string
+	publicURL               string
+	blobDir                 string
+	blobStore               string
+	s3Endpoint              string
+	s3Region                string
+	backupTarget            string
+	logLevel                string
+	logFormat               string
+	keyFile                 string
+	generateKey             bool
+	maxCheckpointBytes      int64
+	maxSecretBatchBytes     int64
+	maxStateBytes           int64
+	maxBodyBytesInFlight    int64
+	checkpointDeltaCutoff   int64
+	disablePulumiJournaling bool
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -283,143 +259,506 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	f.registerNet(fs)
 	f.registerLimits(fs)
 	f.registerStorage(fs)
+	f.registerKey(fs)
+}
+
+// registerKey registers the key-encryption key file flags. The key itself
+// never appears here: it comes from DUSTPAN_KEY_ENCRYPTION_KEY or from the
+// file, so it does not show in process listings.
+func (f *serveFlags) registerKey(fs *flag.FlagSet) {
+	cli.ByFlag("key-encryption-key-file").String(fs, &f.keyFile)
+	cli.ByFlag("generate-key-encryption-key").Bool(fs, &f.generateKey)
 }
 
 // registerStorage registers the blob store, S3 and backup target flags.
 // Credentials never appear here: they come from AWS_ACCESS_KEY_ID,
 // AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
 func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.blobStore,
-		"blob-store",
-		env("DUSTPAN_BLOB_STORE", "fs"),
-		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
-	)
-	fs.StringVar(
-		&f.s3Endpoint,
-		"s3-endpoint",
-		env("DUSTPAN_S3_ENDPOINT", ""),
-		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
-	)
-	fs.StringVar(
-		&f.s3Region,
-		"s3-region",
-		env("DUSTPAN_S3_REGION", ""),
-		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
-	)
-	fs.StringVar(
-		&f.backupTarget,
-		"backup-target",
-		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
-	)
+	cli.ByFlag("blob-store").String(fs, &f.blobStore)
+	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
+	cli.ByFlag("s3-region").String(fs, &f.s3Region)
+	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
 }
 
 // registerNet registers the network and console flags.
 func (f *serveFlags) registerNet(fs *flag.FlagSet) {
-	fs.StringVar(&f.listen, "listen", env("DUSTPAN_LISTEN", ":8080"), "listen address (DUSTPAN_LISTEN)")
-	fs.StringVar(
-		&f.consoleDir,
-		"console-dir",
-		env("DUSTPAN_CONSOLE_DIR", ""),
-		"serve a built web console from this directory (DUSTPAN_CONSOLE_DIR)",
-	)
-	fs.StringVar(
-		&f.origins,
-		"allowed-origins",
-		env("DUSTPAN_ALLOWED_ORIGINS", ""),
-		"comma-separated console origins allowed to call the API (DUSTPAN_ALLOWED_ORIGINS)",
-	)
-	fs.StringVar(
-		&f.tlsCert,
-		"tls-cert",
-		env("DUSTPAN_TLS_CERT", ""),
-		"certificate file for HTTPS, with --tls-key (DUSTPAN_TLS_CERT)",
-	)
-	fs.StringVar(
-		&f.tlsKey,
-		"tls-key",
-		env("DUSTPAN_TLS_KEY", ""),
-		"key file for HTTPS, with --tls-cert (DUSTPAN_TLS_KEY)",
-	)
-	fs.StringVar(
-		&f.publicURL,
-		"public-url",
-		env("DUSTPAN_PUBLIC_URL", ""),
-		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
-	)
-	fs.StringVar(
-		&f.blobDir,
-		"blob-dir",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
-	)
-	fs.StringVar(
-		&f.logLevel,
-		"log-level",
-		env("DUSTPAN_LOG_LEVEL", "info"),
-		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
-	)
-	fs.StringVar(
-		&f.logFormat,
-		"log-format",
-		env("DUSTPAN_LOG_FORMAT", "json"),
-		"log format: json or text (DUSTPAN_LOG_FORMAT)",
-	)
+	cli.ByFlag("listen").String(fs, &f.listen)
+	cli.ByFlag("console-dir").String(fs, &f.consoleDir)
+	cli.ByFlag("allowed-origins").String(fs, &f.origins)
+	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
+	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
+	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
+	cli.ByFlag("log-level").String(fs, &f.logLevel)
+	cli.ByFlag("log-format").String(fs, &f.logFormat)
 }
 
 // registerLimits registers the large-body size flags.
 func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
-	fs.Int64Var(
-		&f.maxCheckpointBytes,
-		"max-checkpoint-bytes",
-		envBytes("DUSTPAN_MAX_CHECKPOINT_BYTES"),
-		"largest checkpoint in bytes, 0 means the default (DUSTPAN_MAX_CHECKPOINT_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxSecretBatchBytes,
-		"max-secret-batch-bytes",
-		envBytes("DUSTPAN_MAX_SECRET_BATCH_BYTES"),
-		"largest secrets batch in bytes, 0 means the default (DUSTPAN_MAX_SECRET_BATCH_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxStateBytes,
-		"max-state-bytes",
-		envBytes("DUSTPAN_MAX_STATE_BYTES"),
-		"largest OpenTofu state in bytes, 0 means the default (DUSTPAN_MAX_STATE_BYTES)",
-	)
-	fs.Int64Var(
-		&f.maxBodyBytesInFlight,
-		"max-body-bytes-in-flight",
-		envBytes("DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT"),
-		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
-	)
+	cli.ByFlag("max-checkpoint-bytes").Int64(fs, &f.maxCheckpointBytes)
+	cli.ByFlag("max-secret-batch-bytes").Int64(fs, &f.maxSecretBatchBytes)
+	cli.ByFlag("max-state-bytes").Int64(fs, &f.maxStateBytes)
+	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
+	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
+	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
-func (f *serveFlags) run(ctx context.Context, stderr io.Writer) error {
+// It resolves the key-encryption key before it opens the database, so a
+// missing key stops with the key error and never makes a key silently. Only
+// when serve is about to make a key file does it open the store first: the
+// store must hold no wrapped keys, because a new key cannot open them (issue
+// 355). Serve then uses the same store.
+func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer, terminal bool) error {
 	logger, err := f.loggerFor(stderr)
 	if err != nil {
 		return err
 	}
 
-	authn, err := adminAuthenticator()
+	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
+		return dbErr
+	}
+
+	authn, authErr := adminAuthenticator()
+	if authErr != nil {
+		return authErr
+	}
+
+	var st store
+
+	defer func() {
+		if st != nil {
+			st.close()
+		}
+	}()
+
+	open := func() (store, error) {
+		if st == nil {
+			opened, err := openStore(ctx, f.database, logger)
+			if err != nil {
+				return nil, err
+			}
+
+			st = opened
+		}
+
+		return st, nil
+	}
+
+	beforeMake := func(path string) error {
+		keys, err := open()
+		if err != nil {
+			return err
+		}
+
+		return refuseNewKeyFile(ctx, keys, path)
+	}
+
+	wrapper, keyErr := f.loadOrMakeKey(
+		keyPrompt{stdin: stdin, stderr: stderr, terminal: terminal}, beforeMake, logger,
+	)
+	if keyErr != nil {
+		return keyErr
+	}
+
+	opened, storeErr := open()
+	if storeErr != nil {
+		return storeErr
+	}
+
+	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
+}
+
+// refuseNewKeyFile stops serve before it makes a key file at path when the
+// store already holds wrapped keys: a new key cannot open them (issue 355).
+// It reads the wrapper IDs through the secret.KeyStore port, with the ADR 23
+// check and no wrapper, so cmd holds no SQL.
+func refuseNewKeyFile(ctx context.Context, keys secret.KeyStore, path string) error {
+	err := secret.CheckWrapper(ctx, keys, nil)
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, secret.ErrKeyNotConfigured):
+		return fmt.Errorf(
+			"%w: restore the original key file at %s, or set %s to the original key",
+			errKeyFileMissing, path, keyEnvVar,
+		)
+	default:
+		return fmt.Errorf("read wrapped keys before making a key file: %w", err)
+	}
+}
+
+// checkDatabaseFlag rejects a --database value with an unknown form before
+// serve resolves the key file, so the backend error keeps its precedence.
+func checkDatabaseFlag(database string) error {
+	switch {
+	case strings.HasPrefix(database, "sqlite:"):
+		return nil
+	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
+		return nil
+	default:
+		return errUnknownBackend
+	}
+}
+
+// resolveKeyFile returns the key file path in use: the --key-encryption-key-file
+// flag when set, else dustpan.key next to the SQLite database file, as
+// --blob-dir defaults, or dustpan.key in the working directory with
+// PostgreSQL.
+func resolveKeyFile(database, flagFile string) string {
+	if strings.TrimSpace(flagFile) != "" {
+		return strings.TrimSpace(flagFile)
+	}
+
+	if rest, ok := strings.CutPrefix(database, "sqlite:"); ok {
+		path := strings.TrimSpace(rest)
+		if path == "" {
+			return defaultKeyFileName
+		}
+
+		return filepath.Join(filepath.Dir(path), defaultKeyFileName)
+	}
+
+	return defaultKeyFileName
+}
+
+// isTerminal reports whether stdin and stderr are both character devices, so
+// serve prompts only on a real terminal.
+func isTerminal(stdin io.Reader, stderr io.Writer) bool {
+	stdinFile, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+
+	stderrFile, ok := stderr.(*os.File)
+	if !ok {
+		return false
+	}
+
+	return isCharDevice(stdinFile) && isCharDevice(stderrFile)
+}
+
+// isCharDevice reports whether f is a character device.
+func isCharDevice(f *os.File) bool {
+	info, err := f.Stat()
 	if err != nil {
+		return false
+	}
+
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// keyPrompt holds the standard input of the key file prompt: the source to
+// read the answer from, where to print the prompt, and whether the source is
+// a terminal that may be prompted.
+type keyPrompt struct {
+	stdin    io.Reader
+	stderr   io.Writer
+	terminal bool
+}
+
+// loadOrMakeKey resolves the key-encryption key for serve. The direct value
+// wins when set. Else the key file at the resolved path is read with the
+// existing owner-only rules. When no key and no key file exist, the opt-in
+// makes the file with no prompt, a terminal prompts for an explicit yes, and
+// without either serve stops before the database opens. Before it makes a
+// file, it calls beforeMake with the path, and makes no file when beforeMake
+// fails. It logs one line with the path of the key file in use, never the
+// key.
+//
+//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
+func (f *serveFlags) loadOrMakeKey(
+	in keyPrompt, beforeMake func(path string) error, logger *slog.Logger,
+) (secret.Wrapper, error) {
+	if wrapper, present, err := directKeyWrapper(); present || err != nil {
+		return wrapper, err
+	}
+
+	path := resolveKeyFile(f.database, f.keyFile)
+
+	if keyFileExists(path) {
+		return useKeyFile(path, logger)
+	}
+
+	if f.generateKey {
+		if err := beforeMake(path); err != nil {
+			return nil, err
+		}
+
+		return makeKeyFile(path, logger)
+	}
+
+	if in.terminal {
+		return promptAndMakeKeyFile(in, path, beforeMake, logger)
+	}
+
+	return nil, errKeyGenerateRequired
+}
+
+// directKeyWrapper returns the wrapper for the direct key-encryption key
+// value when set. Present tells whether the value was set: without it serve
+// falls back to the key file. It clears the variable after the read, so the
+// key does not stay in memory that child processes inherit.
+//
+//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port; absent without an error means no direct value.
+func directKeyWrapper() (secret.Wrapper, bool, error) {
+	raw, ok := os.LookupEnv(keyEnvVar)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, false, nil
+	}
+
+	if err := os.Unsetenv(keyEnvVar); err != nil {
+		return nil, true, fmt.Errorf("%s: clear variable: %w", keyEnvVar, err)
+	}
+
+	key, err := decodeKey(keyEnvVar, raw)
+	if err != nil {
+		return nil, true, err
+	}
+
+	wrapper, err := builtinWrapper(key)
+	if err != nil {
+		return nil, true, err
+	}
+
+	return wrapper, true, nil
+}
+
+// keyFileExists reports whether a key file already exists at path. A stat
+// error other than absence is reported by the read, so it counts as existing
+// here.
+func keyFileExists(path string) bool {
+	_, err := os.Stat(path)
+
+	return err == nil || !os.IsNotExist(err)
+}
+
+// useKeyFile reads the key file at path with the owner-only rules and returns
+// its wrapper. It logs one line with the path, never the key.
+//
+//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
+func useKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
+	key, err := readKeyFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	wrapper, wrapErr := builtinWrapper(key)
+	if wrapErr != nil {
+		return nil, wrapErr
+	}
+
+	logger.Info("using key-encryption key file", slog.String("path", path))
+
+	return wrapper, nil
+}
+
+// makeKeyFile writes a new key file at path and returns its wrapper. It never
+// overwrites a file that exists: a concurrent serve that made the file first
+// wins, and this serve reads that file with the owner-only rules. It logs one
+// line with the path, never the key.
+//
+//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
+func makeKeyFile(path string, logger *slog.Logger) (secret.Wrapper, error) {
+	key, err := generateKeyFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) || os.IsExist(err) {
+			return useKeyFile(path, logger)
+		}
+
+		return nil, err
+	}
+
+	wrapper, wrapErr := builtinWrapper(key)
+	if wrapErr != nil {
+		return nil, wrapErr
+	}
+
+	logger.Info("using key-encryption key file", slog.String("path", path))
+
+	return wrapper, nil
+}
+
+// promptAndMakeKeyFile asks for an explicit yes and makes the key file at
+// path on yes, when beforeMake allows it. On anything else serve stops with
+// exit status 1 and makes no file. The prompt comes first, so a declined
+// prompt stops before the database opens.
+//
+//nolint:ireturn // The caller keeps the wrapper as a secret.Wrapper port.
+func promptAndMakeKeyFile(
+	in keyPrompt, path string, beforeMake func(path string) error, logger *slog.Logger,
+) (secret.Wrapper, error) {
+	agreed, err := promptForKeyFile(in.stdin, in.stderr, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !agreed {
+		return nil, errKeyPromptDeclined
+	}
+
+	if checkErr := beforeMake(path); checkErr != nil {
+		return nil, checkErr
+	}
+
+	return makeKeyFile(path, logger)
+}
+
+// builtinWrapper returns the built-in wrapper for key. Loaders already
+// checked the size, so this fails only when the key is bad.
+//
+//nolint:ireturn // No key is impossible here, but the caller keeps the interface.
+func builtinWrapper(key []byte) (secret.Wrapper, error) {
+	wrapper, err := secret.NewBuiltinWrapper(key)
+	if err != nil {
+		// Unreachable: decodeKey already checked the size.
+		return nil, fmt.Errorf("key-encryption key: %w", err)
+	}
+
+	return wrapper, nil
+}
+
+// keyPromptText tells where serve will write the key file, that losing it
+// loses every secret with no recovery, and asks for an explicit yes.
+const keyPromptText = "The server will write a new key-encryption key file to %s.\n" +
+	"An operator who loses this file loses every secret that the key encrypts, " +
+	"and nobody can recover them.\n" +
+	"Make the key file? Type yes to make it: "
+
+// promptForKeyFile prints where serve will write the key file, that an
+// operator who loses the file loses every secret that the key encrypts with
+// no recovery, and asks for an explicit yes. It answers true only on yes.
+// The read is capped, so an over-long answer counts as not yes.
+func promptForKeyFile(stdin io.Reader, stderr io.Writer, path string) (bool, error) {
+	_, printErr := fmt.Fprintf(stderr, keyPromptText, path)
+	if printErr != nil {
+		return false, fmt.Errorf("write key prompt: %w", printErr)
+	}
+
+	line, readErr := bufio.NewReader(io.LimitReader(stdin, maxKeyAnswerBytes+1)).ReadString('\n')
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return false, fmt.Errorf("read key answer: %w", readErr)
+	}
+
+	if len(line) > maxKeyAnswerBytes {
+		return false, nil
+	}
+
+	return strings.EqualFold(strings.TrimSpace(line), "yes"), nil
+}
+
+// generateKeyFile writes 32 random bytes in base64 to a new file at path
+// with owner-only mode. It never overwrites a file that exists.
+func generateKeyFile(path string) ([]byte, error) {
+	key := make([]byte, generatedKeyBytes)
+
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate key-encryption key: %w", err)
+	}
+
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, blobDirPerm); err != nil {
+			return nil, fmt.Errorf("create key directory: %w", err)
+		}
+	}
+
+	contents := base64.StdEncoding.EncodeToString(key) + "\n"
+
+	if err := writeKeyFile(path, contents, writeKeyContents); err != nil {
+		return nil, err
+	}
+
+	return key, nil
+}
+
+// writeKeyContents writes contents to file. It is the write step of
+// writeKeyFile; tests give writeKeyFile a step that fails.
+func writeKeyContents(file *os.File, contents string) error {
+	if _, err := file.WriteString(contents); err != nil {
+		return fmt.Errorf("write key file: %w", err)
+	}
+
+	return nil
+}
+
+// writeKeyFile creates a new file at path with owner-only mode, writes
+// contents with write, and syncs the file and its directory before it
+// returns: a server must never wrap secrets with a key that a crash can
+// lose. It never overwrites a file that exists. On any error after the
+// create, it removes the file, so that no half-written key file stays for
+// the next start to read.
+func writeKeyFile(path, contents string, write func(*os.File, string) error) error {
+	//nolint:gosec // The operator chose the key file path; the mode stays owner-only.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyFileMode)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("key file %q already exists: refusing to overwrite: %w", path, err)
+		}
+
+		return fmt.Errorf("write key file: %w", err)
+	}
+
+	err = fillKeyFile(file, path, contents, write)
+	if err == nil {
+		err = syncDir(filepath.Dir(path))
+	}
+
+	if err != nil {
+		_ = os.Remove(path) //nolint:errcheck // The first error is the one that matters.
+
 		return err
 	}
 
-	wrapper, err := keyWrapper()
-	if err != nil {
+	return nil
+}
+
+// fillKeyFile writes contents with write, then syncs, closes and protects
+// the new key file. It closes file on every path. It returns the error of
+// write as it is.
+func fillKeyFile(file *os.File, path, contents string, write func(*os.File, string) error) error {
+	if err := write(file, contents); err != nil {
+		_ = file.Close() //nolint:errcheck // The write error is the one that matters.
+
 		return err
 	}
 
-	st, err := openStore(ctx, f.database)
-	if err != nil {
-		return err
-	}
-	defer st.close()
+	if err := file.Sync(); err != nil {
+		_ = file.Close() //nolint:errcheck // The sync error is the one that matters.
 
-	return f.serveWithStores(ctx, st, authn, wrapper, logger)
+		return fmt.Errorf("sync key file: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("write key file: %w", err)
+	}
+
+	if err := os.Chmod(path, keyFileMode); err != nil {
+		return fmt.Errorf("protect key file: %w", err)
+	}
+
+	return nil
+}
+
+// syncDir syncs the directory dir, so that a new entry in it survives a
+// crash.
+func syncDir(dir string) error {
+	handle, err := os.Open(dir) //nolint:gosec // dir holds the key file that the operator chose.
+	if err != nil {
+		return fmt.Errorf("open key directory: %w", err)
+	}
+
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close() //nolint:errcheck // The sync error is the one that matters.
+
+		return fmt.Errorf("sync key directory: %w", err)
+	}
+
+	if err := handle.Close(); err != nil {
+		return fmt.Errorf("close key directory: %w", err)
+	}
+
+	return nil
 }
 
 // serveWithStores opens the blob stores, wires the server and serves until
@@ -559,6 +898,8 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
+		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 	}
 }
 
@@ -768,7 +1109,7 @@ func openS3Store(ctx context.Context, cfg s3StoreConfig, logger *slog.Logger) (b
 // openBackupTarget opens the backup target in raw as a blob store. Empty
 // means no backup target is configured: it returns nil without an error. A
 // dir:/path target opens the local directory, creating it owner-only, as a
-// backup holds OpenTofu state in plain text. An s3://<bucket>[/<prefix>]
+// backup holds sealed OpenTofu state. An s3://<bucket>[/<prefix>]
 // target opens S3-compatible storage with the same constructor as the live
 // blob store. Anything else is an error that shows the allowed forms.
 //
@@ -801,49 +1142,6 @@ func openBackupTarget(
 
 	if err := os.MkdirAll(dir, blobDirPerm); err != nil {
 		return nil, fmt.Errorf("create backup target directory: %w", err)
-	}
-
-	target, err := blobfs.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	return target, nil
-}
-
-// openRestoreSource opens the restore source in raw as a blob store. It
-// never creates the directory: a restore source must already hold a backup,
-// so a missing source is a refusal naming --from. An s3:// source stays
-// reserved for a later change (issue #158). Anything else is an error that
-// shows the allowed forms.
-func openRestoreSource(raw string) (*blobfs.Store, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, errRestoreFrom
-	}
-
-	if strings.HasPrefix(trimmed, "s3://") {
-		return nil, fmt.Errorf("backup source %q: s3 sources are not supported yet: %w", trimmed, errRestoreSource)
-	}
-
-	dir, ok := strings.CutPrefix(trimmed, "dir:")
-	if !ok || strings.TrimSpace(dir) == "" {
-		return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSource)
-	}
-
-	dir = strings.TrimSpace(dir)
-
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSourceMissing)
-		}
-
-		return nil, fmt.Errorf("backup source %q: %w", trimmed, err)
-	}
-
-	if !info.IsDir() {
-		return nil, fmt.Errorf("backup source %q: %w", trimmed, errRestoreSourceNotDir)
 	}
 
 	target, err := blobfs.Open(dir)
@@ -933,493 +1231,6 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
 }
 
-// Upgrade verdicts of the upgrade check subcommand.
-const (
-	// verdictUpToDate reports a database with no pending and no unknown migrations.
-	verdictUpToDate = "up to date"
-	// verdictUpgradePossible reports a database with pending migrations and no unknown versions.
-	verdictUpgradePossible = "upgrade possible"
-	// verdictCannotStart reports a database with a version the binary does not embed.
-	verdictCannotStart = "cannot start"
-)
-
-// upgradeCheck runs `opendustpan upgrade check`: it reads the schema state of
-// the database and writes nothing. It prints the version of the binary, the
-// schema version of the database, the schema version the binary needs, the
-// names of the pending migrations and one verdict. The exit code is 0 for
-// `up to date` and `upgrade possible` and 1 for `cannot start` and for
-// errors. The command has no REST endpoint and no console view: it is a
-// process-level tool (ADR 33 decision 3, ADR 17 process settings).
-func upgradeCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var c common
-
-	fs := flag.NewFlagSet("upgrade check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	// The check accepts --region for flag parity with serve and does not use it.
-	c.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 0 {
-		return errUsage
-	}
-
-	inspection, err := inspectDatabase(ctx, c.database)
-	if err != nil {
-		return err
-	}
-
-	if err := writeUpgradeReport(stdout, inspection); err != nil {
-		return err
-	}
-
-	if len(inspection.Unknown) > 0 {
-		return withBinaryVersion(&schema.NewerError{
-			DatabaseVersion: inspection.DatabaseVersion,
-			BinaryVersion:   inspection.BinaryVersion,
-		})
-	}
-
-	return nil
-}
-
-// inspectDatabase reports the schema state of database without changing it.
-// It takes --database as serve does.
-func inspectDatabase(
-	ctx context.Context, database string,
-) (schema.Inspection, error) {
-	switch {
-	case strings.HasPrefix(database, "sqlite:"):
-		inspection, err := sqlite.Inspect(ctx, strings.TrimPrefix(database, "sqlite:"))
-		if err != nil {
-			return schema.Inspection{}, fmt.Errorf("inspect sqlite database: %w", err)
-		}
-
-		return inspection, nil
-	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		inspection, err := postgres.Inspect(ctx, database)
-		if err != nil {
-			return schema.Inspection{}, fmt.Errorf("inspect postgres database: %w", err)
-		}
-
-		return inspection, nil
-	default:
-		return schema.Inspection{}, errUnknownBackend
-	}
-}
-
-// upgradeVerdict returns the one verdict for inspection: `cannot start` when
-// the database records a version the binary does not embed, `upgrade
-// possible` when migrations are pending, else `up to date`.
-func upgradeVerdict(inspection schema.Inspection) string {
-	switch {
-	case len(inspection.Unknown) > 0:
-		return verdictCannotStart
-	case len(inspection.Pending) > 0:
-		return verdictUpgradePossible
-	default:
-		return verdictUpToDate
-	}
-}
-
-// writeUpgradeReport writes the binary version, the schema version of the
-// database, the schema version the binary needs, the pending migration names
-// and the verdict. When migrations are pending it tells the operator to back
-// up the database first and that no downgrade path exists.
-func writeUpgradeReport(stdout io.Writer, inspection schema.Inspection) error {
-	lines := []string{
-		"binary version: " + version,
-		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
-		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),
-	}
-
-	if len(inspection.Pending) == 0 {
-		lines = append(lines, "pending migrations: none")
-	} else {
-		lines = append(lines, "pending migrations:")
-		for _, name := range inspection.Pending {
-			lines = append(lines, "  "+name)
-		}
-
-		lines = append(
-			lines,
-			"Back up the database before the upgrade. No downgrade path exists.",
-		)
-	}
-
-	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
-
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
-			return fmt.Errorf("write output: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// runRestore runs `opendustpan restore --from <target> --backup <id>`: it
-// loads a backup from the target into an empty installation. It opens the
-// destination store in a way that does not start the server, runs
-// backup.Restore, and prints the steps with the row counts. It is the one
-// exception to ADR 17 in ADR 30: an offline command with no REST endpoint,
-// because restore needs an empty installation with no running server. It
-// needs an empty destination and no running server. The key comes from
-// DUSTPAN_KEY_ENCRYPTION_KEY or from the file in
-// DUSTPAN_KEY_ENCRYPTION_KEY_FILE as serve reads it. The newer-schema guard
-// still applies to the destination. It exits 0 on success and 1 on any
-// refusal, with the one command that helps.
-func runRestore(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	plan, err := parseRestoreFlags(args, stderr)
-	if err != nil {
-		return err
-	}
-
-	wrapper, err := keyWrapper()
-	if err != nil {
-		return err
-	}
-
-	logger := slog.New(slog.NewTextHandler(stderr, nil))
-
-	return executeRestore(ctx, plan, wrapper, logger, stdout)
-}
-
-// restorePlan holds the validated settings of one restore run: the flags
-// with the trimmed backup id and source.
-type restorePlan struct {
-	flags restoreFlags
-	id    string
-	from  string
-}
-
-// parseRestoreFlags parses the restore flags and validates the backup id
-// and the source. It names the missing flag, so the operator knows what to
-// set.
-func parseRestoreFlags(args []string, stderr io.Writer) (restorePlan, error) {
-	var f restoreFlags
-
-	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	f.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return restorePlan{}, fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 0 {
-		return restorePlan{}, errUsage
-	}
-
-	id := strings.TrimSpace(f.backup)
-	if id == "" {
-		return restorePlan{}, errRestoreBackup
-	}
-
-	from := strings.TrimSpace(f.from)
-	if from == "" {
-		return restorePlan{}, errRestoreFrom
-	}
-
-	return restorePlan{flags: f, id: id, from: from}, nil
-}
-
-// executeRestore opens the destination store first, so the newer-schema
-// guard reports before the source check, then the blob directory and the
-// read-only source, runs backup.Restore and prints the report. It opens
-// nothing when the destination refuses: a refused restore writes nothing.
-func executeRestore(
-	ctx context.Context,
-	plan restorePlan,
-	wrapper secret.Wrapper,
-	logger *slog.Logger,
-	stdout io.Writer,
-) error {
-	st, err := openStore(ctx, plan.flags.database)
-	if err != nil {
-		return fmt.Errorf("restore backup %s: %w", plan.id, err)
-	}
-
-	defer st.close()
-
-	dest, err := restoreStoreOf(st)
-	if err != nil {
-		return fmt.Errorf("restore backup %s: %w", plan.id, err)
-	}
-
-	// The offline restore writes to a local blob directory only; ADR 39
-	// (issue #281) moves restore into the server, which owns every store.
-	blobs, err := openFSBlobs(plan.flags.database, plan.flags.blobDir)
-	if err != nil {
-		return fmt.Errorf("restore backup %s: %w", plan.id, err)
-	}
-
-	defer closeLiveStore(ctx, logger, blobs)
-
-	target, err := openRestoreSource(plan.from)
-	if err != nil {
-		return fmt.Errorf("restore backup %s from %q: %w", plan.id, plan.from, err)
-	}
-
-	defer closeRestoreTarget(ctx, logger, target)
-
-	warning, err := backup.Restore(ctx, target, backup.ID(plan.id), backup.RestoreDest{
-		Blobs:  blobs,
-		Store:  dest,
-		Region: strings.TrimSpace(plan.flags.region),
-	}, wrapper)
-	if err != nil {
-		return restoreRefusal(plan.id, err)
-	}
-
-	if writeErr := printRestoreHeader(stdout, plan.id, plan.from); writeErr != nil {
-		return writeErr
-	}
-
-	if reportErr := writeRestoreReport(ctx, stdout, dest, plan.id); reportErr != nil {
-		return reportErr
-	}
-
-	if reportErr := writeRestoreWarning(stdout, warning); reportErr != nil {
-		return reportErr
-	}
-
-	if _, writeErr := fmt.Fprintf(stdout, "restored backup %s\n", plan.id); writeErr != nil {
-		return fmt.Errorf("write output: %w", writeErr)
-	}
-
-	return nil
-}
-
-// closeRestoreTarget closes the backup source and logs the error with
-// context instead of discarding it, as serve does for its stores.
-func closeRestoreTarget(ctx context.Context, logger *slog.Logger, target *blobfs.Store) {
-	if err := target.Close(); err != nil {
-		logger.WarnContext(ctx, "close backup source", slog.String("error", err.Error()))
-	}
-}
-
-// printRestoreHeader prints the restore start line. executeRestore calls it
-// only after backup.Restore succeeds, so a refused restore never emits a
-// line that reads like the start of a restore.
-func printRestoreHeader(stdout io.Writer, id, from string) error {
-	if _, err := fmt.Fprintf(stdout, "restore backup %s from %s\n", id, from); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
-}
-
-// writeRestoreWarning prints the region warning of the restore, or nothing
-// when the regions match.
-func writeRestoreWarning(stdout io.Writer, warning string) error {
-	if warning == "" {
-		return nil
-	}
-
-	if _, err := fmt.Fprintf(stdout, "warning: %s\n", warning); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
-}
-
-// restoreFlags holds the settings of the restore subcommand.
-type restoreFlags struct {
-	common
-
-	from    string
-	backup  string
-	blobDir string
-}
-
-func (f *restoreFlags) register(fs *flag.FlagSet) {
-	f.common.register(fs)
-	fs.StringVar(
-		&f.from,
-		"from",
-		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup source dir:/path (DUSTPAN_BACKUP_TARGET)",
-	)
-	fs.StringVar(&f.backup, "backup", "", "backup ID to restore, for example bkp-aaa")
-	fs.StringVar(
-		&f.blobDir,
-		"blob-dir",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"directory for state content (DUSTPAN_BLOB_DIR, default blobs next to the database)",
-	)
-	fs.StringVar(
-		&f.blobDir,
-		"blob-store",
-		env("DUSTPAN_BLOB_DIR", ""),
-		"same as --blob-dir (DUSTPAN_BLOB_DIR)",
-	)
-}
-
-// restoreStoreOf returns the backup restore port of the opened destination
-// store. Both store adapters implement it.
-//
-//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
-func restoreStoreOf(st store) (backup.RestoreStore, error) {
-	switch s := st.(type) {
-	case sqliteStore:
-		return s.Store, nil
-	case postgresStore:
-		return s.Store, nil
-	default:
-		return nil, errUnknownBackend
-	}
-}
-
-// restoreRefusal wraps a restore failure with the one command that helps. A
-// destination that is not empty needs an empty one: a new --database with a
-// new --blob-dir. Every other error already names its fix: the key errors
-// name DUSTPAN_KEY_ENCRYPTION_KEY, the dialect and schema errors name the
-// versions, and the newer-schema guard names the binary.
-func restoreRefusal(id string, err error) error {
-	if errors.Is(err, backup.ErrNotEmpty) {
-		return fmt.Errorf(
-			"restore backup %s: %w: restore into an empty destination: use a new --database with a new --blob-dir",
-			id,
-			err,
-		)
-	}
-
-	return fmt.Errorf("restore backup %s: %w", id, err)
-}
-
-// writeRestoreReport prints the steps the restore ran with the row count of
-// each table, in the order of backup.Tables. It reads the counts back from
-// the destination, so the report shows what the restore loaded.
-func writeRestoreReport(ctx context.Context, stdout io.Writer, dest backup.RestoreStore, id string) error {
-	summary, err := dest.Export(ctx, io.Discard)
-	if err != nil {
-		return fmt.Errorf("restore backup %s: read restored data: %w", id, err)
-	}
-
-	lines := []string{
-		"read manifest",
-		"checked key",
-		"copied blobs",
-		"loaded SQL data",
-	}
-
-	for _, table := range backup.Tables {
-		lines = append(lines, fmt.Sprintf("table %s: %d rows", table, summary.RowCounts[table]))
-	}
-
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
-			return fmt.Errorf("write output: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// runBackup runs the backup subcommands. It shares one backup entry, so the
-// backup command of a later change and backup check never clash: check runs
-// when the first argument is check, anything else is usage for now.
-func runBackup(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) >= 1 && args[0] == "check" {
-		return backupCheck(ctx, args[1:], stdout, stderr)
-	}
-
-	return backupCommand(ctx, args, stdout, stderr)
-}
-
-// backupCheckFlags holds the settings of the backup check subcommand. It
-// takes no database flag and reads no key: the check reads only the target.
-type backupCheckFlags struct {
-	target     string
-	id         string
-	s3Endpoint string
-	s3Region   string
-}
-
-func (f *backupCheckFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.target,
-		"backup-target",
-		env("DUSTPAN_BACKUP_TARGET", ""),
-		"backup target dir:/path or s3://<bucket>[/<prefix>] (DUSTPAN_BACKUP_TARGET)",
-	)
-	fs.StringVar(&f.id, "backup", "", "backup ID to check, for example bkp-aaa")
-	fs.StringVar(
-		&f.s3Endpoint,
-		"s3-endpoint",
-		env("DUSTPAN_S3_ENDPOINT", ""),
-		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
-	)
-	fs.StringVar(
-		&f.s3Region,
-		"s3-region",
-		env("DUSTPAN_S3_REGION", ""),
-		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
-	)
-}
-
-// backupCheck runs `opendustpan backup check --backup <id>`: it reads the
-// target and checks that it holds every object the manifest names with the
-// recorded size. It opens no database, starts no server and reads no key. It
-// prints one verdict and exits 0 when the backup is complete, else it returns
-// the first missing or short object by key with exit 1.
-func backupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var f backupCheckFlags
-
-	fs := flag.NewFlagSet("backup check", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	f.register(fs)
-
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	if fs.NArg() != 0 {
-		return errUsage
-	}
-
-	id := strings.TrimSpace(f.id)
-	if id == "" {
-		return errBackupID
-	}
-
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-
-	target, err := openBackupTarget(ctx, f.target, f.s3Endpoint, f.s3Region, logger)
-	if err != nil {
-		return err
-	}
-
-	if target == nil {
-		return errBackupTarget
-	}
-
-	checkErr := backup.Check(ctx, target, backup.ID(id))
-
-	var closeErr error
-
-	if closer, ok := target.(io.Closer); ok {
-		closeErr = closer.Close()
-	}
-
-	if checkErr != nil {
-		return checkErr
-	}
-
-	if closeErr != nil {
-		return fmt.Errorf("close backup target: %w", closeErr)
-	}
-
-	if _, err := fmt.Fprintf(stdout, "backup %s is complete\n", id); err != nil {
-		return fmt.Errorf("write output: %w", err)
-	}
-
-	return nil
-}
-
 // store is the persistence adapter chosen by --database.
 //
 //nolint:interfacebloat // The binary needs every persistence port in one adapter.
@@ -1448,11 +1259,16 @@ type postgresStore struct{ *postgres.Store }
 
 func (s postgresStore) close() { s.Close() }
 
-//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
-func openStore(ctx context.Context, database string) (store, error) {
+// openStore opens the persistence adapter that --database names. Only serve
+// calls it: every other command is a client of the REST API (ADR 39 decision
+// 1). The gate test swaps it for a function that fails the test, so a future
+// client command that opens a store fails the test.
+//
+//nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
+var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"))
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), sqlite.WithLogger(logger))
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
 		}
@@ -1481,30 +1297,6 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
-}
-
-func env(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-
-	return fallback
-}
-
-// envBytes returns the byte size in key, or 0 when unset. An invalid value
-// returns -1, so checkSizeFlags rejects it with the flag names.
-func envBytes(key string) int64 {
-	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return 0
-	}
-
-	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || n < 0 {
-		return -1
-	}
-
-	return n
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,
@@ -1582,30 +1374,6 @@ func loadKeyEncryptionKeyFrom(lookup func(key string) (string, bool)) ([]byte, e
 	}
 
 	return nil, nil
-}
-
-// keyWrapper loads the key-encryption key and returns its wrapper, or nil
-// when no key is configured.
-//
-//nolint:ireturn // No key is a valid state, so the result must stay an interface to hold nil.
-func keyWrapper() (secret.Wrapper, error) {
-	key, err := loadKeyEncryptionKey()
-	if err != nil {
-		return nil, err
-	}
-
-	if key == nil {
-		//nolint:nilnil // A nil wrapper without an error means no key is configured.
-		return nil, nil
-	}
-
-	wrapper, err := secret.NewBuiltinWrapper(key)
-	if err != nil {
-		// Unreachable: loadKeyEncryptionKey already checked the size.
-		return nil, fmt.Errorf("key-encryption key: %w", err)
-	}
-
-	return wrapper, nil
 }
 
 // decodeKey decodes a base64 key-encryption key from setting source and

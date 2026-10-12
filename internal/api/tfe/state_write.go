@@ -236,8 +236,9 @@ func (h *Handler) uploadState(
 
 // uploadJSONState serves PUT /api/v2/json-state-uploads/{id}/{token}. It
 // carries no Authorization header: the token in the path is the credential.
-// The server accepts the JSON rendering and discards it: it keeps the state
-// itself and the outputs declared at creation.
+// The server reads the JSON rendering for the sensitive value paths that
+// sensitive_values marks and keeps only those paths, never a value. The rest
+// of the rendering is discarded.
 func (h *Handler) uploadJSONState(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {

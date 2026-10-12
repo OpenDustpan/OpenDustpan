@@ -46,15 +46,18 @@ func TestActionsAreToolNeutral(t *testing.T) {
 	for _, a := range []identity.Action{
 		identity.ActionNamespaceRead,
 		identity.ActionNamespaceAdmin,
+		identity.ActionNamespaceReadAudit,
 		identity.ActionUnitRead,
 		identity.ActionUnitWrite,
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionUnitReadSecrets,
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
+		identity.ActionServerRestore,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -317,6 +320,10 @@ func TestServerActionsProveWireForms(t *testing.T) {
 			"server:maintenance",
 		)
 	}
+
+	if identity.ActionServerRestore != "server:restore" {
+		t.Fatalf("restore action = %q, want %q", identity.ActionServerRestore, "server:restore")
+	}
 }
 
 func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
@@ -325,15 +332,18 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 	actions := []identity.Action{
 		identity.ActionNamespaceRead,
 		identity.ActionNamespaceAdmin,
+		identity.ActionNamespaceReadAudit,
 		identity.ActionUnitRead,
 		identity.ActionUnitWrite,
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionUnitReadSecrets,
 		identity.ActionCallerRead,
 		identity.ActionServerBackup,
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
+		identity.ActionServerRestore,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))

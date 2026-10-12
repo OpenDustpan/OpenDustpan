@@ -1,6 +1,7 @@
 package pulumi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,13 +48,14 @@ type updateProgramResponse struct {
 	UpdateID string `json:"updateID"`
 }
 
-// startUpdateResponse answers a start: the stack version the update produces
-// and the lease token its client must present on every later write. The
-// journal version is left at zero, so journaling stays off.
+// startUpdateResponse answers a start: the stack version the update produces,
+// the lease token its client must present on every later write, and the
+// journal version the update saves its state with. Zero means checkpoints.
 type startUpdateResponse struct {
 	TokenExpiration int64  `json:"tokenExpiration,omitempty"`
 	Token           string `json:"token,omitempty"`
 	Version         int    `json:"version"`
+	JournalVersion  int    `json:"journalVersion"`
 }
 
 // renewLeaseRequest asks to extend an update's lease by Duration seconds.
@@ -90,6 +92,132 @@ type checkpointRequest struct {
 	Version    int             `json:"version"`
 	Features   []string        `json:"features,omitempty"`
 	Deployment json.RawMessage `json:"deployment,omitempty"`
+}
+
+// verbatimCheckpointRequest is the first save of an update with the delta
+// capability: the whole deployment in the schema named by version, kept
+// byte for byte, with the client's sequence number.
+type verbatimCheckpointRequest struct {
+	Version           int             `json:"version"`
+	UntypedDeployment json.RawMessage `json:"untypedDeployment,omitempty"`
+	// SequenceNumber counts the saves of the update from 1. Later deltas
+	// name the next number.
+	SequenceNumber int `json:"sequenceNumber"`
+}
+
+// deltaCheckpointRequest is a later save of an update with the delta
+// capability: the edits that turn the last saved deployment into the new
+// one, with the hash of the result and the next sequence number.
+type deltaCheckpointRequest struct {
+	Version         int             `json:"version"`
+	CheckpointHash  string          `json:"checkpointHash"`
+	SequenceNumber  int             `json:"sequenceNumber"`
+	DeploymentDelta json.RawMessage `json:"deploymentDelta,omitempty"`
+}
+
+// saveCheckpointVerbatim stores the running update's checkpoint exactly as
+// its client sent it, through the same blob-first path as saveCheckpoint.
+// The sequence number makes retried saves idempotent. A sequence number below
+// 1 answers 409 and saves nothing, so the CLI falls back to a full save.
+func (h *Handler) saveCheckpointVerbatim(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+	releaseHold, ok := h.hold(w, r, limit)
+	if !ok {
+		return
+	}
+
+	defer releaseHold()
+
+	var req verbatimCheckpointRequest
+	if !h.decodeLargeBody(w, r, limit, &req) {
+		return
+	}
+
+	if req.SequenceNumber < 1 {
+		h.writeError(ctx, w, fmt.Errorf("%w: checkpoint sequence %d", stack.ErrInvalidDelta, req.SequenceNumber))
+
+		return
+	}
+
+	in := stack.CheckpointInput{
+		Features:      nil,
+		Deployment:    []byte(req.UntypedDeployment),
+		SchemaVersion: req.Version,
+		Sequence:      int64(req.SequenceNumber),
+		Invalid:       false,
+	}
+
+	if err := h.updates.SaveCheckpoint(ctx, ref, id, tok, in); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// saveCheckpointDelta applies the edits in the request to the last saved
+// checkpoint of the running update and stores the result, through the same
+// blob-first path as saveCheckpoint. An invalid delta answers 409 and saves
+// nothing, so the CLI falls back to a full verbatim save. A delta whose
+// result is over the checkpoint size limit answers 409 too: the verbatim
+// fallback then meets the normal limit.
+func (h *Handler) saveCheckpointDelta(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return
+	}
+
+	limit := int64(h.updates.MaxCheckpointBytes())
+	releaseHold, ok := h.hold(w, r, limit)
+	if !ok {
+		return
+	}
+
+	defer releaseHold()
+
+	var req deltaCheckpointRequest
+	if !h.decodeLargeBody(w, r, limit, &req) {
+		return
+	}
+
+	in := stack.DeltaInput{
+		SchemaVersion: req.Version,
+		Sequence:      int64(req.SequenceNumber),
+		Hash:          req.CheckpointHash,
+		Delta:         []byte(req.DeploymentDelta),
+	}
+
+	if err := h.updates.SaveCheckpointDelta(ctx, ref, id, tok, in); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
 }
 
 // importStackRequest is one deployment as `stack import` sends it: the
@@ -273,7 +401,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -301,7 +429,8 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 }
 
 // startUpdate starts the update and hands out its lease. The request tags
-// are ignored in milestone 1: they only annotate the stack.
+// are ignored in milestone 1: they only annotate the stack. The journal version
+// is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
 func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -310,7 +439,14 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	started, err := h.updates.Start(ctx, ref, id)
+	offer, ok := h.startOffer(w, r)
+	if !ok {
+		return
+	}
+
+	journal := h.journalVersionFor(r.UserAgent(), offer)
+
+	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -321,7 +457,41 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		TokenExpiration: started.Update.Lease.ExpiresAt.Unix(),
 		Token:           started.Token.Reveal(),
 		Version:         int(started.Update.Version),
+		JournalVersion:  int(started.Update.JournalVersion),
 	})
+}
+
+// journalVersionFor answers the journal version of a start. With journaling
+// off, the CLI gets checkpoints whatever it offers, so the gate does not run.
+func (h *Handler) journalVersionFor(userAgent string, offer startUpdateOffer) int {
+	if h.disablePulumiJournaling {
+		return 0
+	}
+
+	return negotiateJournalVersion(userAgent, offer.JournalVersion, h.supportedJournal)
+}
+
+// startOffer reads the start-update body. An empty body offers no journal
+// version, because some clients send no body.
+func (h *Handler) startOffer(w http.ResponseWriter, r *http.Request) (startUpdateOffer, bool) {
+	var offer startUpdateOffer
+
+	body, ok := h.readBody(w, r)
+	if !ok {
+		return offer, false
+	}
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return offer, true
+	}
+
+	if err := json.Unmarshal(body, &offer); err != nil {
+		h.writeInvalidBody(r.Context(), w)
+
+		return offer, false
+	}
+
+	return offer, true
 }
 
 // renewLease extends the update's lease. The lease token arrives in the
@@ -339,7 +509,7 @@ func (h *Handler) renewLease(w http.ResponseWriter, r *http.Request, _ identity.
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -406,7 +576,7 @@ func (h *Handler) completeUpdate(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	body, ok := h.readBody(w, r, maxBodyBytes)
+	body, ok := h.readBody(w, r)
 	if !ok {
 		return
 	}
@@ -758,9 +928,11 @@ func (h *Handler) leaseToken(w http.ResponseWriter, r *http.Request) (token.Toke
 	return tok, raw, true
 }
 
-// readBody reads at most limit request bytes. An oversized body answers 413,
-// an unreadable one 400.
-func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+// readBody reads at most maxBodyBytes request bytes. An oversized body answers
+// 413, an unreadable one 400.
+func (h *Handler) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	limit := int64(maxBodyBytes)
+
 	body, err := io.ReadAll(io.LimitReader(http.MaxBytesReader(w, r.Body, limit), limit+1))
 	if err != nil {
 		if tooLarge, ok := errors.AsType[*http.MaxBytesError](err); ok && tooLarge != nil {

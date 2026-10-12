@@ -8,9 +8,9 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 e2e upgrade-test generate build image-smoke
+.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke
 
-check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test ## Everything CI checks.
+check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -18,10 +18,11 @@ fmt: ## Format Go code (gofumpt, gci, golines).
 lint: ## Strict lint, tidy and generated-code checks for Go.
 	go mod tidy -diff
 	sqlc diff
+	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	golangci-lint run ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
-ANALYSIS_TAGS := e2e,upgrade
+ANALYSIS_TAGS := e2e,upgrade,soak
 NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
@@ -75,11 +76,17 @@ licenses: ## Each module linked into the binary has a license file to ship, on e
 # Prose that ADR 14 holds to ASD-STE100. Accepted ADRs before ADR 14 are exempt:
 # ADR 1 forbids editing them.
 STE_LINT  := python3 -I .agents/skills/asd-ste100/scripts/ste-lint.py
-DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md)
+DOCS      := $(wildcard README.md CLAUDE.md GLOSSARY.md CONTRIBUTING.md SECURITY.md SUPPORT.md docs/guides/*.md docs/reference/*.md docs/explanation/*.md)
 DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 
-docs-lint: ## ASD-STE100 structural rules for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference and ADRs from 14 on.
+# Words that claim quality instead of showing it, and emoji. The list and its
+# self-test are in the script.
+BANNED    := python3 -I scripts/docs-banned-words.py
+
+docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md, GLOSSARY.md, the community files, the guides, the reference, the explanations and ADRs from 14 on.
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
+	$(BANNED) --selftest
+	$(BANNED) $(DOCS) $(DOCS_ADRS)
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set.
 	go test -race -count=1 ./...
@@ -87,6 +94,12 @@ test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
 	go test -race -count=1 ./pkg/store/postgres/...
+
+bench: ## Fast benchmarks (delta apply, gzip, checkpoint store) with one iteration each; proves they compile and run.
+	go test -run '^$$' -bench . -benchtime 1x ./pkg/stack/ ./pkg/store/sqlite/
+
+load: ## Run the load harness against a self-started server and write load-report.json (SQLite default; set DUSTPAN_TEST_POSTGRES_URL for PostgreSQL). Not part of check.
+	go run ./load -out load-report.json
 
 test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs DUSTPAN_TEST_S3_*).
 	@test -n "$$DUSTPAN_TEST_S3_ENDPOINT" && test -n "$$DUSTPAN_TEST_S3_BUCKET" && test -n "$$DUSTPAN_TEST_S3_ACCESS_KEY" && test -n "$$DUSTPAN_TEST_S3_SECRET_KEY" || (echo "set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY" && exit 1)
@@ -98,8 +111,21 @@ e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (download
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" -race -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations.
+crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
+	E2E_SERVER=binary go test -tags e2e -race -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
+
+SOAK_DURATION ?= 30m
+SOAK_PULUMI ?= 4
+SOAK_TOFU ?= 4
+SOAK_REPORT_DIR ?= soak-reports
+
+soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
+	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" -race -count=1 -v -timeout 60m ./e2e/ -run TestSoak
+
+generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate
+	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
+	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan

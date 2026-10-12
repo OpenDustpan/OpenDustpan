@@ -18,7 +18,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,36 +50,13 @@ func healthListenOf(t *testing.T, url string) string {
 	return ""
 }
 
-// freePort answers a free loopback port for a health test server. The
-// port can be taken again before the server binds it, so callers bind it
-// at once.
-func freePort(t *testing.T) string {
-	t.Helper()
-
-	//nolint:exhaustruct_v5 // The test listens with defaults; only the port matters.
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for a free port: %v", err)
-	}
-
-	addr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("free port address %v is not TCP", listener.Addr())
-	}
-
-	port := addr.Port
-
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close free port listener: %v", err)
-	}
-
-	return strconv.Itoa(port)
-}
-
 // startHealthServer runs serve with args until it logs "listening" and
-// answers a stop function that ends the server and waits for it, so the
-// health tests probe a running server with no leaked goroutine.
-func startHealthServer(t *testing.T, args ...string) func() {
+// answers the bound host:port with a stop function that ends the server
+// and waits for it, so the health tests probe a running server with no
+// leaked goroutine. Callers pass --listen 127.0.0.1:0 and probe the
+// returned address: serve binds and reports the port it holds, so no test
+// closes a listener and binds its port again.
+func startHealthServer(t *testing.T, args ...string) (string, func()) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -102,8 +78,8 @@ func startHealthServer(t *testing.T, args ...string) func() {
 	for {
 		select {
 		case <-ticker.C:
-			if strings.Contains(logs.String(), "listening") {
-				return func() {
+			if addr, ok := listeningAddrFromLogs(logs.String()); ok {
+				return addr, func() {
 					cancel()
 
 					if err := <-done; err != nil {
@@ -116,6 +92,62 @@ func startHealthServer(t *testing.T, args ...string) func() {
 			t.Fatal("server did not start in time")
 		}
 	}
+}
+
+// listeningAddrFromLogs answers the bound host:port in the listening log
+// line the server writes after it binds. It reads the addr value of the
+// JSON or text log, so a server on :0 reports the port it holds.
+func listeningAddrFromLogs(logs string) (string, bool) {
+	if addr, ok := listeningAddrJSON(logs); ok {
+		return addr, true
+	}
+
+	return listeningAddrText(logs)
+}
+
+// listeningAddrJSON answers the addr value of a JSON listening line.
+func listeningAddrJSON(logs string) (string, bool) {
+	const prefix = `"addr":"`
+
+	_, after, found := strings.Cut(logs, prefix)
+	if !found {
+		return "", false
+	}
+
+	addr, _, found := strings.Cut(after, `"`)
+
+	if !found || addr == "" {
+		return "", false
+	}
+
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return "", false
+	}
+
+	return addr, true
+}
+
+// listeningAddrText answers the addr value of a text listening line.
+func listeningAddrText(logs string) (string, bool) {
+	const prefix = "addr="
+
+	_, after, found := strings.Cut(logs, prefix)
+	if !found {
+		return "", false
+	}
+
+	rest := strings.TrimSpace(after)
+	if rest == "" {
+		return "", false
+	}
+
+	addr, _, _ := strings.Cut(rest, " ")
+
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return "", false
+	}
+
+	return addr, true
 }
 
 // writeHealthCertificate generates a self-signed certificate for
@@ -225,18 +257,18 @@ func TestHealthFlagDefaults(t *testing.T) {
 	var f healthFlags
 
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
-	f.register(fs)
+	f.Register(fs)
 
 	if err := fs.Parse(nil); err != nil {
 		t.Fatalf("parse defaults: %v", err)
 	}
 
-	if f.listen != ":8080" {
-		t.Fatalf("listen = %q, want :8080 as serve uses", f.listen)
+	if f.Listen != ":8080" {
+		t.Fatalf("listen = %q, want :8080 as serve uses", f.Listen)
 	}
 
-	if f.tlsCert != "" {
-		t.Fatalf("tls-cert = %q, want empty for plain HTTP", f.tlsCert)
+	if f.TLSCert != "" {
+		t.Fatalf("tls-cert = %q, want empty for plain HTTP", f.TLSCert)
 	}
 }
 
@@ -342,12 +374,37 @@ func checkHealthUnavailable(t *testing.T) {
 	}
 }
 
-// checkHealthNoServer proves health exits 1 with ErrHealthFailed when no
-// server listens and names the listen setting.
+// checkHealthNoServer proves health exits 1 with ErrHealthFailed when the
+// listener answers no HTTP and names the listen setting. It holds a
+// listener open that closes each connection at once, so no other process
+// can take the port and change the failure.
 func checkHealthNoServer(t *testing.T) {
 	t.Helper()
 
-	_, err := runHealthCommand(t, "--listen", "127.0.0.1:"+freePort(t))
+	//nolint:exhaustruct_v5 // The test listens with defaults; only the address matters.
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := ln.Close(); closeErr != nil {
+			t.Errorf("close listener: %v", closeErr)
+		}
+	})
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+
+			_ = conn.Close() //nolint:errcheck // The refusal closes each connection at once.
+		}
+	}()
+
+	_, err = runHealthCommand(t, "--listen", ln.Addr().String())
 	if err == nil || !errors.Is(err, errHealthFailed) {
 		t.Fatalf("health without a server: err = %v, want ErrHealthFailed", err)
 	}
@@ -411,13 +468,12 @@ func healthReadyPlainServer(t *testing.T) {
 
 	setServeEnv(t, testKeyBase64())
 
-	port := freePort(t)
 	db := "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
 
-	stop := startHealthServer(t, "--database", db, "--listen", "127.0.0.1:"+port)
+	addr, stop := startHealthServer(t, "--database", db, "--listen", "127.0.0.1:0")
 	defer stop()
 
-	out, err := runHealthCommand(t, "--listen", "127.0.0.1:"+port)
+	out, err := runHealthCommand(t, "--listen", addr)
 	if err != nil {
 		t.Fatalf("health of a running server: %v", err)
 	}
@@ -439,19 +495,18 @@ func healthReadyTLSServer(t *testing.T) {
 	key := filepath.Join(dir, "key.pem")
 	writeHealthCertificate(t, cert, key)
 
-	port := freePort(t)
 	db := "sqlite:" + filepath.Join(dir, "dustpan.db")
 
-	stop := startHealthServer(
+	addr, stop := startHealthServer(
 		t,
 		"--database", db,
-		"--listen", "127.0.0.1:"+port,
+		"--listen", "127.0.0.1:0",
 		"--tls-cert", cert,
 		"--tls-key", key,
 	)
 	defer stop()
 
-	out, err := runHealthCommand(t, "--listen", "127.0.0.1:"+port, "--tls-cert", cert)
+	out, err := runHealthCommand(t, "--listen", addr, "--tls-cert", cert)
 	if err != nil {
 		t.Fatalf("health of a running TLS server: %v", err)
 	}
@@ -473,19 +528,18 @@ func healthTLSServerWithoutCert(t *testing.T) {
 	key := filepath.Join(dir, "key.pem")
 	writeHealthCertificate(t, cert, key)
 
-	port := freePort(t)
 	db := "sqlite:" + filepath.Join(dir, "dustpan.db")
 
-	stop := startHealthServer(
+	addr, stop := startHealthServer(
 		t,
 		"--database", db,
-		"--listen", "127.0.0.1:"+port,
+		"--listen", "127.0.0.1:0",
 		"--tls-cert", cert,
 		"--tls-key", key,
 	)
 	defer stop()
 
-	_, err := runHealthCommand(t, "--listen", "127.0.0.1:"+port)
+	_, err := runHealthCommand(t, "--listen", addr)
 	if err == nil {
 		t.Fatal("health of a TLS server over plain HTTP succeeded, want an error")
 	}

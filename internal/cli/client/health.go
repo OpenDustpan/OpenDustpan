@@ -1,4 +1,4 @@
-package main
+package client
 
 // Health subcommand of the container image (issue #272): a client of GET
 // /health/ready (ADR 34).
@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/internal/cli"
 )
 
 const (
@@ -34,65 +36,59 @@ const (
 	// the readiness answer is small, and the limit keeps a long body out
 	// of the error text.
 	healthBodyLimit = 4 << 10
+	// schemeHTTP and schemeHTTPS name the URL schemes of the health probe.
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
 )
 
 // Sentinel errors of the health subcommand. Each error text names what
 // failed and the one command that helps.
 var (
-	// errHealthNotReady reports a probe that reached the server without a
+	// ErrHealthNotReady reports a probe that reached the server without a
 	// 2xx answer, for example 503 while the database is down.
-	errHealthNotReady = errors.New("server is not ready")
-	// errHealthFailed reports a probe that never reached the server.
-	errHealthFailed = errors.New("health check failed")
+	ErrHealthNotReady = errors.New("server is not ready")
+	// ErrHealthFailed reports a probe that never reached the server.
+	ErrHealthFailed = errors.New("health check failed")
 )
 
-// healthFlags holds the settings of the health subcommand: the same
+// HealthFlags holds the settings of the health subcommand: the same
 // listen address and TLS settings as serve, read from the same flags and
 // variables, so the probe meets the server with or without TLS.
-type healthFlags struct {
-	listen  string
-	tlsCert string
+type HealthFlags struct {
+	Listen  string
+	TLSCert string
 }
 
-func (f *healthFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(
-		&f.listen,
-		"listen",
-		env("DUSTPAN_LISTEN", ":8080"),
-		"listen address of the server (DUSTPAN_LISTEN)",
-	)
-	fs.StringVar(
-		&f.tlsCert,
-		"tls-cert",
-		env("DUSTPAN_TLS_CERT", ""),
-		"same certificate file serve uses: when set, probe over HTTPS (DUSTPAN_TLS_CERT)",
-	)
+// Register registers the health flags on fs.
+func (f *HealthFlags) Register(fs *flag.FlagSet) {
+	cli.ByFlag("listen").String(fs, &f.Listen)
+	cli.ByFlag("tls-cert").String(fs, &f.TLSCert)
 }
 
-// runHealth runs `opendustpan health`: it sends GET /health/ready to the
+// RunHealth runs `opendustpan health`: it sends GET /health/ready to the
 // local server, prints ready on a 2xx answer, and returns an error on each
 // other result, so the exit code is 0 only when the server is ready.
-func runHealth(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	var f healthFlags
+func RunHealth(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	var f HealthFlags
 
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	f.register(fs)
+	f.Register(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	if fs.NArg() != 0 {
-		return errUsage
+		return ErrUsage
 	}
 
-	url, err := healthURL(f.listen, f.tlsCert)
+	url, err := HealthURL(f.Listen, f.TLSCert)
 	if err != nil {
 		return err
 	}
 
-	status, body, err := probeReady(ctx, newHealthClient(f.tlsCert), url)
+	status, body, err := probeReady(ctx, newHealthClient(f.TLSCert), url)
 	if err != nil {
 		return err
 	}
@@ -100,7 +96,7 @@ func runHealth(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if status < 200 || status > 299 {
 		return fmt.Errorf(
 			"%w: GET %s answered %d %s: check the server log and run opendustpan health again",
-			errHealthNotReady,
+			ErrHealthNotReady,
 			url,
 			status,
 			body,
@@ -114,15 +110,15 @@ func runHealth(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	return nil
 }
 
-// healthURL answers the readiness address for listen with the scheme that
+// HealthURL answers the readiness address for listen with the scheme that
 // tlsCert selects: https when set, else http. An empty or wildcard host
 // probes loopback, so a server that binds every interface still answers.
-func healthURL(listen, tlsCert string) (string, error) {
+func HealthURL(listen, tlsCert string) (string, error) {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(listen))
 	if err != nil || strings.TrimSpace(port) == "" {
 		return "", fmt.Errorf(
 			"%w: listen address %q: set --listen (DUSTPAN_LISTEN) to host:port and run opendustpan health again",
-			errHealthFailed,
+			ErrHealthFailed,
 			listen,
 		)
 	}
@@ -159,14 +155,14 @@ func newHealthClient(tlsCert string) *http.Client {
 }
 
 // probeReady sends one GET to url and answers the status with the trimmed
-// body. A request error wraps errHealthFailed and names --listen, so the
+// body. A request error wraps ErrHealthFailed and names --listen, so the
 // operator knows which setting to check.
 func probeReady(ctx context.Context, client *http.Client, url string) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return 0, "", fmt.Errorf(
 			"%w: GET %s: %w: check --listen (DUSTPAN_LISTEN) and run opendustpan health again",
-			errHealthFailed,
+			ErrHealthFailed,
 			url,
 			err,
 		)
@@ -176,7 +172,7 @@ func probeReady(ctx context.Context, client *http.Client, url string) (int, stri
 	if err != nil {
 		return 0, "", fmt.Errorf(
 			"%w: GET %s: %w: check --listen (DUSTPAN_LISTEN) and run opendustpan health again",
-			errHealthFailed,
+			ErrHealthFailed,
 			url,
 			err,
 		)
@@ -190,7 +186,7 @@ func probeReady(ctx context.Context, client *http.Client, url string) (int, stri
 	if err != nil {
 		return 0, "", fmt.Errorf(
 			"%w: GET %s: %w: check the server log and run opendustpan health again",
-			errHealthFailed,
+			ErrHealthFailed,
 			url,
 			err,
 		)

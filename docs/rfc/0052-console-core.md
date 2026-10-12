@@ -31,6 +31,10 @@ OpenDustpan's console has early views only.
 ## Open questions
 
 - Which of these is the first milestone of the console?
+  - Spike all of them and iterate from there until the fog is clear and we have enough information to make a decision.
+    I'm not sure about `Extension points for scanner and cost output (Terrakube), without running
+  stored code in the browser.`. This is too tool specific, and we should probably do a deeper dive in a separate RFC
+    first for integrating spend/cost OPS tools.
 
 ## Outcome
 

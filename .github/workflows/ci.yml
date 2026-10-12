@@ -6,9 +6,20 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Draft pull requests run no jobs: mark a PR ready to run CI on it.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
+
+# The project has two self-hosted runners. A new push to a pull request
+# cancels the run for the older head of that pull request. Runs on main
+# are never canceled. The draft state is part of the group, so a run for a
+# draft (all jobs skipped) and a run for a ready pull request never cancel
+# each other.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The repository variable CI_RUNS_ON picks the runners, as a JSON value:
 # unset means GitHub-hosted "ubuntu-latest"; ["self-hosted","linux","x64"]
@@ -17,6 +28,7 @@ permissions:
 
 jobs:
   go:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
@@ -73,6 +85,7 @@ jobs:
   # the upstream releases, and each archive is checked against the SHA-256
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     env:
       TRIVY_VERSION: 0.75.0
@@ -111,6 +124,7 @@ jobs:
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
@@ -124,7 +138,10 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
+      # The upgrade test reads the v* tags, so fetch all of the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -139,6 +156,15 @@ jobs:
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make e2e
+      # ADR 33, decision 7. Without a v* tag, only the empty-database case runs.
+      - name: Upgrade test
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: make upgrade-test
+      - name: Crash test
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: make crash-test
       - name: Show the report
         if: ${{ !cancelled() }}
         run: |

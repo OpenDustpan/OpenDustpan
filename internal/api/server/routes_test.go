@@ -128,6 +128,13 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 // GET-by-id route answers 200 in the generic enforcement tests.
 const testBackupID = backup.ID("bkp-test00000000000001")
 
+// testRestoreID is the failed restore the handler builders seed, so the
+// GET-by-id route answers 200 in the generic enforcement tests. The seed is
+// failed, never checking or applying, so the POST route answers 202 in
+// the same tests instead of 409 for a running restore, and GET skips the
+// manifest read that only succeeded rows need.
+const testRestoreID = backup.RestoreID("rst-test00000000000001")
+
 // runningSeed returns a running backup row: the state a killed backup leaves,
 // which the next server start marks failed.
 func runningSeed() backup.Record {
@@ -153,58 +160,12 @@ func newServiceBackedHandler(
 ) *apiserver.Handler {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	live, err := blobfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open live store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := live.Close(); closeErr != nil {
-			t.Errorf("close live store: %v", closeErr)
-		}
-	})
-
-	target, err := blobfs.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open backup target: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := target.Close(); closeErr != nil {
-			t.Errorf("close backup target: %v", closeErr)
-		}
-	})
-
-	service, err := backup.NewService(backup.Config{
-		Exporter:    st,
-		Registry:    st,
-		Blobs:       live,
-		Target:      target,
-		TargetName:  "dir:test",
-		Now:         nil,
-		Version:     "test",
-		MaxSQLBytes: 0,
-	})
-	if err != nil {
-		t.Fatalf("new backup service: %v", err)
-	}
-
-	for _, seed := range seeds {
-		if seedErr := st.CreateBackup(t.Context(), seed); seedErr != nil {
-			t.Fatalf("seed backup %s: %v", seed.ID, seedErr)
-		}
-	}
+	st := openRouteTestStore(t)
+	live := openRouteTestBlobs(t)
+	target := openRouteTestBlobs(t)
+	service := newRouteTestBackups(t, st, live, target)
+	restores := newRouteTestRestores(t, st, service, live, target)
+	seedRouteTestRows(t, st, seeds)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -217,14 +178,131 @@ func newServiceBackedHandler(
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Restores:      restores,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        st,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
 	return handler
+}
+
+// openRouteTestStore opens a fresh SQLite store for one route test.
+func openRouteTestStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	return st
+}
+
+// openRouteTestBlobs opens a fresh file blob store for one route test.
+func openRouteTestBlobs(t *testing.T) *blobfs.Store {
+	t.Helper()
+
+	live, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open live store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := live.Close(); closeErr != nil {
+			t.Errorf("close live store: %v", closeErr)
+		}
+	})
+
+	return live
+}
+
+// newRouteTestBackups builds the backup service of one route test.
+func newRouteTestBackups(
+	t *testing.T, st *sqlite.Store, live, target *blobfs.Store,
+) *backup.Service {
+	t.Helper()
+
+	service, err := backup.NewService(backup.Config{
+		Exporter:    st,
+		Registry:    st,
+		Blobs:       live,
+		StateOpener: nil,
+		Target:      target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	return service
+}
+
+// newRouteTestRestores builds the restore service of one route test.
+func newRouteTestRestores(
+	t *testing.T, st *sqlite.Store, service *backup.Service, live, target *blobfs.Store,
+) *backup.RestoreService {
+	t.Helper()
+
+	restores, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        st,
+		Registry:    st,
+		Backups:     service,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal),
+		Blobs:       live,
+		Target:      target,
+		Key:         nil,
+		Region:      "test",
+		AfterApply:  nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	return restores
+}
+
+// seedRouteTestRows seeds the backup seeds and one failed restore, so the
+// GET-by-id routes answer 200 in the generic enforcement tests.
+func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
+	t.Helper()
+
+	for _, seed := range seeds {
+		if seedErr := st.CreateBackup(t.Context(), seed); seedErr != nil {
+			t.Fatalf("seed backup %s: %v", seed.ID, seedErr)
+		}
+	}
+
+	seed := backup.RestoreRecord{
+		StartedAt:   time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
+		EndedAt:     time.Date(2026, time.October, 11, 13, 0, 0, 0, time.UTC),
+		ID:          testRestoreID,
+		BackupID:    testBackupID,
+		PreBackupID: "",
+		RequestedBy: "tester",
+		Error:       "",
+		State:       backup.RestoreFailed,
+	}
+
+	seedErr := st.CreateRestore(t.Context(), seed)
+	if seedErr != nil {
+		t.Fatalf("seed restore %s: %v", testRestoreID, seedErr)
+	}
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -368,17 +446,27 @@ func probeRoute(t *testing.T, handler *apiserver.Handler, route apiserver.Route)
 }
 
 // routeRequest builds a valid request for route: the {id} placeholder holds
-// the seeded running backup, so the GET-by-id route answers 200 when allowed,
-// and the namespace create route carries a name, so it answers 201 when
-// allowed. token is sent as the Authorization Bearer header when not empty.
+// the seeded running backup or the seeded checking restore, so the GET-by-id
+// routes answer 200 when allowed, and the namespace create route carries a
+// name, so it answers 201 when allowed. token is sent as the Authorization
+// Bearer header when not empty.
 func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Request {
 	t.Helper()
 
-	path := strings.ReplaceAll(route.Path, "{id}", string(testBackupID))
+	id := string(testBackupID)
+	if strings.HasPrefix(route.Path, "/api/server/restores") {
+		id = string(testRestoreID)
+	}
+
+	path := strings.ReplaceAll(route.Path, "{id}", id)
 
 	var body io.Reader = http.NoBody
 	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
 		body = strings.NewReader(`{"name":"acme"}`)
+	}
+
+	if route.Method == http.MethodPost && route.Path == "/api/server/restores" {
+		body = strings.NewReader(`{"backupID":"` + string(testBackupID) + `"}`)
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, body)
@@ -391,11 +479,12 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 }
 
 // wantSuccessStatus answers the success status of route: POST
-// /api/server/backups starts a backup in the background and answers 202,
-// POST /api/server/namespaces creates a namespace and answers 201, every
-// other route answers 200.
+// /api/server/backups and POST /api/server/restores start work in the
+// background and answer 202, POST /api/server/namespaces creates a namespace
+// and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
-	if route.Method == http.MethodPost && route.Path == "/api/server/backups" {
+	if route.Method == http.MethodPost &&
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
 		return http.StatusAccepted
 	}
 
@@ -639,8 +728,11 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	}
 
 	cases := []struct {
@@ -743,6 +835,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Exporter:    stubBackupExporter{},
 		Registry:    stubBackupRegistry{},
 		Blobs:       live,
+		StateOpener: nil,
 		Target:      target,
 		TargetName:  "dir:/var/backups",
 		Now:         nil,
@@ -764,8 +857,11 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       service,
+		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -781,8 +877,11 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Logger:        slog.New(slog.DiscardHandler),
 		Namespaces:    namespaces,
 		Backups:       nil,
+		Restores:      nil,
 		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
 		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema:        nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
