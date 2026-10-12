@@ -5028,11 +5028,12 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 
 			return nil
 		},
-		Name:   "import encrypted current state",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "import encrypted current state",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if versionID == "" {
@@ -5050,11 +5051,12 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 
 			return nil
 		},
-		Name:   "import encrypted stored state",
-		Method: http.MethodGet,
-		Path:   "/api/v2/state-versions/" + versionID + "/download",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "import encrypted stored state",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/state-versions/" + versionID + "/download",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -5245,12 +5247,13 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 
 	// Principal A locks through the API. The step records 200.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by A",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by A",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// The inventory entry of the workspace holds the lock: holder A, no
@@ -5264,23 +5267,25 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	// An unlock by A releases it, and the inventory entry holds no lock
 	// after. A relocks for the steps below.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by A",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock by A",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by A again",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by A again",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A plan as B fails at once. go-tfe discards the 409 detail for lock, so
@@ -5299,22 +5304,24 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 
 	// A second lock by B answers 409.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B conflicts",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "lock by B conflicts",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// An unlock by B answers 409: only the holder unlocks.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by B conflicts",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "unlock by B conflicts",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// A force-unlock as B succeeds. The CLI sends no lock ID that the
@@ -5351,46 +5358,51 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	const lockReason = "e2e lock reason"
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B with reason",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by B with reason",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
-		Name:   "workspace shows lock holder",
-		Method: http.MethodGet,
-		Path:   wsPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
+		Name:      "workspace shows lock holder",
+		Method:    http.MethodGet,
+		Path:      wsPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by B",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock by B",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceHidesLock,
-		Name:   "workspace hides lock holder",
-		Method: http.MethodGet,
-		Path:   wsPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceHidesLock,
+		Name:      "workspace hides lock holder",
+		Method:    http.MethodGet,
+		Path:      wsPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A force-unlock of an unlocked workspace answers 409.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "force-unlock unlocked conflicts",
-		Method: http.MethodPost,
-		Path:   forcePath,
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "force-unlock unlocked conflicts",
+		Method:    http.MethodPost,
+		Path:      forcePath,
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// Two principals contend for one lock: both plans run at once with a
@@ -5757,33 +5769,36 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
-		Name:   "list state versions",
-		Method: http.MethodGet,
-		Path:   base,
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "list state versions",
+		Method:    http.MethodGet,
+		Path:      base,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(body string) error {
 			return checkStateVersionListPage(newest, 1, 1)(body)
 		},
-		Name:   "list state versions first page",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1&page[number]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "list state versions first page",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1&page[number]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(body string) error {
 			return checkStateVersionListPage(oldest, 2, 1)(body)
 		},
-		Name:   "list state versions second page",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1&page[number]=2",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "list state versions second page",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1&page[number]=2",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6080,12 +6095,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreResponse(oldest),
-		Name:   "restore first state version",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + oldest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkRestoreResponse(oldest),
+		Name:      "restore first state version",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + oldest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// The new current version copies the first version: its MD5 attribute
@@ -6124,21 +6140,23 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B for restore",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by B for restore",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreConflict,
-		Name:   "restore locked by another",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     checkRestoreConflict,
+		Name:      "restore locked by another",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + newest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -6152,12 +6170,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreResponse(newest),
-		Name:   "restore after force-unlock",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkRestoreResponse(newest),
+		Name:      "restore after force-unlock",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + newest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6212,12 +6231,13 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 
 	// The killed apply never unlocked: the workspace is still locked.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceLocked,
-		Name:   "workspace still locked",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceLocked,
+		Name:      "workspace still locked",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A plan now fails on the held lock: the CLI prints the lock failure and
@@ -6249,12 +6269,13 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 
 	// No pending version is current: the current state version is finalized.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkCurrentFinalized,
-		Name:   "current state is finalized",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkCurrentFinalized,
+		Name:      "current state is finalized",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6274,12 +6295,13 @@ func tofuDestroyScenario(t *testing.T, env *e2e.Env) {
 	)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceUnlocked,
-		Name:   "workspace unlocked after destroy",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceUnlocked,
+		Name:      "workspace unlocked after destroy",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, step("state pull after destroy", checkStateDestroyed, "state", "pull"))
@@ -6819,11 +6841,12 @@ func maskedCurrentVersion(ctx context.Context, t *testing.T, env *e2e.Env, works
 
 			return nil
 		},
-		Name:   "masked current state version",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked current state version",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if versionID == "" {
@@ -6935,23 +6958,25 @@ func maskedResourceChecks(ctx context.Context, t *testing.T, env *e2e.Env, _, ve
 
 			return checkMaskedResourceList(body)
 		},
-		Name:   "masked resource list",
-		Method: http.MethodGet,
-		Path:   base + "/resources",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked resource list",
+		Method:    http.MethodGet,
+		Path:      base + "/resources",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	addresses := maskedResourceAddresses(t, listBody)
 
 	for _, address := range addresses {
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			Check:  checkMaskedResourceDetail(address),
-			Name:   "masked resource " + address,
-			Method: http.MethodGet,
-			Path:   base + "/resources/" + url.PathEscape(address),
-			Body:   "",
-			Want:   http.StatusOK,
+			Check:     checkMaskedResourceDetail(address),
+			Name:      "masked resource " + address,
+			Method:    http.MethodGet,
+			Path:      base + "/resources/" + url.PathEscape(address),
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
 		})
 	}
 }
@@ -7039,21 +7064,23 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 	base := "/api/v2/state-versions/" + versionID + "/resources"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedResourceFilterByType,
-		Name:   "masked resource filter by type",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("terraform_data"),
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedResourceFilterByType,
+		Name:      "masked resource filter by type",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("terraform_data"),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedResourceFilterByAddress,
-		Name:   "masked resource filter by address",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedResourceFilterByAddress,
+		Name:      "masked resource filter by address",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	for _, q := range []string{maskedSecretV2, "hello"} {
@@ -7062,12 +7089,13 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		query := url.QueryEscape(q)
 
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			Check:  checkMaskedResourceFilterEmpty,
-			Name:   "masked resource filter no match " + q,
-			Method: http.MethodGet,
-			Path:   base + "?filter[q]=" + query,
-			Body:   "",
-			Want:   http.StatusOK,
+			Check:     checkMaskedResourceFilterEmpty,
+			Name:      "masked resource filter no match " + q,
+			Method:    http.MethodGet,
+			Path:      base + "?filter[q]=" + query,
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
 		})
 	}
 
@@ -7084,11 +7112,12 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 
 			return nil
 		},
-		Name:   "masked resource filter first page",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked resource filter first page",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if firstPage.cursor == "" {
@@ -7101,8 +7130,9 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Method: http.MethodGet,
 		Path: base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1&page[cursor]=" +
 			url.QueryEscape(firstPage.cursor),
-		Body: "",
-		Want: http.StatusOK,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -7414,12 +7444,13 @@ func maskedOutputsCheck(ctx context.Context, t *testing.T, env *e2e.Env, workspa
 	wsID := env.WorkspaceIDByName(ctx, t, workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedOutputs,
-		Name:   "masked outputs list",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedOutputs,
+		Name:      "masked outputs list",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -7702,20 +7733,22 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 
 	for _, spec := range []e2e.APIStepSpec{
 		{
-			Check:  checkEncryptedByClient,
-			Name:   "masked encrypted resource list",
-			Method: http.MethodGet,
-			Path:   base + "/resources",
-			Body:   "",
-			Want:   http.StatusConflict,
+			Check:     checkEncryptedByClient,
+			Name:      "masked encrypted resource list",
+			Method:    http.MethodGet,
+			Path:      base + "/resources",
+			Body:      "",
+			Want:      http.StatusConflict,
+			UserAgent: "",
 		},
 		{
-			Check:  checkEncryptedByClient,
-			Name:   "masked encrypted resource",
-			Method: http.MethodGet,
-			Path:   base + "/resources/" + url.PathEscape("terraform_data.smoke"),
-			Body:   "",
-			Want:   http.StatusConflict,
+			Check:     checkEncryptedByClient,
+			Name:      "masked encrypted resource",
+			Method:    http.MethodGet,
+			Path:      base + "/resources/" + url.PathEscape("terraform_data.smoke"),
+			Body:      "",
+			Want:      http.StatusConflict,
+			UserAgent: "",
 		},
 	} {
 		env.APIStepA(ctx, t, spec)
@@ -7724,12 +7757,13 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "masked encrypted outputs list",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "masked encrypted outputs list",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -8081,32 +8115,35 @@ func tofuDiffScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
-		Name:   "tofu state diff",
-		Method: http.MethodGet,
-		Path:   base,
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "tofu state diff",
+		Method:    http.MethodGet,
+		Path:      base,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(string) error {
 			return assertTofuDiffPaged(ctx, env, base, full)
 		},
-		Name:   "tofu state diff paged",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "tofu state diff paged",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	other := maskedCurrentVersion(ctx, t, env, "masked")
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "tofu state diff of another workspace",
-		Method: http.MethodGet,
-		Path:   "/api/v2/state-versions/" + second + "/diff?from=" + other,
-		Body:   "",
-		Want:   http.StatusNotFound,
+		Check:     nil,
+		Name:      "tofu state diff of another workspace",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/state-versions/" + second + "/diff?from=" + other,
+		Body:      "",
+		Want:      http.StatusNotFound,
+		UserAgent: "",
 	})
 }
 
@@ -8157,12 +8194,13 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 	unlockPath := "/api/v2/workspaces/" + wsID + "/actions/unlock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for stale check",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for stale check",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(staleSerialDetail),
@@ -8175,7 +8213,8 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 			current.Lineage,
 			"d41d8cd98f00b204e9800998ecf8427e",
 		),
-		Want: http.StatusUnprocessableEntity,
+		Want:      http.StatusUnprocessableEntity,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(lineageMismatchDetail),
@@ -8188,15 +8227,17 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 			"00000000-0000-0000-0000-000000000000",
 			"d41d8cd98f00b204e9800998ecf8427e",
 		),
-		Want: http.StatusUnprocessableEntity,
+		Want:      http.StatusUnprocessableEntity,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock after stale check",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock after stale check",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, step("state push force", nil, "state", "push", "-force", stalePath))
@@ -13483,12 +13524,13 @@ func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
 	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for maintenance",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for maintenance",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	status, _, body := enterMaintenance(ctx, t, env, "")

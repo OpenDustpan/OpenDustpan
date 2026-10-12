@@ -191,7 +191,7 @@ func TestForceUnlockStopsWhenItsAuditEntryFails(t *testing.T) {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
-	errAudit := errors.New("audit store down")
+	errAudit := workspace.ErrConcurrentModification
 	record := func() error { return errAudit }
 
 	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", forcedOnly(), record)
