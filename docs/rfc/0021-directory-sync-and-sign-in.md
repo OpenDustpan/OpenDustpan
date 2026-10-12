@@ -11,6 +11,8 @@ Status: discussing. Opened as a stub from the competitor review in the
 research doc "IaC and TACOS landscape". The project owner chose
 the built-in MFA below on 2026-10-11.
 
+The part on built-in MFA is accepted as ADR 46. The rest stays open.
+
 ## Problem
 
 Large organizations remove access through their identity provider. Spacelift,
@@ -33,14 +35,15 @@ only.
 ### Built-in MFA for installs with no identity provider
 
 The project owner chose this MFA. It protects installs that sign people in
-without an identity provider.
+without an identity provider (for example, local users or LDAP).
 
-- WebAuthn comes first: passkeys, Touch ID, Windows Hello and hardware keys.
-  TOTP is the fallback. Recovery codes are shown once at enrollment.
+- WebAuthn (passkeys, Touch ID, Windows Hello and hardware keys) and TOTP are
+  options of the same rank. Recovery codes are shown once at enrollment.
 - MFA is off by default, for any number of users. An administrator turns it
   on. Then the administrator can require it for all users.
 - MFA covers console sign-in, the creation of access tokens, and the reveal
-  of a secret value (ADR 41).
+  of a secret value (ADR 41). An administrator can require MFA for a secret
+  reveal with a separate setting.
 - CLI and CI access tokens stay bearer tokens, with no MFA step on each use.
   A CLI access token of a person is created after an MFA sign-in, and it has
   an expiry (RFC 20).
@@ -91,8 +94,9 @@ In the same commit the owner also edited the text of "Owner direction
 installs with no identity provider. They make WebAuthn and TOTP options, and
 they name the identity provider an "SSO identity provider". The Proposal above
 has the "SSO" edit. It still says "WebAuthn comes first" and "TOTP is the
-fallback". The two texts differ on this point until the RFC is accepted.
+fallback". The Proposal now follows the edited text. ADR 46 records the result.
 
 ## Outcome
 
-None yet.
+The part on built-in MFA is accepted as ADR 46 on 2026-10-12. The rest has no
+outcome yet.
