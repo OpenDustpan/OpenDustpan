@@ -311,8 +311,57 @@ The JSON library question has its own research note:
 correctness and denial-of-service checks, and the provenance of third-party
 JSON libraries and code generators (easyjson, goccy/go-json, sonic,
 json-iterator, segmentio, go-json-experiment). This RFC takes its choice of
-decoder from that note. Headline result of the JSON libraries research note:
-_to be filled in when that note is done_.
+decoder from that note (commit `ac0df91` on that branch).
+
+**Headline result of the JSON libraries research note** (Go 1.27.2, one
+4-core amd64 machine, 10 interleaved samples, a change counts only when
+benchstat gives p < 0.05; its sections 1 and 11):
+
+| Candidate | Typed decode, checkpoint of 1,000 resources | New dependency | Notes from the note |
+| --- | --- | --- | --- |
+| `encoding/json` (std) | 29.88 ms | no | runs on the v2 code in Go 1.27.2 |
+| `encoding/json/v2` (stdv2) | 17.90 ms (-40%) | no | 11 of 54 cases differ from std, from the v2 defaults |
+| easyjson | 12.46 ms (-58%) | yes, plus `josharian/intern` | a code generator; the generated code imports `github.com/mailru/easyjson` at run time; 1 commit in 12 months |
+| goccy/go-json | 7.56 ms (-75%) | yes | `unsafe` and assembly; one person wrote 98 of 101 commits in 12 months; v0.11.1 was 15 days old on 2026-10-12 |
+| sonic | 7.93 ms (-73%) | yes, plus 5 modules on amd64 | JIT and assembly; 9 of 54 cases differ, it accepts a truncated top-level string and loses a byte; native code only below Go 1.28 |
+| segmentio | 38.66 ms (+29%) | yes | no depth limit |
+
+The order is the same for journal batches and OpenTofu state. For the #389
+lookup, a `jsontext.Decoder` walk takes 44 to 51 ms on a 19 to 20 MB
+document and allocates about 14 KiB. The `json.Decoder.Token` walk that
+#389 proposes takes 101 to 131 ms and allocates 22 to 34 MiB. The full
+decode of today takes 296 to 352 ms and 63 to 87 MiB. The note found no
+known advisory for any candidate, and all licenses are compatible with
+ADR 22.
+
+**The decoder that this RFC recommends** is `encoding/json/v2` with
+`encoding/json/jsontext`, from the Go 1.27.2 standard library:
+
+- It is on by default in Go 1.27.2 (see option 2B below).
+- It decodes the typed checkpoint about 40% faster than `encoding/json` at
+  1,000 resources (p < 0.05).
+- It adds no dependency, so it needs no request to the owner under the
+  dependency rule of `CLAUDE.md`.
+- A `jsontext` walk does the #389 lookup on about 20 MB in about 14 KiB of
+  allocation. The same tool reads one resource of a base checkpoint at a
+  time for the streaming build of this section.
+
+Why the faster libraries do not fit now:
+
+- **goccy/go-json and sonic** are about 2.3 times faster than stdv2 on the
+  typed decode, but each is a new dependency with `unsafe` and assembly.
+  sonic differs from `encoding/json` on 9 of 54 cases, among them a
+  truncated string that it accepts with a lost byte, and its native code
+  builds only below Go 1.28, so a Go upgrade changes its behavior. goccy has
+  one main maintainer, and the tested version was 15 days old on
+  2026-10-12, just past the two weeks of ADR 7.
+- **easyjson** is a generator, so it is not a hand-written parser, but its
+  generated code needs the `easyjson` module at run time, plus
+  `josharian/intern`. It adds a dependency and a second generator next to
+  the one of option 2C.
+
+The decision stays with the owner. If the owner accepts a dependency later,
+the note gives the facts for each library.
 
 The comparison in `spike/json-libs.md` on `spike/pulumi-json-libs` is about
 the checkpoint envelope, not about journal entries. It measured the custom
@@ -338,7 +387,7 @@ commit `128d3f2` of `v3.268.0`.
 | Module cache after `go mod tidy` | 558 MB (154 MB of zips in `cache/download`) | `du -sh`, without the Go toolchain download |
 | Module cache of `github.com/pulumi/...` | 45 MB | `du -sh` |
 | Binary size | 19,086,484 bytes | `go build` |
-| `govulncheck` (v1.8.0) | 4 called vulnerabilities in `golang.org/x/net@v0.59.0` (GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6603, fixed in v0.60.0), 1 more in an imported package (GO-2026-6610), 1 in a required module (GO-2026-5932, `golang.org/x/crypto/openpgp`, no fix) | `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` |
+| `govulncheck` v1.8.0, run on 2026-10-12 | 6 in total, in the three classes that govulncheck reports: 4 called (symbol results) in `golang.org/x/net@v0.59.0` (GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6603, fixed in v0.60.0), 1 in an imported package that the code does not call (GO-2026-6610, `x/net`), 1 in a required module only (GO-2026-5932, `golang.org/x/crypto/openpgp`, no fix) | `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...` |
 
 For comparison, the main module today has 39 modules in its build list and
 100 edges (`go list -m all`, `go mod graph` at `48ca134`).
@@ -388,10 +437,11 @@ version, and the link fields of a resource (`urn`, `parent`, `provider`,
   it off. With the experiment on, `encoding/json` (v1) runs on the v2
   implementation (`encoding/json/decode.go` carries
   `//go:build !goexperiment.jsonv2`).
-- This RFC found no text in the toolchain that puts v2 under the Go 1
-  compatibility promise. The build tag suggests that it is still an
-  experiment. An API change in a later Go release could break code that
-  uses it.
+- The toolchain source has no text that puts v2 under the Go 1
+  compatibility promise, and the build tag is still an experiment tag. The
+  JSON libraries research note quotes the go-json-experiment README: v2
+  became "a stable API in Go 1.27". If that is not so, an API change in a
+  later Go release could break code that uses it.
 
 `jsontext.Decoder` can read a token, or read one value as raw bytes
 (`ReadValue`), with no tree. That is the streaming tool that #389 asks for,
@@ -399,7 +449,8 @@ in the standard library. `encoding/json` v1 `Decoder.Token()` also streams,
 with more allocations (the envelope spike measured stdv2 at 19,043
 allocations for 1,000 resources against 31 for a v1 decode into
 `json.RawMessage`; `spike/json-libs.md`). The JSON libraries research note
-decides between them.
+measured the lookup of #389 both ways (see above): the `jsontext` walk
+allocated about 14 KiB, the `json.Decoder.Token` walk 22 to 34 MiB.
 
 Cost: about 230 lines of types to keep in step with
 `sdk/go/common/apitype/journal.go@v3.268.0` (230 lines), by hand, at each
@@ -907,7 +958,7 @@ The new ADR must also decide:
 | Option | What | Cost | Gives |
 | --- | --- | --- | --- |
 | Do nothing | keep ADR 37, decision 9 | none | no journaling. Against the premise |
-| 1A + 2A | separate module that imports `sdk/v3` | 164 modules, 6 known vulnerabilities, generic trees, 5 targets and 6 CI steps more, 3 steps for each change | types that follow upstream with a version bump |
+| 1A + 2A | separate module that imports `sdk/v3` | 164 modules, 6 vulnerabilities from govulncheck v1.8.0 on 2026-10-12 (4 called, 1 imported, 1 required), generic trees, 5 targets and 6 CI steps more, 3 steps for each change | types that follow upstream with a version bump |
 | 1A + 2B or 2C | separate module, own or generated types, ported replay | 5 targets and 6 CI steps more, owner tags, maybe 2 weeks for each fix | embedders can bump the journal code alone, if its API stays stable |
 | 1B + 2B | `internal/pulumijournal`, own types, ported replay | about 230 lines of types by hand, about 970 lines of port | no new dependency, one pull request for each change |
 | 1B + 2C | as 1B + 2B, with generated entry types | a generator of about 200 lines and a diff check | an upstream change shows as a diff in a generated file |
@@ -919,7 +970,8 @@ optional, at about 150 runner minutes each month.
 
 ## Proposal
 
-1B + 2C, with the decoder from the JSON libraries research note: a package
+1B + 2C, with `encoding/json/v2` and `encoding/json/jsontext` as the
+decoder (from the facts of the JSON libraries research note): a package
 `internal/pulumijournal` in the main module, entry types generated from the
 pinned upstream `apitype/journal.go`, resource states kept as raw JSON, and
 a port of the replayer with attribution. Add the opt-out setting
@@ -959,10 +1011,22 @@ This is a recommendation. Decision: for the owner.
    the cost of 1A.
 2. Where does the newest verified CLI version live: a constant in the
    binary, or a value that an operator can set? A value adds a second
-   setting, which the premise does not ask for.
+   setting, which the premise does not ask for. With a constant, an
+   operator who wants journaling with a newer CLI must upgrade the server.
+   Until then, that CLI saves checkpoints: it works, but without the speed
+   of journaling. The owner weighs that cost against a second setting.
 3. Does the server answer version 2 from the start, with state migration
-   replay (R29), or version 1 only? With version 1, a CLI of v3.264.0 or
-   later refuses state migrations (R5).
+   replay (R29), or version 1 only? R5 of the research note in #390 says: a
+   CLI of v3.264.0 or later offers 2 and accepts 1. When the server answers
+   1, the CLI journals with version 1 and sends no kind 10. Its resource
+   monitor then does not advertise the state-migration feature, and it
+   refuses a resource registration that carries state migrations with
+   "state migrations are not supported by this deployment" (research note
+   in #390, section 4, v3.268.0). With full checkpoints, or with version 2,
+   migrations are allowed. So a program that does not use state migrations
+   sees no difference. A program whose SDK sends a migration anyway gets an
+   error on that registration, which in the usual case fails the update. No
+   run measured this case.
 4. When does the server build the checkpoint for a running update that a
    reader asks for: on each read, or once and then kept until the next
    batch?
@@ -973,8 +1037,12 @@ This is a recommendation. Decision: for the owner.
    for a stream build of a large checkpoint at `complete`.
 7. The measured memory of the streaming build at 3,000 and 10,000
    resources. This RFC did not measure it.
-8. The headline result of the JSON libraries research note
-   (`docs/research/json-libraries.md`), and which decoder it picks.
+8. Does the owner accept `encoding/json/v2` and `jsontext` as the decoder?
+   The JSON libraries research note (`docs/research/json-libraries.md`)
+   measured it at -40% against `encoding/json` on the typed checkpoint
+   decode, with no dependency. goccy/go-json and sonic were faster
+   (-75% and -73%), but each needs a new dependency, which only the owner
+   can accept.
 
 ## Outcome
 
