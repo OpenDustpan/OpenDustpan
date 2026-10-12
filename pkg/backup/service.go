@@ -523,29 +523,33 @@ func (w *sizeHashWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// copyBufferSize sizes the counting pass buffer, so the passes that hash
+// without a target write hold one chunk at a time, never the state size.
+// The passes that write into the target stream through its Put instead.
+const copyBufferSize = 32 * 1024
+
 // copyBlob copies one blob the SQL data names from the live store to the
-// target and returns the manifest entry of the stored bytes. A plain blob
-// checks its bytes against the size and MD5 in the SQL data before it
-// writes, so a mismatch leaves the target unchanged. A sealed state blob
-// opens first: the check runs on the plain bytes and the target stores the
-// sealed bytes, so the manifest entry of a sealed blob names the sealed size
-// and MD5. A blob the target already holds keeps its first copy.
+// target and returns the manifest entry of the stored bytes. Every pass
+// streams the blob without holding it whole, so peak memory per blob stays
+// bounded by the read chunk size, not by the state size. A plain blob
+// streams once, straight into the target, while MD5 and size accumulate; on
+// a mismatch the copy deletes the bad object and reports ErrCorrupt, so no
+// bad copy stays in the target as a good one. A sealed state blob opens
+// first: the check hashes the plain stream and the copy streams the sealed
+// bytes, so plain state never reaches the backup target. A blob the target
+// already holds keeps its first copy, after the live bytes still pass the
+// check.
 func (s *Service) copyBlob(ctx context.Context, ref BlobRef) (ManifestBlob, error) {
 	keys, keysErr := copyKeys(ref.Key)
 	if keysErr != nil {
 		return ManifestBlob{}, keysErr
 	}
 
-	data, readErr := readCopySource(ctx, s.source, keys.source, ref.Key)
-	if readErr != nil {
-		return ManifestBlob{}, readErr
-	}
-
 	if ref.Sealed {
-		return s.copySealedBlob(ctx, keys.dest, keys.source, ref, data)
+		return s.copySealedBlob(ctx, keys.dest, keys.source, ref)
 	}
 
-	return s.copyPlainBlob(ctx, keys.dest, ref, data)
+	return s.copyPlainBlob(ctx, keys.dest, keys.source, ref)
 }
 
 // copyKeysResult holds the live key and the target key of one blob
@@ -570,42 +574,33 @@ func copyKeys(key string) (copyKeysResult, error) {
 	return copyKeysResult{source: source, dest: dest}, nil
 }
 
-// readCopySource returns the stored bytes of one blob reference.
-func readCopySource(
-	ctx context.Context, source blob.Store, key blob.Key, name string,
-) ([]byte, error) {
-	reader, err := source.Get(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("read blob %q: %w", name, err)
-	}
-
-	data, readErr := io.ReadAll(reader)
-	closeErr := reader.Close()
-
-	if readErr != nil {
-		return nil, fmt.Errorf("read blob %q: %w", name, readErr)
-	}
-
-	if closeErr != nil {
-		return nil, fmt.Errorf("close blob %q: %w", name, closeErr)
-	}
-
-	return data, nil
-}
-
-// copyPlainBlob stores the plain bytes of one blob reference after it checks
-// them against the size and MD5 in the SQL data.
+// copyPlainBlob streams the plain bytes of one blob reference from the live
+// store into the target while MD5 and size accumulate, then checks them
+// against the size and MD5 in the SQL data. On a mismatch it deletes the
+// copied object and reports ErrCorrupt.
 func (s *Service) copyPlainBlob(
-	ctx context.Context, dest blob.Key, ref BlobRef, data []byte,
+	ctx context.Context, dest, source blob.Key, ref BlobRef,
 ) (ManifestBlob, error) {
-	sum := md5.Sum(data) //nolint:gosec // The manifest records MD5, for integrity.
-
-	if int64(len(data)) != ref.Size || sum != ref.MD5 {
-		return ManifestBlob{}, corruptBlobError(ref.Key, data, ref)
+	copied, err := s.streamCopy(ctx, dest, source, ref)
+	if err != nil {
+		return ManifestBlob{}, err
 	}
 
-	if putErr := s.putCopy(ctx, dest, ref.Key, data); putErr != nil {
-		return ManifestBlob{}, putErr
+	if copied.size != ref.Size || !bytes.Equal(copied.sum, ref.MD5[:]) {
+		corrupt := corruptBlobError(ref.Key, copied.size, copied.sum, ref)
+
+		if copied.kept {
+			return ManifestBlob{}, corrupt
+		}
+
+		if delErr := s.target.Delete(ctx, dest); delErr != nil {
+			return ManifestBlob{}, errors.Join(
+				corrupt,
+				fmt.Errorf("delete bad copy of blob %q: %w", ref.Key, delErr),
+			)
+		}
+
+		return ManifestBlob{}, corrupt
 	}
 
 	return ManifestBlob{
@@ -616,91 +611,202 @@ func (s *Service) copyPlainBlob(
 	}, nil
 }
 
-// copySealedBlob stores the sealed bytes of one blob reference after it opens
-// them and checks the plain bytes against the size and MD5 in the SQL data.
-// The manifest entry names the sealed size and MD5.
+// copySealedBlob checks the plain bytes of one sealed blob reference against
+// the size and MD5 in the SQL data by hashing the opened stream, then
+// streams the sealed bytes into the target. The manifest entry names the
+// sealed size and MD5. Both passes move in chunks, so neither the plain nor
+// the sealed side ever sits in memory whole. A blob the target already holds
+// keeps its first copy.
 func (s *Service) copySealedBlob(
-	ctx context.Context, dest, source blob.Key, ref BlobRef, data []byte,
+	ctx context.Context, dest, source blob.Key, ref BlobRef,
 ) (ManifestBlob, error) {
 	if s.opener == nil {
-		return ManifestBlob{}, corruptBlobError(ref.Key, data, ref)
+		size, sum, err := s.hashStoredBlob(ctx, source, ref)
+		if err != nil {
+			return ManifestBlob{}, err
+		}
+
+		return ManifestBlob{}, corruptBlobError(ref.Key, size, sum, ref)
 	}
 
-	plain, err := s.openCopy(ctx, source, ref)
+	size, sum, err := s.hashPlainCopy(ctx, source, ref)
 	if err != nil {
 		return ManifestBlob{}, err
 	}
 
-	sum := md5.Sum(plain) //nolint:gosec // The manifest records MD5, for integrity.
-
-	if int64(len(plain)) != ref.Size || sum != ref.MD5 {
-		return ManifestBlob{}, corruptBlobError(ref.Key, plain, ref)
+	if size != ref.Size || !bytes.Equal(sum, ref.MD5[:]) {
+		return ManifestBlob{}, corruptBlobError(ref.Key, size, sum, ref)
 	}
 
-	if putErr := s.putCopy(ctx, dest, ref.Key, data); putErr != nil {
-		return ManifestBlob{}, putErr
+	copied, err := s.streamCopy(ctx, dest, source, ref)
+	if err != nil {
+		return ManifestBlob{}, err
 	}
-
-	sum = md5.Sum(data) //nolint:gosec // The manifest records MD5, for integrity.
 
 	return ManifestBlob{
 		Key:    ref.Key,
-		Size:   int64(len(data)),
-		MD5:    hex.EncodeToString(sum[:]),
+		Size:   copied.size,
+		MD5:    hex.EncodeToString(copied.sum),
 		Sealed: true,
 	}, nil
 }
 
-// openCopy returns the plain content of the sealed blob under key.
-func (s *Service) openCopy(ctx context.Context, key blob.Key, ref BlobRef) ([]byte, error) {
-	reader, err := s.opener.OpenStateBlob(ctx, key)
+// copyResult holds the size and MD5 of one streamed blob copy. Kept reports
+// that the target already held the blob, so the first copy stays.
+type copyResult struct {
+	sum  []byte
+	size int64
+	kept bool
+}
+
+// streamCopy streams one live blob from source into the target while MD5 and
+// size accumulate, and returns them. When the target already holds the blob
+// it keeps its first copy and streamCopy reports kept: a refused Put may
+// leave the stream undrained, so the kept values come from a second
+// streaming pass over the live bytes.
+func (s *Service) streamCopy(
+	ctx context.Context, dest, source blob.Key, ref BlobRef,
+) (copyResult, error) {
+	reader, err := s.source.Get(ctx, source)
 	if err != nil {
-		return nil, fmt.Errorf("open sealed blob %q: %w", ref.Key, err)
+		return copyResult{}, fmt.Errorf("read blob %q: %w", ref.Key, err)
 	}
 
-	plain, readErr := io.ReadAll(reader)
+	tracked := &readTracker{reader: reader, err: nil}
+	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+
+	putErr := s.target.Put(ctx, dest, io.TeeReader(tracked, counter))
 	closeErr := reader.Close()
 
-	if readErr != nil {
-		return nil, fmt.Errorf("read sealed blob %q: %w", ref.Key, readErr)
+	if tracked.err != nil {
+		return copyResult{}, fmt.Errorf("read blob %q: %w", ref.Key, tracked.err)
 	}
 
 	if closeErr != nil {
-		return nil, fmt.Errorf("close sealed blob %q: %w", ref.Key, closeErr)
+		return copyResult{}, fmt.Errorf("close blob %q: %w", ref.Key, closeErr)
 	}
 
-	return plain, nil
-}
+	if putErr != nil {
+		if errors.Is(putErr, blob.ErrExists) {
+			size, sum, hashErr := s.hashStoredBlob(ctx, source, ref)
+			if hashErr != nil {
+				return copyResult{}, hashErr
+			}
 
-// putCopy writes data under dest. A blob the target already holds keeps its
-// first copy.
-func (s *Service) putCopy(ctx context.Context, dest blob.Key, key string, data []byte) error {
-	if err := s.target.Put(ctx, dest, bytes.NewReader(data)); err != nil {
-		if errors.Is(err, blob.ErrExists) {
-			return nil
+			return copyResult{sum: sum, size: size, kept: true}, nil
 		}
 
-		return fmt.Errorf("copy blob %q: %w", key, err)
+		return copyResult{}, fmt.Errorf("copy blob %q: %w", ref.Key, putErr)
 	}
 
-	return nil
+	return copyResult{sum: counter.hash.Sum(nil), size: counter.size, kept: false}, nil
 }
 
-// corruptBlobError reports stored bytes that differ from the SQL data.
-func corruptBlobError(key string, data []byte, ref BlobRef) error {
-	sum := md5.Sum(data) //nolint:gosec // The manifest records MD5, for integrity.
+// hashStoredBlob streams one live blob through MD5 and returns its size and
+// checksum. It never holds the blob whole.
+func (s *Service) hashStoredBlob(
+	ctx context.Context, source blob.Key, ref BlobRef,
+) (int64, []byte, error) {
+	reader, err := s.source.Get(ctx, source)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read blob %q: %w", ref.Key, err)
+	}
 
-	if int64(len(data)) != ref.Size {
+	size, sum, countErr := countBlob(reader)
+	closeErr := reader.Close()
+
+	if countErr != nil {
+		return 0, nil, fmt.Errorf("read blob %q: %w", ref.Key, countErr)
+	}
+
+	if closeErr != nil {
+		return 0, nil, fmt.Errorf("close blob %q: %w", ref.Key, closeErr)
+	}
+
+	return size, sum, nil
+}
+
+// hashPlainCopy opens the sealed blob under key and streams its plain bytes
+// through MD5, returning the plain size and checksum for the SQL data check.
+// An open failure names the blob key only, never a key, a scope or content.
+func (s *Service) hashPlainCopy(
+	ctx context.Context, key blob.Key, ref BlobRef,
+) (int64, []byte, error) {
+	reader, err := s.opener.OpenStateBlob(ctx, key)
+	if err != nil {
+		return 0, nil, fmt.Errorf("open sealed blob %q: %w", ref.Key, err)
+	}
+
+	size, sum, countErr := countBlob(reader)
+	closeErr := reader.Close()
+
+	if countErr != nil {
+		return 0, nil, fmt.Errorf("read sealed blob %q: %w", ref.Key, countErr)
+	}
+
+	if closeErr != nil {
+		return 0, nil, fmt.Errorf("close sealed blob %q: %w", ref.Key, closeErr)
+	}
+
+	return size, sum, nil
+}
+
+// countBlob streams r through MD5 in chunks of copyBufferSize and returns
+// the size and the checksum. The explicit loop keeps one chunk in flight,
+// whatever the reader implements.
+func countBlob(r io.Reader) (int64, []byte, error) {
+	counter := &md5SizeWriter{hash: md5.New(), size: 0} //nolint:gosec // The manifest records MD5, for integrity.
+	buf := make([]byte, copyBufferSize)
+
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, err := counter.Write(buf[:n]); err != nil {
+				return 0, nil, fmt.Errorf("count blob bytes: %w", err)
+			}
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				return counter.size, counter.hash.Sum(nil), nil
+			}
+
+			return 0, nil, fmt.Errorf("count blob bytes: %w", readErr)
+		}
+	}
+}
+
+// readTracker records the first non-EOF read error of a source stream, so a
+// copy that fails inside Put still reports a source failure as a read error
+// and a target failure as a copy error.
+type readTracker struct {
+	reader io.Reader
+	err    error
+}
+
+func (t *readTracker) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	if err != nil && err != io.EOF && t.err == nil {
+		t.err = err
+	}
+
+	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// corruptBlobError reports stored bytes of size with MD5 sum that differ
+// from the SQL data.
+func corruptBlobError(key string, size int64, sum []byte, ref BlobRef) error {
+	if size != ref.Size {
 		return fmt.Errorf(
 			"%w: blob %q holds %d bytes, the SQL data names %d",
 			ErrCorrupt,
 			key,
-			len(data),
+			size,
 			ref.Size,
 		)
 	}
 
-	if sum != ref.MD5 {
+	if !bytes.Equal(sum, ref.MD5[:]) {
 		return fmt.Errorf("%w: blob %q does not match the MD5 in the SQL data", ErrCorrupt, key)
 	}
 
