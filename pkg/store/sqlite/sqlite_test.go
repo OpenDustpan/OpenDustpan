@@ -106,7 +106,7 @@ func tamperAuditEntry(
 		return fmt.Errorf("%w: %q", errUnknownAuditField, change.field)
 	}
 
-	conn, err := sql.Open("sqlite", path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		return fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -132,7 +132,7 @@ func tamperAuditEntry(
 // deleteAuditEntry removes one audit entry through a second database handle:
 // the port has no delete path.
 func deleteAuditEntry(ctx context.Context, path string, ns namespace.Name, seq int64) error {
-	conn, err := sql.Open("sqlite", path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		return fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -212,7 +212,7 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 		}
 	})
 
-	conn, connErr := sql.Open("sqlite", "file:"+path)
+	conn, connErr := openRawDB(path)
 	if connErr != nil {
 		t.Fatalf("open raw database: %v", connErr)
 	}
@@ -596,7 +596,7 @@ func openUncounted(t *testing.T) *uncountedStore {
 
 // NullifyResourceCount implements storetest.CountNullifier.
 func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
-	conn, err := sql.Open("sqlite", "file:"+s.path)
+	conn, err := openRawDB(s.path)
 	if err != nil {
 		return fmt.Errorf("open raw database: %w", err)
 	}
@@ -617,7 +617,7 @@ func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
 // SetResourceCount implements storetest.CountSetter: it plants a stored
 // count from before saves stopped counting.
 func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
-	conn, err := sql.Open("sqlite", "file:"+s.path)
+	conn, err := openRawDB(s.path)
 	if err != nil {
 		return fmt.Errorf("open raw database: %w", err)
 	}
@@ -937,7 +937,7 @@ func checkMigratedEntry(t *testing.T, e *inventory.Entry) {
 func seedAt0008WithStacks(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1038,7 +1038,7 @@ func seedInventoryStacks(t *testing.T, conn *sql.DB) {
 func seedAt0006WithTags(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1157,7 +1157,7 @@ func TestMigration0006KeepsOneRowData(t *testing.T) {
 func seedAt0005WithOneRow(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1274,7 +1274,7 @@ func seedOneRowCheckpoint(t *testing.T, conn *sql.DB) {
 func seedAt0003WithHistory(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1407,7 +1407,7 @@ func seedHistoryEvents(t *testing.T, conn *sql.DB) {
 func seedAt0002(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1535,7 +1535,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 func newerSchemaSnapshot(t *testing.T, path string) ([]int64, []string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1622,7 +1622,7 @@ func readSchemaTables(t *testing.T, conn *sql.DB) []string {
 func insertFutureVersion(t *testing.T, path string, version int64) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1720,7 +1720,7 @@ func checkMigratedStateVersions(t *testing.T, s *sqlite.Store) {
 func seedAt0010WithStateVersions(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -1940,7 +1940,7 @@ func checkMigratedHistoryDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) 
 func seedAt0011WithUpdates(t *testing.T, path string) {
 	t.Helper()
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
@@ -2215,7 +2215,7 @@ func breakExportedNamespace(t *testing.T, data []byte) []byte {
 		t.Fatalf("write exported file: %v", err)
 	}
 
-	conn, err := sql.Open("sqlite", "file:"+path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open exported file: %v", err)
 	}

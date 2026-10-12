@@ -51,9 +51,26 @@ const walAutoCheckpointFrames = 1000
 // size forever; 64 MiB bounds the file without extra checkpoints.
 const walJournalSizeLimitBytes = 67108864
 
-// walGuardMaxRetries caps the truncate attempts of one guard tick while the
-// checkpoint reports busy: the guard then waits for the next tick.
-const walGuardMaxRetries = 20
+// walGuardSlowAttempt marks a truncate attempt as slow: an attempt that
+// takes at least this long waited for readers (up to the short busy timeout),
+// so it may stall writers. A fast busy attempt only met the checkpoint lock
+// of an automatic checkpoint and stalled no writer. The split errs in the
+// safe direction under CPU load. A fast busy attempt that takes longer counts
+// as slow and stops the tick early.
+const walGuardSlowAttempt = 10 * time.Millisecond
+
+// walGuardMaxSlowAttempts caps the slow busy attempts of one guard tick: the
+// guard tries at most 2 slow attempts, then waits for the next tick. Two slow
+// attempts with the short busy timeout below bound the writer stall of one
+// tick to about 105 ms in total (2 times 50 ms plus a 5 ms retry delay), plus
+// the time of a successful checkpoint copy.
+const walGuardMaxSlowAttempts = 2
+
+// walGuardMaxAttempts caps all truncate attempts of one guard tick in total:
+// fast busy attempts may repeat up to 20 attempts per tick, with 5 ms between
+// them. Fast attempts stall no writer, so only the 2 slow attempts above
+// bound the worst writer stall of one tick.
+const walGuardMaxAttempts = 20
 
 // walGuardRetryDelay waits between two truncate attempts of one guard tick,
 // so a busy checkpoint lock can clear without stalling writers.
@@ -83,6 +100,72 @@ var walGuardInterval = 200 * time.Millisecond
 //nolint:gochecknoglobals // The guard threshold stays tunable in tests without a new setting; the hook restores it.
 var walGuardThresholdBytes = int64(walJournalSizeLimitBytes)
 
+// walGuardMaxBackoff caps the wait before the next guard tick after a tick
+// that fails with a slow busy attempt, in production. The guard doubles the
+// wait on each such tick up to this cap and resets it to the base interval
+// after a successful truncate or when the log drops below the threshold.
+const walGuardMaxBackoff = 5 * time.Second
+
+// walGuardBackoffCap holds the backoff cap the guard enforces: it holds
+// walGuardMaxBackoff in production; tests replace it through the test hook,
+// so backoff tests stay fast.
+//
+//nolint:gochecknoglobals // The guard backoff stays tunable in tests without a new setting; the hook restores it.
+var walGuardBackoffCap = walGuardMaxBackoff
+
+// walTickInfo describes one past-threshold guard tick for the test hook: when
+// the truncate finished, how long the tick took from its stat to the finish,
+// whether it succeeded, whether the tick saw a slow busy attempt, and the
+// slow and total attempt counts, and the wait the guard slept before the
+// tick, so tests check the backoff without measuring wall-clock gaps.
+type walTickInfo struct {
+	at           time.Time
+	waited       time.Duration
+	elapsed      time.Duration
+	succeeded    bool
+	slowBusy     bool
+	slowAttempts int
+	attempts     int
+}
+
+// walGuardTicksMu guards walGuardTicks and walGuardCollect below: the guard
+// appends past-threshold ticks, and the test hook swaps, clears and reads
+// them. Holds stay brief and never nest with other locks.
+//
+//nolint:gochecknoglobals // The guard and the hook share one tick buffer; every hold stays brief.
+var walGuardTicksMu sync.Mutex
+
+// walGuardTicks holds one entry per past-threshold guard tick while a test
+// collects them. Production never collects, so the buffer stays empty outside
+// tests.
+//
+//nolint:gochecknoglobals // See walGuardTicksMu: the buffer lives beside its lock.
+var walGuardTicks []walTickInfo
+
+// walGuardCollect reports whether the test hook collects guard ticks. Only
+// the hook writes it, under walGuardTicksMu; the guard reads it on the same
+// lock before it appends.
+//
+//nolint:gochecknoglobals // See walGuardTicksMu: the flag lives beside its lock.
+var walGuardCollect = false
+
+// recordWalTick appends info to the test hook buffer when a test collects
+// guard ticks. Production never collects, so this stays a brief locked check.
+func recordWalTick(info walTickInfo) {
+	walGuardTicksMu.Lock()
+	defer walGuardTicksMu.Unlock()
+
+	if !walGuardCollect {
+		return
+	}
+
+	const maxTicks = 100000
+
+	if len(walGuardTicks) < maxTicks {
+		walGuardTicks = append(walGuardTicks, info)
+	}
+}
+
 // walGuardWarnPeriod is the time a truncate checkpoint must keep failing on
 // every tick before the guard writes one warning: 30 s of continuous busy
 // results means the log cannot restart and keeps growing.
@@ -95,10 +178,10 @@ const walGuardWarnPeriod = 30 * time.Second
 //nolint:gochecknoglobals // The guard warn period stays tunable in tests without a new setting; the hook restores it.
 var walGuardWarnAfter = walGuardWarnPeriod
 
-// walGuardMu guards the interval, the threshold and the warn period above:
-// the test hook holds it exclusive for each swap, and the guard holds it
-// shared for each read. Every hold stays brief and never nests with the
-// store lock, so the guard never parks behind a test.
+// walGuardMu guards the interval, the threshold, the warn period and the
+// backoff cap above: the test hook holds it exclusive for each swap, and the
+// guard holds it shared for each read. Every hold stays brief and never nests
+// with the store lock, so the guard never parks behind a test.
 //
 //nolint:gochecknoglobals // The hook and the guard share one lock; every hold stays brief.
 var walGuardMu sync.RWMutex
@@ -1015,18 +1098,39 @@ func rollback(tx *sql.Tx) error {
 // stats the log file and forces a truncate checkpoint past the threshold.
 // Concurrent requests keep short read transactions open all the time, so the
 // passive automatic checkpoint never restarts the log and it only grows;
-// the forced checkpoint reclaims it. The loop never panics and never stops
-// early: a failed tick only logs at debug level. The interval is read again
-// for every tick, so the test hook takes effect without reopening the store.
+// the forced checkpoint reclaims it. One tick tries at most 2 slow attempts,
+// so it stalls writers for about 105 ms at most (2 times 50 ms plus a 5 ms
+// retry delay), plus the time of a successful checkpoint copy, then gives up
+// until the next tick. A tick that fails with a slow busy attempt (a long
+// reader, such as a backup) doubles the wait before the next tick up to the
+// backoff cap; a tick that fails with only fast busy attempts keeps the base
+// interval. A successful truncate or a log below the threshold resets the
+// wait to the base interval. The loop never panics and never stops early: a
+// failed tick only logs at debug level. The interval and the cap are read
+// again for every tick, so the test hook takes effect without reopening the
+// store.
 func (s *Store) guardLoop(ctx context.Context) {
 	defer close(s.guardDone)
 
+	walGuardMu.RLock()
+	wait := walGuardInterval
+	walGuardMu.RUnlock()
+
 	for {
 		walGuardMu.RLock()
-		interval := walGuardInterval
+		base := walGuardInterval
+		backoffCap := walGuardBackoffCap
 		walGuardMu.RUnlock()
 
-		timer := time.NewTimer(interval)
+		if wait < base {
+			wait = base
+		}
+
+		if backoffCap > 0 && wait > backoffCap {
+			wait = backoffCap
+		}
+
+		timer := time.NewTimer(wait)
 
 		select {
 		case <-ctx.Done():
@@ -1034,24 +1138,64 @@ func (s *Store) guardLoop(ctx context.Context) {
 
 			return
 		case <-timer.C:
-			s.guardTick(ctx)
 		}
+
+		wait = nextGuardWait(wait, s.guardTick(ctx, wait))
 	}
+}
+
+// nextGuardWait returns the wait before the next guard tick from the last
+// outcome: a successful truncate or a log below the threshold resets the wait
+// to the base interval, a tick that fails with a slow busy attempt doubles it
+// up to the backoff cap, and a tick that fails with only fast busy attempts
+// keeps the base interval. The base and the cap are read again on every call,
+// so the test hook takes effect without reopening the store.
+func nextGuardWait(wait time.Duration, outcome guardOutcome) time.Duration {
+	walGuardMu.RLock()
+	base := walGuardInterval
+	backoffCap := walGuardBackoffCap
+	walGuardMu.RUnlock()
+
+	switch {
+	case outcome.belowThreshold || outcome.succeeded:
+		return base
+	case outcome.slowBusy:
+		doubled := wait + wait
+		if backoffCap > 0 && doubled > backoffCap {
+			return backoffCap
+		}
+
+		return doubled
+	default:
+		return base
+	}
+}
+
+// guardOutcome reports one guard tick to the loop: whether the log stayed
+// below the threshold, whether a past-threshold truncate succeeded, and
+// whether a failed tick saw a slow busy attempt.
+type guardOutcome struct {
+	belowThreshold bool
+	succeeded      bool
+	slowBusy       bool
 }
 
 // guardTick stats the write-ahead log file and checkpoints it past the
 // threshold. A missing file means no log yet; any other stat failure only
 // logs at debug level. A log below the threshold counts as healthy: it
-// refreshes the last success, so a later busy period warns only after its
-// own full warn period of failures.
-func (s *Store) guardTick(ctx context.Context) {
+// refreshes the last success (which resets both the warn period and the
+// backoff), so a later busy period warns only after its own full warn period
+// of failures. A successful truncate also refreshes the last success and
+// resets the warn state, so the next failing period warns once more. waited
+// is the wait the guard slept before this tick; only the test hook reads it.
+func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcome {
 	info, err := os.Stat(s.path + "-wal")
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			s.logger.DebugContext(ctx, "stat write-ahead log", slog.String("error", err.Error()))
 		}
 
-		return
+		return guardOutcome{belowThreshold: false, succeeded: false, slowBusy: false}
 	}
 
 	walGuardMu.RLock()
@@ -1064,14 +1208,26 @@ func (s *Store) guardTick(ctx context.Context) {
 		s.lastTruncateSuccess = now
 		s.busyWarned = false
 
-		return
+		return guardOutcome{belowThreshold: true, succeeded: false, slowBusy: false}
 	}
 
-	if s.guardCheckpoint(ctx) {
+	result := s.guardCheckpoint(ctx)
+
+	recordWalTick(walTickInfo{
+		at:           time.Now(),
+		waited:       waited,
+		elapsed:      time.Since(now),
+		succeeded:    result.succeeded,
+		slowBusy:     result.slowBusy,
+		slowAttempts: result.slowAttempts,
+		attempts:     result.attempts,
+	})
+
+	if result.succeeded {
 		s.lastTruncateSuccess = now
 		s.busyWarned = false
 
-		return
+		return guardOutcome{belowThreshold: false, succeeded: true, slowBusy: false}
 	}
 
 	if !s.busyWarned && now.Sub(s.lastTruncateSuccess) >= warnAfter {
@@ -1083,17 +1239,30 @@ func (s *Store) guardTick(ctx context.Context) {
 			slog.Duration("since_last_success", now.Sub(s.lastTruncateSuccess)),
 		)
 	}
+
+	return guardOutcome{belowThreshold: false, succeeded: false, slowBusy: result.slowBusy}
+}
+
+// truncateResult reports one runTruncate call: whether the checkpoint
+// succeeded, whether the tick saw a slow busy attempt, and the slow and total
+// attempt counts.
+type truncateResult struct {
+	succeeded    bool
+	slowBusy     bool
+	slowAttempts int
+	attempts     int
 }
 
 // guardCheckpoint forces a truncate checkpoint on one dedicated connection
-// and reports whether the checkpoint succeeded. The guard holds the store
-// lock shared, so the online restore swap waits out the checkpoint instead
-// of closing the handle under it. The checkpoint runs with a short busy
-// timeout, because a truncate checkpoint blocks new writers while it waits
-// for readers; the guard restores the store timeout before it returns the
-// connection to the pool. The work context stays detached from shutdown, so
-// Close never aborts a checkpoint midway.
-func (s *Store) guardCheckpoint(ctx context.Context) bool {
+// and reports the truncate result. The guard holds the store lock shared, so
+// the online restore swap waits out the checkpoint instead of closing the
+// handle under it. The checkpoint runs with a short busy timeout, because a
+// truncate checkpoint blocks new writers while it waits for readers; the
+// guard restores the store timeout before it returns the connection to the
+// pool. The work context stays detached from shutdown, so Close never aborts
+// a checkpoint midway. A connection failure reports no slow attempt: only a
+// busy checkpoint that waited for readers backs the loop off.
+func (s *Store) guardCheckpoint(ctx context.Context) truncateResult {
 	work := context.WithoutCancel(ctx)
 
 	s.mu.RLock()
@@ -1103,7 +1272,7 @@ func (s *Store) guardCheckpoint(ctx context.Context) bool {
 	if err != nil {
 		s.logger.DebugContext(work, "take guard connection", slog.String("error", err.Error()))
 
-		return false
+		return truncateResult{succeeded: false, slowBusy: false, slowAttempts: 0, attempts: 0}
 	}
 
 	defer func() {
@@ -1115,7 +1284,7 @@ func (s *Store) guardCheckpoint(ctx context.Context) bool {
 	if _, err := conn.ExecContext(work, fmt.Sprintf("PRAGMA busy_timeout(%d)", walGuardBusyTimeoutMs)); err != nil {
 		s.logger.DebugContext(work, "set guard busy timeout", slog.String("error", err.Error()))
 
-		return false
+		return truncateResult{succeeded: false, slowBusy: false, slowAttempts: 0, attempts: 0}
 	}
 
 	defer func() {
@@ -1129,37 +1298,62 @@ func (s *Store) guardCheckpoint(ctx context.Context) bool {
 }
 
 // runTruncate runs PRAGMA wal_checkpoint(TRUNCATE) until it reports no busy
-// reader, up to walGuardMaxRetries retries, and reports whether the
-// checkpoint succeeded. A busy checkpoint means the automatic checkpoint
-// holds the checkpoint lock; the guard waits a little and tries again, then
-// gives up until the next tick: it never blocks writers past the short busy
-// timeout of each attempt and never returns an error to any caller. The log
-// keeps growing until a later tick succeeds, and journal_size_limit then
-// truncates the file at the next write-ahead log restart. Every failure only
-// logs at debug level.
-func (s *Store) runTruncate(shutdown, work context.Context, conn *sql.Conn) bool {
-	for attempt := 0; ; attempt++ {
+// reader and reports the truncate result. Each attempt is timed: an attempt
+// that takes 10 ms or more is slow and may stall writers, while a fast busy
+// attempt only met the checkpoint lock of an automatic checkpoint and stalled
+// no writer. The guard tries at most 2 slow busy attempts per tick, while
+// fast busy attempts may repeat up to 20 attempts per tick in total, with
+// 5 ms between them, then gives up until the next tick: it never blocks
+// writers past the short busy timeout of each attempt and never returns an
+// error to any caller. The worst writer stall of one tick stays at about
+// 105 ms (2 times 50 ms plus a 5 ms retry delay), plus the time of a
+// successful checkpoint copy. The log keeps growing until a later tick
+// succeeds, and journal_size_limit then truncates the file at the next
+// write-ahead log restart. When the guard's TRUNCATE stays busy after all
+// attempts, the WAL keeps growing until a later tick succeeds. Every failure
+// only logs at debug level.
+func (s *Store) runTruncate(shutdown, work context.Context, conn *sql.Conn) truncateResult {
+	var result truncateResult
+
+	for attempt := 1; ; attempt++ {
 		var busy, logFrames, checkpointed int64
 
+		start := time.Now()
+
 		err := conn.QueryRowContext(work, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed)
+		elapsed := time.Since(start)
+
 		if err != nil {
 			s.logger.DebugContext(work, "checkpoint write-ahead log", slog.String("error", err.Error()))
 
-			return false
+			result.attempts = attempt
+
+			return result
 		}
 
 		if busy == 0 {
-			return true
+			result.succeeded = true
+			result.attempts = attempt
+
+			return result
 		}
 
-		if attempt >= walGuardMaxRetries {
+		result.attempts = attempt
+
+		if elapsed >= walGuardSlowAttempt {
+			result.slowAttempts++
+			result.slowBusy = true
+		}
+
+		if result.slowAttempts >= walGuardMaxSlowAttempts || attempt >= walGuardMaxAttempts {
 			s.logger.DebugContext(
 				work,
 				"write-ahead log checkpoint stays busy",
-				slog.Int64("attempts", int64(attempt+1)),
+				slog.Int64("attempts", int64(attempt)),
+				slog.Int64("slow_attempts", int64(result.slowAttempts)),
 			)
 
-			return false
+			return result
 		}
 
 		timer := time.NewTimer(walGuardRetryDelay)
@@ -1168,7 +1362,7 @@ func (s *Store) runTruncate(shutdown, work context.Context, conn *sql.Conn) bool
 		case <-shutdown.Done():
 			timer.Stop()
 
-			return false
+			return result
 		case <-timer.C:
 		}
 	}
