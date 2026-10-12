@@ -137,8 +137,11 @@ type settings struct {
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
 	checkpointDeltaCutoff int
-	backupTarget          blob.Store
-	backupTargetName      string
+	// disablePulumiJournaling turns Pulumi journaling off. See
+	// WithDisablePulumiJournaling.
+	disablePulumiJournaling bool
+	backupTarget            blob.Store
+	backupTargetName        string
 }
 
 // Option configures a Server.
@@ -296,6 +299,13 @@ func WithMaxBodyBytesInFlight(n int64) Option {
 	return func(o *settings) { o.maxBodyBytesInFlight = n }
 }
 
+// WithDisablePulumiJournaling turns Pulumi journaling off when disabled is
+// true. The server then answers journalVersion 0 at the start of a Pulumi
+// update, so the Pulumi CLI saves checkpoints. Journaling is on by default.
+func WithDisablePulumiJournaling(disabled bool) Option {
+	return func(o *settings) { o.disablePulumiJournaling = disabled }
+}
+
 // WithCheckpointDeltaCutoff sets the checkpoint size in bytes from which
 // the CLI sends delta uploads. Zero hides the delta capability, so the CLI
 // sends whole checkpoints. A negative value fails NewServer. Without this
@@ -349,37 +359,38 @@ type services struct {
 // NewServer validates the options and wires the server together.
 func NewServer(opts ...Option) (*Server, error) {
 	cfg := settings{
-		namespaceStore:        nil,
-		stackStore:            nil,
-		updateStore:           nil,
-		checkpointStore:       nil,
-		eventStore:            nil,
-		secretKeys:            nil,
-		secretWrapper:         nil,
-		workspaceStore:        nil,
-		stateStore:            nil,
-		blobStore:             nil,
-		inventoryReader:       nil,
-		authenticator:         nil,
-		authorizer:            identity.AdminOnly{},
-		logger:                slog.New(slog.DiscardHandler),
-		now:                   time.Now,
-		region:                "",
-		listenAddr:            defaultListenAddr,
-		listener:              nil,
-		consoleDir:            "",
-		allowedOrigins:        nil,
-		tlsCertFile:           "",
-		tlsKeyFile:            "",
-		publicURL:             "",
-		version:               "",
-		maxCheckpointBytes:    0,
-		maxSecretBatchBytes:   0,
-		maxStateBytes:         0,
-		maxBodyBytesInFlight:  0,
-		backupTarget:          nil,
-		backupTargetName:      "",
-		checkpointDeltaCutoff: pulumi.DefaultCheckpointDeltaCutoff,
+		disablePulumiJournaling: false,
+		namespaceStore:          nil,
+		stackStore:              nil,
+		updateStore:             nil,
+		checkpointStore:         nil,
+		eventStore:              nil,
+		secretKeys:              nil,
+		secretWrapper:           nil,
+		workspaceStore:          nil,
+		stateStore:              nil,
+		blobStore:               nil,
+		inventoryReader:         nil,
+		authenticator:           nil,
+		authorizer:              identity.AdminOnly{},
+		logger:                  slog.New(slog.DiscardHandler),
+		now:                     time.Now,
+		region:                  "",
+		listenAddr:              defaultListenAddr,
+		listener:                nil,
+		consoleDir:              "",
+		allowedOrigins:          nil,
+		tlsCertFile:             "",
+		tlsKeyFile:              "",
+		publicURL:               "",
+		version:                 "",
+		maxCheckpointBytes:      0,
+		maxSecretBatchBytes:     0,
+		maxStateBytes:           0,
+		maxBodyBytesInFlight:    0,
+		backupTarget:            nil,
+		backupTargetName:        "",
+		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 	}
 
 	for _, opt := range opts {
@@ -1037,7 +1048,8 @@ func newPulumiHandler(
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
-		CheckpointDeltaCutoff: cfg.checkpointDeltaCutoff,
+		CheckpointDeltaCutoff:   cfg.checkpointDeltaCutoff,
+		DisablePulumiJournaling: cfg.disablePulumiJournaling,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)

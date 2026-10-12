@@ -217,6 +217,11 @@ type Update struct {
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.
 	RestoredFrom int64
+	// JournalVersion is the journal version that the server answered when the
+	// update started. It is 0 when the update saves checkpoints. The store
+	// keeps it with the update, so a restart does not change how a running
+	// update saves its state.
+	JournalVersion int64
 	// CheckpointBytes is the size in bytes of the checkpoint the update
 	// saved. It is 0 when the update saved no checkpoint. ListUpdates and
 	// GetUpdate fill it from the update's checkpoint row; it is not stored

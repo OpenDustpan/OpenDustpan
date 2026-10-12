@@ -118,6 +118,7 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
 }
@@ -222,6 +223,7 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
 }
@@ -263,6 +265,7 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 			DryRun:           rows[i].DryRun,
 			CreatedBy:        rows[i].CreatedBy,
 			RestoredFrom:     rows[i].RestoredFrom,
+			JournalVersion:   rows[i].JournalVersion,
 			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
 	}
@@ -684,6 +687,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		LeaseExpiresAtMs: row.LeaseExpiresAtMs,
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
+		JournalVersion:   row.JournalVersion,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,

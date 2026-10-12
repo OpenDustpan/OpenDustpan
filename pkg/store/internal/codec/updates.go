@@ -35,6 +35,7 @@ type UpdateRow struct {
 	DryRun           bool
 	CreatedBy        string
 	RestoredFrom     int64
+	JournalVersion   int64
 	CheckpointBytes  int64
 }
 
@@ -102,6 +103,7 @@ func ToUpdateRow(u stack.Update, stackID stack.ID) UpdateRow {
 		DryRun:           u.DryRun,
 		CreatedBy:        u.CreatedBy,
 		RestoredFrom:     u.RestoredFrom,
+		JournalVersion:   u.JournalVersion,
 		CheckpointBytes:  u.CheckpointBytes,
 	}
 }
@@ -139,6 +141,7 @@ func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 		// travels with it from the checkpoint join.
 		CreatedBy:       row.CreatedBy,
 		RestoredFrom:    row.RestoredFrom,
+		JournalVersion:  row.JournalVersion,
 		CheckpointBytes: row.CheckpointBytes,
 	}, nil
 }

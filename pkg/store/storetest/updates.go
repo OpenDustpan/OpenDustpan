@@ -64,6 +64,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		name string
 	}{
 		{name: "update round trip", test: testUpdateRoundTrip},
+		{name: "journal version round trip", test: testJournalVersionRoundTrip},
+		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
 		{name: "missing update is ErrUpdateNotFound", test: testMissingUpdate},
 		{name: "update of missing stack is ErrNotFound", test: testUpdateMissingStack},
 		{name: "stale fence is ErrFenced on every write", test: testUpdateWritesFenced},
@@ -203,6 +205,7 @@ func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan)
 // and restore source, not yet persisted.
 func newUpdate(ref stack.Ref, id string, plan stack.Plan, createdBy string, restoredFrom int64) stack.Update {
 	return stack.Update{
+		JournalVersion:  0,
 		CreatedAt:       now(),
 		StartedAt:       time.Time{},
 		EndedAt:         time.Time{},
@@ -434,6 +437,65 @@ func testUpdateRoundTrip(t *testing.T, f fixture) {
 
 	want = f.end(t, want, stack.StatusSucceeded)
 	assertUpdate(t, f, want)
+}
+
+// testJournalVersionRoundTrip checks that the journal version that a start
+// stores comes back from every read, and that a later save keeps it.
+func testJournalVersionRoundTrip(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := started(t, f.create(t, f.ref, "u1", mutating()))
+	u.JournalVersion = 2
+
+	got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+	if err != nil {
+		t.Fatalf("start update with journal version 2: %v", err)
+	}
+
+	if got.JournalVersion != 2 {
+		t.Fatalf("start returned journal version %d, want 2", got.JournalVersion)
+	}
+
+	assertUpdate(t, f, got)
+
+	active, err := f.s.ActiveUpdate(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("active update: %v", err)
+	}
+
+	if active.JournalVersion != 2 {
+		t.Fatalf("active update journal version = %d, want 2", active.JournalVersion)
+	}
+
+	list, err := f.s.ListUpdates(t.Context(), f.ref, stack.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list updates: %v", err)
+	}
+
+	if len(list) != 1 || list[0].JournalVersion != 2 {
+		t.Fatalf("list updates = %+v, want one update with journal version 2", list)
+	}
+
+	got = f.end(t, got, stack.StatusSucceeded)
+	assertUpdate(t, f, got)
+}
+
+// testJournalVersionDefaultsToZero checks that an update that never started
+// reads back as journal version 0, which means checkpoints.
+func testJournalVersionDefaultsToZero(t *testing.T, f fixture) {
+	t.Helper()
+
+	want := f.create(t, f.ref, "u1", mutating())
+	assertUpdate(t, f, want)
+
+	if want.JournalVersion != 0 {
+		t.Fatalf("new update journal version = %d, want 0", want.JournalVersion)
+	}
+
+	got := f.start(t, want)
+	if got.JournalVersion != 0 {
+		t.Fatalf("started update journal version = %d, want 0", got.JournalVersion)
+	}
 }
 
 func testMissingUpdate(t *testing.T, f fixture) {

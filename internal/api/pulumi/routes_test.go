@@ -315,18 +315,19 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newUnusedUpdates(t, namespaces),
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         stubAuthenticator{},
-		Authorizer:            stubAuthorizer{},
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               base,
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newUnusedUpdates(t, namespaces),
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           stubAuthenticator{},
+		Authorizer:              stubAuthorizer{},
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 base,
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -358,18 +359,19 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               newEnforcingUpdates(t, namespaces),
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            authz,
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 newEnforcingUpdates(t, namespaces),
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              authz,
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1443,18 +1445,19 @@ func newDeleteHandler(
 	}
 
 	handler, err := pulumi.NewHandler(pulumi.Config{
-		Stacks:                stacks,
-		Updates:               updates,
-		Secrets:               newTestSecrets(t, namespaces),
-		Namespaces:            namespaces,
-		Authenticator:         tokenAuthenticator{},
-		Authorizer:            selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:                slog.New(slog.DiscardHandler),
-		BaseURL:               baseurl.Resolver{},
-		MaxBodyBytesInFlight:  0,
-		Audit:                 nil,
-		OnAuditFailure:        nil,
-		CheckpointDeltaCutoff: 0,
+		DisablePulumiJournaling: false,
+		Stacks:                  stacks,
+		Updates:                 updates,
+		Secrets:                 newTestSecrets(t, namespaces),
+		Namespaces:              namespaces,
+		Authenticator:           tokenAuthenticator{},
+		Authorizer:              selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:                  slog.New(slog.DiscardHandler),
+		BaseURL:                 baseurl.Resolver{},
+		MaxBodyBytesInFlight:    0,
+		Audit:                   nil,
+		OnAuditFailure:          nil,
+		CheckpointDeltaCutoff:   0,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

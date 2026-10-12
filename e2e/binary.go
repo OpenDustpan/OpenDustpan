@@ -59,6 +59,8 @@ const (
 	regionFlag = "--region"
 	// deltaCutoffFlag names the checkpoint delta cutoff flag serve takes.
 	deltaCutoffFlag = "--checkpoint-delta-cutoff"
+	// disableJournalingFlag names the flag that turns Pulumi journaling off.
+	disableJournalingFlag = "--disable-pulumi-journaling"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -85,6 +87,9 @@ type envInput struct {
 	// delta uploads. Zero hides the delta capability, so the CLI sends
 	// whole checkpoints.
 	deltaCutoff int
+	// disableJournaling turns Pulumi journaling off on the server, so each
+	// update answers journalVersion 0.
+	disableJournaling bool
 }
 
 // backendConfig groups the settings of one backend process.
@@ -102,6 +107,9 @@ type backendConfig struct {
 	// always passes it explicitly, so an inherited
 	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
 	deltaCutoff int
+	// disableJournaling passes --disable-pulumi-journaling when set, so an
+	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
+	disableJournaling bool
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -386,6 +394,10 @@ func serveArgs(cfg backendConfig, port string) []string {
 		deltaCutoffFlag, strconv.Itoa(cfg.deltaCutoff),
 	}
 
+	if cfg.disableJournaling {
+		args = append(args, disableJournalingFlag)
+	}
+
 	if cfg.blobStore != "" {
 		args = append(args, "--blob-store", cfg.blobStore, "--s3-endpoint", cfg.s3Endpoint)
 	} else {
@@ -531,16 +543,17 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 	blobDir := filepath.Join(dir, "blobs")
 
 	cfg := backendConfig{
-		bin:          e.binPath,
-		dbURL:        dbURL,
-		blobDir:      blobDir,
-		blobStore:    "",
-		s3Endpoint:   "",
-		backupTarget: "",
-		certFile:     cert.cert,
-		keyFile:      cert.key,
-		tokens:       e.backendCfg.tokens,
-		deltaCutoff:  0,
+		disableJournaling: false,
+		bin:               e.binPath,
+		dbURL:             dbURL,
+		blobDir:           blobDir,
+		blobStore:         "",
+		s3Endpoint:        "",
+		backupTarget:      "",
+		certFile:          cert.cert,
+		keyFile:           cert.key,
+		tokens:            e.backendCfg.tokens,
+		deltaCutoff:       0,
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -890,16 +903,17 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	setup := newBlobSetup(ctx, tb, in.dir)
 
 	cfg := backendConfig{
-		bin:          bin,
-		dbURL:        dbURL,
-		blobDir:      setup.blobDir,
-		blobStore:    setup.blobStore,
-		s3Endpoint:   setup.s3Endpoint,
-		backupTarget: setup.backupTarget,
-		certFile:     cert.cert,
-		keyFile:      cert.key,
-		tokens:       in.token + "," + in.tokenB,
-		deltaCutoff:  in.deltaCutoff,
+		bin:               bin,
+		dbURL:             dbURL,
+		blobDir:           setup.blobDir,
+		blobStore:         setup.blobStore,
+		s3Endpoint:        setup.s3Endpoint,
+		backupTarget:      setup.backupTarget,
+		certFile:          cert.cert,
+		keyFile:           cert.key,
+		tokens:            in.token + "," + in.tokenB,
+		deltaCutoff:       in.deltaCutoff,
+		disableJournaling: in.disableJournaling,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 
