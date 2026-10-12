@@ -240,12 +240,19 @@ Actions minutes a month for private repositories, on runners that GitHub
 hosts. At about 2 minutes a build, a deploy on each merge to `main` and each
 pull request fits. A deploy on every push may not.
 
-CI of the project moves to runners that the project owner hosts. The
+CI of the project runs on runners that the project owner hosts. The
 repository variable `CI_RUNS_ON` names them. The workflows of the website
 repository, the Cloudflare deploy among them, take `runs-on` from the same
-variable, with the same expression as the workflows of this repository.
-They never name a runner such as `ubuntu-latest` directly. Jobs on the
-owner's runners use no GitHub minutes.
+variable, with the same expression as `.github/workflows/ci.yml` of this
+repository:
+
+```yaml
+runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+```
+
+`ubuntu-latest` is only the fallback for a repository with no variable. No
+workflow names a runner in any other way. Jobs on the owner's runners use
+no GitHub minutes.
 
 Decision of the project owner: Cloudflare Workers static assets, deployed
 with `wrangler` from GitHub Actions. It costs nothing, works from a private
