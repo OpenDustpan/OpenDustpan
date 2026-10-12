@@ -285,3 +285,95 @@ func TestSecretCiphertextOfURNLast(t *testing.T) {
 		t.Fatalf("ciphertext = %q, want late-cipher", got)
 	}
 }
+
+// TestSecretCiphertextOfLargeSectionBeforeURN proves the lookup keeps no
+// section of a resource in memory when the section streams before the URN.
+// A 6 MiB section ahead of the URN must not show in the allocation of the
+// lookup.
+//
+//nolint:paralleltest // The allocation measurement needs a quiet runtime, so this test never runs in parallel.
+func TestSecretCiphertextOfLargeSectionBeforeURN(t *testing.T) {
+	secret := `{"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` +
+		base64.StdEncoding.EncodeToString([]byte("late-cipher")) + `"}`
+
+	// The section holds 6 MiB as 1 KiB strings. One huge string would cost
+	// the decoder about four times its size in buffers, which the test would
+	// measure instead of the kept section.
+	chunk := `"` + strings.Repeat("x", 1<<10) + `"`
+	chunks := strings.Repeat(chunk+",", (6<<10)-1) + chunk
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"type":"a:index:A","inputs":{},"outputs":{"blob":[` + chunks + `],` +
+		`"password":` + secret + `},` +
+		`"urn":"urn:pulumi:dev::web::a:index:A::x"}]}`)
+
+	path := "/resources/0/outputs/password"
+
+	runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+	runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+
+	var before runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	got, masked, err := stack.SecretCiphertextOf(deployment, path)
+
+	var after runtime.MemStats
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if string(got) != "late-cipher" {
+		t.Fatalf("ciphertext = %q, want late-cipher", got)
+	}
+
+	if len(masked) != 1 || masked[0] != path {
+		t.Fatalf("masked = %q, want [%q]", masked, path)
+	}
+
+	if growth := after.TotalAlloc - before.TotalAlloc; growth > 4<<20 {
+		t.Fatalf("allocated = %d bytes, want below 4 MiB for a 6 MiB section", growth)
+	}
+}
+
+// TestSecretCiphertextOfDuplicateURN proves the masked set and the reveal
+// agree on the index of a resource whose URN repeats an earlier one. The
+// secret answers at its array index, which the masked set lists; the index of
+// the earlier resource answers not-found.
+func TestSecretCiphertextOfDuplicateURN(t *testing.T) {
+	t.Parallel()
+
+	secret := `{"4dabf18193072939515e22adb298388d":"1b47061264138c4ac30d75fd1eb44270","ciphertext":"` +
+		base64.StdEncoding.EncodeToString([]byte("dup-cipher")) + `"}`
+
+	deployment := []byte(`{"secrets_providers":{"type":"service"},"resources":[` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},"outputs":{"plain":"v"}},` +
+		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},"outputs":{"k":` + secret + `}}]}`)
+
+	const path = "/resources/1/outputs/k"
+
+	masked, err := stack.MaskedPaths(deployment)
+	if err != nil {
+		t.Fatalf("masked paths: %v", err)
+	}
+
+	if !slices.Contains(masked, path) {
+		t.Fatalf("masked = %q, want it to hold %q", masked, path)
+	}
+
+	got, _, err := stack.SecretCiphertextOf(deployment, path)
+	if err != nil {
+		t.Fatalf("reveal: %v", err)
+	}
+
+	if string(got) != "dup-cipher" {
+		t.Fatalf("ciphertext = %q, want dup-cipher", got)
+	}
+
+	if _, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs/k"); err == nil {
+		t.Fatal("reveal of /resources/0/outputs/k answered, want not-found")
+	}
+}
