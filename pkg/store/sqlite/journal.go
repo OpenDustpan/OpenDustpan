@@ -38,20 +38,32 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 			return guardErr
 		}
 
-		done, err := journalRetry(ctx, q, stackID, row)
-		if err != nil {
-			return err
-		}
-
+		done, writeErr := writeJournalRow(ctx, q, stackID, row)
 		retried = done
-		if done {
-			return nil
-		}
 
-		return insertJournalRow(ctx, q, stackID, row)
+		return writeErr
 	})
 
 	return retried, err
+}
+
+// writeJournalRow answers a retry without a write (true). Otherwise it runs the
+// row's check against the stored operations and inserts the row (false).
+func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
+	done, err := journalRetry(ctx, q, stackID, row)
+	if err != nil {
+		return false, err
+	}
+
+	if done {
+		return true, nil
+	}
+
+	if verifyErr := verifyJournalRow(ctx, q, stackID, row); verifyErr != nil {
+		return false, verifyErr
+	}
+
+	return false, insertJournalRow(ctx, q, stackID, row)
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
@@ -180,4 +192,33 @@ func lowestOf(seqs []int64) int64 {
 	}
 
 	return low
+}
+
+// verifyJournalRow runs the row's Verify check against the operation IDs of the rows
+// that the update already holds. It runs in the same transaction as the write, so
+// the list it reads is the list that the write follows (ADR 43, decision 6.4). A
+// refusal wraps ErrJournalBatch.
+func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
+	if row.Verify == nil {
+		return nil
+	}
+
+	stored, err := q.ListJournalOperations(ctx, db.ListJournalOperationsParams{
+		StackID:  stackID,
+		UpdateID: row.Update.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("list journal operations: %w", err)
+	}
+
+	known, err := stack.KnownOperationIDs(stored)
+	if err != nil {
+		return err
+	}
+
+	if err := row.Verify(known); err != nil {
+		return fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
+	}
+
+	return nil
 }

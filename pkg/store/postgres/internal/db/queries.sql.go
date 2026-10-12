@@ -1935,6 +1935,37 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 	return items, nil
 }
 
+const listJournalOperations = `-- name: ListJournalOperations :many
+SELECT operation_ids FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival
+`
+
+type ListJournalOperationsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) ListJournalOperations(ctx context.Context, arg ListJournalOperationsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listJournalOperations, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var operation_ids string
+		if err := rows.Scan(&operation_ids); err != nil {
+			return nil, err
+		}
+		items = append(items, operation_ids)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms
 FROM namespaces
