@@ -113,3 +113,4 @@ both together.
 | [62](0062-pulumi-journaling.md) | Pulumi journaling | accepted |
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | draft |
 | [64](0064-pulumi-journaling-architecture.md) | Architecture of Pulumi journaling support | accepted |
+| [65](0065-opentofu-http-backend.md) | OpenTofu through the http backend too | draft |
