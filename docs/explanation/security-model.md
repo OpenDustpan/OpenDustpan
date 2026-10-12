@@ -103,6 +103,7 @@ on the S3 bucket.
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
+| Audit entries, with no secret value | Database | No |
 | Backups | Backup target | No. A backup holds no key-encryption key |
 
 The server creates the blob directory with access for its owner only.
@@ -166,13 +167,38 @@ server.
 
 ## Audit log
 
-No audit log exists today. The Pulumi CLI calls two audit routes,
-`decrypt/log-decryption` and `decrypt/log-batch-decryption`. The server
-checks the `unit:decrypt` action on each, answers 204, and stores nothing.
+Each namespace has an append-only audit log. No route changes or deletes an
+entry. The [audit log guide](../guides/audit-log.md) shows the fields of an
+entry and how to read them.
 
-Planned: an append-only audit log for each namespace, with a SHA-256 hash
-chain, and one entry for each secret that the server gives in plain text
-(ADR 41, decisions 5 and 13). RFC 22 holds the full audit log.
+- **What writes an entry.** The Pulumi CLI calls `decrypt/log-decryption`
+  or `decrypt/log-batch-decryption` when a person shows secrets, for example
+  with `pulumi config get`, `pulumi stack output --show-secrets` or
+  `pulumi stack export --show-secrets`. The server writes one entry of the
+  kind `reveal` for each call. `up`, `preview`, `refresh` and `destroy`
+  decrypt secrets too, but they do not call these routes, so they write no
+  entry. The end-to-end suite checks both.
+- **The CLI reports a reveal.** The server records a reveal only when the
+  client calls an audit route. A client that does not call the route
+  leaves no entry.
+- **Who can read the log.** `GET /api/audit/entries` lists the entries and
+  `GET /api/audit/check` checks the chain. Both need the action
+  `namespace:read-audit` on the namespace.
+- **A hash chain for each namespace.** Each entry holds the SHA-256 of its
+  own fields and of the previous entry. The check finds a changed or a
+  deleted entry. It does not stop a person who can write to the database:
+  that person can write the entries and all the hashes again.
+- **A failed append does not fail the command.** The route still answers
+  204. The server writes a log line with no secret and adds 1 to
+  `dustpan_audit_append_failures_total`. Alert when that counter is above
+  zero.
+- **Backups.** A backup holds the audit log, and a restore keeps a valid
+  chain.
+
+Planned: entries of the kind `tool-operation` for each read of plain
+secrets that a tool needs for its own work, for example an OpenTofu state
+download (ADR 41, decision 9). RFC 22 holds retention, export and an anchor
+for the chain outside the database.
 
 ## Report a vulnerability
 
