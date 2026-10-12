@@ -10100,7 +10100,13 @@ func writeManifestBytes(t *testing.T, target, id string, data []byte) {
 			t.Fatalf("parse backup object key %q: %v", key, err)
 		}
 
-		if putErr := e2e.OpenS3TargetStore(ctx, t, target).Put(ctx, parsed, bytes.NewReader(data)); putErr != nil {
+		// Blob keys are write-once, so the old manifest goes first.
+		store := e2e.OpenS3TargetStore(ctx, t, target)
+		if delErr := store.Delete(ctx, parsed); delErr != nil {
+			t.Fatalf("delete backup object %s: %v", key, delErr)
+		}
+
+		if putErr := store.Put(ctx, parsed, bytes.NewReader(data)); putErr != nil {
 			t.Fatalf("write backup object %s: %v", key, putErr)
 		}
 
