@@ -10,7 +10,7 @@
 
 .PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke
 
-check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench ## Everything CI checks.
+check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -108,6 +108,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
+e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recording build (ADR 43, work item 9). Not part of check.
+	go test -tags "e2e journalrecording" -race -count=1 -run TestPulumiJournalingOn -timeout 60m ./e2e/...
+
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" -race -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
@@ -126,6 +129,12 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	sqlc generate
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
+
+journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
+	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \
+		sed -n '/^build:/,/^[a-z-]*:/p' Makefile | grep -q journalrecording; then \
+		echo "journal-guard: a release path uses the journalrecording tag. Remove it."; exit 1; \
+	fi
 
 build: ## Build the server binary.
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o bin/opendustpan ./cmd/opendustpan

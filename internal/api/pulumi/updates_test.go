@@ -449,6 +449,7 @@ func newUpdateFixtureWithCutoff(
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2645,6 +2646,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -3022,8 +3024,8 @@ func TestStartNegotiatesJournalVersion(t *testing.T) {
 		t.Fatalf("decode start: %v (%s)", err, body)
 	}
 
-	if started.JournalVersion != 0 {
-		t.Fatalf("journalVersion = %d, want 0 with the production server", started.JournalVersion)
+	if started.JournalVersion != startJournalVersion {
+		t.Fatalf("journalVersion = %d, want %d, the server's maximum", started.JournalVersion, startJournalVersion)
 	}
 }
 

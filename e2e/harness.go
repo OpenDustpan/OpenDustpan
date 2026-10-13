@@ -633,6 +633,7 @@ func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		tb.Fatalf("updates service: %v", err)

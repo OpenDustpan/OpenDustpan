@@ -96,6 +96,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		Now:                clk.Now,
 		Logger:             nil,
 		MaxCheckpointBytes: 32 << 20,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)

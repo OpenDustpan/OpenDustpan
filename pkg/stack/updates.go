@@ -145,6 +145,10 @@ type UpdatesConfig struct {
 	Logger *slog.Logger
 	// MaxCheckpointBytes bounds one checkpoint; zero means DefaultMaxCheckpointBytes.
 	MaxCheckpointBytes int
+	// Journal writes the journal batches of an update that started with a
+	// journal version above 0. Nil refuses every batch, so the server answers
+	// the same as it does for an update without journaling.
+	Journal *JournalEntries
 }
 
 // Updates implements the update cycle of the Pulumi CLI: create and start an
@@ -161,6 +165,7 @@ type Updates struct {
 	logger         *slog.Logger
 	now            func() time.Time
 	maxCheckpoints int
+	journal        *JournalEntries
 }
 
 // NewUpdates returns Updates. Every store, Stacks, Blobs and Namespaces are required.
@@ -190,6 +195,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		logger:         cfg.Logger,
 		now:            cfg.Now,
 		maxCheckpoints: cfg.MaxCheckpointBytes,
+		journal:        cfg.Journal,
 	}
 
 	if s.now == nil {
@@ -463,6 +469,67 @@ func (s *Updates) AppendEvents(ctx context.Context, ref Ref, id UpdateID, tok to
 	batch := EventBatch{Events: events, Ref: ref, Update: id, Lease: u.Lease.Digest}
 	if err := s.events.AppendEvents(ctx, batch, fence); err != nil {
 		return fmt.Errorf("append events to update %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// ErrNotJournaled refuses a journal batch for an update that saves checkpoints
+// (journal version 0). It is an ErrWrongUpdateState, so the route answers 409
+// as it does for the other update states, and its message is the one the
+// Pulumi CLI shows to the operator.
+var ErrNotJournaled error = notJournaledError{}
+
+type notJournaledError struct{}
+
+// Error returns the message that the route sends to the caller.
+func (notJournaledError) Error() string {
+	return "This update does not use journaling. Send checkpoints."
+}
+
+// Is reports that the refusal is an update state refusal.
+func (notJournaledError) Is(target error) bool {
+	return target == ErrWrongUpdateState
+}
+
+// AppendJournal stores one journal batch of the update (ADR 43, decision 6).
+// The lease must be held. A version 0 update refuses the batch with
+// ErrNotJournaled and stores nothing. The writer checks the batch against the
+// update's journal version and refuses an invalid batch with ErrJournalBatch.
+func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok token.Token, content []byte) error {
+	u, fence, err := s.authorized(ctx, ref, id, tok)
+	if err != nil {
+		return err
+	}
+
+	if u.JournalVersion == 0 {
+		return ErrNotJournaled
+	}
+
+	if !u.Mutates() {
+		return fmt.Errorf("%w: a preview does not save state", ErrWrongUpdateState)
+	}
+
+	if s.journal == nil {
+		return fmt.Errorf("journal writer of update %s: %w", id, ErrMissingDependency)
+	}
+
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("append journal to update %s: %w", id, err)
+	}
+
+	batch := JournalBatch{
+		Ref:     ref,
+		StackID: st.ID,
+		Update:  id,
+		Lease:   u.Lease.Digest,
+		Content: content,
+		Version: int(u.JournalVersion),
+	}
+
+	if err := s.journal.Append(ctx, batch, fence); err != nil {
+		return fmt.Errorf("append journal to update %s: %w", id, err)
 	}
 
 	return nil

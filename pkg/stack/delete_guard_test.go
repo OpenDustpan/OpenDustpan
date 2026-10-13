@@ -685,6 +685,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 		Now:                func() time.Time { return now },
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
