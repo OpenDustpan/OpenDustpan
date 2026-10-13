@@ -235,7 +235,13 @@ func sealedTestWorkspace(t *testing.T, workspaces *workspace.Service) workspace.
 // sealedStateContent is the state the sealed adapter tests upload: a small
 // document with a known sensitive value.
 func sealedStateContent() string {
-	return `{"version":4,"serial":4,"lineage":"seed-lineage","outputs":{},"resources":[]}`
+	return stateWithOutputs(stateCreateOutputs())
+}
+
+// stateWithOutputs returns a state of serial 4 whose top-level outputs are doc.
+// The outputs of a version come from its body (ADR 49, decision 8).
+func stateWithOutputs(doc string) string {
+	return `{"version":4,"serial":4,"lineage":"seed-lineage","outputs":` + doc + `,"resources":[]}`
 }
 
 // sealedCreateBody returns a state version create body for content with the
@@ -348,9 +354,9 @@ func authenticatedGet(t *testing.T, target string) *http.Request {
 	return req
 }
 
-// TestSealedStateVersionCreate proves a create with a sealer answers 201
-// with the outputs relationship: the pending version renders plain outputs
-// while the stored row keeps them sealed.
+// TestSealedStateVersionCreate proves a create with a sealer answers 201 and
+// stores no outputs from the declared rendering: the outputs of the version come
+// from its body, which the upload stores sealed (ADR 49, decision 8).
 func TestSealedStateVersionCreate(t *testing.T) {
 	t.Parallel()
 
@@ -358,33 +364,27 @@ func TestSealedStateVersionCreate(t *testing.T) {
 	content := sealedStateContent()
 
 	doc := sealedCreate(t, env, content)
-	assertCreateOutputs(t, doc)
-
-	stored := readStoredVersion(t, env, doc.Data.ID)
-	assertOutputsSealed(t, stored)
+	assertCreateHasNoOutputs(t, doc)
 
 	sealUploads(t, env, doc, content)
+
+	stored := readStoredVersion(t, env, doc.Data.ID)
+	if len(stored.Outputs) == 0 {
+		t.Fatal("the upload stored no outputs from the body")
+	}
+
+	assertOutputsSealed(t, stored)
 	assertUploadedBlobSealed(t, env, doc.Data.ID, content)
 }
 
-// assertCreateOutputs proves the create response names the greeting output.
-func assertCreateOutputs(t *testing.T, doc sealedCreateDoc) {
+// assertCreateHasNoOutputs proves the create response names no output: the
+// declared rendering is not stored, so the pending version has none.
+func assertCreateHasNoOutputs(t *testing.T, doc sealedCreateDoc) {
 	t.Helper()
 
-	outputs, ok := doc.Data.Relationships["outputs"]
-	if !ok {
-		t.Fatal("create response holds no outputs relationship")
+	if outputs, ok := doc.Data.Relationships["outputs"]; ok && len(outputs.Data) > 0 {
+		t.Fatalf("create response names %d outputs before the body is uploaded, want none", len(outputs.Data))
 	}
-
-	want := doc.Data.ID + ".greeting"
-
-	for _, ref := range outputs.Data {
-		if ref.ID == want && ref.Type == "state-version-outputs" {
-			return
-		}
-	}
-
-	t.Fatalf("outputs relationship = %+v, want %q", outputs.Data, want)
 }
 
 // readStoredVersion returns the stored row of a created version.
@@ -542,9 +542,9 @@ func TestSealedLargeOutputsRoundTrip(t *testing.T) {
 	const marker = "large-output-marker-"
 
 	env := sealedTestHandler(t)
-	content := sealedStateContent()
 
 	doc := largeSealedOutputs(limit-1024, marker)
+	content := stateWithOutputs(doc.doc)
 	createdDoc := createLargeVersion(t, env, content, doc.doc)
 
 	assertLargeStoredSealed(t, env, createdDoc.Data.ID, marker)

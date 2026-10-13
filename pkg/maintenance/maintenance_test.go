@@ -356,6 +356,10 @@ func (fakeStates) SaveSensitiveMarks(
 	return nil
 }
 
+func (fakeStates) DiscardStateVersion(context.Context, workspace.StateVersionID, namespace.Fence) error {
+	return nil
+}
+
 func (fakeStates) DeleteExpiredPendingStateVersions(
 	context.Context, workspace.ID, time.Time, namespace.Fence,
 ) ([]workspace.StateVersion, error) {
