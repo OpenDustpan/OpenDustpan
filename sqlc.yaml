@@ -23,6 +23,16 @@ sql:
             go_type: bool
           - column: state_versions.sealed
             go_type: bool
+          - column: namespaces.allow_forced_writes
+            go_type: bool
+          - column: namespaces.allow_unlocked_writes
+            go_type: bool
+          - column: workspaces.allow_forced_writes
+            go_type: bool
+          - column: workspaces.allow_unlocked_writes
+            go_type: bool
+          - column: state_versions.unlocked_write
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql

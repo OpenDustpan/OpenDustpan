@@ -47,8 +47,16 @@ const (
 type WorkspaceService interface {
 	WorkspaceReader
 	WorkspaceLocker
+	OverrideWriter
 	StateReader
 	StateWriter
+}
+
+// OverrideWriter is what the override switch route needs.
+type OverrideWriter interface {
+	// SetOverrides replaces the override switches of the unit (ADR 44,
+	// decision 6).
+	SetOverrides(ctx context.Context, id workspace.ID, ov namespace.Overrides) (workspace.Workspace, error)
 }
 
 // WorkspaceReader is what the workspace routes need: create, read and list.
@@ -70,8 +78,11 @@ type WorkspaceLocker interface {
 	Lock(ctx context.Context, id workspace.ID, holder, reason string) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
-	// ForceUnlock releases the lock whoever holds it.
-	ForceUnlock(ctx context.Context, id workspace.ID, by string) (workspace.Workspace, error)
+	// ForceUnlock releases the lock whoever holds it. The bool result reports
+	// an unfenced release under the forced-write override (ADR 44, decision 4).
+	ForceUnlock(
+		ctx context.Context, id workspace.ID, by string, allow namespace.Overrides, record func() error,
+	) (workspace.Workspace, bool, error)
 }
 
 // StateReader is what the state read routes and the current-state-version
@@ -130,6 +141,7 @@ type StateWriter interface {
 		id workspace.ID,
 		holder string,
 		in workspace.NewState,
+		auth workspace.Authority,
 	) (workspace.PendingState, error)
 	// Upload stores the content of a pending state version and makes it
 	// current.

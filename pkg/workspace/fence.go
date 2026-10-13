@@ -114,6 +114,7 @@ func (s *Service) buildFence(
 		RestoredFrom:    "",
 		SensitiveMarks:  cur.SensitiveMarks,
 		FenceBy:         by,
+		UnlockedWrite:   false,
 	}
 
 	key, err := attemptKey(sv)

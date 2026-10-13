@@ -28,6 +28,10 @@ var (
 	ErrLocked = errors.New("workspace is locked")
 	// ErrNotLocked reports an operation that needs the caller to hold the lock.
 	ErrNotLocked = errors.New("workspace is not locked")
+	// ErrOverrideRefused reports an override that the unit or its namespace
+	// does not allow, or that the caller lacks the action for. Its text names
+	// the switch and the action that would allow it (ADR 44, decision 8).
+	ErrOverrideRefused = errors.New("override refused")
 	// ErrLockedByOther reports a lock held by someone other than the caller.
 	ErrLockedByOther = errors.New("workspace is locked by someone else")
 	// ErrConcurrentModification reports that the workspace changed between read and write.
@@ -110,6 +114,9 @@ type Workspace struct {
 	Lock      Lock
 	ID        ID
 	Ref       Ref
+	// Overrides holds the switches of this unit. A switch only narrows the
+	// switch of its namespace: an override needs both (ADR 44, decision 6).
+	Overrides namespace.Overrides
 	// Revision increases with every change; stores accept a write only if they
 	// hold Revision-1.
 	Revision int64
@@ -160,6 +167,15 @@ func (w Workspace) heldBy(holder string) error {
 }
 
 // withLock returns a copy of w holding lock, one revision on.
+// bump records a change of the unit at now.
+func (w Workspace) bump(now time.Time) Workspace {
+	next := w
+	next.UpdatedAt = now
+	next.Revision++
+
+	return next
+}
+
 func (w Workspace) withLock(now time.Time, lock Lock) Workspace {
 	next := w
 	next.Lock = lock

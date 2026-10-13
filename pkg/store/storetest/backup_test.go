@@ -2849,48 +2849,6 @@ func (s *fakeBackupStore) PeekKey(_ context.Context, r io.Reader, wrapperID stri
 	}
 }
 
-// latestResourceCount returns the managed resource count of the latest
-// checkpoint of the stack with stackID, or 0 when it has none. Callers hold
-// the write lock, so the check runs in the same step as the delete.
-func (s *fakeBackupStore) latestResourceCount(stackID string) int64 {
-	var (
-		best  stack.Checkpoint
-		found bool
-	)
-
-	for key := range s.data.checkpoints[stackID] {
-		cp := s.data.checkpoints[stackID][key]
-		u := s.data.updates[stackID][cp.Update.String()]
-
-		if !found || u.Version > s.data.updates[stackID][best.Update.String()].Version {
-			best, found = cp, true
-		}
-	}
-
-	if !found {
-		return 0
-	}
-
-	return stack.CountManagedResources(best.Deployment)
-}
-
-// removeStack deletes ref with the stack st, its children, key and entry.
-// Callers hold the write lock.
-func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
-	delete(s.data.stacks, ref.String())
-	delete(s.data.stackIDs, st.ID.String())
-	delete(s.data.updates, st.ID.String())
-	delete(s.data.checkpoints, st.ID.String())
-	delete(s.data.events, st.ID.String())
-	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
-
-	for scope, key := range s.data.keys {
-		if key.Scope.Namespace == ref.Namespace && key.Scope.ID == st.ID.String() {
-			delete(s.data.keys, scope)
-		}
-	}
-}
-
 // decodePeekKeys decodes the export stream frame by frame and returns the
 // secret_keys rows, or an empty map when the stream holds no secret_keys
 // frame. A corrupt stream reports ErrCorrupt.
@@ -2941,48 +2899,6 @@ func firstPeekKey(keys map[string]secret.WrappedKey) (secret.WrappedKey, bool) {
 	var none secret.WrappedKey
 
 	return none, false
-}
-
-// peekResult returns k, tampering its ciphertext when the peekTampered knob
-// breaks the peek on purpose.
-func (s *fakeBackupStore) peekResult(k secret.WrappedKey) secret.WrappedKey {
-	if !s.peekTampered {
-		return k
-	}
-
-	k.Ciphertext = append(bytes.Clone(k.Ciphertext), 0x00)
-
-	return k
-}
-
-// checkManifest refuses a manifest of another dialect or schema version,
-// unless the ignoreManifest knob accepts any manifest on purpose.
-func (s *fakeBackupStore) checkManifest(want backup.Summary) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.ignoreManifest {
-		return nil
-	}
-	if want.Dialect != s.dialect {
-		return fmt.Errorf(
-			"import backup of dialect %q into %q: %w",
-			want.Dialect,
-			s.dialect,
-			backup.ErrDialectMismatch,
-		)
-	}
-
-	if want.SchemaVersion != s.version {
-		return fmt.Errorf(
-			"import backup of schema version %d into version %d: %w",
-			want.SchemaVersion,
-			s.version,
-			backup.ErrSchemaMismatch,
-		)
-	}
-
-	return nil
 }
 
 // decodeBackup decodes every frame of the stream into fresh tables.
@@ -3047,295 +2963,6 @@ func checkRowCounts(loaded *fakeData, want backup.Summary) error {
 	}
 
 	return nil
-}
-
-// swapLoaded replaces the store data with the loaded tables in one locked
-// step. It rechecks emptiness under the write lock, so a writer that lands
-// after the first check is refused instead of silently overwritten. Real
-// adapters do the check plus the load in one transaction.
-func (s *fakeBackupStore) swapLoaded(loaded *fakeData) (backup.Summary, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return backup.Summary{}, errFakeClosed
-	}
-
-	if !s.skipEmptyCheck {
-		for table, n := range rowCountsOf(s.data) {
-			// The seeded installation row is bookkeeping, not data.
-			if table == "installation" {
-				continue
-			}
-
-			if n != 0 {
-				return backup.Summary{}, backup.ErrNotEmpty
-			}
-		}
-	}
-
-	s.data = loaded
-	s.rebuildIndexes()
-
-	return fakeSummaryOf(s.data, s.dialect, s.version, rowCountsOf(s.data)), nil
-}
-
-// tableRows gob-encodes one table and counts its rows. The caller holds the
-// store lock.
-func (s *fakeBackupStore) tableRows(table string) ([]byte, int64, error) {
-	value, ok := s.snapshotTables()[table]
-	if !ok {
-		return nil, 0, fmt.Errorf("export table %s: %w", table, backup.ErrCorrupt)
-	}
-
-	var buf bytes.Buffer
-
-	if err := gob.NewEncoder(&buf).Encode(value); err != nil {
-		return nil, 0, fmt.Errorf("encode table %s: %w", table, err)
-	}
-
-	return buf.Bytes(), rowCountsOf(s.data)[table], nil
-}
-
-// snapshotTables returns the encodable value of every table. The caller holds
-// the store lock.
-func (s *fakeBackupStore) snapshotTables() map[string]any {
-	return map[string]any{
-		"namespaces":               s.data.namespaces,
-		"stacks":                   s.data.stacks,
-		"stack_tags":               s.stackTags(),
-		"updates":                  s.data.updates,
-		"checkpoints":              s.data.checkpoints,
-		"update_events":            s.data.events,
-		"update_journal":           s.data.journal,
-		"update_journal_sequences": s.data.journalSequences,
-		"secret_keys":              s.data.keys,
-		"inventory":                s.data.entries,
-		"audit_entries":            s.data.audit,
-		"workspaces":               fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
-		"state_versions":           s.data.states,
-		"backups":                  s.data.backups,
-		"restores":                 s.data.restores,
-		"installation":             s.data.installation,
-	}
-}
-
-// stackTags returns the tags of every stack keyed by stack ID. The caller
-// holds the store lock.
-func (s *fakeBackupStore) stackTags() map[string]map[string]string {
-	tags := make(map[string]map[string]string, len(s.data.stacks))
-
-	for ref := range s.data.stacks {
-		st := s.data.stacks[ref]
-		tags[st.ID.String()] = maps.Clone(st.Tags)
-	}
-
-	return tags
-}
-
-// exportLocked encodes every table under one read lock. The counts map
-// gathers the row count of each table.
-func (s *fakeBackupStore) exportLocked(w io.Writer, counts map[string]int64) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	enc := gob.NewEncoder(w)
-
-	for _, table := range backup.Tables {
-		if table == s.dropTable {
-			continue
-		}
-
-		if err := s.writeTable(enc, counts, table); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// writeTable encodes one table and records its row count. The caller holds
-// the store lock.
-func (s *fakeBackupStore) writeTable(enc *gob.Encoder, counts map[string]int64, table string) error {
-	rows, count, err := s.tableRows(table)
-	if err != nil {
-		return err
-	}
-
-	if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows}); err != nil {
-		return fmt.Errorf("write table %s: %w", table, err)
-	}
-
-	counts[table] = count
-
-	return nil
-}
-
-// exportTorn encodes one table per read lock and calls betweenTables after
-// each, so a concurrent write lands in some tables but not others.
-func (s *fakeBackupStore) exportTorn(w io.Writer, counts map[string]int64) error {
-	enc := gob.NewEncoder(w)
-
-	for _, table := range backup.Tables {
-		if table == s.dropTable {
-			continue
-		}
-
-		s.mu.RLock()
-		rows, count, err := s.tableRows(table)
-		hook := s.betweenTables
-		s.mu.RUnlock()
-
-		if err != nil {
-			return err
-		}
-
-		if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows}); err != nil {
-			return fmt.Errorf("write table %s: %w", table, err)
-		}
-
-		counts[table] = count
-
-		if hook != nil {
-			hook(table)
-		}
-	}
-
-	return nil
-}
-
-// checkFence reports a missing namespace or a stale failover version. The
-// caller holds the store lock.
-func (s *fakeBackupStore) checkFence(fence namespace.Fence) error {
-	ns, ok := s.data.namespaces[fence.Namespace.String()]
-	if !ok {
-		return namespace.ErrNotFound
-	}
-
-	if ns.FailoverVersion != fence.FailoverVersion {
-		return namespace.ErrFenced
-	}
-
-	return nil
-}
-
-// stackIDOf returns the stable ID of ref. The caller holds the store lock.
-func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
-	st, ok := s.data.stacks[ref.String()]
-	if !ok {
-		return "", stack.ErrNotFound
-	}
-
-	return st.ID.String(), nil
-}
-
-// publishStack writes the Pulumi inventory entry of ref. The caller holds the
-// store lock.
-func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
-	name := ref.Project.String() + "/" + ref.Stack.String()
-	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
-		LastChanged:   changed,
-		Namespace:     ref.Namespace,
-		Tool:          "pulumi",
-		Name:          name,
-		UnitID:        unitID,
-		DisplayName:   name,
-		Status:        "",
-		ResourceCount: nil,
-		Lock:          nil,
-	}
-}
-
-// publishWorkspace writes the OpenTofu inventory entry of ref. The caller
-// holds the store lock.
-func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
-	name := ref.Name.String()
-	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
-		LastChanged:   changed,
-		Namespace:     ref.Namespace,
-		Tool:          "opentofu",
-		Name:          name,
-		UnitID:        unitID,
-		DisplayName:   name,
-		Status:        "",
-		ResourceCount: nil,
-		Lock:          nil,
-	}
-}
-
-// highestUpdateVersion returns the highest version of any update of the
-// stack. The caller holds the store lock.
-func (s *fakeBackupStore) highestUpdateVersion(stackID string) int64 {
-	var highest int64
-
-	for id := range s.data.updates[stackID] {
-		if version := s.data.updates[stackID][id].Version; version > highest {
-			highest = version
-		}
-	}
-
-	return highest
-}
-
-// checkRunningUpdate reports whether the update may accept a checkpoint or
-// events. The caller holds the store lock.
-func (s *fakeBackupStore) checkRunningUpdate(ref stack.Ref, id stack.UpdateID, lease [32]byte) error {
-	stackID, err := s.stackIDOf(ref)
-	if err != nil {
-		return stack.ErrUpdateNotFound
-	}
-
-	u, ok := s.data.updates[stackID][id.String()]
-	if !ok {
-		return stack.ErrUpdateNotFound
-	}
-
-	if u.Status != stack.StatusRunning || u.Lease.Digest != lease || !u.Mutates() {
-		return stack.ErrWrongUpdateState
-	}
-
-	return nil
-}
-
-// isClosed reports whether the handle is closed.
-func (s *fakeBackupStore) isClosed() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.closed
-}
-
-// empty reports whether the store holds no row. The seeded installation row
-// is bookkeeping, not data, so it never counts: a fresh store is empty.
-func (s *fakeBackupStore) empty() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for table, n := range rowCountsOf(s.data) {
-		if table == "installation" {
-			continue
-		}
-
-		if n != 0 {
-			return false
-		}
-	}
-
-	return true
-}
-
-// rebuildIndexes rebuilds the reference indexes from the rows. The caller
-// holds the store lock.
-func (s *fakeBackupStore) rebuildIndexes() {
-	s.data.stackIDs = map[string]string{}
-	for ref := range s.data.stacks {
-		s.data.stackIDs[s.data.stacks[ref].ID.String()] = ref
-	}
-
-	s.data.workspaceIDs = map[string]string{}
-	for id := range s.data.workspaces {
-		s.data.workspaceIDs[s.data.workspaces[id].Ref.String()] = id
-	}
 }
 
 // decodeTable decodes one frame into loaded.
@@ -3458,6 +3085,7 @@ func fakeNamespace(t *testing.T, s storetest.BackupStore, name, region string) n
 		CreatedAt:       fakeTime(),
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(region),
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 		FailoverVersion: 1,
 	}
 
@@ -4120,5 +3748,388 @@ func encodeFakeFrame(t *testing.T, enc *gob.Encoder, table string, value any) {
 
 	if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows.Bytes()}); err != nil {
 		t.Fatalf("write table %s: %v", table, err)
+	}
+}
+
+// SetOverrides is not used by this fake.
+func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
+}
+
+// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
+func (s *fakeBackupStore) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// latestResourceCount returns the managed resource count of the latest
+// checkpoint of the stack with stackID, or 0 when it has none. Callers hold
+// the write lock, so the check runs in the same step as the delete.
+func (s *fakeBackupStore) latestResourceCount(stackID string) int64 {
+	var (
+		best  stack.Checkpoint
+		found bool
+	)
+
+	for key := range s.data.checkpoints[stackID] {
+		cp := s.data.checkpoints[stackID][key]
+		u := s.data.updates[stackID][cp.Update.String()]
+
+		if !found || u.Version > s.data.updates[stackID][best.Update.String()].Version {
+			best, found = cp, true
+		}
+	}
+
+	if !found {
+		return 0
+	}
+
+	return stack.CountManagedResources(best.Deployment)
+}
+
+// removeStack deletes ref with the stack st, its children, key and entry.
+// Callers hold the write lock.
+func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
+	delete(s.data.stacks, ref.String())
+	delete(s.data.stackIDs, st.ID.String())
+	delete(s.data.updates, st.ID.String())
+	delete(s.data.checkpoints, st.ID.String())
+	delete(s.data.events, st.ID.String())
+	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
+
+	for scope, key := range s.data.keys {
+		if key.Scope.Namespace == ref.Namespace && key.Scope.ID == st.ID.String() {
+			delete(s.data.keys, scope)
+		}
+	}
+}
+
+// peekResult returns k, tampering its ciphertext when the peekTampered knob
+// breaks the peek on purpose.
+func (s *fakeBackupStore) peekResult(k secret.WrappedKey) secret.WrappedKey {
+	if !s.peekTampered {
+		return k
+	}
+
+	k.Ciphertext = append(bytes.Clone(k.Ciphertext), 0x00)
+
+	return k
+}
+
+// checkManifest refuses a manifest of another dialect or schema version,
+// unless the ignoreManifest knob accepts any manifest on purpose.
+func (s *fakeBackupStore) checkManifest(want backup.Summary) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.ignoreManifest {
+		return nil
+	}
+	if want.Dialect != s.dialect {
+		return fmt.Errorf(
+			"import backup of dialect %q into %q: %w",
+			want.Dialect,
+			s.dialect,
+			backup.ErrDialectMismatch,
+		)
+	}
+
+	if want.SchemaVersion != s.version {
+		return fmt.Errorf(
+			"import backup of schema version %d into version %d: %w",
+			want.SchemaVersion,
+			s.version,
+			backup.ErrSchemaMismatch,
+		)
+	}
+
+	return nil
+}
+
+// swapLoaded replaces the store data with the loaded tables in one locked
+// step. It rechecks emptiness under the write lock, so a writer that lands
+// after the first check is refused instead of silently overwritten. Real
+// adapters do the check plus the load in one transaction.
+func (s *fakeBackupStore) swapLoaded(loaded *fakeData) (backup.Summary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return backup.Summary{}, errFakeClosed
+	}
+
+	if !s.skipEmptyCheck {
+		for table, n := range rowCountsOf(s.data) {
+			// The seeded installation row is bookkeeping, not data.
+			if table == "installation" {
+				continue
+			}
+
+			if n != 0 {
+				return backup.Summary{}, backup.ErrNotEmpty
+			}
+		}
+	}
+
+	s.data = loaded
+	s.rebuildIndexes()
+
+	return fakeSummaryOf(s.data, s.dialect, s.version, rowCountsOf(s.data)), nil
+}
+
+// tableRows gob-encodes one table and counts its rows. The caller holds the
+// store lock.
+func (s *fakeBackupStore) tableRows(table string) ([]byte, int64, error) {
+	value, ok := s.snapshotTables()[table]
+	if !ok {
+		return nil, 0, fmt.Errorf("export table %s: %w", table, backup.ErrCorrupt)
+	}
+
+	var buf bytes.Buffer
+
+	if err := gob.NewEncoder(&buf).Encode(value); err != nil {
+		return nil, 0, fmt.Errorf("encode table %s: %w", table, err)
+	}
+
+	return buf.Bytes(), rowCountsOf(s.data)[table], nil
+}
+
+// snapshotTables returns the encodable value of every table. The caller holds
+// the store lock.
+func (s *fakeBackupStore) snapshotTables() map[string]any {
+	return map[string]any{
+		"namespaces":               s.data.namespaces,
+		"stacks":                   s.data.stacks,
+		"stack_tags":               s.stackTags(),
+		"updates":                  s.data.updates,
+		"checkpoints":              s.data.checkpoints,
+		"update_events":            s.data.events,
+		"update_journal":           s.data.journal,
+		"update_journal_sequences": s.data.journalSequences,
+		"secret_keys":              s.data.keys,
+		"inventory":                s.data.entries,
+		"audit_entries":            s.data.audit,
+		"workspaces":               fakeWorkspaceRows{Workspaces: s.data.workspaces, Current: s.data.current},
+		"state_versions":           s.data.states,
+		"backups":                  s.data.backups,
+		"restores":                 s.data.restores,
+		"installation":             s.data.installation,
+	}
+}
+
+// stackTags returns the tags of every stack keyed by stack ID. The caller
+// holds the store lock.
+func (s *fakeBackupStore) stackTags() map[string]map[string]string {
+	tags := make(map[string]map[string]string, len(s.data.stacks))
+
+	for ref := range s.data.stacks {
+		st := s.data.stacks[ref]
+		tags[st.ID.String()] = maps.Clone(st.Tags)
+	}
+
+	return tags
+}
+
+// exportLocked encodes every table under one read lock. The counts map
+// gathers the row count of each table.
+func (s *fakeBackupStore) exportLocked(w io.Writer, counts map[string]int64) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	enc := gob.NewEncoder(w)
+
+	for _, table := range backup.Tables {
+		if table == s.dropTable {
+			continue
+		}
+
+		if err := s.writeTable(enc, counts, table); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeTable encodes one table and records its row count. The caller holds
+// the store lock.
+func (s *fakeBackupStore) writeTable(enc *gob.Encoder, counts map[string]int64, table string) error {
+	rows, count, err := s.tableRows(table)
+	if err != nil {
+		return err
+	}
+
+	if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows}); err != nil {
+		return fmt.Errorf("write table %s: %w", table, err)
+	}
+
+	counts[table] = count
+
+	return nil
+}
+
+// exportTorn encodes one table per read lock and calls betweenTables after
+// each, so a concurrent write lands in some tables but not others.
+func (s *fakeBackupStore) exportTorn(w io.Writer, counts map[string]int64) error {
+	enc := gob.NewEncoder(w)
+
+	for _, table := range backup.Tables {
+		if table == s.dropTable {
+			continue
+		}
+
+		s.mu.RLock()
+		rows, count, err := s.tableRows(table)
+		hook := s.betweenTables
+		s.mu.RUnlock()
+
+		if err != nil {
+			return err
+		}
+
+		if err := enc.Encode(fakeTableFrame{Table: table, Rows: rows}); err != nil {
+			return fmt.Errorf("write table %s: %w", table, err)
+		}
+
+		counts[table] = count
+
+		if hook != nil {
+			hook(table)
+		}
+	}
+
+	return nil
+}
+
+// checkFence reports a missing namespace or a stale failover version. The
+// caller holds the store lock.
+func (s *fakeBackupStore) checkFence(fence namespace.Fence) error {
+	ns, ok := s.data.namespaces[fence.Namespace.String()]
+	if !ok {
+		return namespace.ErrNotFound
+	}
+
+	if ns.FailoverVersion != fence.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// stackIDOf returns the stable ID of ref. The caller holds the store lock.
+func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
+	st, ok := s.data.stacks[ref.String()]
+	if !ok {
+		return "", stack.ErrNotFound
+	}
+
+	return st.ID.String(), nil
+}
+
+// publishStack writes the Pulumi inventory entry of ref. The caller holds the
+// store lock.
+func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
+	name := ref.Project.String() + "/" + ref.Stack.String()
+	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		LastChanged:   changed,
+		Namespace:     ref.Namespace,
+		Tool:          "pulumi",
+		Name:          name,
+		UnitID:        unitID,
+		DisplayName:   name,
+		Status:        "",
+		ResourceCount: nil,
+		Lock:          nil,
+	}
+}
+
+// publishWorkspace writes the OpenTofu inventory entry of ref. The caller
+// holds the store lock.
+func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
+	name := ref.Name.String()
+	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		LastChanged:   changed,
+		Namespace:     ref.Namespace,
+		Tool:          "opentofu",
+		Name:          name,
+		UnitID:        unitID,
+		DisplayName:   name,
+		Status:        "",
+		ResourceCount: nil,
+		Lock:          nil,
+	}
+}
+
+// highestUpdateVersion returns the highest version of any update of the
+// stack. The caller holds the store lock.
+func (s *fakeBackupStore) highestUpdateVersion(stackID string) int64 {
+	var highest int64
+
+	for id := range s.data.updates[stackID] {
+		if version := s.data.updates[stackID][id].Version; version > highest {
+			highest = version
+		}
+	}
+
+	return highest
+}
+
+// checkRunningUpdate reports whether the update may accept a checkpoint or
+// events. The caller holds the store lock.
+func (s *fakeBackupStore) checkRunningUpdate(ref stack.Ref, id stack.UpdateID, lease [32]byte) error {
+	stackID, err := s.stackIDOf(ref)
+	if err != nil {
+		return stack.ErrUpdateNotFound
+	}
+
+	u, ok := s.data.updates[stackID][id.String()]
+	if !ok {
+		return stack.ErrUpdateNotFound
+	}
+
+	if u.Status != stack.StatusRunning || u.Lease.Digest != lease || !u.Mutates() {
+		return stack.ErrWrongUpdateState
+	}
+
+	return nil
+}
+
+// isClosed reports whether the handle is closed.
+func (s *fakeBackupStore) isClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.closed
+}
+
+// empty reports whether the store holds no row. The seeded installation row
+// is bookkeeping, not data, so it never counts: a fresh store is empty.
+func (s *fakeBackupStore) empty() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for table, n := range rowCountsOf(s.data) {
+		if table == "installation" {
+			continue
+		}
+
+		if n != 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+// rebuildIndexes rebuilds the reference indexes from the rows. The caller
+// holds the store lock.
+func (s *fakeBackupStore) rebuildIndexes() {
+	s.data.stackIDs = map[string]string{}
+	for ref := range s.data.stacks {
+		s.data.stackIDs[s.data.stacks[ref].ID.String()] = ref
+	}
+
+	s.data.workspaceIDs = map[string]string{}
+	for id := range s.data.workspaces {
+		s.data.workspaceIDs[s.data.workspaces[id].Ref.String()] = id
 	}
 }

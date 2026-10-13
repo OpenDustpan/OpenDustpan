@@ -110,8 +110,11 @@ func pgCopyTables() []pgCopyTable {
 func pgCopyStackTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
-			table:   "namespaces",
-			columns: []string{pgColName, "home_region", "failover_version", pgColCreatedAtMs},
+			table: "namespaces",
+			columns: []string{
+				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
+				"allow_forced_writes", "allow_unlocked_writes",
+			},
 			orderBy: []string{pgColName},
 		},
 		{
@@ -198,6 +201,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, "updated_at_ms",
+				"allow_forced_writes", "allow_unlocked_writes",
 			},
 			orderBy: []string{"id"},
 		},
@@ -207,7 +211,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", "workspace_id", pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
-				"sensitive_marks", "fenced_by",
+				"sensitive_marks", "fenced_by", "unlocked_write",
 			},
 			orderBy: []string{"id"},
 		},

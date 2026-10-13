@@ -738,7 +738,7 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateV
 		Outputs: []byte(seedStateOutputs),
 		Serial:  serial,
 		Force:   false,
-	})
+	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if beginErr != nil {
 		tb.Fatalf("begin seed state: %v", beginErr)
 	}
@@ -933,36 +933,16 @@ func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
-	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
-	}
+	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: ""})
+}
 
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
-	if err != nil {
-		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/vnd.api+json")
-	}
-
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
-	}
-
-	defer func() {
-		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
-	}()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
-	}
-
-	return resp.StatusCode, string(respBody), nil
+// tfeCall is one TFE API request. An empty userAgent keeps the client default,
+// which the route coverage check counts as harness traffic.
+type tfeCall struct {
+	method    string
+	path      string
+	body      string
+	userAgent string
 }
 
 // TFEStatusA sends one TFE API request as principal A, the default principal
@@ -1090,6 +1070,9 @@ func (e *Env) WorkspaceID(ctx context.Context, tb testing.TB) string {
 
 // APIStepSpec describes one TFE API step.
 type APIStepSpec struct {
+	// UserAgent sets the User-Agent of the request. Empty keeps the client
+	// default. A step that counts for route coverage names its own agent.
+	UserAgent string
 	// Check inspects the response body; nil means the status is enough.
 	Check func(body string) error
 	// Name labels the subtest, the report row and the requests the step makes.
@@ -1117,7 +1100,12 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 
 		var exitCode int
 
-		status, respBody, err := e.TFEStatus(ctx, token, spec.Method, spec.Path, spec.Body)
+		status, respBody, err := e.tfeStatusAs(ctx, token, tfeCall{
+			method:    spec.Method,
+			path:      spec.Path,
+			body:      spec.Body,
+			userAgent: spec.UserAgent,
+		})
 
 		switch {
 		case err != nil:
@@ -2163,6 +2151,46 @@ func (e *Env) createNamespaceThroughAPI(ctx context.Context, tb testing.TB, name
 	if doc.Name != name || doc.HomeRegion != region || doc.FailoverVersion != 1 {
 		tb.Fatalf("namespace answers %+v, want %q in %q at version 1", doc, name, region)
 	}
+}
+
+// tfeStatusAs is TFEStatus for one tfeCall.
+func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int, string, error) {
+	method, path, body, userAgent := call.method, call.path, call.body, call.userAgent
+
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	if err != nil {
+		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+	}
+
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+	}
+
+	return resp.StatusCode, string(respBody), nil
 }
 
 // clip shortens s for logs and reports.

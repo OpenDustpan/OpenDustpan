@@ -62,7 +62,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestForceUnlockFencesPlainState(t *testing.T) {
 		t.Fatalf("push v1: %v", err)
 	}
 
-	if _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin"); err != nil {
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	released, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin")
+	released, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
 	if err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
@@ -196,7 +196,8 @@ func TestForceUnlockSealedNeedsSealer(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	if _, err := f.plain.ForceUnlock(ctx, f.ws.ID, "admin"); !errors.Is(err, workspace.ErrSealerNotConfigured) {
+	_, _, err := f.plain.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
+	if !errors.Is(err, workspace.ErrSealerNotConfigured) {
 		t.Fatalf("force unlock without a sealer: err = %v, want ErrSealerNotConfigured", err)
 	}
 
@@ -240,7 +241,7 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 		}
 	}
 
-	_, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin")
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
 	if !errors.Is(err, workspace.ErrConcurrentModification) {
 		t.Fatalf("force unlock beside a finalize: err = %v, want ErrConcurrentModification", err)
 	}
@@ -285,7 +286,7 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
-	_, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin")
+	_, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
 	if !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Fatalf("force unlock of an encrypted state: err = %v, want ErrClientEncrypted", err)
 	}

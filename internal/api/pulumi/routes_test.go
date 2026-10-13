@@ -82,6 +82,7 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 		Name:            "acme",
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -1811,4 +1812,9 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 	}
 
 	return updates
+}
+
+// SetOverrides is not used by this fake.
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

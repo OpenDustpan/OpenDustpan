@@ -76,6 +76,7 @@ func (h *Handler) buildRoutes() []Route {
 		h.discoveryRoutes(),
 		h.workspaceRoutes(),
 		h.lockRoutes(),
+		h.overrideRoutes(),
 		h.stateRoutes(),
 		h.stateWriteRoutes(),
 	)

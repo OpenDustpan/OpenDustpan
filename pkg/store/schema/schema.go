@@ -150,6 +150,7 @@ var embeddedMigrationNames = []string{
 	"0023_update_journal_version.sql",
 	"0024_state_fence.sql",
 	"0025_update_journal.sql",
+	"0026_override_switches.sql",
 	"0027_update_journal_md5.sql",
 }
 
