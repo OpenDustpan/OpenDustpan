@@ -57,12 +57,10 @@ The project owner chose this export. It helps a reviewer check access.
   permission endpoints?
 - (research) Which built-in roles, by name and by action? The owner chose to
   copy the role sets of competitors (ADR 52, decision 4).
-- Custom roles: can an administrator make a role as a set of actions?
-- A view for site administrators across namespaces, and grants on the whole
-  installation.
-- Does a group belong to one namespace or to the whole installation?
-- Can a principal that is not a person (a service token owner, a workload of
-  ADR 54) be a member of a group?
+- Which administrators can make custom roles, and can a custom role belong
+  to one namespace?
+- Can a group be a member of another group?
+- Which conditions on attributes can a grant hold, and when do they come?
 
 ## Owner direction (2026-10-11)
 
@@ -115,14 +113,30 @@ This answer replaces the owner's answer "Yes." of 2026-10-12 to the question
 "Can a role be granted on a label (RFC 4)". A role cannot be granted on a
 label.
 
+Second round, through the project lead, on 2026-10-13:
+
+- Question "Does a group belong to one namespace or to the whole
+  installation?": "Installation-wide".
+- Questions "Custom roles?", "A site-admin view and grants on the whole
+  installation?" and "Can a non-person principal be in a group?": the owner
+  chose custom roles, a site-admin view, grants on the whole installation and
+  group members that are not persons. The owner added: "Non-person group
+  members is very specific. Any actor can be assigned any role on any object.
+  Our RBAC/ABAC should be flexible to account for this." So any principal (a
+  person, a service, a workload or a group) can get any role on any object:
+  the installation, a namespace, a collection or a unit.
+
 ## Outcome
 
 Accepted in part as ADR 52 on 2026-10-13:
 
-- Groups, not teams. A principal can be a member of more than one group.
-- A grant gives a role to a principal or a group on a namespace, a
-  collection (ADR 51) or a unit. A label never grants access.
-- A broad built-in role set that follows the role sets of other products.
+- Groups, not teams. A group belongs to the whole installation. A principal
+  can be a member of more than one group, and any principal can be a member.
+- A grant gives any role to any principal or group on any object: the
+  installation, a namespace, a collection (ADR 51) or a unit. A label never
+  grants access.
+- A broad built-in role set that follows the role sets of other products,
+  custom roles, and a view for site administrators.
 - The access-review export: a snapshot of the current grants, or a history
   between two timestamps. It covers every grant, with scoping. It shows
   `Never` for a principal with no sign-in and no access token use. JSON from

@@ -37,7 +37,7 @@ The list of all units in a namespace across all tools, with their last change an
 _Avoid_: Catalog, registry, index
 
 **Collection**:
-A named set of units in one namespace, from any tool, that a team manages. A unit is in no more than one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
+A named set of units in one namespace, from any tool, that a team manages. Each unit is in exactly one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
 _Avoid_: Group (that is a set of principals), project, folder, system
 
 **Label**:
@@ -117,7 +117,7 @@ A rule in one namespace that matches a JWT from an issuer or a TLS client certif
 _Avoid_: Trust policy, federation rule
 
 **Group**:
-A named set of principals. A principal can be a member of more than one group (ADR 52).
+A named set of principals of the whole installation. A principal can be a member of more than one group (ADR 52).
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
@@ -125,11 +125,11 @@ A named set of actions (ADR 52).
 _Avoid_: Permission set, policy
 
 **Grant**:
-A record that gives one role to a principal or a group on one namespace, collection or unit (ADR 52).
+A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52).
 _Avoid_: Binding, assignment, permission
 
 **Action**:
-A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on namespaces, collections and units. A policy check can deny an action (ADR 17).
+A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on the installation, namespaces, collections and units. A policy check can deny an action (ADR 17).
 _Avoid_: Permission, verb, scope
 
 ### Pulumi

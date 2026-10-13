@@ -59,29 +59,41 @@ without an identity provider (for example, local users or LDAP).
 ## Open questions
 
 The owner answered the first, second and fourth question of the earlier
-list on 2026-10-13. These stay open:
+list on 2026-10-13. These stay open. Each "lead proposal" is a proposed
+default from the project lead for the owner to decide. It is not a decision.
 
-- Does "require MFA" apply to the bootstrap admin token?
-- What does "OAuth" in the list of 2026-10-13 cover? ADR 6 says that OAuth
-  2.0 alone is authorization and OIDC is the login standard. Does the adapter
-  support OIDC only, or also OAuth 2.0 providers with no OIDC?
-- Does an IP allowlist apply to the whole installation, to a namespace, or
-  to both? Does it apply to access tokens as well as to console sign-in?
-- What does a SCIM removal do to the access tokens and the sessions of the
-  removed user?
-- Does trusted-header sign-in give groups as well as a user?
+- Does "require MFA" apply to the bootstrap admin token? Lead proposal: no.
+  The server reads the token from the environment, the operator must retire
+  it (ADR 53), and each use writes an audit entry.
+- How do IP allowlists at more than one level combine? Lead proposal: a
+  request must pass each list that applies to it: the installation list,
+  the namespace list and the token list.
+- How does the server find that LDAP removed a user? Lead proposal: at the
+  next sign-in, and with a sync at a configurable interval.
+- Does trusted-header sign-in give groups as well as a user? Lead proposal:
+  yes, from a second header that the operator names, off by default.
 - How does MFA freshness work with an SSO identity provider, where MFA is the
-  job of the provider (ADR 46)?
+  job of the provider (ADR 46)? Lead proposal: the server asks the provider
+  for a new sign-in when the last one is older than the window of ADR 56.
+  Examples are OIDC `max_age` and SAML `ForceAuthn`.
 - What are the defaults for the idle timeout and the maximum length of a
-  console session? The research doc gives 15 minutes idle (PCI DSS v4.0.1
-  8.2.8) and 12 hours at most (NIST SP 800-63B-4, AAL3).
+  console session? Lead proposal: 15 minutes idle (PCI DSS v4.0.1 8.2.8) and
+  12 hours at most (NIST SP 800-63B-4, AAL3). An administrator can change
+  both.
 - Can an operator change the break-glass mode after the first boot, and how?
-- What does "works once" mean for break-glass mode 1: one sign-in, one MFA
-  reset, or a time limit?
+  Lead proposal: yes, through an API call by an administrator, with an
+  audit entry. The server never changes the mode on its own.
+- What does "works once" mean for break-glass mode 1? Lead proposal: one
+  sign-in. In that session the operator makes a new administrator or resets
+  an MFA. The token stops working when the session ends, or 1 hour after
+  the restart if no one uses it.
 - How does the audit entry of a break-glass use name a person, as PCI DSS
-  v4.0.1 8.2.2 asks?
+  v4.0.1 8.2.2 asks? Lead proposal: the recovery request carries the name
+  of the operator and a reason, and the audit entry holds both.
 - What is the format of the offline operator key and of the signed recovery
-  request of break-glass mode 2?
+  request of break-glass mode 2? Lead proposal: an Ed25519 key pair. The
+  request is a small signed document with the installation, a nonce and an
+  expiry.
 
 ## Owner direction (2026-10-11)
 
@@ -146,6 +158,21 @@ quotation marks are the words of the owner.
 The research doc `docs/research/m4-identity-defaults.md` holds the findings
 for the defaults.
 
+Second round, through the project lead, on 2026-10-13:
+
+- Question "What does \"OAuth\" cover: OIDC only, or also plain OAuth 2.0
+  providers?": "Any OAuth 2.0 provider". ADR 55 records how this fits ADR 6:
+  a provider with no OIDC needs a configured user-info endpoint and a claim
+  mapping to identify a person.
+- Question "What does a SCIM or LDAP removal do to the user's tokens and
+  sessions?": "Disabled by default, with opt-in auto-revoke." The project
+  lead reads this as follows. A removal disables the sessions and the access
+  tokens of the user, and the server keeps them for review. An administrator
+  setting turns on revocation at once instead.
+- Question "Where do IP allowlists apply?": per installation, per namespace
+  and per access token. They apply to access tokens as well as to console
+  sign-in. The project lead gave this answer in summary, with no quote.
+
 ## Outcome
 
 The part on built-in MFA is accepted as ADR 46 on 2026-10-12.
@@ -154,10 +181,14 @@ Accepted on 2026-10-13:
 
 - ADR 55: LDAP, SAML, CAS, OAuth, SCIM 2.0, passkeys for local users,
   trusted-header sign-in and IP allowlists are in the binary in milestone 4.
-  Each is an adapter behind a port.
+  Each is an adapter behind a port. OAuth covers any OAuth 2.0 provider. IP
+  allowlists apply per installation, per namespace and per token. A SCIM or
+  LDAP removal disables the sessions and tokens of the user, and revocation
+  at once is opt-in.
 - ADR 56: an MFA step stays valid for 15 minutes by default for token
-  creation and for secret reveal (PCI DSS v4.0.1 8.2.8, by analogy). An
-  administrator sets each window.
+  creation and for secret reveal. No standard sets a number for MFA
+  freshness. The number comes from the idle limit of PCI DSS v4.0.1 8.2.8,
+  by analogy. An administrator sets each window.
 - ADR 57: three break-glass modes. The operator chooses one at first boot.
   Mode 1, the one-time bootstrap admin token, is the default, because no
   standard names a preferred option.

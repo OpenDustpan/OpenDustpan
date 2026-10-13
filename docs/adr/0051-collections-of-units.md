@@ -12,7 +12,9 @@ for the profiles of RFC 5 and for the output sharing of RFC 15.
 
 On 2026-10-12 the owner chose the word: "I guess collection sounds good."
 The owner said that a unit is in no more than one collection ("No."). The
-owner also said that groupings do not nest.
+owner also said that groupings do not nest. On 2026-10-13 the owner said that
+each unit must be in a collection: "Yes, and no default collection. Users
+create one."
 
 On 2026-10-12 the owner answered "Yes." to the question "Can a role be
 granted on a label?" On 2026-10-13 the owner replaced that answer with
@@ -30,38 +32,46 @@ Labels are for views and filters, and they never grant access.
    never a part of a unit name. A unit keeps its own name and its own URL in
    its tool.
 3. **Collections do not nest.** A collection holds units, not collections.
-4. **A unit is in no more than one collection.**
-5. **Membership is explicit.** A person or a client adds a unit to a
-   collection, or removes it, with an API call. Each change has a declared
+4. **Each unit is in exactly one collection.** No default collection exists.
+   People make the collections that they need.
+5. **No collection, no unit.** When the server cannot find the collection
+   for a new unit, it refuses to make the unit. The error names the missing
+   collection and the ways to give one. This follows from decision 4: a
+   unit with no collection cannot exist.
+6. **Membership is explicit.** A person or a client names the collection of
+   a unit when it makes the unit, or moves the unit to another collection
+   with an API call. Each change has a declared
    action, passes the policy check and writes an audit entry (ADR 17). A
-   label, a tag or a name pattern never puts a unit into a collection.
-6. **Labels never grant access.** A label (a tag that a tool sends, or a
+   label or a tag never puts a unit into a collection.
+7. **Labels never grant access.** A label (a tag that a tool sends, or a
    label of OpenDustpan) is for views and filters. A saved view can look
    like a collection, but it grants nothing. This replaces the owner's
    2026-10-12 "Yes." to grants on a label.
-7. **A collection is an object of a grant.** A grant, a profile attachment
+8. **A collection is an object of a grant.** A grant, a profile attachment
    (RFC 5) and an output-sharing rule (RFC 15) can name a namespace, a
    collection or a unit as their object. The actions stay the same. The
    collection only widens the object (ADR 13, ADR 17).
-8. **A blueprint can choose the collection.** A blueprint (RFC 14) can name
+9. **A blueprint can choose the collection.** A blueprint (RFC 14) can name
    the collection of the unit that it makes. It can also stop a later change
    of that collection. Both are options of the blueprint.
-9. **No mapping from Kubernetes namespaces.** The Kubernetes operator
-   (RFC 31) does not map a Kubernetes namespace to a collection.
-10. **API.** Each collection operation has a REST API and an action
+10. **No mapping from Kubernetes namespaces.** The Kubernetes operator
+    (RFC 31) does not map a Kubernetes namespace to a collection.
+11. **API.** Each collection operation has a REST API and an action
     (ADR 17).
 
 ## Not decided here
 
 [RFC 4](../rfc/0004-what-sits-under-a-namespace.md) keeps these open:
 
-- Must each unit be in a collection, or can a unit be in no collection?
+- How a CLI names the collection of a new unit. For OpenTofu, the RFC
+  sketches the TFE project of the `cloud` block. For the Pulumi CLI, it
+  sketches placement rules on the Pulumi project and the stack name. Until
+  one of these exists, decision 5 refuses each unit that a CLI makes.
+- How the server gives a collection to the units that exist before this ADR.
 - The name rules of a collection, and whether the TFE-compatible API shows a
   collection as a TFE project.
-- How a new Pulumi stack gets its collection. The RFC sketches placement
-  rules on the Pulumi project and the stack name.
-- Which rights a person needs to add a unit to a collection, to remove it,
-  and to move it to another collection.
+- Which rights a person needs to put a unit into a collection and to move
+  it to another collection.
 - The other first ideas of RFC 4: the first screen of a namespace, the
   environment as a concept, views across namespaces and the tags that the
   inventory indexes.

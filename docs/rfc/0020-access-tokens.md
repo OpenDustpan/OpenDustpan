@@ -59,30 +59,36 @@ The project owner chose this life cycle. It covers each access token.
 
 ## Open questions
 
+Each "lead proposal" is a proposed default from the project lead for the
+owner to decide. It is not a decision.
+
 - (e2e) Does the Pulumi CLI's OIDC login flow work against a self-hosted
   backend?
 - (e2e) Which TFE token endpoints (organization, team) must the TFE-compatible
   API serve?
 - Which roles may rotate or revoke the access token of another principal?
-- Does the inactivity disable also apply to a principal (a user account), as
-  PCI DSS v4.0.1 requirement 8.2.6 asks for user accounts?
-- Does the inactivity disable skip the bootstrap admin token and a
-  break-glass token? NIST SP 800-53 Rev. 5 AC-2 says that some "accounts of
-  last resort" are not subject to automatic disabling.
 - Do the maximum lifetime and the inactivity period belong to the
-  installation, to a namespace, or to both?
+  installation, to a namespace, or to both? Lead proposal: an installation
+  setting that a namespace can make stricter, not looser.
 - What is the default maximum lifetime, and how long before the expiry do
-  the warnings start?
+  the warnings start? No standard sets either number. Lead proposal: a
+  maximum of 1 year, and warnings 14 days and 3 days before the expiry.
 - (e2e) Which CLI shows the expiry warning: the `opendustpan` CLI, or the
   tool CLIs? A tool CLI shows a server warning only if its protocol has a
-  place for one.
+  place for one. Lead proposal: the `opendustpan` CLI always. A tool CLI
+  only where `make e2e` shows that the tool prints the warning.
 - Where do the SMTP settings live, and are they run-time settings (ADR 17)?
 - (e2e) Which tool CLIs can send a TLS client certificate? If a tool cannot,
   can a workload use mTLS at the exchange endpoint to get an access token?
+  Lead proposal: yes, the exchange endpoint accepts mTLS as well as a JWT.
 - How does mTLS work when a proxy of the operator ends TLS before the
-  server?
-- What is the lifetime of an exchanged access token, and its default?
+  server? Lead proposal: the proxy sends the checked client certificate in
+  a header. The server accepts that header only from proxies that the
+  operator names, as for trusted-header sign-in (ADR 55).
+- What is the lifetime of an exchanged access token, and its default? Lead
+  proposal: 1 hour by default, and an administrator can change it.
 - Can an administrator turn off static service tokens for a namespace?
+  Lead proposal: yes. Service tokens stay on by default.
 
 ## Owner direction (2026-10-11)
 
@@ -134,17 +140,31 @@ quotation marks are the words of the owner.
   email and a CLI warning. The email needs SMTP settings. The event and the
   webhook go to milestone 5 (RFC 23).
 
+Second round, through the project lead, on 2026-10-13:
+
+- Questions "Does the 90-day inactivity disable also apply to user
+  accounts?" and "Should the bootstrap and break-glass tokens be exempt from
+  the inactivity disable?": "Configurable. Default to tokens + accounts;
+  exempt break-glass, but allow all of these settings." So by default the
+  90-day disable covers access tokens and user accounts, and the break-glass
+  credential is exempt. Each of these is a setting.
+
 ## Outcome
 
 Accepted in part on 2026-10-13:
 
-- ADR 53, the token life cycle: a last-used time and an expiry on each
-  access token, a maximum lifetime that an administrator sets, an
-  inactivity disable after 90 days by default (PCI DSS v4.0.1 requirement
-  8.2.6, by analogy) that an administrator can change or turn off, service
-  tokens, rotation, the prompt to retire the bootstrap admin token, and
-  expiry warnings as an API field, a console banner, an email and a CLI
-  warning. Events and webhooks for expiry go to milestone 5.
+- ADR 53, the token life cycle:
+  - a last-used time and an expiry on each access token, and a maximum
+    lifetime that an administrator sets;
+  - an inactivity disable of access tokens and user accounts after 90 days
+    by default, with the break-glass credential exempt. The number comes
+    from PCI DSS v4.0.1 requirement 8.2.6, which names user accounts. No
+    standard sets a number for tokens. An administrator can change or turn
+    off each part;
+  - service tokens, rotation, and the prompt to retire the bootstrap admin
+    token;
+  - expiry warnings as an API field, a console banner, an email and a CLI
+    warning. Events and webhooks for expiry go to milestone 5.
 - ADR 54, workload identity: token exchange for any OIDC or JWT issuer and
   mTLS client certificates, with trust rules per namespace. Static tokens
   are discouraged for machines.

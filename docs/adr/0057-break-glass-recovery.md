@@ -52,7 +52,7 @@ does not apply to this question.
 4. **Mode 1 works once.** The operator sets a new bootstrap admin token in
    the configuration or the environment (ADR 6) and restarts the server. The
    token works for one recovery. Then the operator must retire it (ADR 53,
-   decision 8).
+   decision 9).
 5. **Every break-glass use writes an audit entry.** This applies to mode 1
    and mode 2. The entry holds the mode, the time and the source of the
    request.
@@ -76,6 +76,8 @@ does not apply to this question.
 
 ## Consequences
 
+- The inactivity disable of ADR 53 skips the break-glass credential by
+  default (ADR 53, decision 5).
 - Mode 3 still needs the bootstrap admin token on the empty installation
   that receives the backup (ADR 39).
 - The docs for operators describe each mode and the steps of a recovery.

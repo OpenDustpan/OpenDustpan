@@ -181,17 +181,26 @@ The owner answered every question of this list. See "Owner direction
 ### Open questions for collections
 
 ADR 51 accepts the collection. These questions stay open after the owner
-direction of 2026-10-13:
+direction of 2026-10-13. Each "lead proposal" is a proposed default from the
+project lead for the owner to decide. It is not a decision.
 
-- Must each unit be in a collection, or can a unit be in no collection?
 - Does the owner accept the sketch above for names: a collection name
   follows the TFE project name rules, and the TFE-compatible API shows each
-  collection as a TFE project?
-- Does the owner accept the placement rules above for a new Pulumi stack,
-  with a default collection or a refusal when no rule matches?
-- Which rights does a person need to add a unit to a collection, to remove
-  it, and to move it? The sketch says: a right on the unit and a right on
-  the collection to add, the right on the collection to remove.
+  collection as a TFE project? Lead proposal: yes. A workspace that names a
+  TFE project in its `cloud` block then lands in that collection.
+- Does the owner accept the placement rules above for a new Pulumi stack?
+  Lead proposal: yes, first match wins. With no default collection (ADR 51),
+  a stack that matches no rule and names no collection is refused. The
+  error names the namespace, the Pulumi project and the stack, and says to
+  add a placement rule or to make the stack through the API with a
+  collection.
+- Which rights does a person need to put a unit into a collection and to
+  move it? Lead proposal: a right on the unit and a right on the target
+  collection to put it in. To move it, also a right on the old collection.
+- How does the server give a collection to the units that exist before
+  ADR 51? Lead proposal: an upgrade step makes no default collection. The
+  server refuses writes to such a unit until an administrator moves it into
+  a collection, and the error names the fix.
 - (e2e) Can a stack tag that the CLI sends at creation name the collection,
   as a request that the server still checks?
 
@@ -224,11 +233,20 @@ question "Can a role be granted on a label (RFC 4)". A label never grants
 access. The section "Membership: explicit, not by label" above already said
 that a saved view never grants anything.
 
+Second round, through the project lead, on 2026-10-13:
+
+- Question "Must each unit be in a collection, or can a unit be in no
+  collection?": "Yes, and no default collection. Users create one." So each
+  unit is in exactly one collection, and no default collection exists.
+  ADR 51 derives from this that the server refuses a new unit when it
+  cannot find its collection, with an error that names the fix.
+
 ## Outcome
 
-The collection part is accepted as ADR 51 on 2026-10-13: a collection is a
+The collection part is accepted as ADR 51 on 2026-10-13. A collection is a
 named set of units in one namespace, from any tool. Collections do not nest.
-A unit is in no more than one collection. Membership is explicit, and labels
-never grant access. A grant, a profile attachment and an output-sharing rule
-can name a collection as their object. The rest of this RFC has no outcome
-yet.
+Each unit is in exactly one collection, and no default collection exists. The
+server refuses a new unit with no collection. Membership is explicit, and
+labels never grant access. A grant, a profile attachment and an
+output-sharing rule can name a collection as their object. The rest of this
+RFC has no outcome yet.

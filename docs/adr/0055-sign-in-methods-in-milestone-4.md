@@ -16,6 +16,17 @@ proxy of the operator. On 2026-10-13 the project owner answered with this
 list for milestone 4: "LDAP, SAML, CAS, OAuth, SCIM 2.0, Passkeys for local
 users, Trusted-header sign-in, IP allowlists".
 
+On 2026-10-13 the owner also answered three questions on this list:
+
+- What "OAuth" covers: "Any OAuth 2.0 provider".
+- What a SCIM or LDAP removal does: "Disabled by default, with opt-in
+  auto-revoke." The project lead read this answer as follows. A removal
+  disables the sessions and the access tokens of the user, and the server
+  keeps them for review. A setting turns on revocation at once instead.
+- Where IP allowlists apply: per installation, per namespace and per access
+  token. They apply to access tokens and to console sign-in. The project
+  lead gave this answer in summary.
+
 ## Decision
 
 1. **All of these are in the binary in milestone 4.** An operator does not
@@ -26,11 +37,11 @@ users, Trusted-header sign-in, IP allowlists".
    | LDAP | `Authenticator` adapter: a directory check of a user name and a password |
    | SAML | `Authenticator` adapter: SSO sign-in in the browser |
    | CAS | `Authenticator` adapter: SSO sign-in in the browser |
-   | OAuth | `Authenticator` adapter: sign-in in the browser through an OAuth provider |
+   | OAuth | `Authenticator` adapter: sign-in in the browser through any OAuth 2.0 provider |
    | SCIM 2.0 | Provisioning adapter: users and groups from an identity provider |
    | Passkeys for local users | Part of the local-user `Authenticator`: a sign-in with a WebAuthn passkey and no password |
    | Trusted-header sign-in | `Authenticator` adapter: the identity comes from a header that a trusted proxy sets |
-   | IP allowlists | A check on the source address of a request |
+   | IP allowlists | A check on the source address of a request, for console sign-in and for access tokens |
 
 2. **Each method is an adapter behind a port.** Sign-in methods implement
    the `Authenticator` port of ADR 6. SCIM implements a provisioning port.
@@ -46,24 +57,36 @@ users, Trusted-header sign-in, IP allowlists".
 6. **Trusted-header sign-in is off by default.** The operator turns it on
    and names the proxies that may set the header. The server ignores the
    header from any other source.
-7. **MFA follows ADR 46.** With an SSO identity provider (SAML, CAS, OAuth),
-   MFA is the job of that provider. For local users and LDAP, built-in MFA
-   applies.
-8. **API.** The configuration of each method that changes at run time has a
-   REST API and an action (ADR 17). Each change writes an audit entry.
+7. **Any OAuth 2.0 provider, with a configured identity.** ADR 6 says that
+   OAuth 2.0 alone is authorization, not sign-in. So for a provider with no
+   OIDC, an administrator configures a user-info endpoint and a claim
+   mapping. The server calls that endpoint with the access token of the
+   provider, and the mapping names the claim that identifies the person.
+   For an OIDC provider, the ID token identifies the person. ADR 6 stays
+   true: the provider only proves who the person is.
+8. **IP allowlists at three levels.** An administrator can set an IP
+   allowlist for the installation, for a namespace and for one access
+   token. Each list applies to console sign-in and to requests with an
+   access token.
+9. **A removal disables, and revocation is opt-in.** When SCIM or LDAP
+   removes a user, the server disables the sessions and the access tokens
+   of the user. It keeps them for review. A setting
+   makes the server revoke them at once instead. The server writes an audit
+   entry for each disable and each revocation.
+10. **MFA follows ADR 46.** With an SSO identity provider (SAML, CAS,
+    OAuth), MFA is the job of that provider. For local users and LDAP,
+    built-in MFA applies.
+11. **API.** The configuration of each method that changes at run time has
+    a REST API and an action (ADR 17). Each change writes an audit entry.
 
 ## Not decided here
 
 [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) keeps these open:
 
-- What "OAuth" covers. ADR 6 says that OAuth 2.0 alone is authorization and
-  OIDC is the login standard. Does the adapter support OIDC only, or also
-  OAuth 2.0 providers with no OIDC?
-- Whether an IP allowlist applies to the whole installation, to a namespace,
-  or to both, and whether it applies to access tokens as well as to console
-  sign-in.
-- What a SCIM removal does to the access tokens and the sessions of the
-  removed user.
+- How lists at more than one level combine. For example, must a request
+  pass both the list of its namespace and the list of its token?
+- How the server finds that LDAP removed a user: at the next sign-in, with
+  a sync, or both.
 - Whether trusted-header sign-in gives groups as well as a user.
 - Whether "require MFA" (ADR 46) applies to the bootstrap admin token.
 
