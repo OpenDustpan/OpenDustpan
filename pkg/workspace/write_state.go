@@ -232,9 +232,7 @@ func (s *Service) finalizeStream(ctx context.Context, sw *streamWrite, sv StateV
 // sweep finds the blob through it. A refused placeholder left pending would fill
 // the pending cap for the lock holder (ADR 49, decision 7).
 func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error) error {
-	// The cleanup outlives the request: a client that disconnects cancels ctx,
-	// and the delete and the discard must still run. The timeout bounds them.
-	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refuseTimeout)
+	cleanCtx, cancel := cleanupContext(ctx)
 	defer cancel()
 
 	if delErr := s.deleteBlobRetried(cleanCtx, sw.key); delErr != nil {
@@ -425,4 +423,11 @@ func (sw *streamWrite) recordUsed(serial int64) error {
 	}
 
 	return nil
+}
+
+// cleanupContext returns the context of the cleanup of a refused write. The
+// cleanup outlives the request: a client that disconnects cancels ctx, and the
+// delete and the discard must still run. The timeout bounds them.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), refuseTimeout)
 }

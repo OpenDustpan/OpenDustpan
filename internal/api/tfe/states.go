@@ -176,11 +176,9 @@ func parseOutputID(id string) (workspace.StateVersionID, string, error) {
 func parseStoredOutputs(raw []byte) (map[string]storedOutput, error) {
 	var wrapped storedOutputs
 
-	if err := json.Unmarshal(raw, &wrapped); err != nil {
-		return nil, fmt.Errorf("decode stored outputs: %w", err)
-	}
-
-	if wrapped.Outputs != nil {
+	// A flat document with an output named "outputs" does not decode as the
+	// wrapped form: its entries are not outputs. It is read as flat below.
+	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Outputs != nil {
 		return wrapped.Outputs, nil
 	}
 

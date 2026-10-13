@@ -756,7 +756,7 @@ func (s *Service) Upload(
 		err = fmt.Errorf("finalize state %s: %w", id, err)
 		if rejected(err) {
 			// Nothing was written, so this attempt's blob is an orphan.
-			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+			return StateVersion{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
 		}
 
 		// The outcome is unknown; the version may point at this blob. Keep it.
@@ -2125,12 +2125,12 @@ func (s *Service) storeUploadBody(
 	// cannot read must not become current (ADR 49, decision 8).
 	meta, metaErr := stream.finish(nil)
 	if metaErr != nil {
-		return uploadedBody{}, errors.Join(metaErr, s.blobs.Delete(ctx, key))
+		return uploadedBody{}, errors.Join(metaErr, deleteOnCleanup(ctx, s.blobs, key))
 	}
 
 	outputs, err := s.streamedOutputs(ctx, w, meta)
 	if err != nil {
-		return uploadedBody{}, errors.Join(err, s.blobs.Delete(ctx, key))
+		return uploadedBody{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
 	}
 
 	return uploadedBody{size: size, outputs: outputs}, nil
@@ -2140,4 +2140,13 @@ func (s *Service) storeUploadBody(
 // adds nothing: the caller returns the store error.
 func abandonStream(stream *metaStream, cause error) {
 	_, _ = stream.finish(cause) //nolint:errcheck // The caller returns the store error.
+}
+
+// deleteOnCleanup deletes the blob under key on the cleanup context of a refused
+// upload, so a client that disconnects does not leave the blob behind.
+func deleteOnCleanup(ctx context.Context, blobs blob.Store, key blob.Key) error {
+	cleanCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+
+	return blobs.Delete(cleanCtx, key)
 }
