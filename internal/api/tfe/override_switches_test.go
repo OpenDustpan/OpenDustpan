@@ -115,6 +115,7 @@ func newSwitchedHandler(
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

@@ -127,6 +127,7 @@ func newAuditFixture(t *testing.T, err error) auditFixture {
 		BaseURL:       baseurl.Resolver{},
 		Audit:         entries,
 		Gate:          nil,
+		MaxStateBytes: 0,
 		OnAuditFailure: func() {
 			failures++
 		},

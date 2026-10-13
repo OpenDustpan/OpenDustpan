@@ -138,6 +138,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		routes:     nil,
 	}
 
+	if h.gate == nil {
+		h.gate = bodygate.New(0)
+	}
+
 	h.routes = h.buildRoutes()
 
 	for _, route := range h.routes {

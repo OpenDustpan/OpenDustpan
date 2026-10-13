@@ -107,6 +107,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -362,6 +363,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

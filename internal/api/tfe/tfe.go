@@ -193,6 +193,9 @@ type Config struct {
 	OnAuditFailure func()
 	// Gate bounds concurrent large bodies by bytes held at once.
 	Gate *bodygate.Gate
+	// MaxStateBytes bounds one OpenTofu state version. Zero means
+	// workspace.DefaultMaxStateBytes.
+	MaxStateBytes int64
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -207,6 +210,7 @@ type Handler struct {
 	audit          audit.Store
 	onAuditFailure func()
 	gate           *bodygate.Gate
+	maxState       int64
 	mux            *patternMux
 	routes         []Route
 }
@@ -236,8 +240,17 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		gate:           cfg.Gate,
+		maxState:       cfg.MaxStateBytes,
 		mux:            newPatternMux(),
 		routes:         nil,
+	}
+
+	if h.gate == nil {
+		h.gate = bodygate.New(0)
+	}
+
+	if h.maxState == 0 {
+		h.maxState = workspace.DefaultMaxStateBytes
 	}
 
 	h.routes = h.buildRoutes()

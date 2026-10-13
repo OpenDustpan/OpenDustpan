@@ -102,6 +102,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -789,6 +790,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

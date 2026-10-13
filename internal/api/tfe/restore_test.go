@@ -226,6 +226,7 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -298,6 +299,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

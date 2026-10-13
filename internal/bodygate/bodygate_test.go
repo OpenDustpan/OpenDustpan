@@ -206,6 +206,36 @@ func notePeak(peak *atomic.Int64, n int64) {
 	}
 }
 
+// TestStreamReservation proves a streaming body reserves its declared length
+// capped at StreamCost, and StreamCost when the length is unknown or empty.
+func TestStreamReservation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		length int64
+		want   int64
+	}{
+		{name: "length 1 KiB returns 1 KiB", length: 1 << 10, want: 1 << 10},
+		{name: "length 100 MiB returns StreamCost", length: 100 << 20, want: bodygate.StreamCost},
+		{name: "unknown length returns StreamCost", length: -1, want: bodygate.StreamCost},
+		{name: "length 0 returns StreamCost", length: 0, want: bodygate.StreamCost},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(""))
+			r.ContentLength = tc.length
+
+			if got := bodygate.StreamReservation(r); got != tc.want {
+				t.Fatalf("StreamReservation = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSetRetryAfter proves the helper sets the Retry-After header and nothing
 // else: the adapter writes the status and the body.
 func TestSetRetryAfter(t *testing.T) {

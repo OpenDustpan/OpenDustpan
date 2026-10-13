@@ -627,6 +627,7 @@ func newTFEHandler(
 		BaseURL:       base,
 		Audit:         entries,
 		Gate:          gate,
+		MaxStateBytes: cfg.maxStateBytes,
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},

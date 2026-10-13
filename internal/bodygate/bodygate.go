@@ -104,6 +104,18 @@ func Reservation(r *http.Request, limit int64) int64 {
 	return min(n, limit)
 }
 
+// StreamReservation returns the bytes a body that streams reserves: the
+// declared length when the request carries a small one, else StreamCost. A
+// small upload must not hold the full fixed cost, or ordinary parallel
+// uploads would meet 503 at once.
+func StreamReservation(r *http.Request) int64 {
+	if r.ContentLength > 0 {
+		return min(r.ContentLength, StreamCost)
+	}
+
+	return StreamCost
+}
+
 // Hold reserves n bytes of the gate. It reports false when they do not fit.
 // On success the caller runs the returned release once the body is served.
 // The release func frees once; a second call does nothing.

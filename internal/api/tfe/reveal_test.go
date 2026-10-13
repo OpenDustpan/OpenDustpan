@@ -207,6 +207,7 @@ func newRevealHandler(
 		BaseURL:        baseurl.Resolver{},
 		Audit:          store,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: onFail,
 	})
 	if err != nil {

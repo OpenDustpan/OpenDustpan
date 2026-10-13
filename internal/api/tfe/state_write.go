@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -155,6 +156,13 @@ func (h *Handler) createStateVersion(
 ) {
 	ctx := r.Context()
 
+	release, ok := h.hold(w, r, bodygate.Reservation(r, maxStateCreateBytes))
+	if !ok {
+		return
+	}
+
+	defer release()
+
 	body, ok := h.readCreateBody(w, r)
 	if !ok {
 		return
@@ -250,6 +258,13 @@ func (h *Handler) uploadState(
 		return
 	}
 
+	release, ok := h.hold(w, r, bodygate.StreamReservation(r))
+	if !ok {
+		return
+	}
+
+	defer release()
+
 	if _, err := h.workspaces.Upload(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body); err != nil {
 		h.writeError(ctx, w, err)
 
@@ -275,6 +290,13 @@ func (h *Handler) uploadJSONState(
 
 		return
 	}
+
+	release, ok := h.hold(w, r, bodygate.Reservation(r, h.maxState))
+	if !ok {
+		return
+	}
+
+	defer release()
 
 	discardErr := h.workspaces.DiscardJSONRendering(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body)
 	if discardErr != nil {

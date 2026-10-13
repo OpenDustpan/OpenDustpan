@@ -166,6 +166,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -694,6 +695,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -715,6 +717,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -738,6 +741,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -1570,6 +1574,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
 		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
