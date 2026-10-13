@@ -3,6 +3,7 @@ rfc: 19
 title: Users, teams and roles
 status: discussing
 created: 2026-10-10
+adr: 52
 ---
 
 # RFC 19. Users, teams and roles
@@ -10,6 +11,9 @@ created: 2026-10-10
 Status: discussing. Opened as a stub from the competitor review in the
 research doc "IaC and TACOS landscape". The project owner chose
 the access-review export below on 2026-10-11.
+
+Groups, grants, the principle of the built-in role set and the access-review
+export are accepted as ADR 52 on 2026-10-13. The rest stays open.
 
 ## Problem
 
@@ -51,6 +55,48 @@ The project owner chose this export. It helps a reviewer check access.
 
 - (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
+- (research) Which built-in roles, by name and by action? The owner chose to
+  copy the role sets of competitors (ADR 52, decision 4).
+- Which administrators can make custom roles, and can a custom role belong
+  to one namespace?
+- Can a group be a member of another group?
+- Which conditions on attributes can a grant hold, and when do they come?
+
+These come from the console UI spike (OpenDustpan/console PR #29). Each
+"lead proposal" is a proposed default from the project lead for the owner to
+decide. It is not a decision.
+
+- How does the access-review export show a grant to a group? A group has no
+  last access. Lead proposal: one row for each effective grant of each
+  principal. A grant to a group gives one row for each member, with a
+  column "via group <name>".
+- Which actions does ADR 52 need? Lead proposal, in the style of ADR 13 and
+  of the actions that exist (`unit:read`, `namespace:read-audit`,
+  `server:backup`):
+
+  | Action | Object | Operation |
+  | --- | --- | --- |
+  | `server:manage-principals` | installation | create, disable and remove principals |
+  | `group:read` | group | read a group and its members |
+  | `group:manage` | group | create, rename and delete a group |
+  | `group:manage-members` | group | add and remove members |
+  | `role:read` | role | read a role and its actions |
+  | `role:manage` | role | create, change and delete a custom role |
+  | `server:manage-access` | installation | grant and revoke roles on the installation |
+  | `namespace:manage-access` | namespace | grant and revoke roles on a namespace |
+  | `collection:manage-access` | collection | grant and revoke roles on a collection |
+  | `unit:manage-access` | unit | grant and revoke roles on a unit |
+  | `server:read-access` | installation | export the grants of the whole installation |
+  | `namespace:read-access` | namespace | export the grants of a namespace |
+
+  The spike also proposed `unit:plan` (a preview or a plan) and
+  `namespace:manage-tokens`. Lead proposal: `unit:plan` goes in the list of
+  built-in roles (the "planner" question above), and the token actions go
+  in RFC 20.
+- Which action does the access endpoint of ADR 52 need? Lead proposal: a
+  caller can ask about its own access with the read action of the object.
+  To ask about another principal, it needs the `read-access` action of the
+  object.
 
 ## Owner direction (2026-10-11)
 
@@ -90,6 +136,46 @@ decides nothing. An ADR records a decision (ADR 15).
   different teams, etc. So long as we assume that a user can be a member of
   more than one group we should be fine."
 
+## Owner direction (2026-10-13)
+
+The project owner answered a question of this RFC and of RFC 4 on
+2026-10-13. Words in quotation marks are the words of the owner.
+
+- Question "Can a role be granted on a label?": "Collections only". Grants go
+  on a namespace, a collection or a unit. Labels are for views and filters,
+  and they never grant access.
+
+This answer replaces the owner's answer "Yes." of 2026-10-12 to the question
+"Can a role be granted on a label (RFC 4)". A role cannot be granted on a
+label.
+
+Second round, through the project lead, on 2026-10-13:
+
+- Question "Does a group belong to one namespace or to the whole
+  installation?": "Installation-wide".
+- Questions "Custom roles?", "A site-admin view and grants on the whole
+  installation?" and "Can a non-person principal be in a group?": the owner
+  chose custom roles, a site-admin view, grants on the whole installation and
+  group members that are not persons. The owner added: "Non-person group
+  members is very specific. Any actor can be assigned any role on any object.
+  Our RBAC/ABAC should be flexible to account for this." So any principal (a
+  person, a service, a workload or a group) can get any role on any object:
+  the installation, a namespace, a collection or a unit.
+
 ## Outcome
 
-None yet.
+Accepted in part as ADR 52 on 2026-10-13:
+
+- Groups, not teams. A group belongs to the whole installation. A principal
+  can be a member of more than one group, and any principal can be a member.
+- A grant gives any role to any principal or group on any object: the
+  installation, a namespace, a collection (ADR 51) or a unit. A label never
+  grants access.
+- A broad built-in role set that follows the role sets of other products,
+  custom roles, and a view for site administrators.
+- The access-review export: a snapshot of the current grants, or a history
+  between two timestamps. It covers every grant, with scoping. It shows
+  `Never` for a principal with no sign-in and no access token use. JSON from
+  the REST API, CSV in the console, and its own action.
+
+The questions in "Open questions" have no outcome yet.

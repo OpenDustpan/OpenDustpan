@@ -36,6 +36,14 @@ _Avoid_: State file (except for OpenTofu), snapshot
 The list of all units in a namespace across all tools, with their last change and status. Each tool keeps it current with its own writes.
 _Avoid_: Catalog, registry, index
 
+**Collection**:
+A named set of units in one namespace, from any tool, that a team manages. Each unit is in exactly one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
+_Avoid_: Group (that is a set of principals), project, folder, system
+
+**Label**:
+A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51).
+_Avoid_: Tag (except when naming a tool's own field), attribute
+
 **Unit lock**:
 The tool-neutral flag in the inventory that shows who holds a unit for a change. The holder is a mutating Pulumi update that runs, or an OpenTofu workspace lock. It names the holder, the time the holder took it, and the tool's own word for the operation. A unit lock is not a status, so a unit can hold one in any status.
 _Avoid_: Lease (for the inventory field), unit status
@@ -100,8 +108,32 @@ _Avoid_: User (when the caller can be a machine), actor
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
 
+**Service token**:
+An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
+_Avoid_: API key, robot token, machine token
+
+**Trust rule**:
+A rule in one namespace that matches a JWT from an issuer or a TLS client certificate. It names the principal that the match gets (ADR 54).
+_Avoid_: Trust policy, federation rule
+
+**Group**:
+A named set of principals of the whole installation. A principal can be a member of more than one group (ADR 52).
+_Avoid_: Team (except when naming a tool's own protocol field), collection
+
+**Role**:
+A named set of actions (ADR 52).
+_Avoid_: Permission set, policy
+
+**Grant**:
+A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52).
+_Avoid_: Binding, assignment, permission
+
+**No access**:
+The state of an object or a console section that the principal has no grant to use.
+_Avoid_: Locked (that is a unit lock), forbidden, disabled
+
 **Action**:
-A tool-neutral operation that a principal asks to do, such as read state or write state. Access rules allow or deny actions on namespaces and units.
+A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on the installation, namespaces, collections and units. A policy check can deny an action (ADR 17).
 _Avoid_: Permission, verb, scope
 
 ### Pulumi
@@ -248,6 +280,7 @@ _Avoid_: Secret count
 
 ## Flagged ambiguities
 
+- **Group** is a set of principals (ADR 52). RFC 4 used "group" for a set of units before the owner chose "collection". A set of units is a collection.
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.

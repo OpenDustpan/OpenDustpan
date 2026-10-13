@@ -1,13 +1,15 @@
 ---
 rfc: 4
 title: What sits under a namespace
-status: draft
+status: discussing
 created: 2026-10-10
+adr: 51               # the collection part only
 ---
 
 # RFC 4. What sits under a namespace
 
-Status: draft. No proposal is final yet.
+Status: discussing. The collection part is accepted as ADR 51 on
+2026-10-13. The rest stays open.
 
 ## Problem
 
@@ -176,6 +178,32 @@ request that the server still checks? Needs a check with `make e2e`.
 The owner answered every question of this list. See "Owner direction
 (2026-10-12)".
 
+### Open questions for collections
+
+ADR 51 accepts the collection. These questions stay open after the owner
+direction of 2026-10-13. Each "lead proposal" is a proposed default from the
+project lead for the owner to decide. It is not a decision.
+
+- Does the owner accept the sketch above for names: a collection name
+  follows the TFE project name rules, and the TFE-compatible API shows each
+  collection as a TFE project? Lead proposal: yes. A workspace that names a
+  TFE project in its `cloud` block then lands in that collection.
+- Does the owner accept the placement rules above for a new Pulumi stack?
+  Lead proposal: yes, first match wins. With no default collection (ADR 51),
+  a stack that matches no rule and names no collection is refused. The
+  error names the namespace, the Pulumi project and the stack, and says to
+  add a placement rule or to make the stack through the API with a
+  collection.
+- Which rights does a person need to put a unit into a collection and to
+  move it? Lead proposal: a right on the unit and a right on the target
+  collection to put it in. To move it, also a right on the old collection.
+- How does the server give a collection to the units that exist before
+  ADR 51? Lead proposal: an upgrade step makes no default collection. The
+  server refuses writes to such a unit until an administrator moves it into
+  a collection, and the error names the fix.
+- (e2e) Can a stack tag that the CLI sends at creation name the collection,
+  as a request that the server still checks?
+
 ## Owner direction (2026-10-12)
 
 The project owner answered questions in this RFC on 2026-10-12. Words in
@@ -191,6 +219,34 @@ decides nothing. An ADR records a decision (ADR 15).
 - Question "Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
   group": "No we should not make that assumption."
 
+## Owner direction (2026-10-13)
+
+The project owner answered a question of RFC 19 and of this RFC on
+2026-10-13. Words in quotation marks are the words of the owner.
+
+- Question "Can a role be granted on a label?": "Collections only". Grants go
+  on a namespace, a collection or a unit. Labels are for views and filters,
+  and they never grant access.
+
+This answer replaces the owner's answer "Yes." of 2026-10-12 in RFC 19 to the
+question "Can a role be granted on a label (RFC 4)". A label never grants
+access. The section "Membership: explicit, not by label" above already said
+that a saved view never grants anything.
+
+Second round, through the project lead, on 2026-10-13:
+
+- Question "Must each unit be in a collection, or can a unit be in no
+  collection?": "Yes, and no default collection. Users create one." So each
+  unit is in exactly one collection, and no default collection exists.
+  ADR 51 derives from this that the server refuses a new unit when it
+  cannot find its collection, with an error that names the fix.
+
 ## Outcome
 
-None yet.
+The collection part is accepted as ADR 51 on 2026-10-13. A collection is a
+named set of units in one namespace, from any tool. Collections do not nest.
+Each unit is in exactly one collection, and no default collection exists. The
+server refuses a new unit with no collection. Membership is explicit, and
+labels never grant access. A grant, a profile attachment and an
+output-sharing rule can name a collection as their object. The rest of this
+RFC has no outcome yet.
