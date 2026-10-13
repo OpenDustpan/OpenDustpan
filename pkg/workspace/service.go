@@ -2060,9 +2060,9 @@ func (s *Service) storeUploadBody(
 	})
 
 	if storeErr != nil {
-		// Closing the stream with the store error lets the reader beside the
-		// store finish; the store error is the one the caller sees.
-		_, _ = stream.finish(storeErr) //nolint:errcheck // The store error is returned; the stream's own error adds nothing.
+		// Closing the stream lets the reader beside the store finish. The
+		// store error is the one the caller sees.
+		abandonStream(stream, storeErr)
 
 		return uploadedBody{}, fmt.Errorf("upload state %s: %w", sv.ID, storeErr)
 	}
@@ -2087,4 +2087,10 @@ func (s *Service) storeUploadBody(
 	}
 
 	return uploadedBody{size: size, outputs: outputs}, nil
+}
+
+// abandonStream ends a meta stream whose store failed. The stream's own result
+// adds nothing: the caller returns the store error.
+func abandonStream(stream *metaStream, cause error) {
+	_, _ = stream.finish(cause) //nolint:errcheck // The caller returns the store error.
 }
