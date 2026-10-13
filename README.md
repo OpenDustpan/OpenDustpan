@@ -132,6 +132,21 @@ let the server host it in the same process with
 `opendustpan serve --console-dir <console>/dist`. Sign in with the value of
 `DUSTPAN_ADMIN_TOKEN`.
 
+## Demo
+
+`make demo` runs a local demo. You need Git, Go, Node and npm. You need
+no Pulumi CLI and no OpenTofu CLI.
+
+The command builds the web console, starts the server on
+`http://127.0.0.1:8080`, and seeds two namespaces with demo stacks, update
+history and one backup. It prints the URL and the sign-in token. Use the
+token on the sign-in page.
+
+The server uses port 8080 by default. Set another port with
+`make demo DEMO_PORT=<port>`.
+
+Ctrl-C stops the server and deletes its temporary directory.
+
 ## What works
 
 The end-to-end suite drives each version below against the server, on SQLite
