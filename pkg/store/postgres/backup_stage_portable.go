@@ -35,7 +35,7 @@ func (s *Store) StagePortable(
 		)
 	}
 
-	index, err := backup.IndexPortableFiles(files)
+	index, err := backup.IndexPortableFiles(files, want.RowCounts)
 	if err != nil {
 		return backup.Summary{}, err
 	}

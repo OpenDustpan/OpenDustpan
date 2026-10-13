@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -48,6 +49,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a files list with a duplicate table is refused", test: testPortableStageRefusesDuplicate},
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
 		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
+		{name: "a summary with a wrong row count is refused", test: testPortableStageRefusesRowCount},
 	}
 
 	for _, tc := range cases {
@@ -502,4 +504,23 @@ func assertStageRefused(
 	if !strings.Contains(err.Error(), `"`+table+`"`) {
 		t.Fatalf("error = %v, want it to name the table %q", err, table)
 	}
+}
+
+// testPortableStageRefusesRowCount checks that the files are correct but the
+// summary names another row count for one table: the stage fails with ErrCorrupt
+// and names the table, on both dialects (ADR 42, decision 4).
+func testPortableStageRefusesRowCount(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+
+	counts := maps.Clone(sum.RowCounts)
+
+	counts["updates"]++
+	sum.RowCounts = counts
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "updates")
 }

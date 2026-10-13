@@ -253,10 +253,12 @@ func (c *countingReader) Read(p []byte) (int, error) {
 
 // IndexPortableFiles checks the descriptors of a portable backup as a whole and
 // returns them by table. Each table of PortableTables must have exactly one
-// descriptor. A table the spec does not name, a table that holds two descriptors,
-// and a table with none return ErrCorrupt, and the error names the table (ADR 42,
-// decision 4). Both dialects check the list here, before they load a row.
-func IndexPortableFiles(files []PortableFile) (map[string]PortableFile, error) {
+// descriptor, and the descriptor's row count must equal the row count of the
+// summary, rows, for that table. A table the spec does not name, a table that
+// holds two descriptors, a table with none, and a table that rows does not hold
+// return ErrCorrupt, and the error names the table (ADR 42, decision 4). Both
+// dialects check the list here, before they load a row.
+func IndexPortableFiles(files []PortableFile, rows map[string]int64) (map[string]PortableFile, error) {
 	known := make(map[string]bool)
 
 	for _, table := range PortableTables() {
@@ -278,8 +280,23 @@ func IndexPortableFiles(files []PortableFile) (map[string]PortableFile, error) {
 	}
 
 	for _, table := range PortableTables() {
-		if _, ok := index[table.Table]; !ok {
+		file, ok := index[table.Table]
+		if !ok {
 			return nil, fmt.Errorf("portable backup misses the file of table %q: %w", table.Table, ErrCorrupt)
+		}
+
+		want, counted := rows[table.Table]
+		if !counted {
+			return nil, fmt.Errorf(
+				"portable backup summary holds no row count of table %q: %w",
+				table.Table,
+				ErrCorrupt,
+			)
+		}
+
+		if file.Rows != want {
+			return nil, fmt.Errorf("table %q file holds %d rows, the summary says %d: %w",
+				table.Table, file.Rows, want, ErrCorrupt)
 		}
 	}
 
