@@ -10,6 +10,10 @@ would work." This note answers two questions:
 
 Date: 2026-10-13
 
+Outcome: on 2026-10-13 the owner chose to build both the chain with an
+external copy and signed checkpoints, as opt-in features that are off by
+default. ADR 60 records the decision.
+
 This note gives facts, measurements and one recommendation. It decides
 nothing. The owner decides in RFC 22 (ADR 15). It is not legal or compliance
 advice. An assessor decides what meets a requirement for one organization.

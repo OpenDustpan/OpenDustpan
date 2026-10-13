@@ -9,8 +9,10 @@ created: 2026-10-10
 
 Status: discussing. Opened from the competitor review in the research doc
 "IaC and TACOS landscape". [ADR 60](../adr/0060-audit-log-port-and-log-sinks.md)
-accepts the port, the entry fields, query and export, and the log sinks.
-Tamper evidence, retention, trusted proxies and per-namespace sinks stay open.
+accepts the port, the entry fields, query and export, the log sinks, and
+tamper evidence as two opt-in features that are off by default. Retention,
+the existing chain of an installation, the verifier, trusted proxies and
+per-namespace sinks stay open.
 
 ## Problem
 
@@ -31,11 +33,26 @@ requests in RFC 16) but have no common log.
 
 ## Open questions
 
-- (spike done, proposal below) How does the log stay tamper-evident, for
-  example with a hash chain? See "Proposal: tamper evidence".
+- The existing chain of an installation. ADR 41 decision 13 keeps the
+  chain on in every installation today, and ADR 60 decision 17 turns it off
+  by default. How does an existing installation move to the new default?
+  Lead proposal: an installation that already holds chained entries keeps
+  the chain on until an administrator turns it off. The server writes an
+  entry of the kind `change` when the administrator does so. A new
+  installation starts with the chain off. ADR 60 decision 19 keeps the
+  chain on for such an installation until the owner answers.
+- The verifier: a route and a command that compare an export from a sink
+  with the chain of the server, and report the first sequence that differs
+  (spike proposal). The command uses the API only (ADR 39).
+- An entry for each restore that names the backup, so that a verifier can
+  tell a restore apart from a rewrite (spike proposal).
+- The PostgreSQL append lock: move it from the namespace row to a head row
+  for each scope (spike proposal; measured: other fenced writes in a busy
+  namespace wait 1.1 ms less at p50).
 - Retention: how long the server keeps entries, and how a delete of old
-  entries keeps the chain check valid. PCI DSS 10.5.1 asks for 12 months, with
-  the last three months at hand.
+  entries keeps the chain check valid, for example with a retention anchor
+  (the first kept sequence and its previous hash). PCI DSS 10.5.1 asks for
+  12 months, with the last three months at hand. This waits for the owner.
 - Trusted proxies: which `X-Forwarded-For` values the server believes for
   `sourceIP`.
 - Per-namespace sinks: can a namespace send its entries to its own sink?
@@ -69,10 +86,17 @@ words of the owner. ADR 60 records the decision.
   stdout. As always, keep the output adapters generic so that users can
   easily swap them out., Syslog (RFC 5424), HTTP webhook, OpenTelemetry
   logs, Object storage"
+- Question "How does the log stay tamper-evident", after the proposal
+  below: "I see the value in building both 1 and 2 as opt-in features but
+  these need to be off by default." Option 1 is the chain with the external
+  copy: each entry that a sink ships carries `sequence`, `prevHash` and
+  `hash`, and a periodic check sets a metric for an alert. Option 2 is
+  signed checkpoints. ADR 60 decisions 17 to 20 record this.
 
 ## Proposal: tamper evidence
 
-This is a proposal for the owner. It decides nothing. The spike is in
+Answered by the owner on 2026-10-13 (see above) and recorded in ADR 60.
+The text below is the proposal as the owner read it. The spike is in
 [`docs/research/audit-log-tamper-evidence.md`](../research/audit-log-tamper-evidence.md).
 
 **Is it required?** Not by PCI DSS v4.0.1, SOC 2 or ISO/IEC 27001:2022.
@@ -113,4 +137,5 @@ namespace wait 1.1 ms less at p50), and a retention anchor for the check.
 ## Outcome
 
 Partly accepted: ADR 60 (the port, the entry fields, query and export, the
-log sinks). Tamper evidence and retention wait for the owner.
+log sinks, and opt-in tamper evidence that is off by default). Retention and
+the existing chain of an installation wait for the owner.

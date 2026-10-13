@@ -227,7 +227,7 @@ A request from a person to see the plain text of a secret value. The reveal call
 _Avoid_: Decrypt (that is the Pulumi CLI's protocol), unmask, show secrets
 
 **Audit entry**:
-An append-only record of one action in a namespace. It holds who acted, the action, the object and the time. It also holds where the request came from, the kind of access and the outcome. Each entry holds the SHA-256 of its own fields and of the previous entry of its namespace.
+An append-only record of one action in a namespace. It holds who acted, the action, the object and the time. It also holds where the request came from, the kind of access and the outcome. The chain of ADR 60, decision 17 is opt-in. When it is on, each entry holds the SHA-256 of its own fields and of the previous entry of its scope.
 _Avoid_: Audit log line, event, audit event
 
 **Audit log**:

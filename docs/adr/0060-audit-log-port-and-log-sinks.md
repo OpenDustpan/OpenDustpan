@@ -21,11 +21,15 @@ The project owner answered questions in RFC 22:
   stdout. As always, keep the output adapters generic so that users can
   easily swap them out., Syslog (RFC 5424), HTTP webhook, OpenTelemetry
   logs, Object storage".
+- On 2026-10-13, after the spike in
+  `docs/research/audit-log-tamper-evidence.md`, for tamper evidence: "I see
+  the value in building both 1 and 2 as opt-in features but these need to
+  be off by default." Option 1 is the hash chain with an external copy.
+  Option 2 is signed checkpoints.
 
 This ADR records those answers and the design that follows from them.
-Tamper evidence and retention are not part of it. They wait for the spike
-in `docs/research/audit-log-tamper-evidence.md` and for the decision of the
-owner in RFC 22.
+Retention is not part of it. It waits for the decision of the owner in
+RFC 22.
 
 ## Decision
 
@@ -146,8 +150,9 @@ owner in RFC 22.
     restart or another instance (ADR 48) goes on from the cursor. A failed
     delivery retries with a back-off and counts a metric. The shipper never
     drops an entry. A sink can receive an entry twice, so each shipped entry
-    carries its scope, `sequence`, `prevHash` and `hash`, and the receiver
-    can drop duplicates.
+    carries its scope and `sequence`, and the receiver can drop duplicates.
+    When the chain of decision 17 is on, each shipped entry also carries
+    `prevHash` and `hash`.
 14. **Application logs use the same port.** The structured application log
     (the request log of ADR 32 and every other `log/slog` line) goes
     through a `slog.Handler` that writes to one or more sinks. `stdout` is
@@ -171,11 +176,53 @@ owner in RFC 22.
     database URL or driver error text. The canary test of ADR 32 covers
     every built-in adapter.
 
+### Tamper evidence
+
+17. **The chain with an external copy is opt-in.** The switch
+    `--audit-chain` (`DUSTPAN_AUDIT_CHAIN`) is off by default. When it is
+    on:
+    - each append computes the hash chain of its scope, as ADR 41 decision
+      13 describes,
+    - each entry that a sink ships carries `sequence`, `prevHash` and `hash`
+      (decision 13), so the operator's sink holds a copy of the chain
+      outside the database,
+    - the server runs the chain check of each scope on a schedule. It sets
+      the gauge `dustpan_audit_chain_invalid` to the count of scopes whose
+      check fails, with no scope label (ADR 32 decision 5), so an operator
+      can alert on it.
+
+    When the switch is off, the server writes an entry with an empty
+    `prevHash` and an empty `hash`. A change of the switch writes an entry
+    of the kind `change` in the scope `@server`. The check of a scope
+    starts at the first entry after the chain was last turned on.
+18. **Signed checkpoints are opt-in.** The switch `--audit-checkpoints`
+    (`DUSTPAN_AUDIT_CHECKPOINTS`) is off by default, and it needs
+    `--audit-chain`, because a checkpoint signs the head of a chain. When
+    it is on, the server writes a checkpoint for each scope on a schedule.
+    The checkpoint holds the scope, a sequence, the hash at that sequence,
+    the time, a key ID and an Ed25519 signature. It goes to the blob store
+    under an immutable key, so two instances that write the same checkpoint
+    change nothing (ADR 48). The signing key comes from the file that
+    `DUSTPAN_AUDIT_SIGNING_KEY_FILE` names, with the rules of ADR 23
+    decision 1. The server never derives it from the key-encryption key.
+    The check also checks each checkpoint with the public key.
+19. **This changes ADR 41 decision 13.** ADR 41 decision 13 makes every
+    entry hold the hash of its own fields and of the previous entry of its
+    namespace, with no switch. That chain is on in every installation today.
+    Decision 17 turns it off by default. An installation that holds chained
+    entries keeps them, and the check of those entries still works. How
+    such an installation moves to the new default is open in RFC 22. The
+    server keeps the chain on for an installation that holds chained
+    entries until that question has an answer.
+20. **The audit switch comes first.** When the switch of decision 2 is off,
+    decisions 17 and 18 do nothing.
+
 ### Out of scope
 
-17. **Not decided here.** Tamper evidence beyond the chain of ADR 41,
-    retention and the deletion of old entries, trusted proxies for the
-    source IP, and per-namespace sinks stay open in RFC 22.
+21. **Not decided here.** Retention and the deletion of old entries (with a
+    retention anchor for the check), a verifier that compares an export
+    from a sink with the chain, an entry for each restore, trusted proxies
+    for the source IP, and per-namespace sinks stay open in RFC 22.
 
 ## What this ADR replaces
 
@@ -191,6 +238,9 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   decision 2 is off, the server writes no entry and the call answers.
 - **ADR 41, decision 13:** the kind field "with exactly one of two values".
   ADR 44 added `override`. Decision 4 adds `change` and `audit-read`.
+- **ADR 41, decision 13:** the hash chain, which is always on. Decision 19
+  makes it opt-in and off by default, with the rule for an installation
+  that holds chained entries.
 - **ADR 23, decision 6:** the audit routes "answer 204 and store nothing
   until the audit log (RFC 22) exists". ADR 41 already changed this. This
   ADR changes nothing more there.
@@ -209,8 +259,14 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
      output by default.
   5. The shipper with its cursors, then the `syslog`, `webhook`, `otlp` and
      `objectstore` adapters.
+  6. The `--audit-chain` switch with the scheduled check and its metric,
+     after RFC 22 answers how an existing installation keeps its chain.
+  7. The `--audit-checkpoints` switch, the signing key and the checkpoint
+     check.
 - The audit log guide gets the CEF mapping, the sink settings, an alert
-  rule for the delivery lag and an example for each sink.
+  rule for the delivery lag, an alert rule for
+  `dustpan_audit_chain_invalid`, and an example for each sink.
 - The README stops saying that the audit log does not exist when step 3 is
   done.
-- RFC 22 keeps tamper evidence, retention and trusted proxies open.
+- RFC 22 keeps retention, the verifier, the existing chain of an
+  installation, trusted proxies and per-namespace sinks open.
