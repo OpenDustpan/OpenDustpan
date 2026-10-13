@@ -1303,7 +1303,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiRestoreScenario(t, env, org)
 
+	scratchID := stackIDOf(t, env, org, softDeleted)
+
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
+		env.Step(ctx, t, s)
+	}
+
+	for _, s := range pulumiSoftDeleteSteps(ctx, env, org, scratchID) {
 		env.Step(ctx, t, s)
 	}
 
@@ -2822,6 +2828,65 @@ func pulumiTeardownSteps(scratch, resourced string) []e2e.StepSpec {
 		step("stack rm", nil, "stack", "rm", "--yes", "--stack", scratch),
 		// A stack of its own for the delete with resources below.
 		step("stack init resourced", nil, "stack", "init", resourced, "--no-select"),
+	}
+}
+
+// softDeleted is the stack that the soft delete steps remove and create again.
+const softDeleted = "scratch-soft"
+
+// stackIDOf creates the stack name in the e2e project through the CLI and
+// returns its stable ID, failing the test when the stack is missing.
+func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
+	t.Helper()
+
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, name)
+	env.Step(t.Context(), t, step("stack init "+name, nil, "stack", "init", qualified, "--no-select"))
+
+	id, status, err := env.StackID(t.Context(), org, e2e.Project, name)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("get stack %s: status %d, err %v", name, status, err)
+	}
+
+	return id
+}
+
+// pulumiSoftDeleteSteps returns the steps of a soft delete (ADR 47): the
+// removed stack is not found, its name is free at once, and a new stack with
+// that name gets a new stable ID.
+func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
+
+	return []e2e.StepSpec{
+		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
+		{
+			Check:  nil,
+			Name:   "stack select removed",
+			Args:   []string{"stack", "select", qualified},
+			Env:    nil,
+			Stdin:  "",
+			Fail:   true,
+			Redact: false,
+		},
+		step("stack init removed name", func(e2e.Result) error {
+			id, status, err := env.StackID(ctx, org, e2e.Project, softDeleted)
+			if err != nil || status != http.StatusOK {
+				return fmt.Errorf("%w: get stack %s: status %d, err %v", errUnexpected, softDeleted, status, err)
+			}
+
+			if id == removedID {
+				return fmt.Errorf("%w: new stack %s kept the removed stack ID %s", errUnexpected, softDeleted, id)
+			}
+
+			return nil
+		}, "stack", "init", qualified, "--no-select"),
+		step("stack history of new stack", func(r e2e.Result) error {
+			if got := strings.TrimSpace(r.Stdout); got != "[]" {
+				return fmt.Errorf("%w: new stack has history of the removed stack: %s", errUnexpected, got)
+			}
+
+			return nil
+		}, "stack", "history", "--json", "--stack", qualified),
+		step("stack rm new", nil, "stack", "rm", "--yes", "--stack", qualified),
 	}
 }
 
