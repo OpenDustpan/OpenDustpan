@@ -92,6 +92,28 @@ decides nothing. An ADR records a decision (ADR 15).
   users can issue must be configurable by the admin (I guess the latter just
   becomes part of the FGA model)"
 
+## Owner direction (2026-10-13)
+
+The project owner answered questions in this RFC on 2026-10-13. Words in
+quotation marks are the words of the owner.
+
+- Question "Workload identity in milestone 4": "OIDC/JWT and mTLS in M4".
+  Milestone 4 has token exchange for any OIDC or JWT issuer, with trust
+  rules per namespace. It also has mTLS client certificates, SPIFFE or
+  other. Static service tokens are discouraged for machines.
+- Question "What inactivity default does the server ship with, within the
+  limit of 90 days or fewer?": "What do ISO/SOC2/PCIDSS recommend? Follow that
+  as the default but admins can override this to any value including
+  infinite." This replaces the limit "90 days or fewer" of the token life
+  cycle above. The default follows the standards. An administrator can set
+  any value, also no limit. The research doc `docs/research/m4-identity-defaults.md`
+  holds the findings.
+- Question "How does the server warn a principal before its access token
+  expires?": "Event/Webhook for this goes to M5., API field + console banner,
+  Email, CLI warning". Milestone 4 has an API field, a console banner, an
+  email and a CLI warning. The email needs SMTP settings. The event and the
+  webhook go to milestone 5 (RFC 23).
+
 ## Outcome
 
 None yet.

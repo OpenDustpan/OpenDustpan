@@ -3,6 +3,7 @@ rfc: 19
 title: Users, teams and roles
 status: discussing
 created: 2026-10-10
+adr: 52
 ---
 
 # RFC 19. Users, teams and roles
@@ -10,6 +11,9 @@ created: 2026-10-10
 Status: discussing. Opened as a stub from the competitor review in the
 research doc "IaC and TACOS landscape". The project owner chose
 the access-review export below on 2026-10-11.
+
+Groups, grants, the principle of the built-in role set and the access-review
+export are accepted as ADR 52 on 2026-10-13. The rest stays open.
 
 ## Problem
 
@@ -51,6 +55,14 @@ The project owner chose this export. It helps a reviewer check access.
 
 - (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
+- (research) Which built-in roles, by name and by action? The owner chose to
+  copy the role sets of competitors (ADR 52, decision 4).
+- Custom roles: can an administrator make a role as a set of actions?
+- A view for site administrators across namespaces, and grants on the whole
+  installation.
+- Does a group belong to one namespace or to the whole installation?
+- Can a principal that is not a person (a service token owner, a workload of
+  ADR 54) be a member of a group?
 
 ## Owner direction (2026-10-11)
 
@@ -90,6 +102,30 @@ decides nothing. An ADR records a decision (ADR 15).
   different teams, etc. So long as we assume that a user can be a member of
   more than one group we should be fine."
 
+## Owner direction (2026-10-13)
+
+The project owner answered a question of this RFC and of RFC 4 on
+2026-10-13. Words in quotation marks are the words of the owner.
+
+- Question "Can a role be granted on a label?": "Collections only". Grants go
+  on a namespace, a collection or a unit. Labels are for views and filters,
+  and they never grant access.
+
+This answer replaces the owner's answer "Yes." of 2026-10-12 to the question
+"Can a role be granted on a label (RFC 4)". A role cannot be granted on a
+label.
+
 ## Outcome
 
-None yet.
+Accepted in part as ADR 52 on 2026-10-13:
+
+- Groups, not teams. A principal can be a member of more than one group.
+- A grant gives a role to a principal or a group on a namespace, a
+  collection (ADR 51) or a unit. A label never grants access.
+- A broad built-in role set that follows the role sets of other products.
+- The access-review export: a snapshot of the current grants, or a history
+  between two timestamps. It covers every grant, with scoping. It shows
+  `Never` for a principal with no sign-in and no access token use. JSON from
+  the REST API, CSV in the console, and its own action.
+
+The questions in "Open questions" have no outcome yet.

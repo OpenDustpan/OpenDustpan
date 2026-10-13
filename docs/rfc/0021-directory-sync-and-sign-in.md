@@ -96,6 +96,36 @@ they name the identity provider an "SSO identity provider". The Proposal above
 has the "SSO" edit. It still says "WebAuthn comes first" and "TOTP is the
 fallback". The Proposal now follows the edited text. ADR 46 records the result.
 
+## Owner direction (2026-10-13)
+
+The project owner answered questions in this RFC on 2026-10-13. Words in
+quotation marks are the words of the owner.
+
+- Question "Which of these belong in the binary, and which are better left to
+  the operator's proxy?" The owner answered with the list for milestone 4:
+  "LDAP, SAML, CAS, OAuth, SCIM 2.0, Passkeys for local users, Trusted-header
+  sign-in, IP allowlists". Each one is an `Authenticator` or a provisioning
+  adapter behind a port (ADR 6).
+- Question "How long does an MFA sign-in stay valid for the creation of
+  access tokens and for the reveal of a secret value?": "Follow PCIDSS/SOC2/ISO
+  guidance to pin defaults, and then make it configurable."
+- Question "How does a user sign in when they lose every factor and every
+  recovery code?" The question gave three options for the case where the
+  last administrator loses every factor:
+  1. The operator sets a new bootstrap admin token in the configuration or
+     the environment and restarts. The token works once, the server audits
+     it, and the operator must retire it.
+  2. A recovery request signed with an offline operator key.
+  3. No break-glass. The operator restores from a backup.
+
+  The owner answered: "Again, follow ISO/SOC/FIPS/PCIDSS guidance if any
+  precedent exists as a default. and then make it configurable to on
+  first-boot to support either 1, 2, or 3. Default to 1 if no guidance exists
+  from standards bodies."
+
+The research doc `docs/research/m4-identity-defaults.md` holds the findings
+for the defaults.
+
 ## Outcome
 
 The part on built-in MFA is accepted as ADR 46 on 2026-10-12. The rest has no

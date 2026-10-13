@@ -1,13 +1,15 @@
 ---
 rfc: 4
 title: What sits under a namespace
-status: draft
+status: discussing
 created: 2026-10-10
+adr: 51               # the collection part only
 ---
 
 # RFC 4. What sits under a namespace
 
-Status: draft. No proposal is final yet.
+Status: discussing. The collection part is accepted as ADR 51 on
+2026-10-13. The rest stays open.
 
 ## Problem
 
@@ -176,6 +178,23 @@ request that the server still checks? Needs a check with `make e2e`.
 The owner answered every question of this list. See "Owner direction
 (2026-10-12)".
 
+### Open questions for collections
+
+ADR 51 accepts the collection. These questions stay open after the owner
+direction of 2026-10-13:
+
+- Must each unit be in a collection, or can a unit be in no collection?
+- Does the owner accept the sketch above for names: a collection name
+  follows the TFE project name rules, and the TFE-compatible API shows each
+  collection as a TFE project?
+- Does the owner accept the placement rules above for a new Pulumi stack,
+  with a default collection or a refusal when no rule matches?
+- Which rights does a person need to add a unit to a collection, to remove
+  it, and to move it? The sketch says: a right on the unit and a right on
+  the collection to add, the right on the collection to remove.
+- (e2e) Can a stack tag that the CLI sends at creation name the collection,
+  as a request that the server still checks?
+
 ## Owner direction (2026-10-12)
 
 The project owner answered questions in this RFC on 2026-10-12. Words in
@@ -191,6 +210,25 @@ decides nothing. An ADR records a decision (ADR 15).
 - Question "Does the Kubernetes operator (RFC 31) map a Kubernetes namespace to a
   group": "No we should not make that assumption."
 
+## Owner direction (2026-10-13)
+
+The project owner answered a question of RFC 19 and of this RFC on
+2026-10-13. Words in quotation marks are the words of the owner.
+
+- Question "Can a role be granted on a label?": "Collections only". Grants go
+  on a namespace, a collection or a unit. Labels are for views and filters,
+  and they never grant access.
+
+This answer replaces the owner's answer "Yes." of 2026-10-12 in RFC 19 to the
+question "Can a role be granted on a label (RFC 4)". A label never grants
+access. The section "Membership: explicit, not by label" above already said
+that a saved view never grants anything.
+
 ## Outcome
 
-None yet.
+The collection part is accepted as ADR 51 on 2026-10-13: a collection is a
+named set of units in one namespace, from any tool. Collections do not nest.
+A unit is in no more than one collection. Membership is explicit, and labels
+never grant access. A grant, a profile attachment and an output-sharing rule
+can name a collection as their object. The rest of this RFC has no outcome
+yet.
