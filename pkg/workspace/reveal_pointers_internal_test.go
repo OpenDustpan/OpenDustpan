@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json/jsontext"
 	"errors"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -399,16 +400,14 @@ func TestScanPointersStopsEarly(t *testing.T) {
 	}
 }
 
-// TestScanPointersManyPointersManyMembers proves the scan cost does not grow
-// with members times pointers.
-func TestScanPointersManyPointersManyMembers(t *testing.T) {
-	t.Parallel()
-
+// manyMembers is the attributes JSON of the scaling tests: members "k0" to
+// "k<n-1>" with string values, then "p" with one nested member "q".
+func manyMembers(n int) string {
 	var b strings.Builder
 
 	b.WriteString("{")
 
-	for i := range 200000 {
+	for i := range n {
 		b.WriteString(`"k`)
 		b.WriteString(strconv.Itoa(i))
 		b.WriteString(`":"v",`)
@@ -416,18 +415,58 @@ func TestScanPointersManyPointersManyMembers(t *testing.T) {
 
 	b.WriteString(`"p":{"q":"s"}}`)
 
-	literals := make([]string, 0, 20001)
-	for i := range 20000 {
+	return b.String()
+}
+
+// manyPointers returns the pointers "/k0" to "/k<n-1>", then "/p/q".
+func manyPointers(n int) []string {
+	literals := make([]string, 0, n+1)
+	for i := range n {
 		literals = append(literals, "/k"+strconv.Itoa(i))
 	}
 
-	literals = append(literals, "/p/q")
+	return append(literals, "/p/q")
+}
 
-	start := time.Now()
+// fastestScan returns the shortest of runs scans of attributes with literals.
+// The shortest run is the one that other load on the machine slowed least.
+func fastestScan(t *testing.T, runs int, attributes string, literals []string) time.Duration {
+	t.Helper()
 
-	got, err := scan(t, b.String(), literals...)
-	elapsed := time.Since(start)
+	fastest := time.Duration(math.MaxInt64)
 
+	for range runs {
+		start := time.Now()
+
+		if _, err := scan(t, attributes, literals...); err != nil {
+			t.Fatalf("scan pointers: %v", err)
+		}
+
+		fastest = min(fastest, time.Since(start))
+	}
+
+	return fastest
+}
+
+// scanScaleLimit bounds the time of a scan with many pointers as a multiple of
+// the time of a scan with one pointer over the same members (issue 466). With
+// -race and parallel CPU load, the ratio measured from 0.4 to 2.9. A lookup
+// over every pointer for each member, the cost this test guards against, made
+// it 90.
+const scanScaleLimit = 20
+
+// TestScanPointersManyPointersManyMembers proves the scan cost does not grow
+// with members times pointers. It compares two scans on the same machine at
+// the same time, so the bound does not depend on the speed of the machine
+// (issue 466). BenchmarkScanPointersManyPointersManyMembers measures the
+// time itself.
+func TestScanPointersManyPointersManyMembers(t *testing.T) {
+	t.Parallel()
+
+	attributes := manyMembers(50000)
+	literals := manyPointers(5000)
+
+	got, err := scan(t, attributes, literals...)
 	if err != nil {
 		t.Fatalf("scan pointers: %v", err)
 	}
@@ -436,12 +475,34 @@ func TestScanPointersManyPointersManyMembers(t *testing.T) {
 		t.Fatal("entangled = true, want false")
 	}
 
-	if len(got.applied) != 20001 {
-		t.Fatalf("applied = %d pointers, want 20001", len(got.applied))
+	if len(got.applied) != 5001 {
+		t.Fatalf("applied = %d pointers, want 5001", len(got.applied))
 	}
 
-	if elapsed > 3*time.Second {
-		t.Fatalf("scan took %v, want within 3s", elapsed)
+	one := fastestScan(t, 3, attributes, []string{"/p/q"})
+	many := fastestScan(t, 3, attributes, literals)
+
+	if many > scanScaleLimit*one {
+		t.Fatalf("scan with 5001 pointers took %v, %.1f times the %v of one pointer, want at most %d times",
+			many, float64(many)/float64(one), one, scanScaleLimit)
+	}
+}
+
+// BenchmarkScanPointersManyPointersManyMembers measures one scan of 200000
+// members with 20001 pointers.
+func BenchmarkScanPointersManyPointersManyMembers(b *testing.B) {
+	attributes := manyMembers(200000)
+	literals := manyPointers(20000)
+
+	pointers := make([]revealPointer, 0, len(literals))
+	for _, literal := range literals {
+		pointers = append(pointers, revealPointer{literal: literal, tokens: splitPointer(literal)})
+	}
+
+	for b.Loop() {
+		if _, err := scanPointers(jsontext.NewDecoder(strings.NewReader(attributes)), pointers); err != nil {
+			b.Fatalf("scan pointers: %v", err)
+		}
 	}
 }
 
