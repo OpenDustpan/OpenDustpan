@@ -134,10 +134,6 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 		return checkPlan{}, fmt.Errorf("check restore of backup %s: read live data: %w", id, err)
 	}
 
-	if dialectErr := checkRestoreDialect(manifest, liveSum, id); dialectErr != nil {
-		return checkPlan{}, dialectErr
-	}
-
 	if schemaErr := checkRestoreSchema(manifest, liveSum, id); schemaErr != nil {
 		return checkPlan{}, schemaErr
 	}

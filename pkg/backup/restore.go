@@ -66,17 +66,6 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 	return out, nil
 }
 
-// checkRestoreDialect refuses a backup of another dialect. The error names
-// both dialects, so the operator knows which release to use.
-func checkRestoreDialect(manifest Manifest, dst Summary, id ID) error {
-	if manifest.Dialect == dst.Dialect {
-		return nil
-	}
-
-	return fmt.Errorf("restore backup %s of dialect %q into %q: %w",
-		id, manifest.Dialect, dst.Dialect, ErrDialectMismatch)
-}
-
 // checkRestoreSchema refuses a backup of another schema version. The error
 // names both versions, so the operator knows which release to use.
 func checkRestoreSchema(manifest Manifest, dst Summary, id ID) error {

@@ -373,19 +373,18 @@ func TestCheckRestoreUnknownFormat(t *testing.T) {
 	s.assertNoStage(t)
 }
 
-func TestCheckRestoreDialectMismatch(t *testing.T) {
+// TestCheckRestoreAcrossDialects checks that a portable backup restores into the
+// other dialect (ADR 42, decision 9). The manifest dialect names the source only.
+func TestCheckRestoreAcrossDialects(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
 	s.live.live.Dialect = backup.DialectPostgres
 
 	_, _, err := s.check(t, testWrapper(), "")
-	if !errors.Is(err, backup.ErrDialectMismatch) {
-		t.Fatalf("err = %v, want ErrDialectMismatch", err)
+	if err != nil {
+		t.Fatalf("check across dialects: err = %v, want nil", err)
 	}
-
-	s.assertNoStage(t)
-	s.assertTargetIntact(t)
 }
 
 func TestCheckRestoreSchemaMismatch(t *testing.T) {

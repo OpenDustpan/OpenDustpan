@@ -90,15 +90,41 @@ func runBackupCrossDialect(t *testing.T, tools backupPair, from, to e2e.Store) {
 
 	dest := e2e.NewEnv(ctx, t, tools.pulumi, to)
 	copyBackupTree(t, source.BackupTargetDir(t), dest.BackupTargetDir(t))
+	copyStackConfig(t, source.ProjectDir(), dest.ProjectDir())
 
 	runRestoreCommand(ctx, t, dest, id)
 	dest.NoteStep(t, "restore across dialects", "restored "+id+" from "+string(from)+" into "+string(to))
+
+	selectRestoredState(ctx, t, dest, tools)
 
 	restored := captureExitState(ctx, t, dest, tools, "after cross restore")
 	checkExitStateMatches(t, before, restored)
 
 	again := runBackupCommand(ctx, t, dest)
 	runBackupCheck(ctx, t, dest, again)
+}
+
+// selectRestoredState logs the Pulumi CLI in to the destination, selects the
+// restored stack, and initializes the OpenTofu configuration against it. The
+// destination is a fresh environment, so it holds none of the workspace state
+// that writeExitTestState leaves on the source.
+func selectRestoredState(ctx context.Context, t *testing.T, env *e2e.Env, tools backupPair) {
+	t.Helper()
+
+	env.SetCLI(tools.pulumi)
+
+	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+
+	for _, s := range []e2e.StepSpec{
+		step("login", contains(env.URL), "login"),
+		step("stack select", nil, "stack", "select", qualified),
+	} {
+		env.Step(ctx, t, s)
+	}
+
+	env.SetCLI(tools.tofu)
+
+	env.Step(ctx, t, step("init", nil, "init", "-input=false", "-no-color"))
 }
 
 // copyBackupTree copies every object of the backup target src into dst, so the
@@ -127,6 +153,30 @@ func copyBackupTree(t *testing.T, src, dst string) {
 	})
 	if err != nil {
 		t.Fatalf("copy the backup from %s into %s: %v", src, dst, err)
+	}
+}
+
+// copyStackConfig copies the stack configuration files of the project in src
+// into the project in dst. The Pulumi CLI keeps the configuration of each stack
+// in Pulumi.<stack>.yaml next to Pulumi.yaml, outside the server, so a restore
+// alone does not move it. The encrypted values decrypt with the secret keys that
+// the backup restores.
+func copyStackConfig(t *testing.T, src, dst string) {
+	t.Helper()
+
+	names, err := filepath.Glob(filepath.Join(src, "Pulumi.*.yaml"))
+	if err != nil {
+		t.Fatalf("list stack configuration in %s: %v", src, err)
+	}
+
+	for _, name := range names {
+		if filepath.Base(name) == "Pulumi.yaml" {
+			continue
+		}
+
+		if copyErr := copyFile(name, filepath.Join(dst, filepath.Base(name))); copyErr != nil {
+			t.Fatalf("copy stack configuration %s: %v", name, copyErr)
+		}
 	}
 }
 
