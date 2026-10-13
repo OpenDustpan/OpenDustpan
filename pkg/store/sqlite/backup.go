@@ -198,6 +198,29 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
+	return s.checkPortableColumns(ctx)
+}
+
+// checkPortableColumns compares the portable spec with the live columns of each
+// table, under the SQLite names of the portable columns. The export writes the
+// spec, so the spec must match the schema (ADR 42, decisions 3 and 5).
+func (s *Store) checkPortableColumns(ctx context.Context) error {
+	for _, spec := range backup.PortableTables() {
+		listed := make([]string, 0, len(spec.Columns))
+		for _, column := range spec.Columns {
+			listed = append(listed, sqliteColumnName(spec.Table, column.Name))
+		}
+
+		live, err := s.liveColumns(ctx, spec.Table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := backup.CheckColumns(spec.Table, listed, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
 	return nil
 }
 
@@ -420,19 +443,30 @@ func (s *Store) StageRestore(
 		return backup.Summary{}, err
 	}
 
+	if err := s.keepStaged(temp); err != nil {
+		return backup.Summary{}, err
+	}
+
+	kept = true
+
+	return sum, nil
+}
+
+// keepStaged makes temp the staging area, discarding the previous one. A failed
+// discard returns the error and keeps the new file out of the staging area.
+func (s *Store) keepStaged(temp string) error {
 	s.stagingMu.Lock()
 	defer s.stagingMu.Unlock()
 
 	if s.stagingPath != "" {
 		if err := removeSnapshotErr(s.stagingPath); err != nil {
-			return backup.Summary{}, fmt.Errorf("discard previous staging area: %w", err)
+			return fmt.Errorf("discard previous staging area: %w", err)
 		}
 	}
 
 	s.stagingPath = temp
-	kept = true
 
-	return sum, nil
+	return nil
 }
 
 // DiscardStaging implements backup.Stager: it removes the staged restore file,
