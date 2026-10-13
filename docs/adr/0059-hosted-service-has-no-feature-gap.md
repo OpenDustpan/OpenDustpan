@@ -47,6 +47,11 @@ the product. Yes, secrets and such can live in Dustpan and we can use
 Dustpan runners instead of relying on GitHub Actions runners for IaC
 changes."
 
+The product manager then relayed three more owner answers on 2026-10-13:
+the longest embargo is 14 days, the hosted distribution runs the same e2e
+suite and exit tests as the open-source server, and "The private security
+release process needs to be in the open."
+
 ## Decision
 
 ### Features
@@ -142,13 +147,22 @@ changes."
     situation is a necessary evil since we're forced to patch before
     disclosure."
 
+    The fix merges upstream and is released no more than 14 days after the
+    hosted service starts to run it. Only the fix is private during the
+    embargo. The process is public: `SECURITY.md` tells how to report, and
+    describes the private advisory fork, the 14-day limit, the hosted
+    service that runs the fix, and the merge and release at disclosure.
+
+15. **The same tests.** The hosted distribution runs the same e2e suite and
+    the same exit tests as the open-source server.
+
 ### Experiments
 
-15. **No A/B tests.** The hosted service runs no experiment that gives some
+16. **No A/B tests.** The hosted service runs no experiment that gives some
     customers a different behavior from others. It has too few users for a
     valid result, it makes a feature gap, it needs behavior telemetry, and
     it changes behavior that a regulated customer did not ask for.
-16. **Early access is an opt-in setting.** An experimental feature merges
+17. **Early access is an opt-in setting.** An experimental feature merges
     upstream behind a setting that is off by default. Self-hosted
     installations get the same setting. A hosted customer turns it on on
     purpose. Feedback comes from the people who turned it on, not from
@@ -157,11 +171,6 @@ changes."
 
 ## Not decided here
 
-- The longest time that the hosted service can run an embargoed fix
-  before the merge and the release of decision 14. The product manager
-  proposed 14 days.
-- The hosted distribution runs the same e2e suite and exit tests as the
-  open-source server. This is a product manager proposal.
 - The names and places of the hosted distribution repository and the
   infrastructure repository.
 
@@ -171,5 +180,6 @@ changes."
 - GLOSSARY.md gets "hosted distribution", and notes that "account" is a
   label of the hosted console, not a term of the API.
 - The extension points of decision 7 need a console RFC.
+- `SECURITY.md` describes the embargo process of decision 14.
 - The infrastructure repository runs the same secret scans as this
   repository (`make trufflehog`, `make semgrep`).
