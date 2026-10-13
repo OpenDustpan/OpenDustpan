@@ -2062,7 +2062,7 @@ func (s *Service) storeUploadBody(
 	if storeErr != nil {
 		// Closing the stream with the store error lets the reader beside the
 		// store finish; the store error is the one the caller sees.
-		_, _ = stream.finish(storeErr)
+		_, _ = stream.finish(storeErr) //nolint:errcheck // The store error is returned; the stream's own error adds nothing.
 
 		return uploadedBody{}, fmt.Errorf("upload state %s: %w", sv.ID, storeErr)
 	}
