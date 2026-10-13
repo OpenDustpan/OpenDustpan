@@ -8,7 +8,7 @@ created: 2026-10-10
 # RFC 22. Audit log
 
 Status: discussing. Opened from the competitor review in the research doc
-"IaC and TACOS landscape". [ADR 51](../adr/0051-audit-log-port-and-log-sinks.md)
+"IaC and TACOS landscape". [ADR 60](../adr/0060-audit-log-port-and-log-sinks.md)
 accepts the port, the entry fields, query and export, and the log sinks.
 Tamper evidence, retention, trusted proxies and per-namespace sinks stay open.
 
@@ -57,7 +57,7 @@ decides nothing. An ADR records a decision (ADR 15).
 ## Owner direction (2026-10-13)
 
 The project owner answered on 2026-10-13. Words in quotation marks are the
-words of the owner. ADR 51 records the decision.
+words of the owner. ADR 60 records the decision.
 
 - The two answers of 2026-10-12, repeated here for one place: to "Is the
   audit log a port with adapters": "Yes." To "Which events are always on,
@@ -90,7 +90,7 @@ without the chain). Namespaces do not wait for each other.
 **Proposal: option C, an external anchor on top of the chain.**
 
 1. Keep the chain of each namespace.
-2. Each entry that a sink of ADR 51 ships carries `sequence`, `prevHash`
+2. Each entry that a sink of ADR 60 ships carries `sequence`, `prevHash`
    and `hash`. The operator's append-only sink is the anchor outside the
    database.
 3. A verifier route and command compare an export from a sink with the
@@ -112,5 +112,5 @@ namespace wait 1.1 ms less at p50), and a retention anchor for the check.
 
 ## Outcome
 
-Partly accepted: ADR 51 (the port, the entry fields, query and export, the
+Partly accepted: ADR 60 (the port, the entry fields, query and export, the
 log sinks). Tamper evidence and retention wait for the owner.

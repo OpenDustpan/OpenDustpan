@@ -32,7 +32,7 @@ advice. An assessor decides what meets a requirement for one organization.
   Without the chain the same path reaches 4,000 to 4,900. Appends to
   different namespaces do not wait for each other.
 - **Recommendation.** Option C, an external anchor, built on the chain that
-  exists. Each entry that a sink ships (ADR 51) carries its sequence, its
+  exists. Each entry that a sink ships (ADR 60) carries its sequence, its
   previous hash and its hash. The operator's append-only sink then holds a
   copy that the server cannot rewrite. A verifier compares an export from the
   sink with the chain of the server. Signed checkpoints (option B) stay
@@ -121,7 +121,7 @@ Four needs come back in more than one framework:
 2. **No change through the product**: PCI 10.3.2, AU-9. No API changes or
    deletes an entry (ADR 41, decision 13).
 3. **A copy outside the system, promptly**: PCI 10.3.3, AU-9(2). The sinks
-   (ADR 51) give this.
+   (ADR 60) give this.
 4. **Detection of a change, with an alert**: PCI 10.3.4, AU-9 b. The chain
    detects a change when something runs the check. Nothing runs the check on
    a schedule today, so nothing alerts.
@@ -144,6 +144,41 @@ Cryptographic protection is mandatory only for NIST HIGH (AU-9(3), AU-10).
 - The guide (`docs/guides/audit-log.md`) says that a person who can write to
   the database can compute the chain again, and that an anchor outside the
   database is RFC 22.
+
+### What the chain proves today, and what it does not prove
+
+The chain proves one thing: when a person calls the check, it finds an entry
+that someone changed or deleted in the middle of the log without computing
+the chain again. The check walks from sequence 1 and stops at the first entry
+whose sequence, previous hash or own hash does not match.
+
+It does not prove these things:
+
+- **A rewrite by a database writer.** A person who can write to the database
+  can change entries and compute every hash again. The check then answers
+  valid. The guide says this.
+- **A cut of the end of the log.** A delete of the last entries of a
+  namespace leaves a valid chain. Nothing outside the database records the
+  last sequence.
+- **Restore.** A backup carries `audit_entries` (ADR 30, ADR 42), so a
+  restore gives back a valid chain. But a restore rewinds the log to the
+  backup point. The entries written after the backup are gone, and the check
+  answers valid. The restore writes no audit entry today, so the log does not
+  show that a restore occurred. A restore from an old or changed backup also
+  checks as valid, if the backup is consistent.
+- **Retention.** No code deletes entries today. A delete of the oldest
+  entries, for example by hand in SQL, breaks the check at the first kept
+  entry, because the check expects sequence 1 and an empty previous hash. So
+  any retention rule needs a change to the check first.
+- **More than one instance (ADR 48).** The chain itself works. Each append
+  reads the last entry and inserts the next one in one database transaction,
+  so all instances build one sequence for each namespace. On PostgreSQL the
+  lock on the namespace row orders them. On SQLite only one node writes. But
+  an entry does not record which instance wrote it, and the chain proves
+  only the order of the commits, not the time. `atMs` comes from the clock of
+  the instance that wrote the entry.
+- **An alert.** Nothing runs the check on a schedule. A change stays unseen
+  until a person calls `GET /api/audit/check`.
 
 ### Method of the measurement
 
@@ -284,14 +319,14 @@ checkpoint for a Merkle tree.
 
 ### Option C: an external anchor (ship to a sink that the operator controls)
 
-The sinks of ADR 51 ship each entry to syslog, a webhook, OTLP logs, rolled
+The sinks of ADR 60 ship each entry to syslog, a webhook, OTLP logs, rolled
 JSONL in object storage or a file. Each shipped entry carries `sequence`,
 `prevHash` and `hash`. The operator's sink (a SIEM, a syslog server, an
 object-lock bucket) is append-only for the server. The server cannot change
 or delete a shipped entry.
 
 - **Cost on the write path:** none for tamper evidence. The cost is that of
-  the sink adapter, which ADR 51 needs anyway. The adapter ships after the
+  the sink adapter, which ADR 60 needs anyway. The adapter ships after the
   commit, from the table, with a cursor for each sink. A failed delivery
   retries from the cursor and counts a metric.
 - **Gives:** an independent copy (PCI 10.3.3, AU-9(2)). A verifier detects a
@@ -300,7 +335,7 @@ or delete a shipped entry.
 - **Does not give:** protection for entries that the server did not ship yet.
   The window is the delivery delay. It gives no cryptographic proof against
   a person who controls both the server and the sink.
-- **Needs:** nothing new beyond ADR 51, if each shipped entry carries the
+- **Needs:** nothing new beyond ADR 60, if each shipped entry carries the
   chain fields.
 
 ### How each option interacts with the rest of the server
@@ -310,7 +345,7 @@ or delete a shipped entry.
 | **Backup and restore** (ADR 30, ADR 42) | A backup carries `audit_entries`. A restore rewinds the log to the backup point. The chain stays valid, so the check cannot see the rewind. | A checkpoint after the backup point names a sequence that the restored database does not hold. The verifier reports a rewind. Restore must then go on from the restored head, and a checkpoint must mark the restore. | The sink still holds every entry that the server shipped after the backup point. After a restore the server appends from a lower sequence again, so the sink holds two entries with one sequence. The verifier must tell a restore apart from a rewrite: an entry for the restore (ADR 38 apply) helps. |
 | **Retention and deletion** | A delete of old entries breaks a check that starts at sequence 1. A fix: the delete keeps a retention anchor (the first kept sequence and its previous hash), and the check starts there. The anchor is in the same database, so it protects nothing against a database writer. | A checkpoint at or after the first kept sequence still verifies. The checkpoints themselves need a retention rule (bucket lifecycle). | The sink has its own retention, set by the operator. The server can delete old entries without loss of evidence if the sink keeps them (PCI 10.5.1: 12 months). |
 | **More than one instance** (ADR 48) | The database orders the appends, so every instance builds one chain. | Two instances can write the same checkpoint. An immutable key with `ErrExists` makes the write safe: the second write fails and changes nothing. A lease (ADR 48) can elect one writer, to save work. | Each instance can ship. Two instances can ship the same entry. The cursor must live in the database, and a sink must accept a duplicate (same namespace and sequence). |
-| **Key management** (ADR 23) | No key. | A new Ed25519 key. If the server derives it from the key-encryption key, anyone with that key can sign, so it protects only against a database writer. A separate key file, in the style of ADR 23 decision 1, keeps the roles apart. Rotation needs a key ID in each checkpoint and a list of public keys for the verifier. | No key in the server. A signed webhook (ADR 51) uses a shared secret for delivery, not for tamper evidence. |
+| **Key management** (ADR 23) | No key. | A new Ed25519 key. If the server derives it from the key-encryption key, anyone with that key can sign, so it protects only against a database writer. A separate key file, in the style of ADR 23 decision 1, keeps the roles apart. Rotation needs a key ID in each checkpoint and a list of public keys for the verifier. | No key in the server. A signed webhook (ADR 60) uses a shared secret for delivery, not for tamper evidence. |
 | **Verifier** (ADR 17, ADR 39) | `GET /api/audit/check` walks the chain. | The check also reads the checkpoints from the blob store and checks each signature with the public key. It compares each signed hash with the entry at that sequence. A command `opendustpan audit verify` calls the route and needs no database access (ADR 39). An independent verifier can read the bucket and an export with only the public key. | A route or a command reads an export from the sink (JSONL). It compares each entry with the chain of the server through the API. It reports the first sequence that differs, the entries that the server lost, and the entries that the sink never received. The command reads a local file and the API only (ADR 39). |
 
 ### Change detection with an alert
@@ -330,7 +365,7 @@ sink delivery delay.
 1. Keep the per-namespace chain (option A). It is already built and tested,
    it adds no serialization on SQLite, and on PostgreSQL it limits only one
    namespace to about 1,200 appends per second.
-2. Each entry that a sink of ADR 51 ships carries `sequence`, `prevHash` and
+2. Each entry that a sink of ADR 60 ships carries `sequence`, `prevHash` and
    `hash`. The operator's sink is the anchor outside the database.
 3. A verifier route and command compare an export from a sink with the chain
    of the server (ADR 17, ADR 39).

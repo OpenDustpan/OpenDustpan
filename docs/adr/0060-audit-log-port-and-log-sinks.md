@@ -1,4 +1,4 @@
-# 51. The audit log is a port, and logs go to swappable sinks
+# 60. The audit log is a port, and logs go to swappable sinks
 
 Status: accepted · 2026-10-13
 

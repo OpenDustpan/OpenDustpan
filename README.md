@@ -223,7 +223,7 @@ logging with `--log-level` and `--log-format`. Check readiness at
 - **You need remote runs.** OpenDustpan stores state. It does not run
   `pulumi up` or `tofu apply` for you.
 - **You need a full audit log, policy checks or drift detection.** The
-  audit log records secret reads and overrides only. ADR 51 plans the rest:
+  audit log records secret reads and overrides only. ADR 60 plans the rest:
   every change, export and sinks. Policy checks and drift detection do not
   exist yet.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
