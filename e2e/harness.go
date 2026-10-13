@@ -177,6 +177,8 @@ type Env struct {
 	// binPath is the server binary newBinaryEnv built. It is empty in the
 	// in-process mode, where RunBinary, StopServer and StartServer fail.
 	binPath string
+	// backupDir is the backup target directory of the in-process server.
+	backupDir string
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -218,6 +220,8 @@ type serverBuild struct {
 	workspaces *workspace.Service
 	blobs      blob.Store
 	dbProxy    *DBProxy
+	// backupDir is the directory of the dir: backup target the server writes.
+	backupDir string
 }
 
 // NewEnv starts a server on a random local port, backed by a fresh database
@@ -340,6 +344,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
+		backupDir:     build.backupDir,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -487,7 +492,14 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		tb.Fatalf("new server: %v", err)
 	}
 
-	return serverBuild{handler: srv.Handler(), store: st, workspaces: workspaces, blobs: blobs, dbProxy: dbProxy}
+	return serverBuild{
+		handler:    srv.Handler(),
+		store:      st,
+		workspaces: workspaces,
+		blobs:      blobs,
+		dbProxy:    dbProxy,
+		backupDir:  strings.TrimPrefix(targetName, "dir:"),
+	}
 }
 
 // openBackupTarget opens a backup target directory next to the database at
