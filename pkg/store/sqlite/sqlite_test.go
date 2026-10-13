@@ -295,6 +295,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestPortableExportConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunPortable(t, func(t *testing.T) storetest.PortableStore {
+		t.Helper()
+
+		ps, ok := openBackup(t).(storetest.PortableStore)
+		if !ok {
+			t.Fatal("the SQLite store does not export the portable format")
+		}
+
+		return ps
+	})
+}
+
 func TestRestoreConformance(t *testing.T) {
 	t.Parallel()
 

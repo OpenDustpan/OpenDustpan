@@ -206,7 +206,7 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
 	rows, err := s.conn.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
-		return nil, fmt.Errorf("read columns of table %q: %w", table, err)
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
 	}
 
 	defer func() {
@@ -221,14 +221,14 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 		var name string
 
 		if scanErr := rows.Scan(&name); scanErr != nil {
-			return nil, fmt.Errorf("scan column of table %q: %w", table, scanErr)
+			return nil, fmt.Errorf("scan column of table %q: %w", table, backup.ErrSchemaRead)
 		}
 
 		columns = append(columns, name)
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, fmt.Errorf("read columns of table %q: %w", table, iterErr)
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
 	}
 
 	return columns, nil
@@ -281,6 +281,10 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 // database), and streams the file to w. VACUUM INTO reads one consistent
 // view, so the capture runs while the server writes. It adds no dependency.
 func (s *Store) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
+	if err := s.CheckCoverage(ctx); err != nil {
+		return backup.Summary{}, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
