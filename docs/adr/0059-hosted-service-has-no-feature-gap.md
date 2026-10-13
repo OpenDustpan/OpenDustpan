@@ -135,11 +135,31 @@ changes."
     hotfix. It should in principal never run code that isn't MERGED
     upstream."
 
+14. **Embargoed security fixes.** During an embargo, the hosted service
+    can run a security fix from a private security advisory fork. The fix
+    merges upstream and is released when the problem is disclosed. The
+    owner accepted this exception on 2026-10-13: "the embargoed security fix
+    situation is a necessary evil since we're forced to patch before
+    disclosure."
+
+### Experiments
+
+15. **No A/B tests.** The hosted service runs no experiment that gives some
+    customers a different behavior from others. It has too few users for a
+    valid result, it makes a feature gap, it needs behavior telemetry, and
+    it changes behavior that a regulated customer did not ask for.
+16. **Early access is an opt-in setting.** An experimental feature merges
+    upstream behind a setting that is off by default. Self-hosted
+    installations get the same setting. A hosted customer turns it on on
+    purpose. Feedback comes from the people who turned it on, not from
+    telemetry. The hosted service is still the first to run merged code,
+    before the tagged release (decision 13).
+
 ## Not decided here
 
-- A security fix under embargo. Decision 13 makes a fix public when it
-  merges, before self-hosted installations have a release. The product
-  manager takes this question to the owner.
+- The longest time that the hosted service can run an embargoed fix
+  before the merge and the release of decision 14. The product manager
+  proposed 14 days.
 - The hosted distribution runs the same e2e suite and exit tests as the
   open-source server. This is a product manager proposal.
 - The names and places of the hosted distribution repository and the
