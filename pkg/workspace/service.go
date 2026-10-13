@@ -407,22 +407,6 @@ func (s *Service) ForceUnlock(
 	return released, false, err
 }
 
-// Overrides returns the overrides that the unit allows: the switch of its
-// namespace narrowed by the switch of the unit (ADR 44, decision 6).
-func (s *Service) Overrides(ctx context.Context, id ID) (namespace.Overrides, error) {
-	w, err := s.GetByID(ctx, id)
-	if err != nil {
-		return namespace.Overrides{}, err
-	}
-
-	ns, err := s.namespaces.Get(ctx, w.Ref.Namespace)
-	if err != nil {
-		return namespace.Overrides{}, fmt.Errorf("namespace of %s: %w", w.Ref, err)
-	}
-
-	return ns.Overrides.And(w.Overrides), nil
-}
-
 // SetOverrides replaces the override switch of the unit.
 func (s *Service) SetOverrides(ctx context.Context, id ID, ov namespace.Overrides) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
@@ -440,7 +424,8 @@ type PendingState struct {
 }
 
 // BeginState declares a new state version for the workspace. The caller must
-// hold the lock. The content follows through Upload with the returned token.
+// hold the lock, or make an unlocked write that allow.Unlocked permits. The
+// content follows through Upload with the returned token.
 // It first sweeps the expired pending versions of the workspace with their
 // attempted content, then refuses with ErrTooManyPending when the workspace
 // still holds the maximum pending versions. The sweep is best effort: a
@@ -451,12 +436,19 @@ type PendingState struct {
 // serialize, so it holds across services; the stripe below only trims
 // contention between declares of one workspace in this service.
 //
-// allow holds the overrides the caller may use for this declare. A forced
-// declare needs allow.Forced, and a declare without the lock needs
-// allow.Unlocked. Without them the declare is refused with the way out in
-// the error text (ADR 44, decisions 4, 5 and 8).
+// auth holds the overrides the caller may use for this declare, and the record
+// callback of each override it uses. A forced declare into a unit that has a
+// current state version needs auth.Allow.Forced, and a declare without the lock
+// needs auth.Allow.Unlocked. A forced declare into a unit with no current state
+// overwrites nothing, so it needs no override (ADR 44, decisions 4 and 5).
+// Without the override a refused declare names the way out in its error text
+// (ADR 44, decision 8).
+//
+// auth.Record runs before the store write, and a failed record refuses the
+// declare, so no override writes without its entry (ADR 41, decision 5). A nil
+// auth.Record writes nothing.
 func (s *Service) BeginState(
-	ctx context.Context, id ID, holder string, in NewState, allow namespace.Overrides,
+	ctx context.Context, id ID, holder string, in NewState, auth Authority,
 ) (PendingState, error) {
 	sum, err := in.parse()
 	if err != nil {
@@ -468,21 +460,23 @@ func (s *Service) BeginState(
 		return PendingState{}, err
 	}
 
-	unlocked, err := declareAllowed(w, holder, in, allow)
+	current, hasState, err := s.followedState(ctx, w, in)
+	if err != nil {
+		return PendingState{}, err
+	}
+
+	var known *StateVersion
+	if hasState {
+		known = &current
+	}
+
+	unlocked, used, err := declareOverrides(w, holder, in, known, auth.Allow)
 	if err != nil {
 		return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, err)
 	}
 
-	current, err := s.states.CurrentStateVersion(ctx, id)
-
-	switch {
-	case errors.Is(err, ErrNoState):
-	case err != nil:
-		return PendingState{}, fmt.Errorf("current state of %s: %w", w.Ref, err)
-	default:
-		if followErr := in.follows(current); followErr != nil {
-			return PendingState{}, fmt.Errorf("new state for %s: %w", w.Ref, followErr)
-		}
+	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
+		return PendingState{}, recordErr
 	}
 
 	// Declares of one workspace share a stripe from here to the create,
@@ -522,23 +516,71 @@ func (s *Service) BeginState(
 	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
 }
 
-// declareAllowed checks the lock of one declare. It returns whether the declare
-// is an unlocked write, which the override allows (ADR 44, decisions 5 and 8).
-func declareAllowed(w Workspace, holder string, in NewState, allow namespace.Overrides) (bool, error) {
-	if in.Force && !allow.Forced {
-		return false, forcedRefusal()
+// Authority is the caller's side of a declare: the overrides the caller may
+// use, and the callback that writes the audit entry of each override that the
+// declare uses.
+type Authority struct {
+	// Allow holds the overrides the caller may use.
+	Allow namespace.Overrides
+	// Record writes the audit entry of one override. A nil Record writes nothing.
+	Record func(Override) error
+}
+
+// Override names an override that a declare uses. The domain reports each use
+// to the record callback of BeginState before the declare writes.
+type Override int
+
+// Overrides that a declare can use.
+const (
+	// OverrideForced is a forced declare into a unit that has state.
+	OverrideForced Override = iota + 1
+	// OverrideUnlocked is a declare into a unit that no principal holds.
+	OverrideUnlocked
+)
+
+// declareOverrides checks the lock and the overrides of one declare. It returns
+// whether the declare is an unlocked write and the overrides it uses. A forced
+// declare needs the override only when the unit has state (ADR 44, decision 4).
+// current is nil when the unit has no state.
+func declareOverrides(
+	w Workspace, holder string, in NewState, current *StateVersion, allow namespace.Overrides,
+) (bool, []Override, error) {
+	var used []Override
+
+	if in.Force && current != nil {
+		if !allow.Forced {
+			return false, nil, forcedRefusal()
+		}
+
+		used = append(used, OverrideForced)
 	}
 
 	lockErr := w.heldBy(holder)
 	if lockErr == nil {
-		return false, nil
+		return false, used, nil
 	}
 
 	if !errors.Is(lockErr, ErrNotLocked) || !allow.Unlocked {
-		return false, unlockedRefusal(lockErr)
+		return false, nil, unlockedRefusal(lockErr)
 	}
 
-	return true, nil
+	return true, append(used, OverrideUnlocked), nil
+}
+
+// recordOverrides writes the audit entry of each override that a declare uses,
+// and stops at the first entry that fails.
+func recordOverrides(w Workspace, used []Override, record func(Override) error) error {
+	if record == nil {
+		return nil
+	}
+
+	for _, override := range used {
+		if err := record(override); err != nil {
+			return fmt.Errorf("record override of %s: %w", w.Ref, err)
+		}
+	}
+
+	return nil
 }
 
 // pendingDeclare holds the optional parts of a declare: the version it restores
@@ -1034,6 +1076,31 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// followedState returns the current state version of the unit, and whether the
+// unit has one. A new state must follow the current one.
+func (s *Service) followedState(ctx context.Context, w Workspace, in NewState) (StateVersion, bool, error) {
+	current, err := s.states.CurrentStateVersion(ctx, w.ID)
+	if errors.Is(err, ErrNoState) {
+		var none StateVersion
+
+		return none, false, nil
+	}
+
+	if err != nil {
+		var none StateVersion
+
+		return none, false, fmt.Errorf("current state of %s: %w", w.Ref, err)
+	}
+
+	if followErr := in.follows(current); followErr != nil {
+		var none StateVersion
+
+		return none, false, fmt.Errorf("new state for %s: %w", w.Ref, followErr)
+	}
+
+	return current, true, nil
 }
 
 // rejectEncryptedState fails with ErrClientEncrypted when state is a state

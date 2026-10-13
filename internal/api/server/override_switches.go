@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -14,11 +15,51 @@ import (
 // The body holds two booleans, so this is ample.
 const maxOverrideBodyBytes = 1024
 
+// errOverrideSwitchesBody names the body that a switch change needs. Its text
+// is the error of the 400 answer.
+var errOverrideSwitchesBody = errors.New(
+	`invalid override switches body: provide {"allowForcedWrites":true|false,"allowUnlockedWrites":true|false}`,
+)
+
 // overrideSwitchesBody is the JSON body of the override switches of a
-// namespace (ADR 44, decision 6). The switches are off by default.
+// namespace (ADR 44, decision 6). The switches are off by default. A change
+// sets both fields.
 type overrideSwitchesBody struct {
 	AllowForcedWrites   bool `json:"allowForcedWrites"`
 	AllowUnlockedWrites bool `json:"allowUnlockedWrites"`
+}
+
+// overrideSwitchesInput is the body of a change. Its pointers tell a missing
+// field from false, so a change must name both switches.
+type overrideSwitchesInput struct {
+	AllowForcedWrites   *bool `json:"allowForcedWrites"`
+	AllowUnlockedWrites *bool `json:"allowUnlockedWrites"`
+}
+
+// decodeOverrideSwitches reads a change body. It refuses an unknown field,
+// a body that is not one object, a body that lacks either switch, and a null
+// body.
+func decodeOverrideSwitches(body []byte) (overrideSwitchesBody, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+
+	var in overrideSwitchesInput
+	if err := dec.Decode(&in); err != nil {
+		return overrideSwitchesBody{}, errOverrideSwitchesBody
+	}
+
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return overrideSwitchesBody{}, errOverrideSwitchesBody
+	}
+
+	if in.AllowForcedWrites == nil || in.AllowUnlockedWrites == nil {
+		return overrideSwitchesBody{}, errOverrideSwitchesBody
+	}
+
+	return overrideSwitchesBody{
+		AllowForcedWrites:   *in.AllowForcedWrites,
+		AllowUnlockedWrites: *in.AllowUnlockedWrites,
+	}, nil
 }
 
 // overrideSwitchesOf returns the body that shows ov.
@@ -84,8 +125,8 @@ func (h *Handler) readNamespaceOverrides(
 }
 
 // writeNamespaceOverrides serves PUT /api/server/namespaces/{namespace}/override-switches.
-// It answers 200 with the switches as stored. An empty or malformed body answers
-// 400 and changes no switch.
+// It answers 200 with the switches as stored. A body that is empty, null, lacks
+// either switch, or has an unknown field answers 400 and changes no switch.
 func (h *Handler) writeNamespaceOverrides(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
@@ -93,14 +134,14 @@ func (h *Handler) writeNamespaceOverrides(
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOverrideBodyBytes))
 	if err != nil {
-		h.writeError(ctx, w, errInvalidNamespaceBody)
+		h.writeError(ctx, w, errInvalidBody)
 
 		return
 	}
 
-	var in overrideSwitchesBody
-	if decodeErr := json.NewDecoder(bytes.NewReader(body)).Decode(&in); decodeErr != nil {
-		h.writeError(ctx, w, errInvalidBody)
+	in, err := decodeOverrideSwitches(body)
+	if err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}

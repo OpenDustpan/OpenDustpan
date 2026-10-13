@@ -290,7 +290,7 @@ func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.Sta
 // ignores the lock and echoes the declared values: route tests prove
 // authorization, not the state rules.
 func (stubWorkspaces) BeginState(
-	_ context.Context, id workspace.ID, holder string, in workspace.NewState, _ namespace.Overrides,
+	_ context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	upload, err := token.New()
 	if err != nil {
@@ -1488,7 +1488,7 @@ func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.Sta
 }
 
 func (errorWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ namespace.Overrides,
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, errTestInternal
 }
@@ -2136,6 +2136,6 @@ func TestUnknownPathAnswersJSONAPI404(t *testing.T) {
 }
 
 // SetOverrides is not used by this fake.
-func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }

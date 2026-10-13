@@ -87,9 +87,18 @@ func (m *memStore) CreateNamespace(_ context.Context, ns namespace.Namespace) er
 	return nil
 }
 
-func (m *memStore) SetOverrides(_ context.Context, name namespace.Name, ov namespace.Overrides) error {
+func (m *memStore) SetOverrides(
+	_ context.Context,
+	name namespace.Name,
+	ov namespace.Overrides,
+	fence namespace.Fence,
+) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
 
 	ns, ok := m.namespaces[name]
 	if !ok {
@@ -453,7 +462,12 @@ func (m *memStore) FinalizeStateVersion(
 // The caller holds mu.
 func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVersion) error {
 	// A version declared without the lock (ADR 44, decision 5) has no lock to keep,
-	// but its switches must still be on when it finalizes (ADR 44, decision 6).
+	// but a lock taken by another principal since the declare stops it.
+	if sv.UnlockedWrite && w.Lock.Locked() && w.Lock.Holder != sv.Holder {
+		return workspace.ErrLockedByOther
+	}
+
+	// Its switches must still be on when it finalizes (ADR 44, decision 6).
 	if err := m.checkDeclareSwitches(w, sv); err != nil {
 		return err
 	}
@@ -856,7 +870,7 @@ func (f fixture) push(t *testing.T, in workspace.NewState, content string) error
 		f.ws.ID,
 		"alice",
 		in,
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		return err
@@ -971,7 +985,7 @@ func TestStateVersions(t *testing.T) {
 		Force:   false,
 	}
 
-	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized, forcedOnly())
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", oversized, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrTooLarge) {
 		t.Errorf("oversized outputs: %v, want ErrTooLarge", err)
 	}
@@ -992,7 +1006,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 
 	forced := workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true}
 
-	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("forced begin without the lock: %v, want ErrNotLocked", err)
 	}
@@ -1001,7 +1015,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 		t.Fatalf("lock: %v", lockErr)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("forced begin: %v", err)
 	}
@@ -1066,7 +1080,7 @@ func TestUploadCapability(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1099,7 +1113,7 @@ func TestUploadCapability(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 2, "v2"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1135,7 +1149,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 5, "v5"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin v5: %v", err)
@@ -1184,7 +1198,7 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		f.ws.ID,
 		"ci",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1257,7 +1271,7 @@ func TestReadState(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
@@ -1350,7 +1364,7 @@ func TestChecksumMismatchDeletesBlob(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 2, "v2"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1463,7 +1477,7 @@ func TestTooLargeUploadDeletesBlob(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, content),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1507,7 +1521,7 @@ func TestDiscardJSONRendering(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -1557,7 +1571,7 @@ func TestDiscardJSONRendering(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 2, "v2"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
@@ -1592,19 +1606,26 @@ func TestPendingCap(t *testing.T) {
 
 	for _, serial := range []int64{1, 2} {
 		in := newState("l1", serial, "v1")
-		if _, beginErr := svc.BeginState(ctx, f.ws.ID, "alice", in, forcedOnly()); beginErr != nil {
+		if _, beginErr := svc.BeginState(ctx, f.ws.ID, "alice", in, authority(forcedOnly(), nil)); beginErr != nil {
 			t.Fatalf("begin serial %d: %v", serial, beginErr)
 		}
 	}
 
-	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly())
+	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrTooManyPending) {
 		t.Fatalf("begin past the cap: %v, want ErrTooManyPending", err)
 	}
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err = svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
+	_, err = svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 3, "v3"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin after expiry: %v", err)
 	}
 
@@ -1647,7 +1668,7 @@ func unknownUpload(t *testing.T, f fixture, in workspace.NewState) workspace.Pen
 
 	ctx := t.Context()
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, forcedOnly())
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -1712,7 +1733,14 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
+	_, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin within grace: %v", err)
 	}
 
@@ -1726,7 +1754,14 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.SweepGracePeriod)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
+	_, err = f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 3, "v3"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1797,7 +1832,14 @@ func TestRetryAfterUnknownDeletesSupersededBlob(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
+	_, err = f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -1899,7 +1941,14 @@ func assertSweepCollectsOrphan(
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
+	_, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -2006,7 +2055,14 @@ func TestSweepRetriesBlobDeletes(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
+	_, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin past grace: %v", err)
 	}
 
@@ -2040,7 +2096,7 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -2062,8 +2118,8 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 	}
 
 	for _, key := range []blob.Key{stray, fresh} {
-		if err := blobs.Put(ctx, key, strings.NewReader(key.String())); err != nil {
-			t.Fatalf("put %s: %v", key, err)
+		if putErr := blobs.Put(ctx, key, strings.NewReader(key.String())); putErr != nil {
+			t.Fatalf("put %s: %v", key, putErr)
 		}
 	}
 
@@ -2073,7 +2129,14 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 	chtimesBlob(t, dir, stray, old)
 	chtimesBlob(t, dir, fresh, *f.now)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 2, "v2"), forcedOnly()); err != nil {
+	_, err = f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 2, "v2"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
@@ -2111,7 +2174,7 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 2, "v2"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin past grace with failing blobs: %v", err)
@@ -2147,7 +2210,14 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.SweepGracePeriod + time.Second)
 
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), forcedOnly()); err != nil {
+	_, err = f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 3, "v3"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("begin after healing: %v", err)
 	}
 
@@ -2183,7 +2253,7 @@ func TestConcurrentBeginStateKeepsCap(t *testing.T) {
 				f.ws.ID,
 				"alice",
 				newState("l1", int64(i+1), "v1"),
-				forcedOnly(),
+				authority(forcedOnly(), nil),
 			)
 		})
 	}
@@ -2236,7 +2306,14 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 
 	// One pending of the two the cap allows, so the two racing declares
 	// contend for the last slot.
-	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 1, "v1"), forcedOnly()); err != nil {
+	_, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		newState("l1", 1, "v1"),
+		authority(forcedOnly(), nil),
+	)
+	if err != nil {
 		t.Fatalf("prefill: %v", err)
 	}
 
@@ -2250,7 +2327,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 			f.ws.ID,
 			"alice",
 			newState("l1", 2, "v1"),
-			forcedOnly(),
+			authority(forcedOnly(), nil),
 		)
 	})
 	wg.Go(func() {
@@ -2259,7 +2336,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 			f.ws.ID,
 			"alice",
 			newState("l1", 3, "v1"),
-			forcedOnly(),
+			authority(forcedOnly(), nil),
 		)
 	})
 
@@ -2440,7 +2517,7 @@ func concurrentUploadAcrossServicesOnce(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
 		t.Fatalf("begin: %v", beginErr)
@@ -2589,7 +2666,7 @@ func checkRejectedFinalizeDeletesBlob(t *testing.T, sentinel error) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -2628,7 +2705,7 @@ func TestDiscardJSONRenderingTooLarge(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -2674,7 +2751,7 @@ func TestDiscardJSONRenderingExpiryAfterFinalize(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -3150,7 +3227,7 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		f.ws.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -3180,7 +3257,7 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		other.ID,
 		"alice",
 		newState("l1", 1, "v1"),
-		forcedOnly(),
+		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin other: %v", err)
@@ -3762,7 +3839,7 @@ func uploadSealedState(t *testing.T, f fixture, content, outputValue string) wor
 		Outputs: sealedOutputsDoc(outputValue),
 		Serial:  1,
 		Force:   false,
-	}, forcedOnly())
+	}, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -3886,7 +3963,7 @@ func TestSealedDownloadTamper(t *testing.T) {
 		Outputs: nil,
 		Serial:  1,
 		Force:   false,
-	}, forcedOnly())
+	}, authority(forcedOnly(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -4284,7 +4361,8 @@ func (m *memStore) checkDeclareSwitches(w workspace.Workspace, sv workspace.Stat
 		}
 	}
 
-	if sv.Force && sv.RestoredFrom == "" {
+	_, hasState := m.current[w.ID]
+	if sv.Force && sv.RestoredFrom == "" && hasState {
 		return m.checkForcedSwitches(w)
 	}
 

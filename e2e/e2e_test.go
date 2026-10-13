@@ -7726,11 +7726,7 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	)
 
 	writeImportConfig(t, dir, importEncryptedCloudConfig(env.Host(), "masked-encrypted"))
-	// The copy of a client-encrypted state is a forced write: the unit is made
-	// with the forced-write switches on, and they go off after the copy.
-	copyUnit := overrideOpenForcedCopy(ctx, t, env, "masked-encrypted")
 	env.StepIn(ctx, t, dir, importMigrateStep("masked encrypted migrate"))
-	overrideCloseForcedCopy(ctx, t, env, copyUnit)
 
 	versionID := maskedCurrentVersion(ctx, t, env, "masked-encrypted")
 	base := "/api/v2/state-versions/" + versionID

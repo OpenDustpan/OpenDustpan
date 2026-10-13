@@ -1815,6 +1815,6 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 }
 
 // SetOverrides is not used by this fake.
-func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }

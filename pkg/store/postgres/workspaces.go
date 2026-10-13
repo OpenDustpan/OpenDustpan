@@ -533,8 +533,8 @@ func fenceAndUnlockInTx(
 		UpdatedAtMs:         released.UpdatedAtMs,
 		ID:                  released.ID,
 		ExpectedRevision:    released.Revision - 1,
-		AllowForcedWrites:   false,
-		AllowUnlockedWrites: false,
+		AllowForcedWrites:   released.AllowForcedWrites,
+		AllowUnlockedWrites: released.AllowUnlockedWrites,
 	})
 	if err != nil {
 		return fmt.Errorf("release workspace lock: %w", err)
@@ -655,23 +655,12 @@ func checkFinalizeGuards(
 		return db.Workspace{}, pendingErr
 	}
 
-	// A version declared without the lock (ADR 44, decision 5) has no lock to
-	// keep: its finalize skips the lock check.
-	if !row.UnlockedWrite {
-		if lockErr := checkFinalizeLock(wrow, row.LockID); lockErr != nil {
-			return db.Workspace{}, lockErr
-		}
-	} else if switchErr := checkUnlockedSwitches(ctx, q, wrow); switchErr != nil {
-		return db.Workspace{}, switchErr
+	if lockErr := checkFinalizeHolder(ctx, q, row, wrow); lockErr != nil {
+		return db.Workspace{}, lockErr
 	}
 
-	// A forced version finalizes only while the forced-write switches are on, and
-	// it skips the order check only after this check passes (ADR 44, decisions 4
-	// and 6). A restore sets Force itself, so it is not a client's forced write.
-	if sv.Force && sv.RestoredFrom == "" {
-		if switchErr := checkForcedSwitches(ctx, q, wrow); switchErr != nil {
-			return db.Workspace{}, switchErr
-		}
+	if forcedErr := checkFinalizeForced(ctx, q, sv, wrow); forcedErr != nil {
+		return db.Workspace{}, forcedErr
 	}
 
 	if !sv.Force {
@@ -681,6 +670,38 @@ func checkFinalizeGuards(
 	}
 
 	return wrow, nil
+}
+
+// checkFinalizeHolder checks the lock of a finalize. A version declared under
+// the lock keeps it. A version declared without the lock (ADR 44, decision 5)
+// has no lock to keep, and a lock that another principal took after the
+// declare stops it.
+func checkFinalizeHolder(
+	ctx context.Context, q *db.Queries, row codec.StateVersionRow, wrow db.Workspace,
+) error {
+	if !row.UnlockedWrite {
+		return checkFinalizeLock(wrow, row.LockID)
+	}
+
+	if wrow.LockHolder != "" && wrow.LockHolder != row.Holder {
+		return workspace.ErrLockedByOther
+	}
+
+	return checkUnlockedSwitches(ctx, q, wrow)
+}
+
+// checkFinalizeForced checks the forced-write switches of a forced finalize. A
+// forced version finalizes only while the switches are on (ADR 44, decisions 4
+// and 6). A restore sets Force itself, so it is not a client's forced write, and
+// a unit with no current state needs no override.
+func checkFinalizeForced(
+	ctx context.Context, q *db.Queries, sv workspace.StateVersion, wrow db.Workspace,
+) error {
+	if !sv.Force || sv.RestoredFrom != "" || wrow.CurrentStateVersionID == "" {
+		return nil
+	}
+
+	return checkForcedSwitches(ctx, q, wrow)
 }
 
 // writeFinalize marks the version finalized, moves the workspace pointer and
@@ -784,7 +805,9 @@ func checkDeclareSwitches(ctx context.Context, q *db.Queries, sv workspace.State
 		}
 	}
 
-	if sv.Force && sv.RestoredFrom == "" {
+	// A forced write needs the override only into a unit that has state (ADR 44,
+	// decision 4).
+	if sv.Force && sv.RestoredFrom == "" && wrow.CurrentStateVersionID != "" {
 		return checkForcedSwitches(ctx, q, wrow)
 	}
 

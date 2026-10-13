@@ -3735,7 +3735,7 @@ func encodeFakeFrame(t *testing.T, enc *gob.Encoder, table string, value any) {
 }
 
 // SetOverrides is not used by this fake.
-func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (*fakeBackupStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }
 

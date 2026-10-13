@@ -435,7 +435,7 @@ func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 }
 
 func (coverageWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ namespace.Overrides,
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	var none workspace.PendingState
 
@@ -1051,6 +1051,11 @@ func (coverageWorkspaces) forceUnlockUnfenced(
 }
 
 // SetOverrides is not used by this fake.
-func (coverageNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (coverageNamespaceStore) SetOverrides(
+	context.Context,
+	namespace.Name,
+	namespace.Overrides,
+	namespace.Fence,
+) error {
 	return nil
 }

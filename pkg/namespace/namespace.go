@@ -127,8 +127,9 @@ type Store interface {
 	// GetNamespace returns the namespace called name, or ErrNotFound.
 	GetNamespace(ctx context.Context, name Name) (Namespace, error)
 	// SetOverrides replaces the override switches of the namespace called
-	// name. It returns ErrNotFound when the namespace does not exist.
-	SetOverrides(ctx context.Context, name Name, ov Overrides) error
+	// name. It checks fence in the same transaction, and returns ErrFenced when
+	// the fence is stale, and ErrNotFound when the namespace does not exist.
+	SetOverrides(ctx context.Context, name Name, ov Overrides, fence Fence) error
 	// ListNamespaces returns every namespace, ordered by name.
 	ListNamespaces(ctx context.Context) ([]Namespace, error)
 	// Ping returns nil when the database answers within ctx. It returns
@@ -198,7 +199,12 @@ func (s *Service) Get(ctx context.Context, name Name) (Namespace, error) {
 // SetOverrides replaces the override switches of the namespace called name
 // and returns the namespace as stored.
 func (s *Service) SetOverrides(ctx context.Context, name Name, ov Overrides) (Namespace, error) {
-	if err := s.store.SetOverrides(ctx, name, ov); err != nil {
+	current, err := s.store.GetNamespace(ctx, name)
+	if err != nil {
+		return Namespace{}, fmt.Errorf("set overrides of namespace %q: %w", name, err)
+	}
+
+	if err := s.store.SetOverrides(ctx, name, ov, current.Fence()); err != nil {
 		return Namespace{}, fmt.Errorf("set overrides of namespace %q: %w", name, err)
 	}
 

@@ -282,6 +282,6 @@ func assertCheckRefused(t *testing.T, keys *memKeys, wrapper secret.Wrapper, sen
 }
 
 // SetOverrides is not used by this fake.
-func (oneNamespace) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (oneNamespace) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }

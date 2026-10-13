@@ -796,7 +796,7 @@ func (f maskedFixture) pushMasked(
 		f.ws.ID,
 		"alice",
 		newState("l1", serial, content),
-		noOverrides(),
+		authority(noOverrides(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin serial %d: %v", serial, err)

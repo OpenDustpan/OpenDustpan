@@ -137,7 +137,7 @@ func (f sealFixture) pushPlain(
 		Outputs: outputs,
 		Serial:  serial,
 		Force:   false,
-	}, noOverrides())
+	}, authority(noOverrides(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}

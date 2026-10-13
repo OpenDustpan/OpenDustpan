@@ -169,38 +169,29 @@ func (h *Handler) createStateVersion(
 
 	id := workspace.ID(r.PathValue("id"))
 
-	allow, locked, err := h.allowance(ctx, p, id, obj)
+	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	// An unlocked write is an override: its audit entry is written before the
-	// declare, and a failed entry stops the declare (ADR 41, decision 5).
-	// A forced declare is an override: its audit entry is written before the
-	// declare (ADR 41, decision 5).
-	if in.Force && allow.Forced {
-		version := strconv.FormatInt(in.Serial, 10)
-
-		if auditErr := h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteForced, version); auditErr != nil {
-			h.writeError(ctx, w, auditErr)
-
-			return
+	// The domain reports each override the declare uses, before it writes: the
+	// audit entry of that override is written by the record callback, and a
+	// failed entry refuses the declare (ADR 41, decision 5).
+	version := strconv.FormatInt(in.Serial, 10)
+	record := func(override workspace.Override) error {
+		action := identity.ActionUnitWriteUnlocked
+		if override == workspace.OverrideForced {
+			action = identity.ActionUnitWriteForced
 		}
+
+		return h.appendOverrideAudit(r, p, obj, action, version)
 	}
 
-	if allow.Unlocked && !locked {
-		version := strconv.FormatInt(in.Serial, 10)
+	auth := workspace.Authority{Allow: allow, Record: record}
 
-		if auditErr := h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteUnlocked, version); auditErr != nil {
-			h.writeError(ctx, w, auditErr)
-
-			return
-		}
-	}
-
-	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, allow)
+	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

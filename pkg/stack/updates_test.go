@@ -1837,7 +1837,7 @@ func (m *failBlob) Delete(ctx context.Context, key blob.Key) error {
 }
 
 // SetOverrides is not used by this fake.
-func (*memUpdates) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (*memUpdates) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }
 

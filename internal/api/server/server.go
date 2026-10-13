@@ -245,6 +245,8 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, errInvalidBody.Error()
+	case errors.Is(err, errOverrideSwitchesBody):
+		return http.StatusBadRequest, errOverrideSwitchesBody.Error()
 	default:
 		return classifyRegistry(err)
 	}

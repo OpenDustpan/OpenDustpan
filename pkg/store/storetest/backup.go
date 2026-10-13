@@ -181,7 +181,25 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		t.Fatalf("create namespace %q: %v", other.Name, err)
 	}
 
+	// The switches are on in both namespaces, and on in one unit of each
+	// kind, so the round trip carries every switch column with a value that
+	// is not the default (ADR 44, decision 6).
+	if err := s.SetOverrides(ctx, "acme", namespace.Overrides{Forced: true, Unlocked: false}, f.fence); err != nil {
+		t.Fatalf("set acme switches: %v", err)
+	}
+
+	err := s.SetOverrides(
+		ctx,
+		other.Name,
+		namespace.Overrides{Forced: false, Unlocked: true},
+		other.Fence(),
+	)
+	if err != nil {
+		t.Fatalf("set other switches: %v", err)
+	}
+
 	acme := mustGetNamespace(t, s, "acme")
+	other = mustGetNamespace(t, s, "other")
 	dev := mustCreateStack(t, s, acme, "dev")
 	otherProd := mustCreateStack(t, s, other, "prod")
 
@@ -215,7 +233,8 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		seedBackupKey(t, s, acme, dev, "kek-2"),
 	}
 
-	net := createTestWorkspace(t, s, acme, "network")
+	net := setUnitSwitchesOnly(t, s, acme, createTestWorkspace(t, s, acme, "network"),
+		namespace.Overrides{Forced: true, Unlocked: true})
 	locked := lockTestWorkspace(t, s, acme, net, "alice")
 	declared := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
 	createPendingVersion(t, s, acme, declared)
@@ -233,7 +252,8 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	pending.RestoredFrom = current.ID
 	createPendingVersion(t, s, acme, pending)
 
-	plain := createTestWorkspace(t, s, other, "plain")
+	plain := setUnitSwitchesOnly(t, s, other, createTestWorkspace(t, s, other, "plain"),
+		namespace.Overrides{Forced: false, Unlocked: true})
 	backedUp := seedBackupRecord(t, s)
 	entries := seedBackupAudit(t, s, acme)
 

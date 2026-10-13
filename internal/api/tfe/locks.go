@@ -169,7 +169,7 @@ func (h *Handler) forceUnlockWorkspace(
 
 	holder := h.lockHolder(ctx, id)
 
-	allow, _, err := h.allowance(ctx, p, id, obj)
+	allow, err := h.allowance(ctx, p, id, obj)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

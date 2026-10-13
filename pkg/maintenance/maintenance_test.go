@@ -1284,7 +1284,7 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 }
 
 // SetOverrides is not used by this fake.
-func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }
 

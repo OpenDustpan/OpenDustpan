@@ -201,6 +201,14 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testNamespaceOverridesRoundTrip,
 		},
 		{
+			name: "a unit switch with the namespace switch off refuses an unlocked and a forced declare",
+			test: testNamespaceOffUnitOnIsRefused,
+		},
+		{
+			name: "a namespace switch write with a stale fence is ErrFenced and changes nothing",
+			test: testNamespaceOverridesStaleFence,
+		},
+		{
 			name: "a unit override switch round-trips by ID and by name",
 			test: testUnitOverridesRoundTrip,
 		},
@@ -217,12 +225,24 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testReleaseUnfencedNeedsForcedSwitches,
 		},
 		{
+			name: "a fenced force-unlock keeps the unit switches on",
+			test: testFenceAndUnlockKeepsSwitches,
+		},
+		{
 			name: "a forced declare is ErrOverrideRefused while the forced-write switches are off",
 			test: testForcedDeclareNeedsSwitches,
 		},
 		{
 			name: "a switch turned off before a forced write finalizes stops the finalize",
 			test: testForcedFinalizeNeedsSwitches,
+		},
+		{
+			name: "a forced write into an empty unit needs no override",
+			test: testForcedIntoEmptyUnitNeedsNoOverride,
+		},
+		{
+			name: "state appearing before a forced finalize needs the override",
+			test: testForcedRaceNeedsSwitches,
 		},
 		{
 			name: "a declare of an unlocked write is ErrOverrideRefused unless both switches are on",
@@ -430,7 +450,8 @@ func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	if got.Ref != want.Ref || got.ID != want.ID || got.Revision != want.Revision ||
 		!got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) ||
 		got.Lock.ID != want.Lock.ID || got.Lock.Holder != want.Lock.Holder ||
-		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) {
+		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) ||
+		got.Overrides != want.Overrides {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
 }

@@ -19,7 +19,6 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -35,7 +34,7 @@ type writeWorkspaces struct {
 }
 
 func (w writeWorkspaces) BeginState(
-	ctx context.Context, id workspace.ID, holder string, in workspace.NewState, _ namespace.Overrides,
+	ctx context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return w.begin(ctx, id, holder, in)
 }

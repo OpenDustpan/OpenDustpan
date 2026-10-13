@@ -406,6 +406,6 @@ func TestNewServerRequiresMaintenanceStore(t *testing.T) {
 }
 
 // SetOverrides is not used by this fake.
-func (namespaceOnlyStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (namespaceOnlyStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }

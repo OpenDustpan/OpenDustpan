@@ -24,11 +24,11 @@ type forcedDeclareWorkspaces struct {
 }
 
 func (w forcedDeclareWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, allow namespace.Overrides,
+	_ context.Context, _ workspace.ID, _ string, in workspace.NewState, auth workspace.Authority,
 ) (workspace.PendingState, error) {
-	*w.seen = allow
+	*w.seen = auth.Allow
 
-	if in.Force && !allow.Forced {
+	if in.Force && !auth.Allow.Forced {
 		return workspace.PendingState{}, fmt.Errorf(
 			"new state: %w: a forced write needs the unit:write-forced action and both forced-write switches on",
 			workspace.ErrOverrideRefused,

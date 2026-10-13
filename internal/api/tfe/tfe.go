@@ -141,7 +141,7 @@ type StateWriter interface {
 		id workspace.ID,
 		holder string,
 		in workspace.NewState,
-		allow namespace.Overrides,
+		auth workspace.Authority,
 	) (workspace.PendingState, error)
 	// Upload stores the content of a pending state version and makes it
 	// current.

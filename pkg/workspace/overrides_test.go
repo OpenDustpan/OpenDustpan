@@ -20,7 +20,7 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 	ctx := t.Context()
 	in := newState("lin-old", 1, smallDoc)
 
-	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, forcedOnly())
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Fatalf("declare on an unlocked unit: err = %v, want ErrNotLocked", err)
 	}
@@ -31,7 +31,13 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 
 	// The action alone is not enough: the switches must be on too, and the
 	// store refuses the declare while either is off (ADR 44, decision 6).
-	_, err = f.svc.BeginState(ctx, f.ws.ID, "alice", in, namespace.Overrides{Unlocked: true, Forced: false})
+	_, err = f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		in,
+		authority(namespace.Overrides{Unlocked: true, Forced: false}, nil),
+	)
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("declare with the action but no switches: err = %v, want ErrOverrideRefused", err)
 	}
@@ -45,7 +51,13 @@ func TestUnlockedDeclareNeedsTheSwitches(t *testing.T) {
 		t.Fatalf("turn on the unit switch: %v", err)
 	}
 
-	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", in, namespace.Overrides{Unlocked: true, Forced: false})
+	pending, err := f.svc.BeginState(
+		ctx,
+		f.ws.ID,
+		"alice",
+		in,
+		authority(namespace.Overrides{Unlocked: true, Forced: false}, nil),
+	)
 	if err != nil {
 		t.Fatalf("declare with the unlocked override: %v", err)
 	}
@@ -82,7 +94,7 @@ func TestUnitSwitchNarrowsNamespaceSwitch(t *testing.T) {
 		t.Fatalf("turn on the unit switches: %v", err)
 	}
 
-	got, err := f.svc.Overrides(ctx, f.ws.ID)
+	got, err := effectiveOverrides(t, f)
 	if err != nil {
 		t.Fatalf("overrides: %v", err)
 	}
@@ -95,7 +107,7 @@ func TestUnitSwitchNarrowsNamespaceSwitch(t *testing.T) {
 		t.Fatalf("turn on the namespace switches: %v", err)
 	}
 
-	if got, err = f.svc.Overrides(ctx, f.ws.ID); err != nil || got != on {
+	if got, err = effectiveOverrides(t, f); err != nil || got != on {
 		t.Fatalf("both switches on: overrides = %+v, err = %v, want %+v", got, err, on)
 	}
 
@@ -103,7 +115,7 @@ func TestUnitSwitchNarrowsNamespaceSwitch(t *testing.T) {
 		t.Fatalf("narrow the unit switches: %v", err)
 	}
 
-	got, err = f.svc.Overrides(ctx, f.ws.ID)
+	got, err = effectiveOverrides(t, f)
 	if err != nil || got != forcedOnly() {
 		t.Fatalf("unit narrows to forced: overrides = %+v, err = %v", got, err)
 	}
@@ -180,6 +192,12 @@ func noOverrides() namespace.Overrides {
 	return namespace.Overrides{Forced: false, Unlocked: false}
 }
 
+// authority returns the caller's side of a declare: the overrides it may use
+// and the callback that records each override it uses.
+func authority(allow namespace.Overrides, record func(workspace.Override) error) workspace.Authority {
+	return workspace.Authority{Allow: allow, Record: record}
+}
+
 // TestForceUnlockStopsWhenItsAuditEntryFails proves that an unfenced release
 // does not happen when its audit entry cannot be written: the lock stays held
 // (ADR 41, decision 5).
@@ -217,9 +235,10 @@ func TestForceUnlockStopsWhenItsAuditEntryFails(t *testing.T) {
 	}
 }
 
-// TestForcedDeclareNeedsTheActionAndSwitches proves a forced declare writes
-// nothing without the unit:write-forced action, or while a switch is off. With
-// both the action and the switches it is allowed (ADR 44, decisions 4 and 6).
+// TestForcedDeclareNeedsTheActionAndSwitches proves a forced declare into a unit
+// that has state writes nothing without the unit:write-forced action, or while a
+// switch is off. With both the action and the switches it is allowed (ADR 44,
+// decisions 4 and 6).
 func TestForcedDeclareNeedsTheActionAndSwitches(t *testing.T) {
 	t.Parallel()
 
@@ -230,10 +249,14 @@ func TestForcedDeclareNeedsTheActionAndSwitches(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	forced := newState("lin-old", 1, smallDoc)
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("first state: %v", err)
+	}
+
+	forced := newState("lin-old", 2, smallDoc)
 	forced.Force = true
 
-	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, noOverrides())
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(noOverrides(), nil))
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("forced declare without the action: err = %v, want ErrOverrideRefused", err)
 	}
@@ -242,19 +265,110 @@ func TestForcedDeclareNeedsTheActionAndSwitches(t *testing.T) {
 		t.Fatalf("refusal does not name the action: %v", err)
 	}
 
-	if _, curErr := f.svc.Current(ctx, f.ws.ID); !errors.Is(curErr, workspace.ErrNoState) {
-		t.Fatalf("current after a refused forced declare: err = %v, want ErrNoState", curErr)
-	}
-
 	// The action alone is not enough: the store refuses while the switches are off.
-	_, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly())
+	_, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrOverrideRefused) {
 		t.Fatalf("forced declare with the action and the switches off: err = %v, want ErrOverrideRefused", err)
 	}
 
 	enableForced(t, f)
 
-	if _, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, forcedOnly()); err != nil {
+	var recorded []workspace.Override
+
+	record := func(o workspace.Override) error {
+		recorded = append(recorded, o)
+
+		return nil
+	}
+
+	if _, err = f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), record)); err != nil {
 		t.Fatalf("forced declare with the action and both switches: %v", err)
 	}
+
+	if len(recorded) != 1 || recorded[0] != workspace.OverrideForced {
+		t.Fatalf("recorded overrides = %v, want one forced write", recorded)
+	}
+}
+
+// TestForcedDeclareIntoEmptyUnitNeedsNoOverride proves a forced declare into a unit
+// with no state is allowed without any override: it overwrites nothing (ADR 44,
+// decision 4).
+func TestForcedDeclareIntoEmptyUnitNeedsNoOverride(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	forced := newState("lin-new", 1, smallDoc)
+	forced.Force = true
+
+	recorded := 0
+	record := func(workspace.Override) error {
+		recorded++
+
+		return nil
+	}
+
+	if _, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(noOverrides(), record)); err != nil {
+		t.Fatalf("forced declare into an empty unit: %v", err)
+	}
+
+	if recorded != 0 {
+		t.Fatalf("an empty-unit forced write recorded %d overrides, want none", recorded)
+	}
+}
+
+// TestDeclareRefusedWhenRecordFails proves that a declare does not write when its
+// audit entry cannot be recorded (ADR 41, decision 5).
+func TestDeclareRefusedWhenRecordFails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	enableForced(t, f)
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("first state: %v", err)
+	}
+
+	forced := newState("lin-old", 2, smallDoc)
+	forced.Force = true
+
+	errAudit := workspace.ErrConcurrentModification
+	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), func(workspace.Override) error {
+		return errAudit
+	}))
+	if !errors.Is(err, errAudit) {
+		t.Fatalf("declare with a failing record: err = %v, want the record error", err)
+	}
+
+	if cur, curErr := f.svc.Current(ctx, f.ws.ID); curErr != nil || cur.Serial != 1 {
+		t.Fatalf("current after a refused declare: serial %d, err %v, want the first state", cur.Serial, curErr)
+	}
+}
+
+// effectiveOverrides returns the overrides that the unit allows: the namespace
+// switch narrowed by the unit switch (ADR 44, decision 6).
+func effectiveOverrides(t *testing.T, f fixture) (namespace.Overrides, error) {
+	t.Helper()
+
+	w, err := f.svc.GetByID(t.Context(), f.ws.ID)
+	if err != nil {
+		return namespace.Overrides{}, err
+	}
+
+	ns, err := f.namespaces.Get(t.Context(), w.Ref.Namespace)
+	if err != nil {
+		return namespace.Overrides{}, err
+	}
+
+	return ns.Overrides.And(w.Overrides), nil
 }

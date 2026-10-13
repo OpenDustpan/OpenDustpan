@@ -28,6 +28,36 @@ type overrideSwitchesBody struct {
 	AllowUnlockedWrites bool `json:"allow-unlocked-writes"` //nolint:tagliatelle // The TFE-style wire name; it must not change.
 }
 
+// overrideSwitchesInput is the body of a change. Its pointers tell a missing
+// field from false, so a change must name both switches.
+type overrideSwitchesInput struct {
+	AllowForcedWrites   *bool `json:"allow-forced-writes"`   //nolint:tagliatelle // The TFE-style wire name; it must not change.
+	AllowUnlockedWrites *bool `json:"allow-unlocked-writes"` //nolint:tagliatelle // The TFE-style wire name; it must not change.
+}
+
+// decodeOverrideSwitches reads a change body. It refuses an unknown field,
+// a body that is not one object, a body that lacks either switch, and a null
+// body.
+func decodeOverrideSwitches(body []byte) (namespace.Overrides, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+
+	var in overrideSwitchesInput
+	if err := dec.Decode(&in); err != nil {
+		return namespace.Overrides{}, errOverrideBody
+	}
+
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return namespace.Overrides{}, errOverrideBody
+	}
+
+	if in.AllowForcedWrites == nil || in.AllowUnlockedWrites == nil {
+		return namespace.Overrides{}, errOverrideBody
+	}
+
+	return namespace.Overrides{Forced: *in.AllowForcedWrites, Unlocked: *in.AllowUnlockedWrites}, nil
+}
+
 // overrideSwitchesOf returns the body that shows ov.
 func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 	return overrideSwitchesBody{
@@ -38,20 +68,19 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 
 // allowance returns the overrides that the caller may use on the unit for one
 // request: the switch of the namespace narrowed by the switch of the unit, and
-// the action of the override. It also reports whether the unit is locked. It
-// refuses nothing: the domain refuses an override that the result does not
-// allow (ADR 44, decisions 4, 5 and 8).
+// the action of the override. It refuses nothing: the domain refuses an
+// override that the result does not allow (ADR 44, decisions 4, 5 and 8).
 func (h *Handler) allowance(
 	ctx context.Context, p identity.Principal, id workspace.ID, obj identity.Object,
-) (namespace.Overrides, bool, error) {
+) (namespace.Overrides, error) {
 	w, err := h.workspaces.GetByID(ctx, id)
 	if err != nil {
-		return namespace.Overrides{}, false, err
+		return namespace.Overrides{}, err
 	}
 
 	ns, err := h.namespaces.Get(ctx, w.Ref.Namespace)
 	if err != nil {
-		return namespace.Overrides{}, false, err
+		return namespace.Overrides{}, err
 	}
 
 	switches := ns.Overrides.And(w.Overrides)
@@ -59,7 +88,7 @@ func (h *Handler) allowance(
 	return namespace.Overrides{
 		Forced:   switches.Forced && h.permits(ctx, p, identity.ActionUnitWriteForced, obj),
 		Unlocked: switches.Unlocked && h.permits(ctx, p, identity.ActionUnitWriteUnlocked, obj),
-	}, w.Lock.Locked(), nil
+	}, nil
 }
 
 // permits reports whether the principal may do action on obj.
@@ -156,8 +185,8 @@ func (h *Handler) readOverrideSwitches(
 }
 
 // writeOverrideSwitches serves PUT /api/v2/workspaces/{id}/override-switches.
-// It answers 200 with the switches as stored. An empty or malformed body answers
-// 400 and changes no switch.
+// It answers 200 with the switches as stored. A body that is empty, null, lacks
+// either switch, or has an unknown field answers 400 and changes no switch.
 func (h *Handler) writeOverrideSwitches(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
 ) {
@@ -170,18 +199,14 @@ func (h *Handler) writeOverrideSwitches(
 		return
 	}
 
-	var in overrideSwitchesBody
-	if decodeErr := json.NewDecoder(bytes.NewReader(body)).Decode(&in); decodeErr != nil {
+	ov, err := decodeOverrideSwitches(body)
+	if err != nil {
 		h.writeJSONAPIError(ctx, w, http.StatusBadRequest, "bad request", errOverrideBody.Error())
 
 		return
 	}
 
-	ws, err := h.workspaces.SetOverrides(
-		ctx,
-		workspace.ID(r.PathValue("id")),
-		namespace.Overrides{Forced: in.AllowForcedWrites, Unlocked: in.AllowUnlockedWrites},
-	)
+	ws, err := h.workspaces.SetOverrides(ctx, workspace.ID(r.PathValue("id")), ov)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

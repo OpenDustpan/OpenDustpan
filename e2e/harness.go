@@ -738,7 +738,7 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateV
 		Outputs: []byte(seedStateOutputs),
 		Serial:  serial,
 		Force:   false,
-	}, namespace.Overrides{Forced: false, Unlocked: false})
+	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if beginErr != nil {
 		tb.Fatalf("begin seed state: %v", beginErr)
 	}

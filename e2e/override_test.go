@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -344,89 +343,4 @@ func tofuOverrideSwitchesScenario(t *testing.T, env *e2e.Env) {
 	// Restore the defaults for the scenarios that follow.
 	overrideSwitches(t, env, "turn the namespace switches off again", nsSwitches,
 		`{"allowForcedWrites":false,"allowUnlockedWrites":false}`)
-}
-
-// overrideCreatedUnitData is the data object of a unit that the API created.
-type overrideCreatedUnitData struct {
-	ID string `json:"id"`
-}
-
-// overrideCreatedUnit reads the ID of a unit that the API created.
-type overrideCreatedUnit struct {
-	Data overrideCreatedUnitData `json:"data"`
-}
-
-// overrideOpenForcedCopy creates the unit that a forced copy writes into, and turns
-// on the forced-write switches of the namespace and of the unit. The copy of a
-// client-encrypted state into a new unit is a forced write, so it needs both
-// switches (ADR 44, decision 4). It returns the unit's ID for the close.
-func overrideOpenForcedCopy(ctx context.Context, t *testing.T, env *e2e.Env, name string) string {
-	t.Helper()
-
-	var id string
-
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: overrideAgent,
-		Name:      "create the unit for the forced copy",
-		Method:    http.MethodPost,
-		Path:      "/api/v2/organizations/" + e2e.Namespace + "/workspaces",
-		Body:      `{"data":{"type":"workspaces","attributes":{"name":"` + name + `"}}}`,
-		Want:      http.StatusCreated,
-		Check: func(body string) error {
-			var doc overrideCreatedUnit
-			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Data.ID == "" {
-				return fmt.Errorf("%w: the created unit has no id: %s", errUnexpected, body)
-			}
-
-			id = doc.Data.ID
-
-			return nil
-		},
-	})
-
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: overrideAgent,
-		Name:      "turn on the namespace switches for the forced copy",
-		Method:    http.MethodPut,
-		Path:      "/api/server/namespaces/" + e2e.Namespace + "/override-switches",
-		Body:      `{"allowForcedWrites":true,"allowUnlockedWrites":false}`,
-		Want:      http.StatusOK,
-		Check:     nil,
-	})
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: overrideAgent,
-		Name:      "turn on the unit switches for the forced copy",
-		Method:    http.MethodPut,
-		Path:      "/api/v2/workspaces/" + id + "/override-switches",
-		Body:      `{"allow-forced-writes":true,"allow-unlocked-writes":false}`,
-		Want:      http.StatusOK,
-		Check:     nil,
-	})
-
-	return id
-}
-
-// overrideCloseForcedCopy turns the forced-write switches of the unit and of the
-// namespace off again, after the copy.
-func overrideCloseForcedCopy(ctx context.Context, t *testing.T, env *e2e.Env, id string) {
-	t.Helper()
-
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: overrideAgent,
-		Name:      "turn off the unit switches after the forced copy",
-		Method:    http.MethodPut,
-		Path:      "/api/v2/workspaces/" + id + "/override-switches",
-		Body:      `{"allow-forced-writes":false,"allow-unlocked-writes":false}`,
-		Want:      http.StatusOK,
-		Check:     nil,
-	})
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: overrideAgent,
-		Name:      "turn off the namespace switches after the forced copy",
-		Method:    http.MethodPut,
-		Path:      "/api/server/namespaces/" + e2e.Namespace + "/override-switches",
-		Body:      `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
-		Want:      http.StatusOK,
-		Check:     nil,
-	})
 }

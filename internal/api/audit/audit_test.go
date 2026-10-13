@@ -579,11 +579,11 @@ func TestCheckChainFindsAChangedEntry(t *testing.T) {
 }
 
 // SetOverrides is not used by this fake.
-func (*memNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (*memNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }
 
 // SetOverrides is not used by this fake.
-func (homedNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides) error {
+func (homedNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
 }

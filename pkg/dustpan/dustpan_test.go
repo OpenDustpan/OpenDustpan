@@ -317,7 +317,7 @@ func uploadWorkspaceState(
 		Outputs: nil,
 		Serial:  1,
 		Force:   false,
-	}, namespace.Overrides{Forced: false, Unlocked: false})
+	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)
 	}
