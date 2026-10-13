@@ -3,6 +3,7 @@ rfc: 21
 title: Directory sync and sign-in hardening
 status: discussing
 created: 2026-10-10
+adr: 46, 55, 56, 57
 ---
 
 # RFC 21. Directory sync and sign-in hardening
@@ -11,7 +12,9 @@ Status: discussing. Opened as a stub from the competitor review in the
 research doc "IaC and TACOS landscape". The project owner chose
 the built-in MFA below on 2026-10-11.
 
-The part on built-in MFA is accepted as ADR 46. The rest stays open.
+The part on built-in MFA is accepted as ADR 46. The sign-in methods for
+milestone 4 are accepted as ADR 55, MFA freshness as ADR 56 and break-glass
+recovery as ADR 57. The questions in "Open questions" stay open.
 
 ## Problem
 
@@ -55,13 +58,30 @@ without an identity provider (for example, local users or LDAP).
 
 ## Open questions
 
-- Which of these belong in the binary, and which are better left to the
-  operator's proxy?
-- How does a user sign in when they lose every factor and every recovery
-  code?
+The owner answered the first, second and fourth question of the earlier
+list on 2026-10-13. These stay open:
+
 - Does "require MFA" apply to the bootstrap admin token?
-- How long does an MFA sign-in stay valid for the creation of access tokens
-  and for the reveal of a secret value?
+- What does "OAuth" in the list of 2026-10-13 cover? ADR 6 says that OAuth
+  2.0 alone is authorization and OIDC is the login standard. Does the adapter
+  support OIDC only, or also OAuth 2.0 providers with no OIDC?
+- Does an IP allowlist apply to the whole installation, to a namespace, or
+  to both? Does it apply to access tokens as well as to console sign-in?
+- What does a SCIM removal do to the access tokens and the sessions of the
+  removed user?
+- Does trusted-header sign-in give groups as well as a user?
+- How does MFA freshness work with an SSO identity provider, where MFA is the
+  job of the provider (ADR 46)?
+- What are the defaults for the idle timeout and the maximum length of a
+  console session? The research doc gives 15 minutes idle (PCI DSS v4.0.1
+  8.2.8) and 12 hours at most (NIST SP 800-63B-4, AAL3).
+- Can an operator change the break-glass mode after the first boot, and how?
+- What does "works once" mean for break-glass mode 1: one sign-in, one MFA
+  reset, or a time limit?
+- How does the audit entry of a break-glass use name a person, as PCI DSS
+  v4.0.1 8.2.2 asks?
+- What is the format of the offline operator key and of the signed recovery
+  request of break-glass mode 2?
 
 ## Owner direction (2026-10-11)
 
@@ -128,5 +148,18 @@ for the defaults.
 
 ## Outcome
 
-The part on built-in MFA is accepted as ADR 46 on 2026-10-12. The rest has no
-outcome yet.
+The part on built-in MFA is accepted as ADR 46 on 2026-10-12.
+
+Accepted on 2026-10-13:
+
+- ADR 55: LDAP, SAML, CAS, OAuth, SCIM 2.0, passkeys for local users,
+  trusted-header sign-in and IP allowlists are in the binary in milestone 4.
+  Each is an adapter behind a port.
+- ADR 56: an MFA step stays valid for 15 minutes by default for token
+  creation and for secret reveal (PCI DSS v4.0.1 8.2.8, by analogy). An
+  administrator sets each window.
+- ADR 57: three break-glass modes. The operator chooses one at first boot.
+  Mode 1, the one-time bootstrap admin token, is the default, because no
+  standard names a preferred option.
+
+The questions in "Open questions" have no outcome yet.

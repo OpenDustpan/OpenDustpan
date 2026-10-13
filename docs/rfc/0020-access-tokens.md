@@ -3,6 +3,7 @@ rfc: 20
 title: Access tokens and machine identity
 status: discussing
 created: 2026-10-10
+adr: 53, 54
 ---
 
 # RFC 20. Access tokens and machine identity
@@ -10,6 +11,9 @@ created: 2026-10-10
 Status: discussing. Opened as a stub from the competitor review in the
 research doc "IaC and TACOS landscape". The project owner chose
 the token life cycle below on 2026-10-11.
+
+The token life cycle is accepted as ADR 53 and workload identity as ADR 54 on
+2026-10-13. The questions in "Open questions" stay open.
 
 ## Problem
 
@@ -55,14 +59,30 @@ The project owner chose this life cycle. It covers each access token.
 
 ## Open questions
 
-- Does the Pulumi CLI's OIDC login flow work against a self-hosted backend?
-  This needs a check with `make e2e`.
-- Which TFE token endpoints (organization, team) must the TFE-compatible API
-  serve?
-- What inactivity default does the server ship with, within the limit of 90
-  days or fewer?
+- (e2e) Does the Pulumi CLI's OIDC login flow work against a self-hosted
+  backend?
+- (e2e) Which TFE token endpoints (organization, team) must the TFE-compatible
+  API serve?
 - Which roles may rotate or revoke the access token of another principal?
-- How does the server warn a principal before its access token expires?
+- Does the inactivity disable also apply to a principal (a user account), as
+  PCI DSS v4.0.1 requirement 8.2.6 asks for user accounts?
+- Does the inactivity disable skip the bootstrap admin token and a
+  break-glass token? NIST SP 800-53 Rev. 5 AC-2 says that some "accounts of
+  last resort" are not subject to automatic disabling.
+- Do the maximum lifetime and the inactivity period belong to the
+  installation, to a namespace, or to both?
+- What is the default maximum lifetime, and how long before the expiry do
+  the warnings start?
+- (e2e) Which CLI shows the expiry warning: the `opendustpan` CLI, or the
+  tool CLIs? A tool CLI shows a server warning only if its protocol has a
+  place for one.
+- Where do the SMTP settings live, and are they run-time settings (ADR 17)?
+- (e2e) Which tool CLIs can send a TLS client certificate? If a tool cannot,
+  can a workload use mTLS at the exchange endpoint to get an access token?
+- How does mTLS work when a proxy of the operator ends TLS before the
+  server?
+- What is the lifetime of an exchanged access token, and its default?
+- Can an administrator turn off static service tokens for a namespace?
 
 ## Owner direction (2026-10-11)
 
@@ -116,4 +136,17 @@ quotation marks are the words of the owner.
 
 ## Outcome
 
-None yet.
+Accepted in part on 2026-10-13:
+
+- ADR 53, the token life cycle: a last-used time and an expiry on each
+  access token, a maximum lifetime that an administrator sets, an
+  inactivity disable after 90 days by default (PCI DSS v4.0.1 requirement
+  8.2.6, by analogy) that an administrator can change or turn off, service
+  tokens, rotation, the prompt to retire the bootstrap admin token, and
+  expiry warnings as an API field, a console banner, an email and a CLI
+  warning. Events and webhooks for expiry go to milestone 5.
+- ADR 54, workload identity: token exchange for any OIDC or JWT issuer and
+  mTLS client certificates, with trust rules per namespace. Static tokens
+  are discouraged for machines.
+
+The questions in "Open questions" have no outcome yet.
