@@ -171,8 +171,13 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 
 	meta, err := stream.finish(storeErr)
 	if err != nil {
-		// A body the decoder refuses keeps its blob until the refusal deletes it.
-		return StateVersion{}, errors.Join(fmt.Errorf("write state %s: %w", sv.ID, err), s.blobsDeleteIf(ctx, sw.key, storeErr))
+		// A body the decoder refuses is refused here, so its blob goes. A store
+		// error leaves the blob to the sweep, as its attempt names it.
+		if storeErr == nil {
+			err = errors.Join(err, s.blobs.Delete(ctx, sw.key))
+		}
+
+		return StateVersion{}, fmt.Errorf("write state %s: %w", sv.ID, err)
 	}
 
 	if metaErr := checkStreamedMeta(meta); metaErr != nil {
@@ -404,15 +409,4 @@ func (sw *streamWrite) recordUsed(serial int64) error {
 	}
 
 	return nil
-}
-
-// blobsDeleteIf deletes the blob under key when the write has no store error:
-// a refusal after the body streamed owns its blob, while a store error leaves
-// the attempt to the sweep. It returns nil when the blob is kept.
-func (s *Service) blobsDeleteIf(ctx context.Context, key blob.Key, storeErr error) error {
-	if storeErr != nil {
-		return nil
-	}
-
-	return s.blobs.Delete(ctx, key)
 }

@@ -32,6 +32,8 @@ const unitTool = "opentofu"
 
 // WorkspaceService is the workspace use cases that the http backend routes
 // need. workspace.Service implements it.
+//
+//nolint:interfacebloat // One port for the workspace use cases of the http backend: each route calls one of them.
 type WorkspaceService interface {
 	// Get returns the workspace called ref, or workspace.ErrNotFound.
 	Get(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)

@@ -3786,7 +3786,12 @@ func TestSealedReadWithoutSealerFails(t *testing.T) {
 	t.Parallel()
 
 	f := newSealedFixture(t)
-	sv := uploadSealedState(t, f, `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`, "s3cr3t-output-value")
+	sv := uploadSealedState(
+		t,
+		f,
+		`{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`,
+		"s3cr3t-output-value",
+	)
 	ctx := t.Context()
 
 	plain, err := workspace.NewService(workspace.Config{

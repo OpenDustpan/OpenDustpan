@@ -684,41 +684,16 @@ func (s *Service) Upload(
 		return StateVersion{}, noteErr
 	}
 
-	// The outputs come from the body, read as it streams (ADR 49, decision 8),
-	// so the client's JSON rendering of the outputs is never stored.
-	reader, stream := newMetaStream(content)
-
-	size, storeErr := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		seal:      sv.Sealed,
-		key:       key,
-		want:      sv.MD5,
-		content:   reader,
-		unchecked: false,
-	})
-
-	if storeErr != nil {
-		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, storeErr)
-	}
-
-	// A body that is not a state object stores no outputs; the upload still
-	// stores the bytes the client sent, as before.
-	meta, metaErr := stream.finish(nil)
-	if metaErr != nil {
-		meta = streamedMeta{}
-	}
-
-	outputs, err := s.streamedOutputs(ctx, w, meta)
+	body, err := s.storeUploadBody(ctx, w, sv, key, content)
 	if err != nil {
-		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
+		return StateVersion{}, err
 	}
 
 	sv.Status = StatusFinalized
 	sv.FinalizedAt = s.clock()
-	sv.Size = size
+	sv.Size = body.size
 	sv.Content = key
-	sv.Outputs = outputs.stored
+	sv.Outputs = body.outputs.stored
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		err = fmt.Errorf("finalize state %s: %w", id, err)
@@ -732,6 +707,13 @@ func (s *Service) Upload(
 	}
 
 	return sv, nil
+}
+
+// uploadedBody is what a state upload stores: the size of its bytes, and the
+// outputs read from them as they streamed.
+type uploadedBody struct {
+	size    int64
+	outputs streamedOutputs
 }
 
 // DiscardJSONRendering accepts the JSON rendering the CLI uploads alongside
@@ -2056,4 +2038,53 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += int64(n)
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// storeUploadBody stores the bytes of an upload under key and reads the outputs
+// from them (ADR 49, decision 8). The outputs come from the body, so the
+// client's JSON rendering of the outputs is never stored. A refused body deletes
+// its blob.
+func (s *Service) storeUploadBody(
+	ctx context.Context, w Workspace, sv StateVersion, key blob.Key, content io.Reader,
+) (uploadedBody, error) {
+	reader, stream := newMetaStream(content)
+
+	size, storeErr := s.store(ctx, storeInput{
+		namespace: w.Ref.Namespace,
+		workspace: w.ID,
+		seal:      sv.Sealed,
+		key:       key,
+		want:      sv.MD5,
+		content:   reader,
+		unchecked: false,
+	})
+
+	if storeErr != nil {
+		// Closing the stream with the store error lets the reader beside the
+		// store finish; the store error is the one the caller sees.
+		_, _ = stream.finish(storeErr)
+
+		return uploadedBody{}, fmt.Errorf("upload state %s: %w", sv.ID, storeErr)
+	}
+
+	// A body that is not a state object stores no outputs; the upload still
+	// stores the bytes the client sent, as before.
+	meta, metaErr := stream.finish(nil)
+	if metaErr != nil {
+		meta = streamedMeta{
+			Lineage:         "",
+			Outputs:         nil,
+			Serial:          0,
+			HasSerial:       false,
+			HasLineage:      false,
+			ClientEncrypted: false,
+		}
+	}
+
+	outputs, err := s.streamedOutputs(ctx, w, meta)
+	if err != nil {
+		return uploadedBody{}, errors.Join(err, s.blobs.Delete(ctx, key))
+	}
+
+	return uploadedBody{size: size, outputs: outputs}, nil
 }

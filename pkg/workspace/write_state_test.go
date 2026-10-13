@@ -378,7 +378,10 @@ func assertNoOrphanBlobs(t *testing.T, f fixture) {
 }
 
 // streamAuthority returns the caller's side of a streamed write.
-func streamAuthority(allow namespace.Overrides, record func(workspace.Override, int64) error) workspace.StreamAuthority {
+func streamAuthority(
+	allow namespace.Overrides,
+	record func(workspace.Override, int64) error,
+) workspace.StreamAuthority {
 	return workspace.StreamAuthority{Allow: allow, Record: record}
 }
 

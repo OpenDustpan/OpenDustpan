@@ -138,7 +138,11 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 	}
 
 	if !h.permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
-		h.writeError(ctx, w, fmt.Errorf("%w: force-unlock needs %s", identity.ErrDenied, identity.ActionUnitWriteForced))
+		h.writeError(
+			ctx,
+			w,
+			fmt.Errorf("%w: force-unlock needs %s", identity.ErrDenied, identity.ActionUnitWriteForced),
+		)
 
 		return
 	}
