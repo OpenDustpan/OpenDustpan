@@ -168,6 +168,72 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 	})
 }
 
+// CheckCoverage implements backup.Coverage: it compares the column list of each
+// table of backup.Tables with the columns that the schema holds for the table
+// (ADR 42, decision 5). A table without a list, or a column that differs, fails
+// with backup.ErrCoverage.
+func (s *Store) CheckCoverage(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	lists := make(map[string][]string, len(backup.Tables))
+
+	for _, spec := range sqliteBackupTables() {
+		lists[spec.table] = spec.columns
+	}
+
+	for _, table := range backup.Tables {
+		listed, ok := lists[table]
+		if !ok {
+			return fmt.Errorf("backup table %q has no column list: %w", table, backup.ErrCoverage)
+		}
+
+		live, err := s.liveColumns(ctx, table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := backup.CheckColumns(table, listed, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return nil
+}
+
+// liveColumns returns the column names of table in schema order, read with
+// pragma_table_info.
+func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
+	rows, err := s.conn.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
+	if err != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	var columns []string
+
+	for rows.Next() {
+		var name string
+
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			return nil, fmt.Errorf("scan column of table %q: %w", table, scanErr)
+		}
+
+		columns = append(columns, name)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, iterErr)
+	}
+
+	return columns, nil
+}
+
 // SchemaTables implements backup.Inspector: the data tables the schema holds,
 // read from the catalog, never from backup.Tables, so the conformance suite
 // fails while the two differ. It excludes bookkeeping (schema_migrations)

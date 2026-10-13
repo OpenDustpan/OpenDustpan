@@ -1,0 +1,268 @@
+package sqlite
+
+// Column names that more than one table of the list holds. goconst keeps
+// each one a constant.
+const (
+	backupColCreatedAtMs = "created_at_ms"
+	backupColEndedAtMs   = "ended_at_ms"
+	backupColName        = "name"
+	backupColNamespace   = "namespace"
+	backupColSequence    = "sequence"
+	backupColSize        = "size"
+	backupColStackID     = "stack_id"
+	backupColStartedAtMs = "started_at_ms"
+	backupColState       = "state"
+	backupColStatus      = "status"
+	backupColUpdateID    = "update_id"
+	backupColVersion     = "version"
+)
+
+// sqliteBackupTable is the column list of one backup table: the columns of the
+// table in the SQLite schema, in schema order. The portable format names each
+// column the same in both dialects (ADR 42, decision 3), so these names are the
+// portable names too.
+type sqliteBackupTable struct {
+	table   string
+	columns []string
+}
+
+// sqliteBackupTables lists the column list of every table of backup.Tables, in
+// the order of backup.Tables. CheckCoverage compares each list with the live
+// schema, so a migration that adds a column fails until its author adds the
+// column here (ADR 42, decision 5).
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "namespaces",
+			columns: []string{
+				backupColName,
+				"home_region",
+				"failover_version",
+				backupColCreatedAtMs,
+				"allow_forced_writes",
+				"allow_unlocked_writes",
+			},
+		},
+		{
+			table: "stacks",
+			columns: []string{
+				backupColNamespace,
+				"project",
+				backupColName,
+				backupColVersion,
+				backupColCreatedAtMs,
+				"updated_at_ms",
+				"id",
+			},
+		},
+		{
+			table: "stack_tags",
+			columns: []string{
+				backupColStackID,
+				backupColName,
+				"value",
+			},
+		},
+		{
+			table: "updates",
+			columns: []string{
+				backupColStackID,
+				"id",
+				"kind",
+				"dry_run",
+				backupColStatus,
+				backupColVersion,
+				"revision",
+				"lease_digest",
+				"lease_expires_at_ms",
+				backupColCreatedAtMs,
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"created_by",
+				"restored_from",
+				"journal_version",
+			},
+		},
+		{
+			table: "checkpoints",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				"lease_digest",
+				"schema_version",
+				backupColSequence,
+				"digest",
+				"invalid",
+				"features_json",
+				"deployment",
+				"saved_at_ms",
+				"resource_count",
+				"blob_key",
+				backupColSize,
+				"blob_size",
+				"blob_md5",
+			},
+		},
+		{
+			table: "update_events",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				backupColSequence,
+				"timestamp_ms",
+				"payload",
+			},
+		},
+		{
+			table: "update_journal",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				"arrival",
+				"blob_key",
+				"sha256",
+				backupColSize,
+				"lowest_sequence",
+				"sequence_ids",
+				"operation_ids",
+			},
+		},
+		{
+			table: "update_journal_sequences",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				backupColSequence,
+				"arrival",
+				"sha256",
+			},
+		},
+		{
+			table: "secret_keys",
+			columns: []string{
+				backupColNamespace,
+				backupColStackID,
+				"wrapper_id",
+				"ciphertext",
+				backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "inventory",
+			columns: []string{
+				backupColNamespace,
+				"tool",
+				backupColName,
+				"unit_id",
+				"display_name",
+				"last_changed_ms",
+				backupColStatus,
+				"resource_count",
+				"lock_holder",
+				"lock_since_ms",
+				"lock_operation",
+			},
+		},
+		{
+			table: "workspaces",
+			columns: []string{
+				"id",
+				backupColNamespace,
+				backupColName,
+				"revision",
+				"lock_id",
+				"lock_holder",
+				"lock_reason",
+				"locked_at_ms",
+				"current_state_version_id",
+				backupColCreatedAtMs,
+				"updated_at_ms",
+				"allow_forced_writes",
+				"allow_unlocked_writes",
+			},
+		},
+		{
+			table: "state_versions",
+			columns: []string{
+				"id",
+				"workspace_id",
+				backupColStatus,
+				"serial",
+				"lineage",
+				"md5",
+				backupColSize,
+				"content_key",
+				"outputs",
+				"force",
+				"upload_digest",
+				"upload_expires_at_ms",
+				"holder",
+				"lock_id",
+				backupColCreatedAtMs,
+				"finalized_at_ms",
+				"restored_from",
+				"sealed",
+				"sensitive_marks",
+				"fenced_by",
+				"unlocked_write",
+			},
+		},
+		{
+			table: "audit_entries",
+			columns: []string{
+				backupColNamespace,
+				backupColSequence,
+				"subject",
+				"idp_subject",
+				"token_id",
+				"action",
+				"object",
+				backupColVersion,
+				"value_path",
+				"at_ms",
+				"source_ip",
+				"user_agent",
+				"channel",
+				"kind",
+				"outcome",
+				"request_id",
+				"prev_hash",
+				"hash",
+				"value_count",
+			},
+		},
+		{
+			table: "backups",
+			columns: []string{
+				"id",
+				backupColState,
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"target",
+				"error",
+			},
+		},
+		{
+			table: "restores",
+			columns: []string{
+				"id",
+				backupColState,
+				"backup_id",
+				"pre_backup_id",
+				"requested_by",
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"error",
+			},
+		},
+		{
+			table: "installation",
+			columns: []string{
+				"id",
+				backupColState,
+			},
+		},
+	}
+}
