@@ -281,7 +281,7 @@ _Avoid_: Secret count
 ### Hosted service
 
 **Hosted distribution**:
-The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points, and adds only the shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
+The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points. It adds only shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
 _Avoid_: Fork, enterprise edition, cloud edition
 
 ## Flagged ambiguities
