@@ -655,7 +655,7 @@ func maskPointer(attributes any, relative, full string) bool {
 // true. It never changes the tree.
 func routeTokens(node any, tokens []string) ([]string, bool) {
 	if len(tokens) == 0 {
-		return nil, true
+		return []string{}, true
 	}
 
 	switch typed := node.(type) {
@@ -664,7 +664,7 @@ func routeTokens(node any, tokens []string) ([]string, bool) {
 	case []any:
 		return routeListAt(typed, tokens)
 	default:
-		return nil, false
+		return []string{}, false
 	}
 }
 
@@ -672,7 +672,7 @@ func routeTokens(node any, tokens []string) ([]string, bool) {
 func routeMapAt(doc map[string]any, tokens []string) ([]string, bool) {
 	next, present := doc[tokens[0]]
 	if !present {
-		return nil, false
+		return []string{}, false
 	}
 
 	if len(tokens) == 1 {
@@ -689,14 +689,14 @@ func routeMapAt(doc map[string]any, tokens []string) ([]string, bool) {
 		}
 	}
 
-	return nil, false
+	return []string{}, false
 }
 
 // routeListAt returns the physical route of tokens under list.
 func routeListAt(list []any, tokens []string) ([]string, bool) {
 	index, err := strconv.Atoi(tokens[0])
 	if err != nil || index < 0 || index >= len(list) {
-		return nil, false
+		return []string{}, false
 	}
 
 	if len(tokens) == 1 {
@@ -707,7 +707,7 @@ func routeListAt(list []any, tokens []string) ([]string, bool) {
 		return append([]string{strconv.Itoa(index)}, sub...), true
 	}
 
-	return nil, false
+	return []string{}, false
 }
 
 // belowAppliedRoute reports whether route sits strictly below an applied
