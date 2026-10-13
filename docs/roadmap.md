@@ -39,6 +39,8 @@ the three versions and both stores (issue #58).
 | server  | Stable identity of a stack (no RFC)                                              | all                                                                                    | accepted (ADR 19) |
 | server  | Where checkpoints live (no RFC)                                                  | all                                                                                    | accepted (ADR 24) |
 | server  | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle                              | Pulumi stack rename, hard delete, tags as the CLI sends them (rules in ADR 19, ADR 23) | draft             |
+| server  | [RFC 62](rfc/0062-pulumi-journaling.md) Pulumi journaling                        | follow-up after the exit test: journal version 1                                       | accepted (ADR 43) |
+| server  | [RFC 64](rfc/0064-pulumi-journaling-architecture.md) Journaling architecture     | follow-up after the exit test: all                                                     | accepted (ADR 43) |
 | console | Keep the Console working through the API changes above                           | n/a                                                                                    | n/a               |
 
 ## Milestone 2. OpenTofu runs on one node
@@ -64,7 +66,9 @@ server (issue #99).
 | server  | [RFC 1](rfc/0001-opentofu-via-the-tfe-compatible-api.md) OpenTofu via the TFE-compatible API | all                                                                      | accepted (ADR 25) |
 | server  | [RFC 3](rfc/0003-domain-modules-for-updates-secrets-and-state.md) Domain modules             | 3: OpenTofu state                                                        | accepted (ADR 26) |
 | server  | [RFC 35](rfc/0035-packaging.md) Packaging and installation                                   | TLS, binary, container image                                             | accepted (ADR 27) |
-| server  | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle                                          | the rest: soft delete, move, workspace lifecycle, tags as labels (RFC 4) | draft             |
+| server  | [RFC 17](rfc/0017-unit-lifecycle.md) Unit lifecycle                                          | the rest: soft delete, move, workspace lifecycle, tags as labels (RFC 4) | draft; soft delete accepted (ADR 47) |
+| server  | [RFC 63](rfc/0063-workspace-lock-holder.md) A workspace lock belongs to a principal          | follow-up after the exit test: all                                       | accepted (ADR 44) |
+| server  | [RFC 65](rfc/0065-opentofu-http-backend.md) OpenTofu through the http backend too            | follow-up after the exit test: all                                       | accepted (ADR 49) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                                        | unit list across both tools, "connect your CLI" snippet                  | draft             |
 
 **First tagged release: `v0.1.0`** ([ADR 21](adr/0021-the-first-tagged-release.md)).
@@ -118,10 +122,13 @@ run from the first tag on.
 |---------|----------------------------------------------------------------------|------------------------------------|---------------------------------------------------|
 | server  | [RFC 42](rfc/0042-migration-import.md) Migration from other backends | first sources                      | accepted (ADR 29)                                 |
 | server  | [RFC 18](rfc/0018-state-operations.md) State operations              | history, restore, force-unlock     | accepted (ADR 28)                                 |
-| server  | [RFC 8](rfc/0008-backups-and-restore.md) Backups and restore         | all                                | accepted (ADR 30)                                 |
+| server  | [RFC 8](rfc/0008-backups-and-restore.md) Backups and restore         | all                                | accepted (ADR 30, portable format ADR 42)         |
 | server  | [RFC 32](rfc/0032-object-storage.md) Object storage adapters         | S3-compatible                      | accepted (ADR 31)                                 |
 | server  | [RFC 34](rfc/0034-server-observability.md) Observing the server      | all                                | accepted (ADR 32)                                 |
 | server  | [RFC 38](rfc/0038-upgrade-checks.md) Upgrade checks                  | all                                | accepted (ADR 33)                                 |
+| server  | [RFC 58](rfc/0058-large-request-limits.md) Large request limits      | follow-up after the exit test: all | accepted (ADR 45)                                 |
+| server  | [RFC 59](rfc/0059-installation-api.md) Installation API              | follow-up after the exit test: all | draft                                             |
+| server  | [RFC 60](rfc/0060-maintenance-mode-visibility-wait.md) Instance registry | follow-up after the exit test: all | accepted (ADR 48)                             |
 | console | [RFC 18](rfc/0018-state-operations.md) State operations              | version list, restore, lock holder | accepted (ADR 28)                                 |
 | console | [RFC 42](rfc/0042-migration-import.md) Migration                     | import progress                    | deferred: ADR 29 has no import API in milestone 3 |
 
@@ -135,7 +142,7 @@ install, each with only the access they need, and every change is on record.
 | server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | groups                                   | draft |
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all                                      | draft |
 | server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | draft |
-| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | draft |
+| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | discussing; built-in MFA accepted (ADR 46) |
 | server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | draft |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, teams, role grants              | draft |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
@@ -188,7 +195,7 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                 | runners (RFC 6)                                          |
 | [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys           | secrets (RFC 3, part 2)                                  |
 | [RFC 36](rfc/0036-high-availability.md) High availability                   | home regions and fencing in use (ADR 4)                  |
-| [RFC 39](rfc/0039-reading-state.md) Reading state contents                  | state history (RFC 18)                                   |
+| [RFC 39](rfc/0039-reading-state.md) Reading state contents                  | accepted (ADR 41); a milestone to place it in            |
 | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                   | the inventory projection (ADR 13) at scale               |
 | [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents               | read-only tokens (RFC 20)                                |
 | [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification | runs (milestone 5)                                       |
@@ -196,6 +203,9 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                   | OpenTofu (milestone 2) and a license check               |
 | [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git             | runs (milestone 5)                                       |
 | [RFC 57](rfc/0057-documentation.md) Documentation as a product              | its research                                             |
+| [RFC 61](rfc/0061-docs-site-and-landing-page.md) Docs site and landing page | documentation as a product (RFC 57)                      |
+| [RFC 66](rfc/0066-moving-units-between-namespaces-and-installations.md) Moving units | unit lifecycle (RFC 17, ADR 47)                  |
+| [RFC 67](rfc/0067-spend-and-cost-tool-integration.md) Spend and cost tools  | a decision on cost estimation (RFC 45)                   |
 
 ## Candidates to drop or merge
 
