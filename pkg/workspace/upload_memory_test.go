@@ -36,7 +36,7 @@ const (
 	memNumResourcesA    = 3000
 	memAttrsPerResource = 10
 	memMaxStateBytes    = 64 << 20
-	memOutputsPeakRatio = 5
+	memOutputsPeakRatio = 6
 )
 
 // memStateGen streams one deterministic state document without holding it.
@@ -676,8 +676,10 @@ func finishMemCase(
 	// A state whose body streams peaks under the fixed cost that a streaming
 	// upload reserves in the shared budget. The outputs document is the
 	// exception: the upload buffers it whole (and sealing buffers it again), so
-	// its peak follows its size. The ratio is measured: 14.1 MiB unsealed and
-	// 35.4 MiB sealed under -race for a 7.9 MiB document, so 5 times the size.
+	// its peak follows its size. The ratio is measured for a 7.9 MiB document:
+	// 14.1 MiB unsealed, 27 MiB sealed, and 35 to 40 MiB sealed under -race
+	// (the peak varies with the timing of the garbage collector), so the guard
+	// is 6 times the size.
 	bound := uint64(bodygate.StreamCost)
 	if report.variant == "outputs" {
 		bound = uint64(memOutputsPeakRatio) * uint64(max(report.size, 0))
