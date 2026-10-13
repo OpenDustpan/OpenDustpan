@@ -4,11 +4,14 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -145,7 +148,76 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		Redact: false,
 	})
 
+	runTofuHTTPMigration(t, env, address, backendEnv)
+
 	runTofuHTTPForceUnlock(t, env, backendEnv)
+}
+
+// runTofuHTTPMigration moves the state of the workspace from the http backend
+// to the cloud block with the CLI migration, and then reads it back
+// (ADR 49, decision 3). A cloud block takes the copy of the state from an
+// interactive prompt of init, so the scenario answers yes on stdin. The workspace is one unit for both backends, so
+// each
+// direction reads the state the other wrote. The scenario ends on the http
+// backend, which the force-unlock scenario needs.
+func runTofuHTTPMigration(t *testing.T, env *e2e.Env, address string, backendEnv []string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	env.WriteTofuConfig(t, tofuAuditSecretConfig(env.Host()))
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains("Cloud backend has been successfully initialized!"),
+		Name:   "migrate from http to cloud",
+		Args:   []string{"init", "-no-color"},
+		Env:    append(slices.Clone(backendEnv), "TF_INPUT=1"),
+		Stdin:  "yes\n",
+		Fail:   false,
+		Redact: false,
+	})
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains(`"greeting"`),
+		Name:   "state pull through cloud",
+		Args:   []string{"state", "pull"},
+		Env:    nil,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	writeTofuHTTPConfig(t, env.ProjectDir(), address)
+
+	// The http backend has no workspaces, so the cloud workspace name must not
+	// stay selected in .terraform; the default workspace is the only one.
+	envFile := filepath.Join(env.ProjectDir(), ".terraform", "environment")
+	if err := os.Remove(envFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("clear the selected workspace: %v", err)
+	}
+
+	// OpenTofu does not migrate state away from a cloud block ("not yet
+	// implemented"), so the way back is a reconfigure. The unit is one
+	// workspace, so its state stays where the cloud block wrote it.
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains(`Successfully configured the backend "http"`),
+		Name:   "reconfigure cloud to http",
+		Args:   []string{"init", "-reconfigure", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  contains(`"greeting"`),
+		Name:   "state pull through http",
+		Args:   []string{"state", "pull"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
 }
 
 // tofuHTTPForceLock is the lock that principal B holds in the force-unlock
