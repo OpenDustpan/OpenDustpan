@@ -52,6 +52,12 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "save persists a lock and an unlock by the holder", test: testLockRoundTrip},
 		{name: "finalize of a workspace that is not locked is ErrNotLocked", test: testFinalizeWithoutLock},
 		{name: "finalize under a lock held by another principal is ErrLockedByOther", test: testFinalizeLockedByOther},
+		{name: "finalize sets the declared serial, lineage, MD5 and outputs", test: testFinalizeSetsDeclaredFields},
+		{name: "a placeholder pending version is never current", test: testPlaceholderNeverCurrent},
+		{
+			name: "a finalize under a stale fence keeps the placeholder pending",
+			test: testFinalizeStaleFenceKeepsPlaceholder,
+		},
 		{name: "a pending state version reads back and is not current yet", test: testPendingRoundTrip},
 		{name: "create of a state version for a missing workspace is ErrNotFound", test: testCreateStateVersionMissing},
 		{name: "finalize makes the highest finalized serial current", test: testFinalizeMakesCurrent},
@@ -3515,4 +3521,129 @@ func currentVersionID(t *testing.T, s WorkspaceStore, id workspace.ID) workspace
 	}
 
 	return cur.ID
+}
+
+// placeholderVersion returns the row a streamed write creates before its
+// first byte: serial -1, an empty lineage and an all-zero MD5. The row stays
+// pending until its finalize sets the declared fields (ADR 49, decision 7).
+func placeholderVersion(t *testing.T, w workspace.Workspace) workspace.StateVersion {
+	t.Helper()
+
+	sv := newPendingVersion(t, w, w.Lock.ID, stateInput("", "", -1))
+	sv.MD5 = [md5.Size]byte{}
+
+	return sv
+}
+
+// testFinalizeSetsDeclaredFields proves a finalize sets the serial, lineage,
+// MD5 and outputs that the streamed write declares, in the same transaction as
+// the status change.
+func testFinalizeSetsDeclaredFields(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	declared := finalizedVersion(pending, now().Add(time.Hour), "v1")
+	declared.Serial = 1
+	declared.Lineage = "lin-1"
+	declared.MD5 = md5.Sum([]byte("v1")) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+	declared.Outputs = []byte(`{"greeting":{"value":"hello"}}`)
+
+	if err := finalizeRecorded(t, s, ns.Fence(), declared); err != nil {
+		t.Fatalf("finalize with the declared fields: %v", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get finalized state version: %v", err)
+	}
+
+	if stored.Status != workspace.StatusFinalized || stored.Serial != 1 || stored.Lineage != "lin-1" ||
+		stored.MD5 != declared.MD5 || !bytes.Equal(stored.Outputs, declared.Outputs) {
+		t.Fatalf("finalized row = status %s, serial %d, lineage %q, outputs %s; want the declared fields",
+			stored.Status, stored.Serial, stored.Lineage, stored.Outputs)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil || current.ID != pending.ID {
+		t.Fatalf("current state = %v, %v; want the finalized version", current.ID, err)
+	}
+}
+
+// testPlaceholderNeverCurrent proves a pending placeholder row is not current,
+// and does not replace the finalized version that is current.
+func testPlaceholderNeverCurrent(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-1", "v1", 1),
+	))
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(first, now().Add(time.Hour), "v1")); err != nil {
+		t.Fatalf("finalize the first version: %v", err)
+	}
+
+	placeholder := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state with a placeholder pending: %v", err)
+	}
+
+	if current.ID != first.ID || current.Serial != 1 {
+		t.Fatalf("current state = %s serial %d, want the first version serial 1", current.ID, current.Serial)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), placeholder.ID)
+	if err != nil {
+		t.Fatalf("get placeholder: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Fatalf("placeholder status = %s, want pending", stored.Status)
+	}
+}
+
+// testFinalizeStaleFenceKeepsPlaceholder proves a finalize under a stale
+// namespace fence is refused, and leaves the placeholder row pending with its
+// placeholder fields.
+func testFinalizeStaleFenceKeepsPlaceholder(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	declared := finalizedVersion(pending, now().Add(time.Hour), "v1")
+	declared.Serial = 1
+	declared.Lineage = "lin-1"
+
+	if _, err := s.RecordUploadAttempt(t.Context(), declared.ID, declared.Content, ns.Fence()); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	if err := s.FinalizeStateVersion(t.Context(), declared, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get placeholder after a refused finalize: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending || stored.Serial != -1 || stored.Lineage != "" {
+		t.Fatalf("placeholder after a refused finalize = status %s, serial %d, lineage %q; want pending, -1, empty",
+			stored.Status, stored.Serial, stored.Lineage)
+	}
 }

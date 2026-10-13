@@ -769,6 +769,10 @@ func writeFinalize(
 	ctx context.Context, q *db.Queries, wrow db.Workspace, row codec.StateVersionRow,
 ) error {
 	n, err := q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
+		Serial:        row.Serial,
+		Lineage:       row.Lineage,
+		Md5:           row.MD5,
+		Outputs:       row.Outputs,
 		Status:        string(workspace.StatusFinalized),
 		FinalizedAtMs: row.FinalizedAtMs,
 		ContentKey:    row.ContentKey,

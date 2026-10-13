@@ -523,35 +523,12 @@ func (s *Service) BeginState(
 	// which trims contention on the cap check below. The store enforces
 	// the cap where concurrent declares serialize, so the check below is
 	// only an early refusal with a count.
-	unlock := s.lockKey("begin/" + id.String())
-	defer unlock()
-
-	// Best effort only: a cleanup failure never fails the declare. The
-	// rows stay for the next sweep, and the cap check below still bounds
-	// the workspace.
-	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
-		s.logger.WarnContext(
-			ctx,
-			"sweep expired state",
-			slog.String("workspace", w.ID.String()),
-			slog.String("error", sweepErr.Error()),
-		)
-	}
-
-	pending, err := s.states.CountPendingStateVersions(ctx, id)
+	unlock, err := s.admitDeclare(ctx, w)
 	if err != nil {
-		return PendingState{}, fmt.Errorf("count pending state of %s: %w", w.Ref, err)
+		return PendingState{}, err
 	}
 
-	if pending >= s.maxPending {
-		return PendingState{}, fmt.Errorf(
-			"%w for %s: %d pending, limit %d",
-			ErrTooManyPending,
-			w.Ref,
-			pending,
-			s.maxPending,
-		)
-	}
+	defer unlock()
 
 	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
 }
@@ -714,6 +691,7 @@ func (s *Service) Upload(
 		key:       key,
 		want:      sv.MD5,
 		content:   content,
+		unchecked: false,
 	})
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
@@ -1522,6 +1500,7 @@ func (s *Service) copyBlob(
 		key:       key,
 		want:      src.MD5,
 		content:   r,
+		unchecked: false,
 	})
 	closeErr := r.Close()
 
@@ -1838,6 +1817,16 @@ type storeInput struct {
 	key       blob.Key
 	want      [md5.Size]byte
 	content   io.Reader
+	// unchecked skips the MD5 comparison: a streamed write with no declared MD5
+	// records the MD5 that the bytes produce.
+	unchecked bool
+}
+
+// storedContent is what storeContent reports: the size and the MD5 of the
+// plain bytes.
+type storedContent struct {
+	size int64
+	sum  [md5.Size]byte
 }
 
 // store writes content under key, checking size and MD5 as it streams. The
@@ -1847,8 +1836,16 @@ type storeInput struct {
 // without a sealer fails closed instead of storing plain bytes under a
 // sealed flag. On any mismatch the object is deleted.
 func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
+	stored, err := s.storeContent(ctx, in)
+
+	return stored.size, err
+}
+
+// storeContent is store, and it also reports the MD5 of the plain bytes. With
+// unchecked set, it checks only the size.
+func (s *Service) storeContent(ctx context.Context, in storeInput) (storedContent, error) {
 	if in.seal && s.sealer == nil {
-		return 0, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
+		return storedContent{}, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
 	}
 
 	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
@@ -1858,28 +1855,30 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 	if in.seal {
 		sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), checked)
 		if err != nil {
-			return 0, err
+			return storedContent{}, err
 		}
 
 		checked = sealedReader
 	}
 
 	if err := s.blobs.Put(ctx, in.key, checked); err != nil {
-		return 0, fmt.Errorf("store content: %w", err)
+		return storedContent{}, fmt.Errorf("store content: %w", err)
 	}
+
+	sum := [md5.Size]byte(hash.Sum(nil))
 
 	var problem error
 
 	switch {
 	case counted.n > s.maxState:
 		problem = fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
-	case [md5.Size]byte(hash.Sum(nil)) != in.want:
+	case !in.unchecked && sum != in.want:
 		problem = ErrChecksumMismatch
 	default:
-		return counted.n, nil
+		return storedContent{size: counted.n, sum: sum}, nil
 	}
 
-	return 0, errors.Join(problem, s.blobs.Delete(ctx, in.key))
+	return storedContent{}, errors.Join(problem, s.blobs.Delete(ctx, in.key))
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain

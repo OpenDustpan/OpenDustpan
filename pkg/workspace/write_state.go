@@ -1,0 +1,361 @@
+package workspace
+
+import (
+	"context"
+	"crypto/md5" //nolint:gosec // The TFE protocol and the http backend name state by MD5 for integrity, not security.
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// placeholderSerial marks the serial of a streamed version before its body
+// is read. Readers never see it: a placeholder is pending until it finalizes.
+const placeholderSerial int64 = -1
+
+// StreamInput is one state written as a single streamed body (ADR 49, decision
+// 7). The serial and the lineage come from the body itself, so the write
+// declares no metadata before it streams.
+type StreamInput struct {
+	// Holder is the principal the write runs as. It holds the lock named by
+	// LockID, or it is the principal that makes an unlocked write.
+	Holder string
+	// LockID is the lock ID the client names with ?ID=. It is empty when the
+	// client names none: the write then needs an unlocked unit and the
+	// unlocked-write override (ADR 44, decision 5).
+	LockID string
+	// MD5 is the hex MD5 the client declared with Content-MD5. It is empty when
+	// the client declared none: the MD5 the bytes produce is recorded instead.
+	MD5 string
+}
+
+// WriteState stores one state version streamed from body, for the caller
+// holder. It checks the lock of in and the overrides of auth before the body
+// streams, and records each override that it uses. It records the attempt
+// before the first byte, so a sweep finds the blob even when the write stops
+// midway. After the body streams, it finalizes the version in one store
+// transaction. That transaction runs the namespace fence and the lock checks,
+// and the serial and lineage checks of ADR 25. A refused version deletes its own
+// blob. The returned version carries the plain outputs of the body, and none for
+// a state the client encrypted.
+//
+// An error from the body or from the blob store leaves the attempt for the
+// sweep. The outcome is unknown when a finalize fails for another reason than
+// a refusal, so its blob stays.
+func (s *Service) WriteState(
+	ctx context.Context, id ID, in StreamInput, auth Authority, body io.Reader,
+) (StateVersion, error) {
+	sum, hasSum, err := parseStreamMD5(in.MD5)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	w, err := s.GetByID(ctx, id)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	sw, err := s.admitStream(ctx, w, in, auth)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
+	sw.want = sum
+	sw.checked = hasSum
+
+	return s.streamVersion(ctx, sw, body)
+}
+
+// streamWrite is one admitted streamed version: its placeholder row, the blob
+// key of its attempt, the fence it runs under, and the MD5 the body must match
+// when the client declared one.
+type streamWrite struct {
+	workspace Workspace
+	version   StateVersion
+	key       blob.Key
+	fence     namespace.Fence
+	want      [md5.Size]byte
+	checked   bool
+}
+
+// admitStream checks the lock and the overrides of a streamed write, records
+// each override it uses, and declares its placeholder row. The attempt is noted
+// before the body streams, so a write that stops midway leaves a row that names
+// its blob.
+func (s *Service) admitStream(ctx context.Context, w Workspace, in StreamInput, auth Authority) (*streamWrite, error) {
+	if lockErr := checkStreamLock(w, in.LockID); lockErr != nil {
+		return nil, lockErr
+	}
+
+	unlocked, used, err := declareOverrides(
+		w,
+		in.Holder,
+		NewState{Lineage: "", MD5: "", Outputs: nil, Serial: 0, Force: false},
+		nil,
+		auth.Allow,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
+	}
+
+	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
+		return nil, recordErr
+	}
+
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	sv, key, err := s.declarePlaceholder(ctx, w, fence, unlocked)
+	if err != nil {
+		return nil, err
+	}
+
+	if noteErr := s.noteAttempt(ctx, sv.ID, key, fence); noteErr != nil {
+		return nil, noteErr
+	}
+
+	return &streamWrite{workspace: w, version: sv, key: key, fence: fence, want: [md5.Size]byte{}, checked: false}, nil
+}
+
+// streamVersion streams the body into the blob of sw, reads its serial, lineage
+// and outputs as it passes, and finalizes the version. A refused body deletes
+// its blob. A failed store write leaves the blob to the sweep, as the attempt
+// names it.
+func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Reader) (StateVersion, error) {
+	sv := sw.version
+
+	reader, stream := newMetaStream(body)
+
+	stored, storeErr := s.storeContent(ctx, storeInput{
+		namespace: sw.workspace.Ref.Namespace,
+		workspace: sw.workspace.ID,
+		seal:      sv.Sealed,
+		key:       sw.key,
+		want:      sw.want,
+		content:   reader,
+		unchecked: !sw.checked,
+	})
+
+	meta, err := stream.finish(storeErr)
+	if err != nil {
+		return StateVersion{}, fmt.Errorf("write state %s: %w", sv.ID, err)
+	}
+
+	if metaErr := checkStreamedMeta(meta); metaErr != nil {
+		return StateVersion{}, errors.Join(
+			fmt.Errorf("write state %s: %w", sv.ID, metaErr),
+			s.blobs.Delete(ctx, sw.key),
+		)
+	}
+
+	outputs, err := s.streamedOutputs(ctx, sw.workspace, meta)
+	if err != nil {
+		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, sw.key))
+	}
+
+	sv.Status = StatusFinalized
+	sv.FinalizedAt = s.clock()
+	sv.Content = sw.key
+	sv.Size = stored.size
+	sv.MD5 = stored.sum
+	sv.Serial = meta.Serial
+	sv.Lineage = meta.Lineage
+	sv.Outputs = outputs.stored
+
+	if finErr := s.finalizeStream(ctx, sw, sv); finErr != nil {
+		return StateVersion{}, finErr
+	}
+
+	sv.Outputs = outputs.plain
+
+	return sv, nil
+}
+
+// finalizeStream finalizes sv in one store transaction. The transaction runs
+// the namespace fence, the lock checks and the serial and lineage checks of ADR
+// 25. A refusal deletes the blob of sw, since nothing was written.
+func (s *Service) finalizeStream(ctx context.Context, sw *streamWrite, sv StateVersion) error {
+	finErr := s.states.FinalizeStateVersion(ctx, sv, sw.fence)
+	if finErr == nil {
+		return nil
+	}
+
+	wrapped := fmt.Errorf("finalize state %s: %w", sv.ID, finErr)
+	if rejected(wrapped) {
+		return errors.Join(wrapped, s.blobs.Delete(ctx, sw.key))
+	}
+
+	// The outcome is unknown; the version may point at this blob. Keep it.
+	return wrapped
+}
+
+// checkStreamLock refuses a streamed write whose lock ID does not name the
+// current lock. A write without a lock ID needs an unlocked unit, so a locked
+// unit refuses it with ErrLocked (ADR 49, decision 6).
+func checkStreamLock(w Workspace, lockID string) error {
+	switch {
+	case lockID != "" && lockID != w.Lock.ID:
+		return fmt.Errorf("%w: write names lock %q, unit %s", ErrLockMismatch, lockID, w.Ref)
+	case lockID == "" && w.Lock.Locked():
+		return fmt.Errorf("%w: write names no lock ID, unit %s", ErrLocked, w.Ref)
+	default:
+		return nil
+	}
+}
+
+// declarePlaceholder admits one streamed declare and creates its placeholder
+// row. The row holds no upload capability and no content: it is pending until
+// the body finalizes it, and readers never see it. It returns the row and the
+// blob key of its one attempt.
+func (s *Service) declarePlaceholder(
+	ctx context.Context, w Workspace, fence namespace.Fence, unlocked bool,
+) (StateVersion, blob.Key, error) {
+	unlock, err := s.admitDeclare(ctx, w)
+	if err != nil {
+		return StateVersion{}, "", err
+	}
+
+	defer unlock()
+
+	now := s.clock()
+
+	sv := StateVersion{
+		CreatedAt:       now,
+		FinalizedAt:     time.Time{},
+		UploadExpiresAt: now.Add(UploadWindow),
+		Upload:          token.Digest{},
+		ID:              StateVersionID(ident.NewID("sv-")),
+		Workspace:       w.ID,
+		Holder:          w.Lock.Holder,
+		LockID:          w.Lock.ID,
+		Lineage:         "",
+		Status:          StatusPending,
+		Content:         "",
+		Outputs:         nil,
+		MD5:             [md5.Size]byte{},
+		Serial:          placeholderSerial,
+		Size:            0,
+		Force:           false,
+		UnlockedWrite:   unlocked,
+		Sealed:          s.sealer != nil,
+		RestoredFrom:    "",
+		SensitiveMarks:  nil,
+		FenceBy:         "",
+	}
+
+	if createErr := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); createErr != nil {
+		return StateVersion{}, "", fmt.Errorf("create state version for %s: %w", w.Ref, createErr)
+	}
+
+	key, err := attemptKey(sv)
+	if err != nil {
+		return StateVersion{}, "", err
+	}
+
+	return sv, key, nil
+}
+
+// admitDeclare takes the declare stripe of w, sweeps its expired pending
+// versions, and refuses with ErrTooManyPending when the workspace holds the
+// maximum. It returns the function that releases the stripe. A cleanup failure
+// never fails the declare, as in BeginState.
+func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error) {
+	unlock := s.lockKey("begin/" + w.ID.String())
+
+	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+		s.logger.WarnContext(
+			ctx,
+			"sweep expired state",
+			slog.String("workspace", w.ID.String()),
+			slog.String("error", sweepErr.Error()),
+		)
+	}
+
+	pending, err := s.states.CountPendingStateVersions(ctx, w.ID)
+	if err != nil {
+		unlock()
+
+		return nil, fmt.Errorf("count pending state of %s: %w", w.Ref, err)
+	}
+
+	if pending >= s.maxPending {
+		unlock()
+
+		return nil, fmt.Errorf("%w for %s: %d pending, limit %d", ErrTooManyPending, w.Ref, pending, s.maxPending)
+	}
+
+	return unlock, nil
+}
+
+// streamedOutputs is the outputs of a streamed version: stored holds what the
+// row keeps, plain holds what the caller reads.
+type streamedOutputs struct {
+	stored []byte
+	plain  []byte
+}
+
+// streamedOutputs returns the outputs to store and the plain outputs to return.
+// A state the client encrypted has no readable outputs, so it stores none. A
+// version of a sealing service stores the outputs sealed (ADR 41).
+func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streamedMeta) (streamedOutputs, error) {
+	if meta.ClientEncrypted {
+		return streamedOutputs{stored: nil, plain: nil}, nil
+	}
+
+	plain := meta.Outputs
+	if s.sealer == nil || len(plain) == 0 {
+		return streamedOutputs{stored: plain, plain: plain}, nil
+	}
+
+	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), plain)
+	if err != nil {
+		return streamedOutputs{stored: nil, plain: nil}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
+	}
+
+	return streamedOutputs{stored: sealedOutputs, plain: plain}, nil
+}
+
+// checkStreamedMeta checks the serial and the lineage that the body declared.
+// The finalize transaction checks them against the current state (ADR 25).
+func checkStreamedMeta(meta streamedMeta) error {
+	switch {
+	case !meta.HasSerial:
+		return fmt.Errorf("%w: state has no serial", ErrInvalidState)
+	case !meta.HasLineage:
+		return fmt.Errorf("%w: state has no lineage", ErrInvalidState)
+	case meta.Serial < 0:
+		return fmt.Errorf("%w: serial %d", ErrInvalidState, meta.Serial)
+	case meta.Lineage == "", len(meta.Lineage) > maxLineageLength:
+		return fmt.Errorf("%w: lineage %q", ErrInvalidState, meta.Lineage)
+	default:
+		return nil
+	}
+}
+
+// parseStreamMD5 decodes the hex MD5 a streamed write declared. An empty value
+// declares none, and the bool reports whether one was declared.
+func parseStreamMD5(s string) ([md5.Size]byte, bool, error) {
+	var sum [md5.Size]byte
+
+	if s == "" {
+		return sum, false, nil
+	}
+
+	raw, err := hex.DecodeString(s)
+	if err != nil || len(raw) != md5.Size {
+		return sum, false, fmt.Errorf("%w: md5 %q", ErrInvalidState, s)
+	}
+
+	copy(sum[:], raw)
+
+	return sum, true, nil
+}

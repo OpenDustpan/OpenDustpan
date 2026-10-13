@@ -1,0 +1,378 @@
+package workspace_test
+
+import (
+	"crypto/md5" //nolint:gosec // The test checks the MD5 the service records, which the protocol names.
+	"encoding/hex"
+	"errors"
+	"io"
+	"strconv"
+	"strings"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/workspace"
+)
+
+// streamDoc is a state document that declares its own serial and lineage. The
+// shared fixture caps state at 64 bytes, so the document stays short.
+func streamDoc(lineage string, serial int) string {
+	return `{"serial":` + strconv.Itoa(serial) + `,"lineage":"` + lineage + `","outputs":{"n":{"value":"web"}}}`
+}
+
+// md5Hex returns the hex MD5 of doc, the value a client declares.
+func md5Hex(doc string) string {
+	sum := md5.Sum([]byte(doc)) //nolint:gosec // Test helper for the protocol's MD5.
+
+	return hex.EncodeToString(sum[:])
+}
+
+// lockedFixture returns a fixture whose unit alice holds under lock ID lock-1.
+func lockedFixture(t *testing.T) fixture {
+	t.Helper()
+
+	f := newFixture(t)
+
+	if _, err := f.svc.LockWithID(t.Context(), f.ws.ID, "alice", "apply", "lock-1"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	return f
+}
+
+// TestWriteStateTakesSerialAndLineageFromTheBody proves a streamed write stores
+// the serial, the lineage, the MD5 and the outputs the body declares, with no
+// metadata declared before it streams (ADR 49, decisions 7 and 8).
+func TestWriteStateTakesSerialAndLineageFromTheBody(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+	doc := streamDoc("lin-w", 1)
+
+	sv, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(doc),
+	)
+	if err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	if sv.Serial != 1 || sv.Lineage != "lin-w" {
+		t.Fatalf("serial %d lineage %q, want 1 and lin-w", sv.Serial, sv.Lineage)
+	}
+
+	if sv.MD5 != md5Sum(doc) {
+		t.Fatalf("MD5 %x, want the MD5 of the bytes %x", sv.MD5, md5Sum(doc))
+	}
+
+	if !strings.Contains(string(sv.Outputs), `"web"`) {
+		t.Fatalf("outputs %q do not carry the body's outputs", sv.Outputs)
+	}
+
+	current, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if current.ID != sv.ID {
+		t.Fatalf("current = %s, want the streamed version %s", current.ID, sv.ID)
+	}
+}
+
+// TestWriteStateRefusesLockIDsThatDoNotMatch proves a write names the current
+// lock: another ID is ErrLockMismatch, and no ID on a locked unit is ErrLocked.
+// A write under another holder is refused as locked by someone else.
+func TestWriteStateRefusesLockIDsThatDoNotMatch(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+	doc := streamDoc("lin-l", 1)
+
+	cases := []struct {
+		name   string
+		holder string
+		lockID string
+		want   error
+	}{
+		{name: "other lock ID", holder: "alice", lockID: "lock-2", want: workspace.ErrLockMismatch},
+		{name: "no lock ID on a locked unit", holder: "alice", lockID: "", want: workspace.ErrLocked},
+		{name: "other holder", holder: "bob", lockID: "lock-1", want: workspace.ErrLockedByOther},
+	}
+
+	for _, tc := range cases {
+		_, err := f.svc.WriteState(
+			ctx,
+			f.ws.ID,
+			workspace.StreamInput{Holder: tc.holder, LockID: tc.lockID, MD5: ""},
+			authority(noOverrides(), nil),
+			strings.NewReader(doc),
+		)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+
+	if _, err := f.svc.Current(ctx, f.ws.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("refused writes left a current state: %v", err)
+	}
+}
+
+// TestWriteStateRefusesAStaleSerialAndDeletesItsBlob proves the serial and
+// lineage checks of ADR 25 run in the finalize transaction, and that the
+// refused write deletes the blob it stored.
+func TestWriteStateRefusesAStaleSerialAndDeletesItsBlob(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+
+	first, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-s", 5)),
+	)
+	if err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	_, err = f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-s", 5)),
+	)
+	if !errors.Is(err, workspace.ErrStaleSerial) {
+		t.Fatalf("equal serial: err = %v, want ErrStaleSerial", err)
+	}
+
+	_, err = f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(streamDoc("other", 6)),
+	)
+	if !errors.Is(err, workspace.ErrLineageMismatch) {
+		t.Fatalf("other lineage: err = %v, want ErrLineageMismatch", err)
+	}
+
+	current, err := f.svc.Current(t.Context(), f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if current.ID != first.ID {
+		t.Fatalf("current = %s after refusals, want %s", current.ID, first.ID)
+	}
+
+	assertNoOrphanBlobs(t, f)
+}
+
+// TestWriteStateChecksTheDeclaredMD5 proves a body that does not match its
+// Content-MD5 is refused, and its blob is deleted.
+func TestWriteStateChecksTheDeclaredMD5(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+
+	_, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: md5Hex("other")},
+		authority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-m", 1)),
+	)
+	if !errors.Is(err, workspace.ErrChecksumMismatch) {
+		t.Fatalf("wrong MD5: err = %v, want ErrChecksumMismatch", err)
+	}
+
+	assertNoOrphanBlobs(t, f)
+}
+
+// TestWriteStateKeepsClientEncryptedStateWithoutOutputs proves a state the
+// client encrypted stores no outputs, so the console shows none (ADR 49,
+// decision 8).
+func TestWriteStateKeepsClientEncryptedStateWithoutOutputs(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+	doc := `{"serial":1,"lineage":"l","encrypted_data":"c"}`
+
+	sv, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(doc),
+	)
+	if err != nil {
+		t.Fatalf("write encrypted state: %v", err)
+	}
+
+	if len(sv.Outputs) != 0 {
+		t.Fatalf("outputs of an encrypted state = %q, want none", sv.Outputs)
+	}
+
+	current, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if len(current.Outputs) != 0 {
+		t.Fatalf("stored outputs of an encrypted state = %q, want none", current.Outputs)
+	}
+}
+
+// TestWriteStateNeedsTheUnlockedOverride proves a write without the lock is
+// refused until the switches and the authority allow it, and then it records
+// the override it uses.
+func TestWriteStateNeedsTheUnlockedOverride(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	doc := streamDoc("lin-u", 1)
+
+	_, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
+		authority(noOverrides(), nil),
+		strings.NewReader(doc),
+	)
+	if !errors.Is(err, workspace.ErrNotLocked) {
+		t.Fatalf("unlocked write without the override: err = %v, want ErrNotLocked", err)
+	}
+
+	on := namespace.Overrides{Unlocked: true, Forced: false}
+
+	if _, err = f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, on); err != nil {
+		t.Fatalf("namespace switch: %v", err)
+	}
+
+	if _, err = f.svc.SetOverrides(ctx, f.ws.ID, on); err != nil {
+		t.Fatalf("unit switch: %v", err)
+	}
+
+	var recorded []workspace.Override
+
+	sv, err := f.svc.WriteState(ctx, f.ws.ID, workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
+		authority(on, func(o workspace.Override) error {
+			recorded = append(recorded, o)
+
+			return nil
+		}),
+		strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("unlocked write with the override: %v", err)
+	}
+
+	if !sv.UnlockedWrite {
+		t.Fatal("version written without the lock does not carry the unlocked-write flag")
+	}
+
+	if len(recorded) != 1 || recorded[0] != workspace.OverrideUnlocked {
+		t.Fatalf("recorded overrides = %v, want one unlocked override", recorded)
+	}
+}
+
+// TestWriteStateRecordsTheAttemptBeforeTheFirstByte proves the blob key is
+// stored on the row before the body streams, so a write that stops midway
+// still leaves a row that names its blob for the sweep.
+func TestWriteStateRecordsTheAttemptBeforeTheFirstByte(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+	doc := streamDoc("lin-r", 1)
+
+	var named bool
+
+	body := newFirstReadHook(strings.NewReader(doc), func() {
+		f.store.mu.Lock()
+		defer f.store.mu.Unlock()
+
+		for id := range f.store.versions {
+			row := f.store.versions[id]
+
+			if row.Status == workspace.StatusPending && row.Content != "" {
+				named = true
+			}
+		}
+	})
+
+	_, err := f.svc.WriteState(
+		ctx,
+		f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
+		authority(noOverrides(), nil),
+		body,
+	)
+	if err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	if !named {
+		t.Fatal("the attempt was not recorded before the first byte streamed")
+	}
+}
+
+// firstReadHook runs onFirst once, before the first read of r.
+type firstReadHook struct {
+	r       io.Reader
+	onFirst func()
+	started bool
+}
+
+// newFirstReadHook returns a reader of r that runs onFirst before its first read.
+func newFirstReadHook(r io.Reader, onFirst func()) *firstReadHook {
+	return &firstReadHook{r: r, onFirst: onFirst, started: false}
+}
+
+// Read calls onFirst on the first call, then reads r.
+func (h *firstReadHook) Read(p []byte) (int, error) {
+	if !h.started {
+		h.started = true
+		h.onFirst()
+	}
+
+	return h.r.Read(p) //nolint:wrapcheck // Transparent reader: callers must see io.EOF unchanged.
+}
+
+// md5Sum returns the MD5 of doc as the service stores it.
+func md5Sum(doc string) [md5.Size]byte {
+	return md5.Sum([]byte(doc)) //nolint:gosec // Test helper for the protocol's MD5.
+}
+
+// assertNoOrphanBlobs proves that every pending row whose blob the store still
+// names has no blob behind it: a refused write deleted its own blob.
+func assertNoOrphanBlobs(t *testing.T, f fixture) {
+	t.Helper()
+
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	for id := range f.store.versions {
+		row := f.store.versions[id]
+
+		if row.Status != workspace.StatusPending || row.Content == "" {
+			continue
+		}
+
+		r, err := f.blobs.Get(t.Context(), row.Content)
+		if err == nil {
+			_ = r.Close() //nolint:errcheck // Test cleanup.
+
+			t.Fatalf("refused write left blob %q behind", row.Content)
+		}
+	}
+}

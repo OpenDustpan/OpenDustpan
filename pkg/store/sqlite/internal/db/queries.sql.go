@@ -644,11 +644,15 @@ func (q *Queries) FailRunningRestores(ctx context.Context, arg FailRunningRestor
 
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
-SET status = ?1, finalized_at_ms = ?2, size = ?3
-WHERE id = ?4 AND status = 'pending' AND content_key = ?5
+SET serial = ?1, lineage = ?2, md5 = ?3, outputs = ?4, status = ?5, finalized_at_ms = ?6, size = ?7
+WHERE id = ?8 AND status = 'pending' AND content_key = ?9
 `
 
 type FinalizeStateVersionParams struct {
+	Serial        int64
+	Lineage       string
+	Md5           []byte
+	Outputs       []byte
 	Status        string
 	FinalizedAtMs int64
 	Size          int64
@@ -659,9 +663,16 @@ type FinalizeStateVersionParams struct {
 // Marks one pending version finalized with its recorded attempt. The write
 // matches only the recorded content key, so a superseded attempt reports no
 // change instead of finalizing over a newer one; a finalized version also
-// matches no row, so a retry reports no change.
+// matches no row, so a retry reports no change. It also sets the declared
+// serial, lineage, MD5 and outputs: a streamed write declares them only after
+// its content is read (ADR 49, decision 7), and its row holds placeholders
+// until then.
 func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVersionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, finalizeStateVersion,
+		arg.Serial,
+		arg.Lineage,
+		arg.Md5,
+		arg.Outputs,
 		arg.Status,
 		arg.FinalizedAtMs,
 		arg.Size,

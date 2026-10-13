@@ -99,8 +99,13 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkTofuHTTPApply(), Name: "apply", Args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
-		Env: backendEnv, Stdin: "", Fail: false, Redact: false,
+		Check:  checkTofuHTTPApply(),
+		Name:   "apply",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -116,8 +121,13 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkTofuHTTPLockConflict(), Name: "apply while locked", Args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
-		Env: backendEnv, Stdin: "", Fail: true, Redact: false,
+		Check:  checkTofuHTTPLockConflict(),
+		Name:   "apply while locked",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   true,
+		Redact: false,
 	})
 
 	status, body, err = env.TFEStatusA(ctx, "UNLOCK", "/tofu/state/"+e2e.Namespace+"/"+e2e.Workspace, lock)
@@ -126,8 +136,13 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkTofuHTTPApplied(), Name: "apply after unlock", Args: []string{"apply", "-input=false", "-auto-approve", "-no-color"},
-		Env: backendEnv, Stdin: "", Fail: false, Redact: false,
+		Check:  checkTofuHTTPApplied(),
+		Name:   "apply after unlock",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
 	})
 }
 

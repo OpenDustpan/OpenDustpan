@@ -34,6 +34,8 @@ var (
 	ErrOverrideRefused = errors.New("override refused")
 	// ErrLockedByOther reports a lock held by someone other than the caller.
 	ErrLockedByOther = errors.New("workspace is locked by someone else")
+	// ErrLockMismatch reports a write that names a lock ID other than the current lock.
+	ErrLockMismatch = errors.New("lock ID does not match the current lock")
 	// ErrConcurrentModification reports that the workspace changed between read and write.
 	ErrConcurrentModification = errors.New("workspace changed concurrently")
 	// ErrInvalidLockID reports a lock ID that the caller chose and that fails validation.

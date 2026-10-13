@@ -554,11 +554,18 @@ func newAdapters(
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
 func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
+	var entries audit.Store
+	if s, ok := cfg.namespaceStore.(audit.Store); ok {
+		entries = s
+	}
+
 	handler, err := tofuhttp.NewHandler(tofuhttp.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
 		Workspaces:    svc.workspaces,
+		Namespaces:    svc.namespaces,
+		Audit:         entries,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)

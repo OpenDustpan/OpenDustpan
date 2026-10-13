@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -34,6 +35,8 @@ const unitTool = "opentofu"
 type WorkspaceService interface {
 	// Get returns the workspace called ref, or workspace.ErrNotFound.
 	Get(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	// GetByID returns the workspace with id, or workspace.ErrNotFound.
+	GetByID(ctx context.Context, id workspace.ID) (workspace.Workspace, error)
 	// Create creates an unlocked workspace without state.
 	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
 	// LockWithID locks the workspace for holder under lockID, the ID the
@@ -46,6 +49,11 @@ type WorkspaceService interface {
 	Current(ctx context.Context, id workspace.ID) (workspace.StateVersion, error)
 	// Open returns the content of sv. The caller closes it.
 	Open(ctx context.Context, sv workspace.StateVersion) (io.ReadCloser, error)
+	// WriteState stores one state version streamed from body (ADR 49, decision 7).
+	WriteState(
+		ctx context.Context, id workspace.ID, in workspace.StreamInput,
+		auth workspace.Authority, body io.Reader,
+	) (workspace.StateVersion, error)
 }
 
 // Config holds the dependencies of a Handler.
@@ -54,6 +62,9 @@ type Config struct {
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
 	Workspaces    WorkspaceService
+	Namespaces    NamespaceService
+	// Audit receives the entry of each override a write uses. Nil writes none.
+	Audit audit.Store
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -62,8 +73,11 @@ type Handler struct {
 	authz  identity.Authorizer
 	logger *slog.Logger
 	ws     WorkspaceService
-	mux    *http.ServeMux
-	routes []Route
+	// namespaces and audit serve the override allowance and its audit entries.
+	namespaces NamespaceService
+	audit      audit.Store
+	mux        *http.ServeMux
+	routes     []Route
 }
 
 // call is the authorized request that a route handler serves.
@@ -94,15 +108,19 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.Workspaces == nil:
 		return nil, fmt.Errorf("%w: workspaces", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
 	}
 
 	h := &Handler{
-		authn:  cfg.Authenticator,
-		authz:  cfg.Authorizer,
-		logger: cfg.Logger,
-		ws:     cfg.Workspaces,
-		mux:    http.NewServeMux(),
-		routes: nil,
+		authn:      cfg.Authenticator,
+		authz:      cfg.Authorizer,
+		logger:     cfg.Logger,
+		ws:         cfg.Workspaces,
+		namespaces: cfg.Namespaces,
+		audit:      cfg.Audit,
+		mux:        http.NewServeMux(),
+		routes:     nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -122,7 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // buildRoutes returns the route table. It is the single source of the patterns
 // that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return slices.Concat(h.stateRoutes(), h.lockRoutes())
+	return slices.Concat(h.stateRoutes(), h.writeStateRoutes(), h.lockRoutes())
 }
 
 // Patterns of the one address of each workspace.
@@ -237,10 +255,19 @@ func classify(err error) (int, string) {
 	case errors.Is(err, workspace.ErrInvalidName), errors.Is(err, namespace.ErrInvalidName),
 		errors.Is(err, workspace.ErrInvalidLockID):
 		return http.StatusBadRequest, "invalid request"
-	case errors.Is(err, workspace.ErrLocked):
+	case errors.Is(err, workspace.ErrLocked), errors.Is(err, workspace.ErrLockedByOther):
 		return http.StatusLocked, "workspace is locked"
-	case errors.Is(err, workspace.ErrConcurrentModification):
-		return http.StatusConflict, "workspace changed concurrently"
+	case errors.Is(err, workspace.ErrConcurrentModification), errors.Is(err, workspace.ErrLockMismatch),
+		errors.Is(err, workspace.ErrStaleSerial), errors.Is(err, workspace.ErrLineageMismatch):
+		return http.StatusConflict, "state conflicts with the current state or lock"
+	case errors.Is(err, workspace.ErrNotLocked), errors.Is(err, workspace.ErrOverrideRefused):
+		return http.StatusForbidden, "write refused: an override is off or not granted"
+	case errors.Is(err, workspace.ErrChecksumMismatch), errors.Is(err, workspace.ErrInvalidState):
+		return http.StatusBadRequest, "invalid state"
+	case errors.Is(err, workspace.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, "state is too large"
+	case errors.Is(err, workspace.ErrTooManyPending):
+		return http.StatusTooManyRequests, "too many pending state versions"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
