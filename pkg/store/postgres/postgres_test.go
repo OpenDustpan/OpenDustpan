@@ -289,6 +289,21 @@ func TestBackupConformance(t *testing.T) {
 	})
 }
 
+func TestPortableExportConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL portable export suite", envURL)
+	}
+
+	storetest.RunPortable(t, func(t *testing.T) storetest.PortableStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 func TestRestoreConformance(t *testing.T) {
 	t.Parallel()
 

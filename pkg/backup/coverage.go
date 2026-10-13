@@ -13,6 +13,11 @@ import (
 // The error names the table and the column.
 var ErrCoverage = errors.New("backup column list and schema differ")
 
+// ErrSchemaRead reports that the store could not read its live schema to
+// compare it with a column list. The driver error stays out of the value: an
+// adapter translates it into this sentinel (CLAUDE.md, backend rules).
+var ErrSchemaRead = errors.New("backup cannot read the live schema")
+
 // Coverage is the port that compares the column list of each table in Tables
 // with the live schema of the store. It returns ErrCoverage when they differ.
 // The conformance suite runs it on both dialects.
