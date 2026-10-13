@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -19,9 +18,11 @@ import (
 // proves the key-encryption key through PeekKey, and stages the SQL part
 // through StageRestore. It never loads into the live data.
 type CheckStore interface {
-	Exporter
+	PortableExporter
 	KeyPeeker
-	Stager
+	PortableStager
+	// DiscardStaging removes the staging area, if any (Stager).
+	DiscardStaging(ctx context.Context) error
 }
 
 // CheckInput holds one server-side restore check: the backup target to read
@@ -62,7 +63,7 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 		return none, "", err
 	}
 
-	if sqlErr := verifySQLPart(ctx, in.Target, in.ID, plan.manifest.SQLSize, plan.wantSHA); sqlErr != nil {
+	if sqlErr := verifySQLPart(ctx, in.Target, in.ID, plan.manifest.SQLFiles); sqlErr != nil {
 		return none, "", sqlErr
 	}
 
@@ -82,7 +83,10 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 		return none, "", blobErr
 	}
 
-	staged, err := stageBackup(ctx, in.Target, in.Live, in.ID, restoreWant(plan.manifest, plan.wantBlobs))
+	staged, err := stageBackup(ctx, in.Target, in.Live, in.ID, stagePlan{
+		want:  restoreWant(plan.manifest, plan.wantBlobs),
+		files: plan.manifest.SQLFiles,
+	})
 	if err != nil {
 		return none, "", err
 	}
@@ -125,7 +129,7 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 		return checkPlan{}, err
 	}
 
-	liveSum, err := live.Export(ctx, io.Discard)
+	liveSum, _, err := live.ExportPortable(ctx, discardSink)
 	if err != nil {
 		return checkPlan{}, fmt.Errorf("check restore of backup %s: read live data: %w", id, err)
 	}
@@ -141,46 +145,46 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 	return checkPlan{manifest: manifest, wantSHA: wantSHA, wantBlobs: wantBlobs, live: liveSum}, nil
 }
 
-// stageBackup Gets the SQL part of backup id from the target and stages it in
-// the live store. A failed stage removes the staging area before the error
-// returns, so the live data stays unchanged.
+// stagePlan names what a stage checks: the summary the backup must match, and the
+// table files to load.
+type stagePlan struct {
+	want  Summary
+	files []PortableFile
+}
+
+// stageBackup stages the table files of backup id in the live store. A failed
+// stage removes the staging area before the error returns, so the live data
+// stays unchanged.
 func stageBackup(
-	ctx context.Context, target blob.Store, live CheckStore, id ID, want Summary,
+	ctx context.Context, target blob.Store, live CheckStore, id ID, plan stagePlan,
 ) (Summary, error) {
 	var none Summary
 
-	dbKey, err := blob.ParseKey("backups/" + id.String() + "/db")
-	if err != nil {
-		return none, fmt.Errorf("check restore of backup %s: %w", id, err)
-	}
-
-	reader, err := target.Get(ctx, dbKey)
-	if err != nil {
-		if isNotFound(err) {
-			return none, fmt.Errorf("backup is incomplete: object %q is missing: %w", dbKey, ErrCorrupt)
-		}
-
-		return none, fmt.Errorf("read backup object %q: %w", dbKey, err)
-	}
-
-	staged, stageErr := live.StageRestore(ctx, reader, want)
-	closeErr := reader.Close()
-
+	staged, stageErr := live.StagePortable(ctx, portableOpener(ctx, target, id), plan.want, plan.files)
 	if stageErr != nil {
 		// Best-effort cleanup after a failed stage: the staging area must go,
 		// and the error below already names the cause.
 		_ = live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
 
-		return none, fmt.Errorf("check restore of backup %s: %w", id, errors.Join(stageErr, closeErr))
-	}
-
-	if closeErr != nil {
-		_ = live.DiscardStaging(context.WithoutCancel(ctx)) //nolint:errcheck // Best-effort cleanup.
-
-		return none, fmt.Errorf("close backup object %q: %w", dbKey, closeErr)
+		return none, fmt.Errorf("check restore of backup %s: %w", id, stageErr)
 	}
 
 	return staged, nil
+}
+
+// discardSink is a sink that keeps no bytes: a summary reads the store through it.
+func discardSink(string) (io.WriteCloser, error) {
+	return nopSinkCloser{Writer: io.Discard}, nil
+}
+
+// nopSinkCloser is a writer whose Close does nothing.
+type nopSinkCloser struct {
+	io.Writer
+}
+
+// Close does nothing.
+func (nopSinkCloser) Close() error {
+	return nil
 }
 
 // verifyTargetBlobs checks that the target holds every blob the manifest names,
@@ -270,7 +274,7 @@ func (c backupKeyCheck) run(ctx context.Context) error {
 			c.id, c.key.ID(), c.manifest.WrapperIDs, secret.ErrWrapperMismatch)
 	}
 
-	wrapped, err := peekBackupKey(ctx, c.target, c.peeker, c.id, c.key.ID())
+	wrapped, err := peekBackupKey(ctx, c.peeker, portableOpener(ctx, c.target, c.id), c.manifest.SQLFiles, c.key.ID())
 	if err != nil {
 		return err
 	}
@@ -287,37 +291,21 @@ func (c backupKeyCheck) run(ctx context.Context) error {
 	return nil
 }
 
-// peekBackupKey Gets the SQL part and reads one data key of wrapperID from it
-// without loading any store.
+// peekBackupKey reads one data key of wrapperID from the secret_keys file of the
+// SQL part, without loading any store.
 func peekBackupKey(
-	ctx context.Context, target blob.Store, peeker KeyPeeker, id ID, wrapperID string,
+	ctx context.Context, peeker KeyPeeker, open PortableOpener, files []PortableFile, wrapperID string,
 ) (secret.WrappedKey, error) {
 	var none secret.WrappedKey
 
-	key, err := blob.ParseKey("backups/" + id.String() + "/db")
-	if err != nil {
-		return none, fmt.Errorf("restore backup %s: %w", id, err)
+	file, ok := portableFileOf(files, "secret_keys")
+	if !ok {
+		return none, fmt.Errorf("the SQL part holds no secret_keys file: %w", ErrCorrupt)
 	}
 
-	reader, err := target.Get(ctx, key)
-	if err != nil {
-		if isNotFound(err) {
-			return none, fmt.Errorf("backup is incomplete: object %q is missing: %w",
-				key, ErrCorrupt)
-		}
-
-		return none, fmt.Errorf("read backup object %q: %w", key, err)
-	}
-
-	wrapped, peekErr := peeker.PeekKey(ctx, reader, wrapperID)
-	closeErr := reader.Close()
-
+	wrapped, peekErr := peeker.PeekPortableKey(ctx, open, file, wrapperID)
 	if peekErr != nil {
-		return none, fmt.Errorf("read backup key of %q: %w", key, peekErr)
-	}
-
-	if closeErr != nil {
-		return none, fmt.Errorf("close backup object %q: %w", key, closeErr)
+		return none, fmt.Errorf("read backup key of %q: %w", file.Path, peekErr)
 	}
 
 	return wrapped, nil

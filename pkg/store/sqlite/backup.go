@@ -494,6 +494,14 @@ func (s *Store) DiscardStaging(ctx context.Context) error {
 	return nil
 }
 
+// PeekPortableKey implements backup.KeyPeeker: it reads one data key of
+// wrapperID from the secret_keys file of a portable backup (ADR 42).
+func (s *Store) PeekPortableKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
+}
+
 // PeekKey implements backup.KeyPeeker: it stages the export stream in a
 // temporary file and reads one wrapped data key of wrapperID from its
 // secret_keys table, without loading the destination. The caller streams the

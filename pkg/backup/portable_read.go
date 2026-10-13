@@ -302,3 +302,16 @@ func IndexPortableFiles(files []PortableFile, rows map[string]int64) (map[string
 
 	return index, nil
 }
+
+// portableFileOf returns the descriptor of table in files.
+func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
+	for _, file := range files {
+		if file.Table == table {
+			return file, true
+		}
+	}
+
+	var none PortableFile
+
+	return none, false
+}

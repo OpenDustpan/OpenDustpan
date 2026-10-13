@@ -50,6 +50,9 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
 		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
 		{name: "a summary with a wrong row count is refused", test: testPortableStageRefusesRowCount},
+		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
+		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
+		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
 	}
 
 	for _, tc := range cases {
@@ -393,9 +396,102 @@ func findPortableRow(t *testing.T, rows []map[string]any, name, value string) ma
 	return nil
 }
 
-// testPortableEmptyBytes checks that an empty byte value is written as the empty
-// string and not as null: a NOT NULL bytes column would refuse the null on the
-// way back (ADR 42, decision 3). The seeded updates hold empty lease digests.
+// testPortablePeekKey peeks one wrapped data key per seeded wrapper from the
+// secret_keys file of the export through an empty store: the key must equal the
+// stored row, and the peeking store must stay empty (ADR 42, decision 4).
+func testPortablePeekKey(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seed := seedBackupStore(t, src)
+	sink, _, files := exportPortable(t, src)
+	keyFile := portableFileNamed(t, files, "secret_keys")
+
+	dst := newStore(t)
+
+	for i, wrapper := range []string{"kek-1", "kek-2"} {
+		got, err := dst.PeekPortableKey(t.Context(), sink.read, keyFile, wrapper)
+		if err != nil {
+			t.Fatalf("peek key of wrapper %q: %v", wrapper, err)
+		}
+
+		want := mustGetKey(t, src, seed.scopes[i])
+
+		if got.Scope != want.Scope || got.WrapperID != want.WrapperID ||
+			!got.CreatedAt.Equal(want.CreatedAt) || !bytes.Equal(got.Ciphertext, want.Ciphertext) {
+			t.Fatalf("peeked key of wrapper %q = %+v, want %+v", wrapper, got, want)
+		}
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testPortablePeekUnknownWrapper peeks a wrapper the export holds no key of and
+// expects ErrCorrupt, with the peeking store still empty.
+func testPortablePeekUnknownWrapper(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sink, _, files := exportPortable(t, src)
+
+	dst := newStore(t)
+
+	_, err := dst.PeekPortableKey(t.Context(), sink.read, portableFileNamed(t, files, "secret_keys"), "kek-unknown")
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// testPortablePeekCorrupt peeks a key file that differs from its descriptor and
+// expects ErrCorrupt, with the peeking store still empty.
+func testPortablePeekCorrupt(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	seedBackupStore(t, src)
+	sink, _, files := exportPortable(t, src)
+	keyFile := portableFileNamed(t, files, "secret_keys")
+
+	raw := sink.files[keyFile.Path].Bytes()
+	raw[len(raw)/2] ^= 0xff
+
+	dst := newStore(t)
+
+	if _, err := dst.PeekPortableKey(t.Context(), sink.read, keyFile, "kek-1"); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("peek key of a corrupt file: err = %v, want ErrCorrupt", err)
+	}
+
+	assertBackupEmpty(t, dst)
+}
+
+// portableFileNamed returns the descriptor of table in files, failing the test
+// when the export holds none.
+func portableFileNamed(t *testing.T, files []backup.PortableFile, table string) backup.PortableFile {
+	t.Helper()
+
+	var found backup.PortableFile
+
+	for _, file := range files {
+		if file.Table == table {
+			found = file
+
+			break
+		}
+	}
+
+	if found.Table != table {
+		t.Fatalf("export holds no file of table %q", table)
+	}
+
+	return found
+}
+
+// testPortableStageRefusesDuplicate checks that a files list that holds two
+// descriptors of one table fails the stage with ErrCorrupt before any load, and
+// names the table (ADR 42, decision 4).
 func testPortableEmptyBytes(t *testing.T, newStore PortableFactory) {
 	t.Helper()
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5" //nolint:gosec // The test computes the MD5 values the manifest records.
-	"crypto/sha256"
 	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
@@ -107,7 +106,11 @@ func writeRestoreManifest(
 
 	const id = backup.ID("bkp-restore")
 
-	target.storeObject(t, "backups/"+id.String()+"/db", in.db)
+	files := sqlPartAllFiles(in.db)
+
+	for _, table := range backup.Tables {
+		target.storeObject(t, sqlPartAllKey(id, table), in.db)
+	}
 
 	entries := make([]backup.ManifestBlob, 0, len(blobs))
 
@@ -124,7 +127,7 @@ func writeRestoreManifest(
 		})
 	}
 
-	sha := sha256.Sum256(in.db)
+	sqlSize, sqlSHA := sqlPartAggregate(files)
 	wrappers := []string{}
 
 	for _, k := range in.dump.Keys {
@@ -143,11 +146,13 @@ func writeRestoreManifest(
 		WrapperIDs:    wrappers,
 		Blobs:         entries,
 		Version:       "test-1.0",
-		SQLSHA256:     hex.EncodeToString(sha[:]),
+		SQLSHA256:     sqlSHA,
 		Format:        backup.FormatVersion,
 		SchemaVersion: 10,
-		SQLSize:       int64(len(in.db)),
+		SQLSize:       sqlSize,
 		RowCounts:     maps.Clone(in.dump.Rows),
+		SQLFormat:     backup.PortableFormat,
+		SQLFiles:      files,
 	}
 
 	data, err := json.Marshal(manifest)

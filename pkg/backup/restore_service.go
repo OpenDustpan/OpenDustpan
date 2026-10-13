@@ -957,12 +957,11 @@ func (s *RestoreService) stage(ctx context.Context, id ID) error {
 		return err
 	}
 
-	wantSHA, shaErr := parseSQLSHA(manifest, id)
-	if shaErr != nil {
+	if _, shaErr := parseSQLSHA(manifest, id); shaErr != nil {
 		return shaErr
 	}
 
-	if verifyErr := verifySQLPart(ctx, s.target, id, manifest.SQLSize, wantSHA); verifyErr != nil {
+	if verifyErr := verifySQLPart(ctx, s.target, id, manifest.SQLFiles); verifyErr != nil {
 		return verifyErr
 	}
 
@@ -971,7 +970,9 @@ func (s *RestoreService) stage(ctx context.Context, id ID) error {
 		return blobsErr
 	}
 
-	if _, stageErr := stageBackup(ctx, s.target, s.live, id, restoreWant(manifest, wantBlobs)); stageErr != nil {
+	plan := stagePlan{want: restoreWant(manifest, wantBlobs), files: manifest.SQLFiles}
+
+	if _, stageErr := stageBackup(ctx, s.target, s.live, id, plan); stageErr != nil {
 		return stageErr
 	}
 

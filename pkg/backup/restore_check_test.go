@@ -36,11 +36,15 @@ type checkLiveStore struct {
 	present      bool
 }
 
-func (s *checkLiveStore) Export(_ context.Context, _ io.Writer) (backup.Summary, error) {
-	return s.live, nil
+func (s *checkLiveStore) ExportPortable(
+	_ context.Context, _ backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
+	return s.live, nil, nil
 }
 
-func (s *checkLiveStore) PeekKey(_ context.Context, _ io.Reader, wrapperID string) (secret.WrappedKey, error) {
+func (s *checkLiveStore) PeekPortableKey(
+	_ context.Context, _ backup.PortableOpener, _ backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
 	if s.keyErr != nil {
 		return secret.WrappedKey{}, s.keyErr
 	}
@@ -54,8 +58,8 @@ func (s *checkLiveStore) PeekKey(_ context.Context, _ io.Reader, wrapperID strin
 	return s.key, nil
 }
 
-func (s *checkLiveStore) StageRestore(
-	_ context.Context, r io.Reader, _ backup.Summary,
+func (s *checkLiveStore) StagePortable(
+	_ context.Context, open backup.PortableOpener, _ backup.Summary, files []backup.PortableFile,
 ) (backup.Summary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,8 +70,19 @@ func (s *checkLiveStore) StageRestore(
 		return backup.Summary{}, s.stageErr
 	}
 
-	if _, err := io.Copy(io.Discard, r); err != nil {
-		return backup.Summary{}, fmt.Errorf("drain backup stream: %w", err)
+	for _, file := range files {
+		reader, err := open(file.Path)
+		if err != nil {
+			return backup.Summary{}, err
+		}
+
+		if _, err := io.Copy(io.Discard, reader); err != nil {
+			return backup.Summary{}, fmt.Errorf("drain backup file: %w", err)
+		}
+
+		if err := reader.Close(); err != nil {
+			return backup.Summary{}, fmt.Errorf("close backup file: %w", err)
+		}
 	}
 
 	s.present = true
@@ -258,7 +273,7 @@ func equalCheckBlobs(a, b []backup.BlobRef) bool {
 func (s *checkSetup) assertTargetIntact(t *testing.T) {
 	t.Helper()
 
-	if got := s.target.readObject(t, "backups/"+s.id.String()+"/db"); !bytes.Equal(got, s.db) {
+	if got := s.target.readObject(t, sqlPartKey(s.id)); !bytes.Equal(got, s.db) {
 		t.Fatal("target SQL part changed during a check-only restore, want it untouched")
 	}
 
@@ -497,8 +512,8 @@ func TestCheckRestoreCorruptSQLPart(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	mustDelete(t, s.target, "backups/"+s.id.String()+"/db")
-	s.target.storeObject(t, "backups/"+s.id.String()+"/db", append(bytes.Clone(s.db), 0x00))
+	mustDelete(t, s.target, sqlPartKey(s.id))
+	s.target.storeObject(t, sqlPartKey(s.id), append(bytes.Clone(s.db), 0x00))
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrCorrupt) {

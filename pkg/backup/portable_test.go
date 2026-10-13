@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -236,31 +237,39 @@ func TestPortableSpecFollowsTables(t *testing.T) {
 	}
 }
 
-// TestPortableManifestFormat proves the portable manifest names format 2 and the
-// portable SQL format, and lists each table file (ADR 42, decision 4).
+// TestPortableManifestFormat proves the manifest of a portable backup names
+// format 2 and the portable SQL format, and lists each table file (ADR 42,
+// decision 4).
 func TestPortableManifestFormat(t *testing.T) {
 	t.Parallel()
 
-	sum := backup.Summary{
+	manifest := backup.Manifest{
+		CreatedAt:     time.Time{},
+		ID:            "bkp-1",
 		Dialect:       backup.DialectSQLite,
 		HomeRegions:   []string{"eu-west"},
 		WrapperIDs:    []string{"kek-1"},
-		RowCounts:     map[string]int64{"namespaces": 1},
 		Blobs:         nil,
+		Version:       "test",
+		SQLSHA256:     "00",
+		Format:        backup.FormatVersion,
 		SchemaVersion: 26,
-	}
-	files := []backup.PortableFile{
-		{
-			Table:   "namespaces",
-			Path:    "sql/namespaces.jsonl.gz",
-			SHA256:  "00",
-			Columns: []string{"name"},
-			Rows:    1,
-			Size:    9,
+		SQLSize:       9,
+		RowCounts:     map[string]int64{"namespaces": 1},
+		SQLFormat:     backup.PortableFormat,
+		SQLFiles: []backup.PortableFile{
+			{
+				Table:   "namespaces",
+				Path:    "sql/namespaces.jsonl.gz",
+				SHA256:  "00",
+				Columns: []string{"name"},
+				Rows:    1,
+				Size:    9,
+			},
 		},
 	}
 
-	raw, err := json.Marshal(backup.NewPortableManifest(sum, files))
+	raw, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
 	}

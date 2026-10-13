@@ -3,6 +3,8 @@ package backup_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,18 +96,20 @@ type restoreServiceLive struct {
 	wipeBackups *fakeRegistry
 }
 
-func (l *restoreServiceLive) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
-	return l.checks.Export(ctx, w)
+func (l *restoreServiceLive) ExportPortable(
+	ctx context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
+	return l.checks.ExportPortable(ctx, sink)
 }
 
-func (l *restoreServiceLive) PeekKey(
-	ctx context.Context, r io.Reader, wrapperID string,
+func (l *restoreServiceLive) PeekPortableKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
 ) (secret.WrappedKey, error) {
-	return l.checks.PeekKey(ctx, r, wrapperID)
+	return l.checks.PeekPortableKey(ctx, open, file, wrapperID)
 }
 
-func (l *restoreServiceLive) StageRestore(
-	ctx context.Context, r io.Reader, want backup.Summary,
+func (l *restoreServiceLive) StagePortable(
+	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
 ) (backup.Summary, error) {
 	l.mu.Lock()
 	block := l.stageBlock
@@ -130,7 +134,7 @@ func (l *restoreServiceLive) StageRestore(
 		}
 	}
 
-	return l.checks.StageRestore(ctx, r, want)
+	return l.checks.StagePortable(ctx, open, want, files)
 }
 
 func (l *restoreServiceLive) DiscardStaging(ctx context.Context) error {
@@ -452,16 +456,39 @@ type stubBackupExporter struct {
 	order *orderLog
 }
 
-func (e *stubBackupExporter) Export(_ context.Context, w io.Writer) (backup.Summary, error) {
+func (e *stubBackupExporter) ExportPortable(
+	_ context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
 	if e.order != nil {
 		e.order.add("export")
 	}
 
-	if _, err := w.Write(e.data); err != nil {
-		return backup.Summary{}, fmt.Errorf("write stub export: %w", err)
+	path := backup.PortablePath("namespaces")
+
+	w, err := sink(path)
+	if err != nil {
+		return backup.Summary{}, nil, fmt.Errorf("open stub table file: %w", err)
 	}
 
-	return e.sum, nil
+	if _, err := w.Write(e.data); err != nil {
+		return backup.Summary{}, nil, fmt.Errorf("write stub export: %w", err)
+	}
+
+	if err := w.Close(); err != nil {
+		return backup.Summary{}, nil, fmt.Errorf("close stub table file: %w", err)
+	}
+
+	digest := sha256.Sum256(e.data)
+	file := backup.PortableFile{
+		Table:   "namespaces",
+		Path:    path,
+		SHA256:  hex.EncodeToString(digest[:]),
+		Columns: nil,
+		Rows:    0,
+		Size:    int64(len(e.data)),
+	}
+
+	return e.sum, []backup.PortableFile{file}, nil
 }
 
 // newRestoreServiceSetup builds the fakes and the RestoreService under test.
