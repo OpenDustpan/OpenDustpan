@@ -50,6 +50,8 @@ import (
 
 // Errors that Replay returns.
 var (
+	// ErrWriteOrder reports a write entry after an entry that changes the records.
+	ErrWriteOrder = errors.New("pulumijournal: write entry follows an entry that changes the records")
 	// ErrNoSnapshot reports a write entry without a snapshot, or a rebuilt document
 	// without a deployment.
 	ErrNoSnapshot = errors.New("pulumijournal: journal entry has no snapshot")
@@ -244,23 +246,21 @@ func (s *replayState) apply(ctx context.Context, entry JournalEntry) error {
 	}
 }
 
-// applyWrite applies a write entry (kind 5): the base becomes the new snapshot,
-// and the records of the replay so far are dropped. Upstream
-// backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines
-// 295 to 298, only sets the base, and expects a write before any other entry that
-// changes the snapshot. Clearing the records here does not change such a journal.
-// A write without a snapshot is refused.
+// applyWrite applies a write entry (kind 5). The base becomes the snapshot, as
+// upstream does (backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0,
+// lines 295 to 298). The secrets and snippets that earlier entries set are part of
+// the base that the snapshot replaces, so they are dropped. The verifier refuses a
+// write that follows an entry that changes the records (ErrWriteOrder), so the
+// records are not cleared here. A write without a snapshot is refused.
 func (s *replayState) applyWrite(entry JournalEntry, name string) error {
 	if len(entry.NewSnapshot) == 0 {
 		return fmt.Errorf("pulumijournal: entry %s: write without a snapshot: %w", name, ErrNoSnapshot)
 	}
 
 	s.base = snapshotOpener(entry.NewSnapshot)
-	s.clearRecords()
 	s.secrets = nil
 	s.snippets = nil
 	s.snippetsSet = false
-	s.extensions = make(map[string]jsontext.Value)
 
 	return nil
 }

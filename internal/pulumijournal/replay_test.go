@@ -161,26 +161,32 @@ func TestReplayRefusesStateMigration(t *testing.T) {
 	}
 }
 
-// TestReplayWriteReplacesBaseAndDropsRecords checks that a write entry (kind 5)
-// replaces the base with its snapshot and drops the records of the entries before
-// it: the delete of a base resource and the new resource are not in the output.
-func TestReplayWriteReplacesBaseAndDropsRecords(t *testing.T) {
+// TestReplayWriteDropsSecretsSetBeforeIt checks that a secrets manager entry
+// before a write (kind 5) does not survive it: the snapshot replaces the base,
+// and the base holds the secrets provider of the snapshot. Upstream loses such an
+// entry the same way (backend/journal.go, lines 295 to 298).
+func TestReplayWriteDropsSecretsSetBeforeIt(t *testing.T) {
 	t.Parallel()
-	base := baseJSON(resourceJSON("urn:a"))
-	snapshot := `{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[` +
+	base := baseJSON()
+	snapshot := `{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},` +
+		`"secrets_providers":{"type":"service","state":{"stack":"snapshot"}},"resources":[` +
 		resourceJSON("urn:z") + `]}`
 	entries := batch(
-		`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
-		`{"version":1,"kind":1,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null,`+
-			`"state":`+resourceJSON("urn:c")+`,"deleteOld":0}`,
-		`{"version":1,"kind":5,"sequenceID":3,"operationID":2,"removeOld":null,"removeNew":null,`+
+		`{"version":1,"kind":6,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"secretsProvider":{"type":"service","state":{"stack":"entry"}}}`,
+		`{"version":1,"kind":5,"sequenceID":2,"operationID":2,"removeOld":null,"removeNew":null,`+
 			`"newSnapshot":`+snapshot+`}`,
 	)
 	got, err := replay(base, entries)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectDeployment(t, got, resourceJSON("urn:z"))
+	if strings.Contains(got, `"stack":"entry"`) {
+		t.Fatalf("the secrets entry before the write survived it:\n%s", got)
+	}
+	if !strings.Contains(got, `"stack":"snapshot"`) {
+		t.Fatalf("the snapshot's secrets provider is missing:\n%s", got)
+	}
 }
 
 // TestReplayWriteWithoutSnapshotIsRefused checks that a write entry without a

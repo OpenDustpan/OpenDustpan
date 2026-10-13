@@ -106,3 +106,30 @@ func TestVerifierRefusesEntriesThatBreakDecision55(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifierRefusesWriteAfterRecordChange checks that a write entry (kind 5)
+// that follows an entry that changes the records is refused with ErrWriteOrder, so
+// the route answers 400. A write before the record changes is accepted.
+func TestVerifierRefusesWriteAfterRecordChange(t *testing.T) {
+	t.Parallel()
+
+	write := `{"version":1,"kind":5,"sequenceID":3,"operationID":3,"removeOld":null,"removeNew":null,` +
+		`"newSnapshot":{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[]}}`
+	begin := `{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`
+	success := `{"version":1,"kind":1,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null}`
+
+	err := (pulumijournal.Verifier{}).VerifyBatch(batchOf(begin, write), 1, nil)
+	if !errors.Is(err, pulumijournal.ErrWriteOrder) {
+		t.Fatalf("write after begin: err = %v, want ErrWriteOrder", err)
+	}
+
+	err = (pulumijournal.Verifier{}).VerifyBatch(batchOf(success, write), 1, []int64{1})
+	if !errors.Is(err, pulumijournal.ErrWriteOrder) {
+		t.Fatalf("write after success: err = %v, want ErrWriteOrder", err)
+	}
+
+	err = (pulumijournal.Verifier{}).VerifyBatch(batchOf(write, begin), 1, nil)
+	if err != nil {
+		t.Fatalf("write before begin: %v", err)
+	}
+}

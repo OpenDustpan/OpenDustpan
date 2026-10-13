@@ -27,9 +27,22 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 		held[op] = true
 	}
 
+	// recordsChanged is set by an entry that changes the replay records. A write
+	// entry (kind 5) must come before all of them (upstream backend/journal.go of
+	// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that order).
+	recordsChanged := false
+
 	return DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
 		if err := replayable(entry); err != nil {
 			return err
+		}
+
+		if entry.Kind == JournalEntryKindWrite && recordsChanged {
+			return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
+		}
+
+		if changesRecords(entry.Kind) {
+			recordsChanged = true
 		}
 
 		for _, ref := range references(entry) {
@@ -42,6 +55,21 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 
 		return nil
 	})
+}
+
+// changesRecords reports whether an entry of kind changes the records of the
+// replay. A write entry must not come after one of them.
+func changesRecords(kind JournalEntryKind) bool {
+	switch kind {
+	case JournalEntryKindBegin, JournalEntryKindSuccess, JournalEntryKindFailure,
+		JournalEntryKindRefreshSuccess, JournalEntryKindOutputs, JournalEntryKindRebuiltBaseState:
+		return true
+	case JournalEntryKindSecretsManager, JournalEntryKindWrite, JournalEntryKindSnippets,
+		JournalEntryKindExtensionParameterize, JournalEntryKindStateMigration:
+		return false
+	}
+
+	return false
 }
 
 // replayable refuses a kind that the replayer does not apply yet, and a write
