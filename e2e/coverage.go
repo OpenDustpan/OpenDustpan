@@ -669,7 +669,23 @@ func CoverageAllowlist() []AllowEntry {
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		restoreAllowEntries(),
+		journalAllowEntries(),
 	)
+}
+
+// journalAllowEntries returns the allowlist row for the journal entry route.
+// The release build answers journal version 0, so no CLI reaches the route
+// there. The recording build (journalrecording tag) reaches it through
+// make e2e-journal.
+func journalAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPatch, Path: "/api/stacks/{namespace}/{project}/{stack}/update/{update}/journalentries",
+			CoveringTest: "TestPulumiJournalingOn (make e2e-journal, journalrecording build)",
+			Reason: "The release build answers journal version 0, so no CLI sends journal batches. " +
+				"The recording build answers version 1, and its test proves the route.",
+		},
+	}
 }
 
 // consoleAllowEntries returns the allowlist rows for console-only routes and
