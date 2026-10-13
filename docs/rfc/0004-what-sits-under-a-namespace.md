@@ -3,13 +3,14 @@ rfc: 4
 title: What sits under a namespace
 status: discussing
 created: 2026-10-10
-adr: 51               # the collection part only
+adr: 51, 61           # the collection part only
 ---
 
 # RFC 4. What sits under a namespace
 
 Status: discussing. The collection part is accepted as ADR 51 on
-2026-10-13. The rest stays open.
+2026-10-13. How a unit from the CLI gets its collection is accepted as
+ADR 61 on 2026-10-13. The rest stays open.
 
 ## Problem
 
@@ -184,19 +185,14 @@ ADR 51 accepts the collection. These questions stay open after the owner
 direction of 2026-10-13. Each "lead proposal" is a proposed default from the
 project lead for the owner to decide. It is not a decision.
 
-- Does the owner accept the sketch above for names: a collection name
-  follows the TFE project name rules, and the TFE-compatible API shows each
-  collection as a TFE project? Lead proposal: yes. A workspace that names a
-  TFE project in its `cloud` block then lands in that collection.
-- Does the owner accept the placement rules above for a new Pulumi stack?
-  Lead proposal: yes, first match wins. With no default collection (ADR 51),
-  a stack that matches no rule and names no collection is refused. The
-  error names the namespace, the Pulumi project and the stack, and says to
-  add a placement rule or to make the stack through the API with a
+- Which rights does a person need to move a unit to another collection?
+  Lead proposal: a right on the unit, on the old collection and on the
+  target collection. ADR 61 covers the right to make a unit in a
   collection.
-- Which rights does a person need to put a unit into a collection and to
-  move it? Lead proposal: a right on the unit and a right on the target
-  collection to put it in. To move it, also a right on the old collection.
+- What is the syntax of a stack-name pattern in a placement rule? Lead
+  proposal: a glob with `*`, as in the sketch above (`prod*`).
+- What does a change to a placement rule do to the units that exist? Lead
+  proposal: nothing. A rule applies only when the server makes a unit.
 - How does the server give a collection to the units that exist before
   ADR 51? Lead proposal: an upgrade step makes no default collection. The
   server refuses writes to such a unit until an administrator moves it into
@@ -241,6 +237,16 @@ Second round, through the project lead, on 2026-10-13:
   ADR 51 derives from this that the server refuses a new unit when it
   cannot find its collection, with an error that names the fix.
 
+Third round, through the project lead, on 2026-10-13:
+
+- Questions "Does the owner accept the sketch for names and TFE projects?"
+  and "Does the owner accept the placement rules for a new Pulumi stack?":
+  the owner chose "Placement rules + TFE project (Recommended)". The text of
+  that option was: "Namespace rules match Pulumi project/stack-name
+  patterns; OpenTofu's `cloud` block `project` names the collection. No
+  match: refuse with an error naming the fix." ADR 61 records the decision.
+  The question on the rights to move a unit stays open.
+
 ## Outcome
 
 The collection part is accepted as ADR 51 on 2026-10-13. A collection is a
@@ -248,5 +254,14 @@ named set of units in one namespace, from any tool. Collections do not nest.
 Each unit is in exactly one collection, and no default collection exists. The
 server refuses a new unit with no collection. Membership is explicit, and
 labels never grant access. A grant, a profile attachment and an
-output-sharing rule can name a collection as their object. The rest of this
-RFC has no outcome yet.
+output-sharing rule can name a collection as their object.
+
+ADR 61 accepts on 2026-10-13 how a unit from the CLI gets its collection.
+Placement rules in the namespace match the Pulumi project and a stack-name
+pattern, and the first match wins. For OpenTofu, the `project` of the `cloud`
+block names the collection, and the TFE-compatible API shows each collection
+as a TFE project. When nothing matches, the server refuses the unit with an
+error that names the fix. The caller needs the right to make a unit in the
+collection.
+
+The rest of this RFC has no outcome yet.
