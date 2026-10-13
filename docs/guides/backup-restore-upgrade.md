@@ -1,8 +1,10 @@
 # Backup, restore and upgrade
 
-This guide shows how to back up a whole installation, restore it, and upgrade the server. It follows ADR 30, ADR 33, ADR 38 and ADR 39. The end-to-end suite ran each command in this guide.
+This guide shows how to back up a whole installation, check the backup, restore it, and upgrade the server. It follows ADR 30, ADR 33, ADR 38, ADR 39 and ADR 42. The end-to-end suite ran each command in this guide on SQLite and on PostgreSQL.
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
+
+The commands are the same for both databases. The server chooses the database: SQLite is the default, and `serve --database postgres://...` selects PostgreSQL. A backup of one database restores into the other. Section "Restore a backup" gives the rule.
 
 ## Back up the installation
 
@@ -16,7 +18,7 @@ Set a backup target on the server. Use the flag or the variable. An empty target
 DUSTPAN_BACKUP_TARGET=dir:/var/backups/dustpan ./bin/opendustpan serve
 ```
 
-The target holds `blobs/<key>`, one `backups/<id>/sql/<table>.jsonl.gz` file for each table, and `backups/<id>/manifest.json`. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
+The target holds the layout that the next section describes. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
 
 Start a backup with the backup command. It calls the server and waits until the backup leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
@@ -42,11 +44,25 @@ The target can also be S3-compatible storage. Set the credentials in `AWS_ACCESS
 ./bin/opendustpan serve --backup-target s3://dustpan-backups/prod --s3-endpoint https://s3.example
 ```
 
-An S3-compatible target holds one object with a limit of 5 GiB. A SQL part above this limit fails with a clear error.
+An S3-compatible target holds each object with a limit of 5 GiB. Each table file is one object. A table file above 5 GiB fails the backup. The error says that the table file is over the target limit, with its size and the limit. It does not name the table.
+
+## Layout of a backup
+
+A backup is a set of objects under the target:
+
+- `backups/<id>/manifest.json` describes the backup. It is the last object that the server writes. A backup without it is not complete.
+- `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
+- `blobs/<key>` holds each blob that the SQL data names, such as an OpenTofu state version or a Pulumi checkpoint.
+
+The manifest records the backup format (`format`: 2) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the home regions and the wrapper IDs.
+
+For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5.
+
+The table files use one encoding for both databases. A backup of SQLite restores into PostgreSQL, and a backup of PostgreSQL restores into SQLite.
 
 ## Check a backup
 
-Check a backup with the check command. It asks the server to check the backup in its configured target. The server reads its configured target. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
+Check a backup with the check command. It asks the server to check the backup in its configured target. The check reads the manifest, every table file and every blob, and compares each object with the size and checksum that the manifest names. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
 ```sh
 opendustpan backup check --server https://dustpan.example --ca-file ca.pem --backup bkp-aaa
@@ -60,7 +76,9 @@ Restore loads a backup from the configured backup target into the running
 installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key-encryption key and the same schema version as the backup
-source. The dialect may differ. A backup from before the seal change still restores.
+source. The database may differ: a backup of SQLite restores into PostgreSQL
+and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9). A backup
+from before the seal change still restores.
 After the apply, the server seals the rows that the backup holds unsealed.
 
 Run the restore command. It calls the server and waits until the restore
@@ -124,18 +142,54 @@ with a wrong key leaves the live data unchanged.
 
 The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
-the server instead. A backup of the other dialect restores: SQLite to
-PostgreSQL and PostgreSQL to SQLite.
+the server instead.
+
+Before the server changes anything, it checks the manifest, the
+key-encryption key, each table file against its descriptor, and each blob
+against its size and MD5. It loads the table files into a staging area. The
+stage checks the staged data against the row counts, the blob references and
+the foreign keys of the manifest. A failed check leaves the live data unchanged.
 
 The command refuses a backup with no manifest or with an unknown format
-number. A backup in the native format of ADR 30 (manifest format 1) is refused
-too, with a message that says a new backup is necessary. Take a new backup on
-the server that wrote it, and restore that one. The manifest is internal in
-this milestone.
+number. This server also refuses a backup in the native format of the older
+server (manifest format 1), and the message says to take a new backup.
+This server does not restore that format. To keep such a backup, follow the
+steps in "Move a format 1 backup". The refusal does not change the live data.
 
 Disaster recovery on a new machine: start the server on an empty database
 with the same key-encryption key, then restore through the API. The
-bootstrap admin token can restore into the empty installation.
+bootstrap admin token can restore into the empty installation. The new
+database may be the other kind.
+
+## Move a format 1 backup
+
+A format 1 backup holds the native format of the older server. An older server
+writes format 1 again, so a new backup from the older server does not help.
+The data moves through a restore into the older server, then an upgrade, then
+a new backup. Use these steps:
+
+1. Keep the format 1 backup in its target. Do not delete it.
+2. Start the older server version that wrote the backup. Use an empty
+   database and the same key-encryption key. Set `--backup-target` to the
+   target that holds the format 1 backup.
+3. Restore the format 1 backup into that server:
+
+   ```sh
+   opendustpan restore --server https://old.example --ca-file ca.pem --backup bkp-aaa
+   ```
+
+4. Check that the restore succeeded and that the data is present.
+5. Stop the older server. Run the upgrade check for this server version, then
+   start this server version on the same database. The start applies the
+   pending migrations.
+6. Take a new backup with this server version. The new backup is format 2:
+
+   ```sh
+   opendustpan backup --server https://dustpan.example --ca-file ca.pem
+   ```
+
+7. Check the new backup. Keep the format 1 backup until the format 2 backup
+   checks as complete.
 
 ## Upgrade the server
 
@@ -163,6 +217,13 @@ Back up the database before each upgrade. `serve` applies pending migrations at 
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails because the schema is newer than the binary knows. Then start the other new nodes.
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. The older binary refuses to start on the newer schema. It names the schema version of the database, the schema version of the binary, and the version of the binary.
+
+## Known limit
+
+Restore reads each backup file through gzip with no size bound. The server
+does not stop a file that expands far beyond its size. Keep backups in a
+store that only the operator can write. The files then come from the
+operator's own store, not from a source that others can change.
 
 ## What this guide does not cover
 
