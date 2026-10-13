@@ -125,11 +125,21 @@ changes."
     they run on CI runners that the project controls. A plan output that
     holds an identifier never goes to a public log.
 
+### Releases
+
+13. **Only merged code.** The hosted service runs only code that is merged
+    to the main branch of the public repositories. It can run ahead of the
+    latest tagged release, for example for an urgent fix. The owner said on
+    2026-10-13, as the product manager relayed: "The hosted service might
+    run ahead of the tagged release at times if e.g. it needs an urgent
+    hotfix. It should in principal never run code that isn't MERGED
+    upstream."
+
 ## Not decided here
 
-- A release rule: the hosted service runs only versions that the open-source
-  project released first, and a security fix is released in open source
-  within a stated time after the hosted fix. This is a product manager proposal.
+- A security fix under embargo. Decision 13 makes a fix public when it
+  merges, before self-hosted installations have a release. The product
+  manager takes this question to the owner.
 - The hosted distribution runs the same e2e suite and exit tests as the
   open-source server. This is a product manager proposal.
 - The names and places of the hosted distribution repository and the
