@@ -206,6 +206,7 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 61](rfc/0061-docs-site-and-landing-page.md) Docs site and landing page | documentation as a product (RFC 57)                      |
 | [RFC 66](rfc/0066-moving-units-between-namespaces-and-installations.md) Moving units | unit lifecycle (RFC 17, ADR 47)                  |
 | [RFC 67](rfc/0067-spend-and-cost-tool-integration.md) Spend and cost tools  | a decision on cost estimation (RFC 45)                   |
+| [RFC 68](rfc/0068-installation-settings.md) Installation settings          | the shape of the installation API (RFC 59)               |
 
 ## Candidates to drop or merge
 
