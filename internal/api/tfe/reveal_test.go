@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -100,6 +101,11 @@ func (r revealWorkspaces) ReadState(
 		sv.ID = id
 
 		return sv, nil
+	case "sv-entangled-large123", "sv-marks-large123", "sv-disjoint-large123":
+		sv.ID = id
+		sv.SensitiveMarks = revealOtherMarks()
+
+		return sv, nil
 	default:
 		return workspace.StateVersion{}, workspace.ErrStateVersionNotFound
 	}
@@ -111,9 +117,78 @@ func (r revealWorkspaces) Open(_ context.Context, sv workspace.StateVersion) (io
 		return io.NopCloser(strings.NewReader(stubResourceState())), nil
 	case "sv-encrypted123":
 		return io.NopCloser(strings.NewReader(stubEncryptedState())), nil
+	case "sv-entangled-large123":
+		return io.NopCloser(strings.NewReader(revealEntangledLargeState())), nil
+	case "sv-marks-large123":
+		return io.NopCloser(strings.NewReader(revealMarksLargeState())), nil
+	case "sv-disjoint-large123":
+		return io.NopCloser(strings.NewReader(revealDisjointLargeState())), nil
 	default:
 		return nil, workspace.ErrStateVersionNotFound
 	}
+}
+
+// revealOtherMarks keeps marks non-empty without matching the test address,
+// so only sensitive_attributes drives masking.
+func revealOtherMarks() workspace.SensitiveMarks {
+	return workspace.SensitiveMarks{"other.none": {"/id"}}
+}
+
+// revealLargeWrapper wraps one attributes object and its sensitive list in a
+// state with one managed terraform_data resource named x.
+func revealLargeWrapper(attributes, sensitive string) string {
+	return `{"version":4,"terraform_version":"1.11.0","serial":1,"lineage":"seed-lineage",` +
+		`"outputs":{},"resources":[` +
+		`{"mode":"managed","type":"terraform_data","name":"x",` +
+		`"provider":"provider[\"terraform.io/builtin/terraform\"]",` +
+		`"instances":[{"schema_version":0,` +
+		`"attributes":` + attributes + `,"sensitive_attributes":` + sensitive + `}]}]}`
+}
+
+// revealEntangledLargeState builds a state with one instance over the 4 MiB
+// fallback limit: one 5 MiB pad string with a small object a holding b, and
+// two nested pointers at a and at a then b in the same list.
+func revealEntangledLargeState() string {
+	pad := strings.Repeat("p", 5<<20)
+
+	attributes := `{"a":{"b":"x"},"pad":` + strconv.Quote(pad) + `}`
+	sensitive := `[[{"type":"get_attr","value":"a"}],` +
+		`[{"type":"get_attr","value":"a"},{"type":"get_attr","value":"b"}]]`
+
+	return revealLargeWrapper(attributes, sensitive)
+}
+
+// revealMarksLargeState builds a state whose sensitive_attributes run over
+// the 1 MiB marks limit: 40000 one-step entries.
+func revealMarksLargeState() string {
+	const entries = 40000
+
+	var sensitive strings.Builder
+
+	sensitive.WriteString("[")
+
+	for i := range entries {
+		if i > 0 {
+			sensitive.WriteString(",")
+		}
+
+		sensitive.WriteString(`[[{"type":"get_attr","value":"k` + strconv.Itoa(i) + `"}]]`)
+	}
+
+	sensitive.WriteString("]")
+
+	return revealLargeWrapper(`{"id":"a"}`, sensitive.String())
+}
+
+// revealDisjointLargeState builds the same 5 MiB instance with one pointer
+// at the small token attribute, so the streaming answer has no 4 MiB limit.
+func revealDisjointLargeState() string {
+	pad := strings.Repeat("p", 5<<20)
+
+	attributes := `{"token":"s3cr3t","pad":` + strconv.Quote(pad) + `}`
+	sensitive := `[[{"type":"get_attr","value":"token"}]]`
+
+	return revealLargeWrapper(attributes, sensitive)
 }
 
 // newRevealHandler builds a Handler with the reveal state and the audit
@@ -357,13 +432,13 @@ func TestRevealAnswersValue(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 
-	checkRevealAudit(t, entries, path)
+	checkRevealAudit(t, entries, "sv-test123", path)
 }
 
 // checkRevealAudit fails unless entries holds exactly one entry: the reveal
 // entry of the kind reveal with the action unit:read-secrets, the unit, the
 // version, the path and the success outcome.
-func checkRevealAudit(t *testing.T, entries *memRevealAudit, path string) {
+func checkRevealAudit(t *testing.T, entries *memRevealAudit, version, path string) {
 	t.Helper()
 
 	entries.mu.Lock()
@@ -379,7 +454,7 @@ func checkRevealAudit(t *testing.T, entries *memRevealAudit, path string) {
 		t.Fatalf("entry = %+v, want action unit:read-secrets with kind reveal", got)
 	}
 
-	if got.Object != "opentofu:acme/web" || got.Version != "sv-test123" || got.ValuePath != path {
+	if got.Object != "opentofu:acme/web" || got.Version != version || got.ValuePath != path {
 		t.Fatalf("entry = %+v, want the unit, the version and the path", got)
 	}
 
@@ -567,4 +642,145 @@ func TestRevealBodyOverLimitAnswers413(t *testing.T) {
 	if len(entries.entries) != 0 {
 		t.Fatalf("entries = %d, want none for an oversized body", len(entries.entries))
 	}
+}
+
+// TestRevealEntangledLargeInstanceAnswers413 proves a reveal that needs the
+// full instance answers 413 when the instance runs over 4 MiB: the entangled
+// pointers at a and at a then b force the full decode.
+func TestRevealEntangledLargeInstanceAnswers413(t *testing.T) {
+	t.Parallel()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		entries,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+
+	path := "/resources/0/instances/0/attributes/a"
+
+	status, header, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-entangled-large123/actions/reveal", revealBody(t, path),
+	)
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("entangled large reveal answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	if !strings.Contains(body, "4194304") {
+		t.Fatalf("413 body misses the limit 4194304: %s", body)
+	}
+
+	if strings.Contains(body, "\"value\"") {
+		t.Fatalf("413 body holds a value: %s", body)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 0 {
+		t.Fatalf("entries = %d, want none for an entangled large instance", len(entries.entries))
+	}
+}
+
+// TestRevealLargeSensitiveAttributesAnswers413 proves a lookup whose
+// sensitive_attributes run over 1 MiB answers 413.
+func TestRevealLargeSensitiveAttributesAnswers413(t *testing.T) {
+	t.Parallel()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		entries,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+
+	status, header, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-marks-large123/actions/reveal",
+		revealBody(t, "/resources/0/instances/0/attributes/id"),
+	)
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large marks reveal answers %d, want %d (%s)", status, http.StatusRequestEntityTooLarge, body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	if !strings.Contains(body, "1048576") {
+		t.Fatalf("413 body misses the limit 1048576: %s", body)
+	}
+
+	if strings.Contains(body, "\"value\"") {
+		t.Fatalf("413 body holds a value: %s", body)
+	}
+
+	entries.mu.Lock()
+	defer entries.mu.Unlock()
+
+	if len(entries.entries) != 0 {
+		t.Fatalf("entries = %d, want none for large sensitive_attributes", len(entries.entries))
+	}
+}
+
+// TestRevealDisjointLargeInstanceAnswers proves the same 5 MiB instance with
+// one pointer at the small token attribute answers 200: the streaming answer
+// has no 4 MiB limit.
+func TestRevealDisjointLargeInstanceAnswers(t *testing.T) {
+	t.Parallel()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		entries,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+
+	path := "/resources/0/instances/0/attributes/token"
+
+	status, header, body := sendReveal(
+		t, handler, "/api/v2/state-versions/sv-disjoint-large123/actions/reveal", revealBody(t, path),
+	)
+
+	if status != http.StatusOK {
+		t.Fatalf("disjoint large reveal answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc revealTestDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode reveal body: %v (%s)", err, body)
+	}
+
+	if doc.Data.Type != "state-version-reveals" || doc.Data.Attributes.Path != path {
+		t.Fatalf("reveal = %+v, want the path in a reveals document", doc)
+	}
+
+	if doc.Data.Attributes.Value != "s3cr3t" {
+		t.Fatalf("reveal value = %#v, want s3cr3t", doc.Data.Attributes.Value)
+	}
+
+	if got := header.Get("Content-Type"); got != "application/vnd.api+json" {
+		t.Fatalf("media type = %q, want JSON:API", got)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	checkRevealAudit(t, entries, "sv-disjoint-large123", path)
 }
