@@ -80,7 +80,8 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
-// check: the blob key, the lease and the update kind.
+// check: the blob key, the lease, the update kind, and an open journal. A closed journal
+// refuses every batch, so no batch can land after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
 	if err := checkJournalKey(stackID, row); err != nil {
 		return err
@@ -90,7 +91,20 @@ func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 		return err
 	}
 
-	return checkMutates(ctx, q, stackID, row.Update)
+	if err := checkMutates(ctx, q, stackID, row.Update); err != nil {
+		return err
+	}
+
+	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: row.Update.String()})
+	if err != nil {
+		return fmt.Errorf("read journal state: %w", err)
+	}
+
+	if state.JournalClosed {
+		return stack.ErrWrongUpdateState
+	}
+
+	return nil
 }
 
 // checkJournalKey refuses a row whose blob key does not belong to the stack and the
@@ -237,23 +251,33 @@ func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 	return nil
 }
 
-// JournalKeys implements stack.JournalStore. A missing stack or update yields no keys.
-func (s *Store) JournalKeys(ctx context.Context, ref stack.Ref, update stack.UpdateID) ([]blob.Key, error) {
-	stackID, err := s.stackID(ctx, ref)
-	if errors.Is(err, stack.ErrUpdateNotFound) {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := s.queries.JournalBlobKeys(ctx, db.JournalBlobKeysParams{StackID: stackID, UpdateID: update.String()})
+// JournalKeys implements stack.JournalStore. It is keyed by the stack ID, as the blob
+// keys are. A missing update yields no keys.
+func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.UpdateID) ([]blob.Key, error) {
+	rows, err := s.queries.JournalBlobKeys(
+		ctx,
+		db.JournalBlobKeysParams{StackID: stackID.String(), UpdateID: update.String()},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("select journal blob keys: %w", err)
 	}
 
 	return journalBlobKeys(rows), nil
+}
+
+// JournalSweepable implements stack.JournalStore. It reports whether the journal is
+// closed or the update no longer runs. A missing update is ErrUpdateNotFound.
+func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
+	state, err := s.queries.JournalState(ctx, db.JournalStateParams{StackID: stackID.String(), ID: update.String()})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, stack.ErrUpdateNotFound
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("read journal state: %w", err)
+	}
+
+	return state.JournalClosed || state.Status != string(stack.StatusRunning), nil
 }
 
 // PutBuiltCheckpoint implements stack.BuiltCheckpointStore. The checkpoint write is the
@@ -289,12 +313,38 @@ func (s *Store) PutBuiltCheckpoint(
 			return writeErr
 		}
 
-		keys, err = removeJournal(ctx, q, stackID, cp.Update)
+		removed, closeErr := closeAndRemove(ctx, q, stackID, cp.Update)
+		keys = removed
 
-		return err
+		return closeErr
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	return keys, nil
+}
+
+// closeAndRemove closes the journal of the update and removes its rows, in the caller's
+// transaction. A journal that is already closed keeps no rows, so a retry of the build
+// deletes nothing and returns no keys.
+func closeAndRemove(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) ([]blob.Key, error) {
+	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: update.String()})
+	if err != nil {
+		return nil, fmt.Errorf("read journal state: %w", err)
+	}
+
+	if state.JournalClosed {
+		return nil, nil
+	}
+
+	keys, err := removeJournal(ctx, q, stackID, update)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := q.CloseJournal(ctx, db.CloseJournalParams{StackID: stackID, ID: update.String()}); err != nil {
+		return nil, fmt.Errorf("close journal: %w", err)
 	}
 
 	return keys, nil

@@ -372,12 +372,21 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 }
 
 // JournalKeys returns the blob keys of the update's batches, unless a fault fires first.
-func (s *Store) JournalKeys(ctx context.Context, ref stack.Ref, update stack.UpdateID) ([]blob.Key, error) {
+func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.UpdateID) ([]blob.Key, error) {
 	if err := s.before(ctx, "JournalKeys"); err != nil {
 		return nil, err
 	}
 
-	return s.inner.JournalKeys(ctx, ref, update)
+	return s.inner.JournalKeys(ctx, stackID, update)
+}
+
+// JournalSweepable reports whether the journal may be swept, unless a fault fires first.
+func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
+	if err := s.before(ctx, "JournalSweepable"); err != nil {
+		return false, err
+	}
+
+	return s.inner.JournalSweepable(ctx, stackID, update)
 }
 
 // PutBuiltCheckpoint writes the built checkpoint and removes the journal, unless a

@@ -36,3 +36,7 @@ FROM update_journal;
 DROP TABLE update_journal;
 
 ALTER TABLE update_journal_new RENAME TO update_journal;
+
+-- The journal closes when the build writes the checkpoint (ADR 43, decision 6.7). A
+-- closed journal refuses every batch, so no batch can land after the build.
+ALTER TABLE updates ADD COLUMN journal_closed INTEGER NOT NULL DEFAULT 0;

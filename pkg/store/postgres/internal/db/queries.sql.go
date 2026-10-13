@@ -207,6 +207,21 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const closeJournal = `-- name: CloseJournal :exec
+UPDATE updates SET journal_closed = TRUE
+WHERE stack_id = $1 AND id = $2
+`
+
+type CloseJournalParams struct {
+	StackID string
+	ID      string
+}
+
+func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
+	_, err := q.db.Exec(ctx, closeJournal, arg.StackID, arg.ID)
+	return err
+}
+
 const countAuditEntries = `-- name: CountAuditEntries :one
 SELECT COUNT(*)
 FROM audit_entries
@@ -1599,6 +1614,28 @@ func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHA
 	var sha256 []byte
 	err := row.Scan(&sha256)
 	return sha256, err
+}
+
+const journalState = `-- name: JournalState :one
+SELECT journal_closed, status FROM updates
+WHERE stack_id = $1 AND id = $2
+`
+
+type JournalStateParams struct {
+	StackID string
+	ID      string
+}
+
+type JournalStateRow struct {
+	JournalClosed bool
+	Status        string
+}
+
+func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (JournalStateRow, error) {
+	row := q.db.QueryRow(ctx, journalState, arg.StackID, arg.ID)
+	var i JournalStateRow
+	err := row.Scan(&i.JournalClosed, &i.Status)
+	return i, err
 }
 
 const lastAuditEntry = `-- name: LastAuditEntry :one

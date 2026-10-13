@@ -157,6 +157,7 @@ type Update struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	JournalClosed    int64
 }
 
 type UpdateEvent struct {

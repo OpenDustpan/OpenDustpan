@@ -94,10 +94,15 @@ type JournalStore interface {
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
 	// Verify function that returns an error is refused with ErrJournalBatch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
-	// JournalKeys returns the blob keys of the batches that the update holds, in
-	// arrival order. A missing stack or update yields an empty list. The sweep
-	// compares this set with the stored blobs.
-	JournalKeys(ctx context.Context, ref Ref, update UpdateID) ([]blob.Key, error)
+	// JournalKeys returns the blob keys of the batches of the update, in arrival
+	// order. It is keyed by the stack ID, as the blob keys are. A missing update
+	// yields an empty list. The sweep compares this set with the stored blobs.
+	JournalKeys(ctx context.Context, stackID ID, update UpdateID) ([]blob.Key, error)
+	// JournalSweepable reports whether the sweep may delete the journal blobs of the
+	// update: its journal is closed, or the update no longer runs. Then no batch can
+	// be added while the sweep runs. It returns ErrUpdateNotFound for a missing update,
+	// so a sweep never deletes for a stack it cannot find.
+	JournalSweepable(ctx context.Context, stackID ID, update UpdateID) (bool, error)
 }
 
 // BuiltCheckpointStore writes the checkpoint of a built update and removes its
@@ -177,9 +182,19 @@ func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error
 
 // SweepUpdate deletes the journal blobs of one update that no row names and that are
 // older than the grace period at now: batches whose row never committed, and blobs
-// that a finished build left behind. The listing covers one update prefix. It returns
-// the first error that it meets, joined with the others.
-func (j *JournalEntries) SweepUpdate(ctx context.Context, ref Ref, stackID ID, update UpdateID, now time.Time) error {
+// that a finished build left behind. It runs only when the store reports the journal
+// sweepable, so no batch can be added during the sweep. The listing covers one update
+// prefix. It returns the first error that it meets, joined with the others.
+func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update UpdateID, now time.Time) error {
+	sweepable, err := j.rows.JournalSweepable(ctx, stackID, update)
+	if err != nil {
+		return fmt.Errorf("check journal sweepable: %w", err)
+	}
+
+	if !sweepable {
+		return nil
+	}
+
 	prefix := "pulumi/" + stackID.String() + "/" + update.String() + "/journal/"
 
 	listed, err := j.blobs.List(ctx, prefix)
@@ -191,7 +206,7 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, ref Ref, stackID ID, u
 		return nil
 	}
 
-	named, err := j.rows.JournalKeys(ctx, ref, update)
+	named, err := j.rows.JournalKeys(ctx, stackID, update)
 	if err != nil {
 		return fmt.Errorf("read journal keys: %w", err)
 	}
