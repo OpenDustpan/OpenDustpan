@@ -139,7 +139,7 @@ install, each with only the access they need, and every change is on record.
 
 | Where   | Item                                                                         | Part                                     | State |
 |---------|------------------------------------------------------------------------------|------------------------------------------|-------|
-| server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections                              | discussing; collections accepted (ADR 51) |
+| server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections                              | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all                                      | discussing; groups, grants and export accepted (ADR 52) |
 | server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | discussing; token life cycle and workload identity accepted (ADR 53, ADR 54) |
 | server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57) |

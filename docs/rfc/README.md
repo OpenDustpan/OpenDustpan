@@ -52,7 +52,7 @@ both together.
 | [1](0001-opentofu-via-the-tfe-compatible-api.md) | OpenTofu support through the TFE-compatible remote API | accepted |
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
-| [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections accepted (ADR 51) |
+| [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft |

@@ -40,6 +40,10 @@ _Avoid_: Catalog, registry, index
 A named set of units in one namespace, from any tool, that a team manages. Each unit is in exactly one collection, and collections do not nest (ADR 51). A collection can be the object of a grant.
 _Avoid_: Group (that is a set of principals), project, folder, system
 
+**Placement rule**:
+A rule of a namespace that matches a Pulumi project and a stack-name pattern. It names the collection of a new stack that the Pulumi CLI makes (ADR 61).
+_Avoid_: Routing rule, assignment rule
+
 **Label**:
 A key and a value on a unit, for views and filters. A label never grants access and never puts a unit into a collection (ADR 51).
 _Avoid_: Tag (except when naming a tool's own field), attribute
