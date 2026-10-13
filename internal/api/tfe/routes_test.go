@@ -226,6 +226,7 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 		ID:        workspace.ID("ws-" + name.String()),
 		Ref:       workspace.Ref{Namespace: ns, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -266,15 +267,15 @@ func (stubWorkspaces) Unlock(_ context.Context, id workspace.ID, _ string) (work
 	return ws, nil
 }
 
-func (stubWorkspaces) ForceUnlock(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
-	ws, err := stubWorkspaceByID(id)
-	if err != nil {
-		return workspace.Workspace{}, err
-	}
+func (rstubWorkspaces stubWorkspaces) ForceUnlock(
+	ctx context.Context,
+	id workspace.ID,
+	by string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	w, err := rstubWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
-	ws.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
-
-	return ws, nil
+	return w, false, err
 }
 
 func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.StateVersion, error) {
@@ -289,7 +290,7 @@ func (stubWorkspaces) Current(_ context.Context, id workspace.ID) (workspace.Sta
 // ignores the lock and echoes the declared values: route tests prove
 // authorization, not the state rules.
 func (stubWorkspaces) BeginState(
-	_ context.Context, id workspace.ID, holder string, in workspace.NewState,
+	_ context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	upload, err := token.New()
 	if err != nil {
@@ -325,6 +326,7 @@ func (stubWorkspaces) BeginState(
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
 			FenceBy:         "",
+			UnlockedWrite:   false,
 		},
 	}, nil
 }
@@ -386,6 +388,7 @@ func stubStateVersion() workspace.StateVersion {
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		UnlockedWrite:   false,
 	}
 }
 
@@ -619,6 +622,17 @@ func (stubWorkspaces) History(
 	return []workspace.StateVersion{stubStateVersion()}, 1, nil
 }
 
+func (stubWorkspaces) forceUnlockUnfenced(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
+	ws, err := stubWorkspaceByID(id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	ws.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+
+	return ws, nil
+}
+
 // stubWorkspaceTime stamps every stub workspace.
 func stubWorkspaceTime() time.Time {
 	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
@@ -660,9 +674,10 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 			Holder:   "",
 			Reason:   "",
 		},
-		ID:       id,
-		Ref:      workspace.Ref{Namespace: ns, Name: parsed},
-		Revision: 1,
+		ID:        id,
+		Ref:       workspace.Ref{Namespace: ns, Name: parsed},
+		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -746,6 +761,7 @@ func (stubNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (
 		Name:            name,
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -1105,6 +1121,10 @@ func routeRequest(t *testing.T, route tfe.Route, raw string) *http.Request {
 	}
 
 	body := ""
+	if route.Method == http.MethodPut && strings.HasSuffix(route.Path, "/override-switches") {
+		body = `{"allow-forced-writes":false,"allow-unlocked-writes":false}`
+	}
+
 	if route.Method == http.MethodPost {
 		body = `{"data":{}}`
 		if strings.HasSuffix(route.Path, "/workspaces") {
@@ -1452,8 +1472,15 @@ func (errorWorkspaces) Unlock(
 	return workspace.Workspace{}, errTestInternal
 }
 
-func (errorWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID, _ string) (workspace.Workspace, error) {
-	return workspace.Workspace{}, errTestInternal
+func (rerrorWorkspaces errorWorkspaces) ForceUnlock(
+	ctx context.Context,
+	id workspace.ID,
+	by string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	w, err := rerrorWorkspaces.forceUnlockUnfenced(ctx, id, by)
+
+	return w, false, err
 }
 
 func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
@@ -1461,7 +1488,7 @@ func (errorWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.Sta
 }
 
 func (errorWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState,
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, errTestInternal
 }
@@ -1516,6 +1543,10 @@ func (errorWorkspaces) History(
 	_ context.Context, _ workspace.ID, _ workspace.Page,
 ) ([]workspace.StateVersion, int, error) {
 	return nil, 0, errTestInternal
+}
+
+func (errorWorkspaces) forceUnlockUnfenced(_ context.Context, _ workspace.ID, _ string) (workspace.Workspace, error) {
+	return workspace.Workspace{}, errTestInternal
 }
 
 // errTestInternal is the internal failure errorWorkspaces answers with.
@@ -2102,4 +2133,9 @@ func TestUnknownPathAnswersJSONAPI404(t *testing.T) {
 	}
 
 	checkJSONAPIError(t, rec, http.StatusNotFound)
+}
+
+// SetOverrides is not used by this fake.
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

@@ -164,6 +164,18 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	return s.inner.GetNamespace(ctx, name)
 }
 
+// SetOverrides replaces the override switches of a namespace, unless a fault
+// fires first.
+func (s *Store) SetOverrides(
+	ctx context.Context, name namespace.Name, ov namespace.Overrides, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "SetOverrides"); err != nil {
+		return err
+	}
+
+	return s.inner.SetOverrides(ctx, name, ov, fence)
+}
+
 // ListNamespaces returns every namespace, unless a fault fires first.
 func (s *Store) ListNamespaces(ctx context.Context) ([]namespace.Namespace, error) {
 	if err := s.before(ctx, "ListNamespaces"); err != nil {
@@ -433,6 +445,15 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	}
 
 	return s.inner.SaveWorkspace(ctx, w, fence)
+}
+
+// ReleaseUnfenced saves a released unit under the forced-write override, unless a fault fires first.
+func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	if err := s.before(ctx, "ReleaseUnfenced"); err != nil {
+		return err
+	}
+
+	return s.inner.ReleaseUnfenced(ctx, w, fence)
 }
 
 // DeleteWorkspace removes the workspace called ref with its state versions

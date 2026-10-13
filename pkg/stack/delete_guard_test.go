@@ -182,6 +182,7 @@ func newDeleteFixture(
 		Name:            "acme",
 		HomeRegion:      "local",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	namespaces, err := namespace.NewService(
@@ -338,6 +339,7 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 		Name:            "acme",
 		HomeRegion:      "local",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	namespaces, err := namespace.NewService(
@@ -660,6 +662,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 		Name:            "acme",
 		HomeRegion:      "local",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	namespaces, err := namespace.NewService(
@@ -940,4 +943,9 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 	if startedPlain.Update.JournalVersion != 0 {
 		t.Fatalf("Start journal version = %d, want 0", startedPlain.Update.JournalVersion)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (*memNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

@@ -1,6 +1,7 @@
 package secret_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -278,4 +279,9 @@ func assertCheckRefused(t *testing.T, keys *memKeys, wrapper secret.Wrapper, sen
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("check: err = %v, want %v", err, sentinel)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (oneNamespace) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

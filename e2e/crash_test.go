@@ -405,12 +405,13 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for crash upload",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for crash upload",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	newSerial := current.Serial + 1
@@ -464,21 +465,23 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 
 	// The lock survived the crash with its holder.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceLocked,
-		Name:   "workspace still locked after kill",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceLocked,
+		Name:      "workspace still locked after kill",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B conflicts after kill",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "lock by B conflicts after kill",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	crashUploadSettled(ctx, t, env, uploadSettledInput{
@@ -491,12 +494,13 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 
 	// The stored version resolves to its blob.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  containsCrashPad,
-		Name:   "download after kill resolves",
-		Method: http.MethodGet,
-		Path:   "/api/v2/state-versions/" + created.Data.ID + "/download",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     containsCrashPad,
+		Name:      "download after kill resolves",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/state-versions/" + created.Data.ID + "/download",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -621,12 +625,13 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 	unlockPath := "/api/v2/workspaces/" + wsID + "/actions/unlock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for crash kill",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for crash kill",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// The lock is held, so the kill lands during it with no sleep and no
@@ -659,28 +664,31 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 	env.NoteStep(t, "lock survived the kill", "the workspace stays locked by "+attrs.LockHolder)
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B conflicts after kill",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "lock by B conflicts after kill",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by B conflicts after kill",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "unlock by B conflicts after kill",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by A after kill",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock by A after kill",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, step("plan after lock kill", nil, "plan", "-input=false", "-no-color"))

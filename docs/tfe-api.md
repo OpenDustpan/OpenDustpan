@@ -19,7 +19,9 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/organizations/{organization}/workspaces | Token, `namespace:read` | Lists the workspaces of one namespace the caller may `unit:read`. Supports the search query. `page[size]` caps at 100. |
 | POST | /api/v2/workspaces/{id}/actions/lock | Token, `unit:write` | Locks one workspace for the caller. Locked workspaces answer 409. |
 | POST | /api/v2/workspaces/{id}/actions/unlock | Token, `unit:write` | Releases the caller lock. Another holder answers 409. |
-| POST | /api/v2/workspaces/{id}/actions/force-unlock | Token, `unit:manage` | Releases the lock whoever holds it. Unlocked workspaces answer 409. |
+| POST | /api/v2/workspaces/{id}/actions/force-unlock | Token, `unit:manage` | Releases the lock whoever holds it. Unlocked workspaces answer 409. A client-encrypted state keeps its lock unless the forced-write override is allowed (`unit:write-forced`, both switches on). |
+| GET | /api/v2/workspaces/{id}/override-switches | Token, `unit:read` | Reads the unit switches `allow-forced-writes` and `allow-unlocked-writes`. Both are off by default. An override needs the namespace switch and the unit switch. |
+| PUT | /api/v2/workspaces/{id}/override-switches | Token, `unit:set-overrides` | Sets the unit switches from a JSON body with the same two booleans. An empty or malformed body answers 400 and changes no switch. |
 | GET | /api/v2/workspaces/{id}/current-state-version | Token, `unit:read` | Reads the current state version. Workspaces without state answer 404. |
 | GET | /api/v2/state-versions | Token, `unit:read` | Lists the finalized state versions of the filtered workspace, newest first. Needs `filter[organization][name]` and `filter[workspace][name]`. Supports `page[number]` and `page[size]`. |
 | GET | /api/v2/state-versions/{state_version_id} | Token, `unit:read` | Reads one finalized state version. Other versions answer 404. |

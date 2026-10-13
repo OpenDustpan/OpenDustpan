@@ -27,6 +27,8 @@ type WorkspaceRow struct {
 	LockedAtMs          int64
 	CreatedAtMs         int64
 	UpdatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
 }
 
 // StateVersionRow is the column representation of a state version. The upload
@@ -51,6 +53,7 @@ type StateVersionRow struct {
 	Sealed            bool
 	RestoredFrom      string
 	FencedBy          string
+	UnlockedWrite     bool
 	SensitiveMarks    []byte
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
@@ -72,6 +75,8 @@ func ToWorkspaceRow(w workspace.Workspace) WorkspaceRow {
 		LockedAtMs:          OptionalMillis(w.Lock.LockedAt),
 		CreatedAtMs:         Millis(w.CreatedAt),
 		UpdatedAtMs:         Millis(w.UpdatedAt),
+		AllowForcedWrites:   w.Overrides.Forced,
+		AllowUnlockedWrites: w.Overrides.Unlocked,
 	}
 }
 
@@ -86,9 +91,10 @@ func FromWorkspaceRow(row WorkspaceRow) workspace.Workspace {
 			Holder:   row.LockHolder,
 			Reason:   row.LockReason,
 		},
-		ID:       workspace.ID(row.ID),
-		Ref:      workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
-		Revision: row.Revision,
+		ID:        workspace.ID(row.ID),
+		Ref:       workspace.Ref{Namespace: namespace.Name(row.Namespace), Name: workspace.Name(row.Name)},
+		Overrides: namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
+		Revision:  row.Revision,
 	}
 }
 
@@ -135,6 +141,7 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		Sealed:            sv.Sealed,
 		RestoredFrom:      sv.RestoredFrom.String(),
 		FencedBy:          sv.FenceBy,
+		UnlockedWrite:     sv.UnlockedWrite,
 		SensitiveMarks:    marks,
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
@@ -243,7 +250,7 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Force:           row.Force,
 		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
-		FenceBy:         row.FencedBy,
-		SensitiveMarks:  marks,
+		FenceBy:         row.FencedBy, UnlockedWrite: row.UnlockedWrite,
+		SensitiveMarks: marks,
 	}, nil
 }

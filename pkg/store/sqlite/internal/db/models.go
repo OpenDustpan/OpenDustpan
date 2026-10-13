@@ -77,10 +77,12 @@ type Inventory struct {
 }
 
 type Namespace struct {
-	Name            string
-	HomeRegion      string
-	FailoverVersion int64
-	CreatedAtMs     int64
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
 }
 
 type Restore struct {
@@ -139,6 +141,7 @@ type StateVersion struct {
 	Sealed            bool
 	SensitiveMarks    []byte
 	FencedBy          string
+	UnlockedWrite     bool
 }
 
 type Update struct {
@@ -199,4 +202,6 @@ type Workspace struct {
 	CurrentStateVersionID string
 	CreatedAtMs           int64
 	UpdatedAtMs           int64
+	AllowForcedWrites     bool
+	AllowUnlockedWrites   bool
 }

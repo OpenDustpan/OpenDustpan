@@ -592,6 +592,7 @@ func testRestoreBumpFences(t *testing.T, newStore RestoreFactory) {
 		Name:            "other",
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if createErr != nil {
 		t.Fatalf("create namespace after bump: %v", createErr)

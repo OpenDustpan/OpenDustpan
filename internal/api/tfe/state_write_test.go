@@ -34,7 +34,7 @@ type writeWorkspaces struct {
 }
 
 func (w writeWorkspaces) BeginState(
-	ctx context.Context, id workspace.ID, holder string, in workspace.NewState,
+	ctx context.Context, id workspace.ID, holder string, in workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return w.begin(ctx, id, holder, in)
 }

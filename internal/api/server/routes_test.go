@@ -128,6 +128,10 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 // GET-by-id route answers 200 in the generic enforcement tests.
 const testBackupID = backup.ID("bkp-test00000000000001")
 
+// testNamespace is the namespace the override switch routes name. The
+// service-backed handler seeds it, so those routes answer 200 when allowed.
+const testNamespace = "routes"
+
 // testRestoreID is the failed restore the handler builders seed, so the
 // GET-by-id route answers 200 in the generic enforcement tests. The seed is
 // failed, never checking or applying, so the POST route answers 202 in
@@ -170,6 +174,10 @@ func newServiceBackedHandler(
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
+	}
+
+	if _, seedErr := namespaces.Create(t.Context(), testNamespace); seedErr != nil {
+		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
@@ -459,8 +467,13 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
+	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
 
 	var body io.Reader = http.NoBody
+	if route.Method == http.MethodPut && strings.HasSuffix(route.Path, "/override-switches") {
+		body = strings.NewReader(`{"allowForcedWrites":false,"allowUnlockedWrites":false}`)
+	}
+
 	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
 		body = strings.NewReader(`{"name":"acme"}`)
 	}
@@ -470,6 +483,9 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, body)
+
+	// The resolvers read the path value, which the mux sets in production.
+	req.SetPathValue("namespace", testNamespace)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

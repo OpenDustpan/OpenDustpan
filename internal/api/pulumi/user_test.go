@@ -202,7 +202,13 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore, name string) {
 		t.Fatalf("parse namespace: %v", err)
 	}
 
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: n, HomeRegion: "test-region", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            n,
+		HomeRegion:      "test-region",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := nsStore.CreateNamespace(t.Context(), ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -434,4 +440,9 @@ func TestMissingSubjectNamespaceNamesTheFix(t *testing.T) {
 	if body := rec.Body.String(); strings.Contains(body, "pulumi org set-default") {
 		t.Fatalf("create body = %s, want no set-default fix", body)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (*memNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

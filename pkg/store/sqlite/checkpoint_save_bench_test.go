@@ -118,7 +118,13 @@ func openBenchSaveStore(b *testing.B) *benchSaveFixture {
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err = s.CreateNamespace(ctx, ns); err != nil {
 		b.Fatalf("create namespace: %v", err)
 	}

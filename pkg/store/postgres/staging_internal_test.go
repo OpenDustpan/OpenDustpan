@@ -92,7 +92,13 @@ func TestStageRestoreRefusesForeignKeys(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}

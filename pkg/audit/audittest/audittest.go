@@ -86,6 +86,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 		Name:            "acme",
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -363,6 +364,7 @@ func testIsolation(t *testing.T, ts TestStore) {
 		Name:            "other",
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), other); err != nil {

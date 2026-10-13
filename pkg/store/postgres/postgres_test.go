@@ -565,7 +565,13 @@ func TestRenameKeepsTags(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -1985,6 +1991,7 @@ func TestPeekKeyReadsOneWrappedKey(t *testing.T) {
 		Name:            namespace.Name("acme"),
 		HomeRegion:      namespace.Region("eu-west"),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, ns); err != nil {
@@ -2212,6 +2219,7 @@ func seedAddedColumns(t *testing.T, s *postgres.Store) addedSeed {
 		Name:            namespace.Name("acme"),
 		HomeRegion:      namespace.Region("eu-west"),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(ctx, ns); err != nil {
@@ -2347,6 +2355,7 @@ func seedAddedStates(
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateWorkspace(ctx, w, ns.Fence()); err != nil {
@@ -2423,6 +2432,7 @@ func declareAddedVersion(
 		RestoredFrom:    from,
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		UnlockedWrite:   false,
 	}
 }
 

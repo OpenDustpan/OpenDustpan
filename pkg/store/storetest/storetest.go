@@ -106,6 +106,7 @@ func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namesp
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

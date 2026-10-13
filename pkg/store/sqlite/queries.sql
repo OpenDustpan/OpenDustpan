@@ -4,14 +4,20 @@ VALUES (?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 WHERE name = ?;
 
 -- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 ORDER BY name;
+
+-- name: SetNamespaceOverrides :execrows
+-- Replaces the override switches of one namespace (ADR 44, decision 6).
+UPDATE namespaces
+SET allow_forced_writes = ?, allow_unlocked_writes = ?
+WHERE name = ?;
 
 -- name: GetFailoverVersion :one
 SELECT failover_version
@@ -308,25 +314,26 @@ ORDER BY tool, name;
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
+    allow_forced_writes, allow_unlocked_writes
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = ? AND name = ?;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = ?;
 
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = ?
 ORDER BY name;
@@ -336,7 +343,8 @@ ORDER BY name;
 -- one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.
 UPDATE workspaces
 SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
-    lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms
+    lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms,
+    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: DeleteWorkspace :execrows
@@ -354,13 +362,13 @@ WHERE workspace_id = ?;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks, fenced_by
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE id = ?;
 
@@ -369,7 +377,7 @@ WHERE id = ?;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -396,7 +404,7 @@ WHERE workspace_id = ? AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -420,7 +428,7 @@ WHERE id = ? AND status = 'pending';
 -- out: a pending row names no content yet.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
 ORDER BY id ASC;
@@ -461,7 +469,7 @@ WHERE id = ?;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by
+       sv.sensitive_marks, sv.fenced_by, unlocked_write
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?;

@@ -58,6 +58,21 @@ const (
 	ActionUnitManage         Action = "unit:manage"
 	ActionUnitEncrypt        Action = "unit:encrypt"
 	ActionUnitDecrypt        Action = "unit:decrypt"
+	// ActionUnitWriteForced allows a forced state write (state push -force)
+	// and an unfenced force-unlock of a client-encrypted state. Its object
+	// is a unit. The unit and namespace override switches must allow it too
+	// (ADR 44, decisions 4 and 6).
+	ActionUnitWriteForced Action = "unit:write-forced"
+	// ActionUnitWriteUnlocked allows a write to an unlocked unit, as with
+	// apply -lock=false. Its object is a unit. The override switches must
+	// allow it too (ADR 44, decisions 5 and 6).
+	ActionUnitWriteUnlocked Action = "unit:write-unlocked"
+	// ActionNamespaceSetOverrides allows changing the override switches of a
+	// namespace. Its object is a namespace.
+	ActionNamespaceSetOverrides Action = "namespace:set-overrides"
+	// ActionUnitSetOverrides allows changing the override switches of a unit.
+	// Its object is a unit.
+	ActionUnitSetOverrides Action = "unit:set-overrides"
 	// ActionUnitReadSecrets allows reading secret values in plain text. Its
 	// object is a unit.
 	ActionUnitReadSecrets Action = "unit:read-secrets"

@@ -200,3 +200,8 @@ func TestMetricsServesFormat(t *testing.T) {
 		}
 	}
 }
+
+// SetOverrides keeps no switch: the stub only names the namespace acme.
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
+}

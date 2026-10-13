@@ -192,6 +192,66 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "a fence whose read of the current version is stale is ErrConcurrentModification",
 			test: testFenceStaleCurrent,
 		},
+		{
+			name: "a new namespace and a new unit allow no override",
+			test: testOverridesDefaultOff,
+		},
+		{
+			name: "a namespace override switch round-trips, and a missing namespace is ErrNotFound",
+			test: testNamespaceOverridesRoundTrip,
+		},
+		{
+			name: "a unit switch with the namespace switch off refuses an unlocked and a forced declare",
+			test: testNamespaceOffUnitOnIsRefused,
+		},
+		{
+			name: "a namespace switch write with a stale fence is ErrFenced and changes nothing",
+			test: testNamespaceOverridesStaleFence,
+		},
+		{
+			name: "a unit override switch round-trips by ID and by name",
+			test: testUnitOverridesRoundTrip,
+		},
+		{
+			name: "an unlocked write finalizes on an unlocked unit and keeps its flag",
+			test: testUnlockedWriteFinalizes,
+		},
+		{
+			name: "a version without the unlocked-write flag does not finalize on an unlocked unit",
+			test: testUnlockedFinalizeNeedsTheFlag,
+		},
+		{
+			name: "an unfenced release is ErrOverrideRefused unless both forced-write switches are on",
+			test: testReleaseUnfencedNeedsForcedSwitches,
+		},
+		{
+			name: "a fenced force-unlock keeps the unit switches on",
+			test: testFenceAndUnlockKeepsSwitches,
+		},
+		{
+			name: "a forced declare is ErrOverrideRefused while the forced-write switches are off",
+			test: testForcedDeclareNeedsSwitches,
+		},
+		{
+			name: "a switch turned off before a forced write finalizes stops the finalize",
+			test: testForcedFinalizeNeedsSwitches,
+		},
+		{
+			name: "a forced write into an empty unit needs no override",
+			test: testForcedIntoEmptyUnitNeedsNoOverride,
+		},
+		{
+			name: "state appearing before a forced finalize needs the override",
+			test: testForcedRaceNeedsSwitches,
+		},
+		{
+			name: "a declare of an unlocked write is ErrOverrideRefused unless both switches are on",
+			test: testUnlockedDeclareNeedsSwitches,
+		},
+		{
+			name: "a switch turned off before an unlocked write finalizes stops the finalize",
+			test: testUnlockedFinalizeNeedsSwitches,
+		},
 	}
 
 	for _, tc := range cases {
@@ -210,6 +270,7 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -238,6 +299,7 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 
@@ -334,6 +396,7 @@ func newPendingVersion(
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		UnlockedWrite:   false,
 	}
 }
 
@@ -387,7 +450,8 @@ func assertWorkspace(t *testing.T, got, want workspace.Workspace) {
 	if got.Ref != want.Ref || got.ID != want.ID || got.Revision != want.Revision ||
 		!got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) ||
 		got.Lock.ID != want.Lock.ID || got.Lock.Holder != want.Lock.Holder ||
-		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) {
+		got.Lock.Reason != want.Lock.Reason || !got.Lock.LockedAt.Equal(want.Lock.LockedAt) ||
+		got.Overrides != want.Overrides {
 		t.Fatalf("workspace = %+v, want %+v", got, want)
 	}
 }
@@ -537,7 +601,13 @@ func testDuplicateWorkspace(t *testing.T, s WorkspaceStore) {
 func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
-	ghost := namespace.Namespace{CreatedAt: now(), Name: "ghost", HomeRegion: "eu-west", FailoverVersion: 1}
+	ghost := namespace.Namespace{
+		CreatedAt:       now(),
+		Name:            "ghost",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	w := newTestWorkspace(ghost, mustWorkspaceName(t, "network"))
 
 	if err := s.CreateWorkspace(t.Context(), w, ghost.Fence()); !errors.Is(err, namespace.ErrNotFound) {
@@ -1077,7 +1147,8 @@ func testFinalizeForce(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ns := newWorkspaceNamespace(t, s, "acme")
-	w := createTestWorkspace(t, s, ns, "network")
+	w := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 	first := finalizedVersion(createPendingVersion(t, s, ns, newPendingVersion(
 		t, locked, locked.Lock.ID, stateInput("l1", "v5", 5),
@@ -1767,7 +1838,8 @@ func testListStateVersionsForcedLowerSerial(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ns := newWorkspaceNamespace(t, s, "acme")
-	w := createTestWorkspace(t, s, ns, "network")
+	w := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 
 	firstPending := createPendingVersion(t, s, ns, newPendingVersion(
@@ -3117,6 +3189,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
+		UnlockedWrite:   false,
 	}
 }
 
