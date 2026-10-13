@@ -438,6 +438,7 @@ func newUpdateFixtureWithCutoff(
 	}
 
 	mem := newMemUpdateStore()
+	blobs := newMemBlob()
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
@@ -445,11 +446,11 @@ func newUpdateFixtureWithCutoff(
 		Events:             mem,
 		Namespaces:         namespaces,
 		Stacks:             stacks,
-		Blobs:              newMemBlob(),
+		Blobs:              blobs,
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
-		Journal:            nil,
+		Journal:            journalWriterFor(t, blobs, mem),
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

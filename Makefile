@@ -10,7 +10,7 @@
 
 .PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke
 
-check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard ## Everything CI checks.
+check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -129,6 +129,9 @@ generate: ## Regenerate sqlc query code after editing queries.sql or migrations,
 	sqlc generate
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -update -count=1
+
+journal-test: ## Journal route tests of the recording build. No CLI download; part of check.
+	go test -tags journalrecording -race -count=1 ./internal/api/pulumi/ ./pkg/dustpan/
 
 journal-guard: ## Refuse a release build that uses the journalrecording tag (ADR 43, work item 9).
 	@if grep -rq journalrecording Dockerfile .github/workflows scripts 2>/dev/null || \
