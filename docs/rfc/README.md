@@ -85,7 +85,7 @@ both together.
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | draft |
 | [36](0036-high-availability.md) | High availability and scale-out | draft |
-| [37](0037-federation.md) | One view over many OpenDustpan installs | draft |
+| [37](0037-federation.md) | Namespace placement and routing | draft |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |
 | [40](0040-inventory-queries.md) | Inventory search, saved views and graph queries | draft |

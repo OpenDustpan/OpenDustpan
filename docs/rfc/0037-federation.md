@@ -1,40 +1,357 @@
 ---
 rfc: 37
-title: One view over many OpenDustpan installs
+title: Namespace placement and routing
 status: draft
 created: 2026-10-10
 ---
 
-# RFC 37. One view over many OpenDustpan installs
+# RFC 37. Namespace placement and routing
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: draft. Opened on 2026-10-10 as "One view over many OpenDustpan
+installs". On 2026-10-13 the project lead asked for a rewrite in place with a
+wider question. RFC 37 was not accepted, so an edit is allowed (ADR 15). This
+RFC replaces the separate multi-tenancy RFC that RFC 68 names. It decides
+nothing.
 
 ## Problem
 
-Upbound's console connects many control planes into one view. Large
-organizations may run several OpenDustpan installs, for example one per
-business unit or per network zone. ADR 4 covers regions of one install only.
+Where does a namespace live, and how does a request reach it?
 
-## First ideas
+Four needs ask this question. This RFC looks for one design that covers all
+four:
 
-- A read-only federated inventory across installs.
-- Or: one install with many namespaces is always the answer, and federation is
-  not needed.
+1. **Regions in one installation.** ADR 4 gives each namespace one home
+   region. Other regions answer 421 today, with "later: forward the
+   request".
+2. **Several installations.** The first scope of this RFC: an organization
+   runs one installation for each business unit or network zone. The owner
+   answered on 2026-10-12: "Yes. We can proxy traffic between instances."
+3. **Hosted multi-tenancy.** A customer is a set of namespaces placed on an
+   installation. RFC 68 holds the lead recommendation: one installation for
+   each customer first.
+4. **Forwarding instead of 421.** A client that reaches the wrong place gets
+   its answer, not an error.
 
-## Open questions
+Facts from the code on `main` (commit `6e3c2d7`):
 
-None. The owner answered the one question. See "Owner direction (2026-10-12)".
+- A namespace row holds its home region. `namespace.ErrNotHome` reports a
+  write outside the home region. Only the Pulumi adapter maps it to 421
+  (`internal/api/pulumi/pulumi.go`). The TFE-compatible adapter and the
+  OpenTofu http adapter have no mapping for it.
+- Replication between regions is not built (ADR 4).
+- Most Pulumi routes name the namespace in the path:
+  `/api/stacks/{namespace}/...`. Three do not: `/api/user`,
+  `/api/user/stacks` and `/api/capabilities`.
+- Many TFE-compatible routes name an ID, not a namespace:
+  `/api/v2/workspaces/{id}`, `/api/v2/state-versions/{state_version_id}`,
+  and the upload routes `/api/v2/state-uploads/{id}/{token}`. The IDs are
+  opaque (`ws-...`, `sv-...`) and say nothing about where the workspace
+  lives.
+- The OpenTofu http backend names the namespace in the path:
+  `/tofu/state/{namespace}/{workspace}`.
+- ADR 47 decision 6: "A namespace moves between installations" for failover
+  or disaster recovery.
+- ADR 48: each instance registers with an advertised address and a lease. The
+  calls between instances use the public API with an administrator action.
 
 ## Owner direction (2026-10-12)
 
 The project owner answered questions in this RFC on 2026-10-12. Words in
-quotation marks are the words of the owner. A question that the owner sent to
-research or to a spike stays in "Open questions", with a mark. This section
-decides nothing. An ADR records a decision (ADR 15).
+quotation marks are the words of the owner. This section decides nothing. An
+ADR records a decision (ADR 15).
 
 - Question "Is there a real need, beyond regions in one install?": "Yes. We can
   proxy traffic between instances."
+
+## Owner direction (2026-10-13)
+
+The owner gave these constraints on 2026-10-13. The product manager relayed
+them, and the project lead passed them to this RFC. They decide nothing in
+this RFC.
+
+1. Routing is in the open-source server, in Go. A Cloudflare Worker or
+   another edge proxy is only an optional fast path, never the only path.
+   No behavior exists only in the hosted service.
+2. Asynchronous geo replication (ADR 4) stays planned for the open-source
+   server. With replication, routing sends requests to the promoted region.
+   Without it, failover is a restore from a backup, and the docs must state
+   the recovery time objective (RTO) and the recovery point objective
+   (RPO).
+3. Do not block RFC 68. The placement settings are inputs to it.
+
+## Terms in this RFC
+
+- **Placement**: where a namespace lives: its home installation and its
+  home region in that installation.
+- **Placement map**: the record that answers "where is namespace X".
+- **Router**: the code in the server that reads the placement map for a
+  request and serves it, forwards it, or refuses it.
+- **Forward**: the router sends the request to the home and streams the
+  answer back to the client.
+- **Front door**: the address that a client uses, for example
+  `https://dustpan.example`. A front door can serve namespaces of more than
+  one installation.
+
+These words are proposals. The ADR that accepts this RFC adds the words that
+stay to `GLOSSARY.md`. "Installation" and "instance" keep their glossary
+meanings.
+
+## Design points
+
+### 1. The placement map
+
+Where does the answer to "where is namespace X" live?
+
+- **Option A. The namespace row.** Each installation knows its own
+  namespaces and their home regions. This is the state today, for regions.
+  It cannot answer for a namespace on another installation.
+- **Option B. A placement map in installation settings (RFC 68).** A list of
+  entries: a namespace name, or a name prefix, and the installation that
+  holds it, with its address. It comes from the static layer, so it fits
+  the "file wins" rule of RFC 68.
+- **Option C. A directory service.** One shared database or service that
+  every installation reads. It scales to many namespaces. It is one more
+  system to run and to keep available, and every installation depends on
+  it.
+- **Option D. DNS.** One host name for each namespace or each customer. The
+  client chooses the installation by its URL. The server needs no map for
+  that case.
+
+**Recommendation: A for regions, B for installations, D for the hosted
+service first.** With one installation for each customer, each customer gets
+a host name, and no request crosses installations. Option B covers an
+organization that runs a few installations behind one front door. Option C
+waits until a real count of namespaces needs it.
+
+**Security.** A placement entry decides where a client token goes. An entry
+that the API can change can send the tokens of a namespace to a host that an
+attacker runs. This is the risk class of the backup target in RFC 68.
+Recommendation: the static layer only, or an API that can choose only an
+address from an allowlist that the static layer sets.
+
+### 2. How a request reaches its home
+
+- **Option A. Refuse with 421.** The state today, in the Pulumi adapter
+  only. The CLIs show an error. The person must find the right URL.
+- **Option B. Redirect (307 or 308).** The Pulumi CLI and OpenTofu are Go
+  programs. The Go HTTP client may drop the `Authorization` header on a
+  redirect to another host, so the request can arrive with no token. A
+  redirect also changes the URL that the CLI keeps for later calls in some
+  cases. `make e2e` must show what each CLI does.
+- **Option C. Forward.** The router streams the request to the home and the
+  answer back, with `net/http/httputil.ReverseProxy` from the standard
+  library. The client sees one host. The owner answer of 2026-10-12 points
+  here.
+
+**Recommendation: option C, with A when the home cannot answer.** When the
+home does not answer, the router answers 503 with `Retry-After` and the
+name of the home. It never serves a write in a place that is not the home,
+because the fence (ADR 4) would refuse it anyway. Every adapter, not only
+the Pulumi adapter, maps `ErrNotHome` to the same answer.
+
+Rules for forwarding:
+
+- **Stream, never buffer.** Large bodies (ADR 45, RFC 58) pass through as a
+  stream. The forwarded bytes count against the bound on bodies in flight.
+- **One hop.** The router adds a header that names itself. A request that
+  already carries it is never forwarded again. Two placement maps that
+  disagree then give an error, not a loop.
+- **Pass the token unchanged.** The router does not sign in the caller. The
+  home authenticates and authorizes the request (ADR 17). See design point 3.
+- **The client address.** The router passes the client IP in a header. The
+  home trusts that header only from an address in its placement map or its
+  instance registry. RFC 22 keeps trusted proxies open. This RFC needs the
+  same answer.
+- **Absolute URLs.** Upload URLs and discovery documents hold the public
+  URL (ADR 27). After a forward, they must hold the front door, not the
+  home, because the client may not reach the home. Open: the router
+  rewrites them, or the home builds them from a forwarded host that it
+  trusts.
+
+### 3. Trust between installations
+
+The home must accept the token of the caller.
+
+- **Regions in one installation.** The identity data is in the same
+  database, or a replica of it. The token works in every region. Nothing
+  more is needed.
+- **Several installations.** Each installation keeps its own tokens in its
+  own database, so a token works only at the installation that made it.
+  Options:
+  - A token works only at its own installation. A front door for several
+    installations then needs the person to hold one token for each. This is
+    simple and safe.
+  - The installations trust one OIDC provider (ADR 55, ADR 54), so a person
+    signs in to each with the same identity. Each installation still makes
+    its own token.
+  - A shared identity store. This makes several installations behave like
+    one, with the costs of option C of design point 1.
+
+  Recommendation: one token for each installation, with one identity
+  provider for sign-in. A later RFC can add more.
+- **Calls between installations** (a forward, a federated read): the router
+  never adds its own rights. It passes the caller's token. Mutual TLS
+  between installations (ADR 54) can prove that the forward came from a
+  known router.
+
+### 4. Routes with no namespace in the path
+
+- `/api/user`, `/api/capabilities`: the front door answers them itself.
+- `/api/user/stacks`: lists the stacks of the caller across namespaces.
+  Behind a front door with several installations, this is a fan-out.
+  Options: the front door asks each installation and merges the lists, or it
+  lists only the local installation. Recommendation: local only first, with
+  a note in the answer when the list is not complete (as ADR 17 says for a
+  list that leaves out objects).
+- TFE-compatible routes with an ID (`ws-...`, `sv-...`) and the upload
+  routes: the router cannot find the namespace from the path. Options:
+  - **An ID that holds a placement hint**, for example an installation code
+    in the ID. A new ID form must still pass the e2e suite, because the
+    OpenTofu `remote` and `cloud` backends keep IDs.
+  - **A lookup table** from ID to namespace on the front door.
+  - **Host names**: each installation has its own host, and the TFE-compatible
+    discovery document (`/.well-known/terraform.json`) gives that host. Then
+    an ID never reaches the wrong installation.
+
+  Recommendation: host names first. They need no change to the IDs. Keep
+  the placement hint as an open question for a shared front door.
+
+### 5. Regions and replication
+
+ADR 4 plans asynchronous replication to standby regions and an explicit
+promotion. With replication:
+
+- A promotion moves the home region and increments the failover version of
+  the namespace. The router reads the new home from the namespace row and
+  forwards there. The fence refuses late writes to the old home.
+- **Reads in a standby region.** Options: serve them from the replica (fast,
+  but they can be stale by the replication lag), or forward them to the
+  home (always current). A tool CLI reads what it just wrote, for example a
+  checkpoint and then the stack. Recommendation: forward every request of a
+  tool API. Allow replica reads only for the console inventory, with the
+  lag shown.
+
+Without replication:
+
+- Failover is a restore from a backup into another installation or region
+  (ADR 30, ADR 38, ADR 42). The placement changes after the restore.
+- **RPO** is the time since the last backup that succeeded. A backup
+  schedule is deferred (ADR 30). Until it exists, the RPO is whatever the
+  operator schedules outside the server.
+- **RTO** is the time to start a server, restore the backup, and change the
+  placement or DNS. It grows with the size of the backup.
+- The docs must state both for each reference architecture of RFC 68
+  (owner decision 5 there). This RFC gives no numbers. Proposal: the
+  reference architecture tests in CI measure a restore and publish the
+  time, so the docs quote a measured RTO and the backup interval as the
+  RPO.
+
+### 6. Moving a namespace
+
+ADR 47 decision 6 lets a namespace move between installations. A move
+changes its placement. Proposed steps, as a first idea:
+
+1. The source refuses new work in the namespace, as maintenance mode does
+   for the installation (ADR 38), but for one namespace.
+2. The source exports the namespace: rows, blobs and data keys.
+3. The target imports it, with the same key-encryption key or a rewrap
+   (ADR 23).
+4. The placement changes to the target. The source increments the failover
+   version of the namespace, so late writes fail at the fence.
+5. The router forwards to the target. The source keeps the namespace for a
+   retention period, then deletes it.
+
+Open: a backup of one namespace is out of scope in ADR 30. A move needs it.
+RFC 66 covers moving units, not namespaces. A move of a namespace keeps its
+units, so the questions of RFC 66 (grants, profiles) do not apply inside one
+namespace. They still apply to principals and groups of the installation,
+which do not move with the namespace (ADR 52, groups are installation-wide).
+
+### 7. Hosted multi-tenancy
+
+A customer is a set of namespaces placed on an installation.
+
+- **Option A. One installation for each customer** (the lead recommendation
+  in RFC 68). Placement is DNS: one host name for each customer. No request
+  crosses installations. State, secrets and the key-encryption key stay
+  apart for each customer. The router of this RFC is not needed for it.
+- **Option B. A shared installation with a tenant layer above namespaces.**
+  The placement map holds the tenant of each namespace. Namespace names
+  must be unique across all customers behind one front door, or the front
+  door needs the tenant in the URL. RFC 68 lists what its settings must not
+  block for this case.
+- **Option C. Shared installations, with customers placed on them.** A
+  middle way: a few customers on each installation, and the router of this
+  RFC behind one front door. A customer can move to its own installation
+  with design point 6.
+
+Recommendation: A first, as RFC 68 says. This RFC keeps B and C possible:
+the placement map has a tenant field that is empty now, and the router
+already forwards by namespace.
+
+### 8. A read view over many installations
+
+The first idea of this RFC was a read-only inventory across installations.
+With a placement map and forwarding, this is a fan-out of inventory reads
+(ADR 13) to each installation in the map, with the caller's token on each.
+Recommendation: later, after design point 4 decides the fan-out of
+`/api/user/stacks`. The same code serves both.
+
+### 9. Where the code goes
+
+A proposal, so that the ports have owners:
+
+- `pkg/placement`: a tool-neutral port. `Lookup(namespace)` answers the home
+  installation, the home region and the address. Adapters: the namespace
+  store (regions), the placement map from RFC 68 settings
+  (installations), and later a directory. A conformance suite in
+  `placementtest`.
+- The router is middleware in `pkg/dustpan`, before each tool adapter. Each
+  adapter gives a resolver from a request to a namespace, as the route table
+  already resolves an object for authorization (ADR 17). Adapters never
+  call each other (ADR 12). The router is shared core, not an adapter.
+- An installation route, for example `GET /api/server/placements/{namespace}`,
+  with its own action, answers the placement. An optional edge proxy (owner
+  constraint 1) reads this route and caches it. The edge proxy is a fast
+  path only. The Go router serves every request that the edge does not.
+
+### 10. Inputs to RFC 68
+
+Owner constraint 3: the placement settings are inputs to RFC 68. These are
+proposals for its inventory:
+
+| Setting | Scope | Layer | Note |
+| --- | --- | --- | --- |
+| Installation name | installation | static | Names this installation in the placement map and in forward headers. |
+| Placement map | installation | static, or API with an allowlist from the static layer | See the security note of design point 1. |
+| Forwarding on or off | installation | API, live | Off means 421 for every adapter, as today for the Pulumi adapter. A default, not a gate: every build has it. |
+| Forward timeout | installation | API, live | How long the router waits for the home before 503. |
+| Trusted router addresses | installation | static | Which addresses may set the client IP header. Same class as trusted proxies (RFC 22). |
+| Region | instance | static (bootstrap) | Already in RFC 68. |
+| Advertised address | instance | static | Already in RFC 68 (ADR 48). |
+
+Each row passes the "No setting gates a feature" check of RFC 68: none reads
+a license, an edition or a hosted flag, and each exists in every build.
+
+## Open questions
+
+1. Which status does every adapter answer when the home cannot answer: 503
+   with `Retry-After`, or 421 as the Pulumi adapter does today?
+2. What does each CLI do with a 307 or 308 to another host? (`make e2e`)
+3. How do absolute URLs (upload URLs, discovery) hold the front door after a
+   forward?
+4. Does a shared front door need an installation code in the IDs, or are
+   host names enough?
+5. Does `/api/user/stacks` fan out across installations, or list only the
+   local one?
+6. Can the API change the placement map, with an allowlist, or only the
+   static layer?
+7. What are the measured RTO and RPO of each reference architecture without
+   replication?
+8. How does a backup of one namespace work, for a move (ADR 30 keeps it out
+   of scope)?
+9. Do replica reads serve the console inventory, and how does the console
+   show the lag?
 
 ## Outcome
 
