@@ -117,3 +117,4 @@ both together.
 | [66](0066-moving-units-between-namespaces-and-installations.md) | Tooling to move units between namespaces and installations | draft |
 | [67](0067-spend-and-cost-tool-integration.md) | Integration with spend and cost tools (FinOps) | draft |
 | [68](0068-installation-settings.md) | Installation settings: inventory, settings through the API, and live reload | draft |
+| [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
