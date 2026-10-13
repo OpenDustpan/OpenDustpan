@@ -1,6 +1,7 @@
 package workspace_test
 
 import (
+	"context"
 	"crypto/md5" //nolint:gosec // The test checks the MD5 the service records, which the protocol names.
 	"encoding/hex"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -469,6 +471,211 @@ func TestRefusedWritesDoNotFillThePendingCap(t *testing.T) {
 		strings.NewReader(streamDoc("lin-p", 1)))
 	if err != nil {
 		t.Fatalf("valid write after eleven refusals: %v", err)
+	}
+
+	assertNoOrphanBlobs(t, f)
+}
+
+// ctxStates fails the writes of a state store whose context is done, as a SQL
+// store does when the request that made the call has gone away.
+type ctxStates struct {
+	workspace.StateStore
+}
+
+// CreateStateVersion fails when ctx is done.
+func (c ctxStates) CreateStateVersion(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return c.StateStore.CreateStateVersion(
+		ctx,
+		sv,
+		fence,
+		maxPending,
+	) //nolint:wrapcheck // The port error passes through unchanged.
+}
+
+// DiscardStateVersion fails when ctx is done.
+func (c ctxStates) DiscardStateVersion(ctx context.Context, id workspace.StateVersionID, fence namespace.Fence) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return c.StateStore.DiscardStateVersion(
+		ctx,
+		id,
+		fence,
+	) //nolint:wrapcheck // The port error passes through unchanged.
+}
+
+// cancelingBody sends the start of a state, then cancels the request and fails,
+// as a client that disconnects mid-body does.
+type cancelingBody struct {
+	cancel context.CancelFunc
+	sent   bool
+}
+
+// Read sends the start of a state on the first call, and then the cancellation.
+func (b *cancelingBody) Read(p []byte) (int, error) {
+	if b.sent {
+		return 0, context.Canceled
+	}
+
+	b.sent = true
+	b.cancel()
+
+	return copy(p, `{"serial":1,"lineage":"l"`), nil
+}
+
+// TestCancelledBodyLeavesNoPendingRow proves a body cut off by the client
+// removes its placeholder row and its blob. The cleanup outlives the request,
+// so ten cut-off bodies do not fill the pending cap (ADR 49, decision 7).
+func TestCancelledBodyLeavesNoPendingRow(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctxService := ctxAwareService(t, f)
+	in := workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""}
+
+	for range 10 {
+		ctx, cancel := context.WithCancel(t.Context())
+
+		_, err := ctxService.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil),
+			&cancelingBody{cancel: cancel, sent: false})
+		cancel()
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cut-off body: err = %v, want context.Canceled", err)
+		}
+	}
+
+	if pending := pendingRows(f); pending != 0 {
+		t.Fatalf("%d pending rows after ten cut-off bodies, want none", pending)
+	}
+
+	assertNoOrphanBlobs(t, f)
+
+	if _, err := f.svc.WriteState(t.Context(), f.ws.ID, in, streamAuthority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-c", 1))); err != nil {
+		t.Fatalf("valid write after ten cut-off bodies: %v", err)
+	}
+}
+
+// ctxAwareService returns a service over the fixture stores whose state writes
+// fail once their context is done.
+func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
+	t.Helper()
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             ctxStates{StateStore: f.store},
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
+}
+
+// pendingRows counts the pending state versions of the fixture store.
+func pendingRows(f fixture) int {
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+
+	count := 0
+
+	for id := range f.store.versions {
+		if f.store.versions[id].Status == workspace.StatusPending {
+			count++
+		}
+	}
+
+	return count
+}
+
+// TestForceUnlockRefusesAnotherHolderOfTheSameLockID proves a force-unlock that
+// names a lock by ID and holder releases nothing when the lock ID repeats under
+// another holder. The release frees carol's lock only if the holder is ignored.
+func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	admin := namespace.Overrides{Forced: true, Unlocked: false}
+
+	if _, err := f.svc.LockWithID(ctx, f.ws.ID, "bob", "apply", "lock-x"); err != nil {
+		t.Fatalf("lock as bob: %v", err)
+	}
+
+	if _, _, err := f.svc.ForceUnlockLock(
+		ctx,
+		f.ws.ID,
+		workspace.Lock{ID: "lock-x", Holder: "bob"},
+		"admin",
+		admin,
+		nil,
+	); err != nil {
+		t.Fatalf("force-unlock of bob's lock as seen: %v", err)
+	}
+
+	if _, err := f.svc.LockWithID(ctx, f.ws.ID, "carol", "apply", "lock-x"); err != nil {
+		t.Fatalf("lock as carol with the same ID: %v", err)
+	}
+
+	_, _, err := f.svc.ForceUnlockLock(ctx, f.ws.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin", admin, nil)
+	if !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
+	}
+
+	stored, err := f.store.GetWorkspaceByID(ctx, f.ws.ID)
+	if err != nil || stored.Lock.Holder != "carol" {
+		t.Fatalf("after the stale force-unlock: holder %q, err %v; want carol still holding", stored.Lock.Holder, err)
+	}
+}
+
+// TestUploadRefusesABodyThatIsNotAState proves a TFE upload whose body the reader
+// refuses is refused and stores nothing: the state stays unreadable by no one,
+// and no version becomes current (ADR 49, decision 8).
+func TestUploadRefusesABodyThatIsNotAState(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	body := `{"serial":1,"lineage":"l"} junk`
+
+	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
+		Lineage: "l",
+		MD5:     md5Hex(body),
+		Outputs: nil,
+		Serial:  1,
+		Force:   false,
+	}, authority(noOverrides(), nil))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	_, err = f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(body))
+	if !errors.Is(err, workspace.ErrInvalidState) {
+		t.Fatalf("upload with trailing data: err = %v, want ErrInvalidState", err)
+	}
+
+	if _, err := f.svc.Current(ctx, f.ws.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("refused upload made a version current: %v", err)
 	}
 
 	assertNoOrphanBlobs(t, f)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // streamedMeta holds what the domain reads from a state while it streams in:
@@ -32,7 +33,8 @@ const maxLineageBytes = 1024
 const maxSerialBytes = 32
 
 // readStateMeta reads the top-level members of the state in r. It checks the
-// JSON grammar of the whole document as it goes, and it buffers only the values
+// JSON grammar of the whole document, and it refuses data after the closing
+// brace, so the state it accepts is the state OpenTofu reads. It buffers only the values
 // the domain keeps, each within a limit. A skipped value is consumed byte by byte
 // and never buffered, so a large string costs no memory. An outputs value above
 // maxOutputsBytes fails with ErrTooLarge. A document that is not a JSON object
@@ -56,12 +58,23 @@ func readStateMeta(r io.Reader) (streamedMeta, error) {
 		return streamedMeta{}, err
 	}
 
+	if err := s.end(); err != nil {
+		return streamedMeta{}, err
+	}
+
 	return meta, nil
 }
 
 // topObject walks the members of the top-level object, and keeps the members the
 // domain reads.
 func (s *jsonScanner) topObject(meta *streamedMeta) error {
+	// The top-level object is one level of nesting, as in encoding/json.
+	if err := s.enter(); err != nil {
+		return err
+	}
+
+	defer func() { s.depth-- }()
+
 	if err := s.expect('{'); err != nil {
 		return err
 	}
@@ -78,10 +91,16 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 		return err
 	}
 
+	seen := make(map[string]bool, len(topLevelKeys))
+
 	for {
 		name, err := s.memberName()
 		if err != nil {
 			return err
+		}
+
+		if keyErr := checkTopLevelKey(name, seen); keyErr != nil {
+			return keyErr
 		}
 
 		if topErr := s.topMember(name, meta); topErr != nil {
@@ -93,6 +112,34 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 			return sepErr
 		}
 	}
+}
+
+// topLevelKeys are the top-level members the domain reads. encoding/json (v1)
+// matches the struct fields of a state case-insensitively, so OpenTofu reads a
+// key that folds to one of these as that member (ADR 49, decision 8).
+var topLevelKeys = [...]string{"serial", "lineage", "outputs", encryptedStateKey}
+
+// checkTopLevelKey refuses a key that folds to one of topLevelKeys without being
+// it, and a second key that is one of them. Either would make this reader and
+// OpenTofu disagree about the metadata of the state.
+func checkTopLevelKey(name string, seen map[string]bool) error {
+	for _, key := range topLevelKeys {
+		if name == key {
+			if seen[key] {
+				return syntaxError("duplicate member " + key)
+			}
+
+			seen[key] = true
+
+			return nil
+		}
+
+		if strings.EqualFold(name, key) {
+			return syntaxError("member " + name + " folds to " + key)
+		}
+	}
+
+	return nil
 }
 
 // memberName reads one member name, bounded by maxMemberNameBytes.

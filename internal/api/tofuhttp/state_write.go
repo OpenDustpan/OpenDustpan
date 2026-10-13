@@ -123,9 +123,7 @@ func contentMD5(r *http.Request) (string, error) {
 // lock: a force-unlock (ADR 49, decision 6). It needs unit:write-forced. The
 // unlock writes the fence version of a unit with state; a client-encrypted state
 // unlocks unfenced only while the forced-write switches are on (ADR 44).
-func (h *Handler) forceUnlockWorkspace(
-	w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace, lockID string,
-) {
+func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace) {
 	ctx := r.Context()
 
 	obj, err := unitObject(c.ref)
@@ -156,7 +154,9 @@ func (h *Handler) forceUnlockWorkspace(
 		return h.appendOverrideAudit(r, c.principal, obj, identity.ActionUnitWriteForced, "")
 	}
 
-	_, _, err = h.ws.ForceUnlockLock(ctx, ws.ID, lockID, c.principal.Subject, allow, record)
+	// The lock the caller saw is the one that must still be held: its ID and its
+	// holder come from the same read (ADR 49, decision 6).
+	_, _, err = h.ws.ForceUnlockLock(ctx, ws.ID, ws.Lock, c.principal.Subject, allow, record)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
 		h.writeHeldOrConflict(ctx, w, c, err)

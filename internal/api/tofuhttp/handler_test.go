@@ -41,6 +41,8 @@ type fakeUnits struct {
 	exists    bool
 	hideOnce  bool
 	createErr error
+	// writeErr, when set, is what WriteState answers.
+	writeErr error
 }
 
 // newFakeUnits returns a service whose unit exists, unlocked, with both switches on.
@@ -62,6 +64,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 		exists:    exists,
 		hideOnce:  false,
 		createErr: nil,
+		writeErr:  nil,
 	}
 }
 
@@ -143,7 +146,7 @@ func (f *fakeUnits) UnlockLock(_ context.Context, _ workspace.ID, lockID, holder
 //
 //nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
 func (f *fakeUnits) ForceUnlockLock(
-	_ context.Context, _ workspace.ID, lockID, _ string, _ namespace.Overrides, _ func() error,
+	_ context.Context, _ workspace.ID, expect workspace.Lock, _ string, _ namespace.Overrides, _ func() error,
 ) (workspace.Workspace, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -151,7 +154,7 @@ func (f *fakeUnits) ForceUnlockLock(
 	switch {
 	case !f.ws.Lock.Locked():
 		return workspace.Workspace{}, false, workspace.ErrNotLocked
-	case lockID != "" && f.ws.Lock.ID != lockID:
+	case expect.ID != "" && f.ws.Lock.ID != expect.ID:
 		return workspace.Workspace{}, false, workspace.ErrLockMismatch
 	}
 
@@ -180,6 +183,10 @@ func (f *fakeUnits) WriteState(
 	defer f.mu.Unlock()
 
 	var none workspace.StateVersion
+
+	if f.writeErr != nil {
+		return none, f.writeErr
+	}
 
 	switch {
 	case in.LockID == "" && f.ws.Lock.Locked():
@@ -512,5 +519,81 @@ func TestStatusMapping(t *testing.T) {
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST with a malformed Content-MD5: status %d, want 400", rec.Code)
+	}
+}
+
+// TestPostCreatesTheUnitOnFirstWrite proves a POST to a unit that does not exist
+// creates it for a caller with unit:manage, and writes the state (ADR 49,
+// decision 5).
+func TestPostCreatesTheUnitOnFirstWrite(t *testing.T) {
+	t.Parallel()
+
+	units := newFakeUnits(false)
+	h := newTestHandler(t, units)
+
+	state := `{"serial":1,"lineage":"l","resources":[]}`
+
+	if rec := do(h, http.MethodPost, unitPath, state, bearer(adminToken)); rec.Code != http.StatusOK {
+		t.Fatalf("POST that creates the unit as an admin: status %d, want 200", rec.Code)
+	}
+
+	if !units.exists {
+		t.Fatal("the unit was not created by the POST")
+	}
+}
+
+// TestPostConflictBodyNamesTheLock proves a POST that names another lock answers
+// 409 with the lock info of the current lock.
+func TestPostConflictBodyNamesTheLock(t *testing.T) {
+	t.Parallel()
+
+	h := newTestHandler(t, newFakeUnits(true))
+
+	if rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+		t.Fatalf("LOCK: status %d, want 200", rec.Code)
+	}
+
+	rec := do(h, http.MethodPost, unitPath+"?ID=other", `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("POST with another lock ID: status %d, want 409", rec.Code)
+	}
+
+	assertLockBody(t, rec.Body.Bytes(), lockOne, "alice")
+}
+
+// TestWriteRefusalStatuses proves the status of each refusal of a POST: the
+// oversized state, the full pending cap, the override that is off, and a unit
+// that already exists.
+func TestWriteRefusalStatuses(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		err  error
+		name string
+		want int
+	}{
+		{
+			name: "too large",
+			err:  fmt.Errorf("%w: outputs of more than 16777216 bytes", workspace.ErrTooLarge),
+			want: http.StatusRequestEntityTooLarge,
+		},
+		{name: "too many pending", err: workspace.ErrTooManyPending, want: http.StatusTooManyRequests},
+		{name: "override refused", err: workspace.ErrOverrideRefused, want: http.StatusForbidden},
+		{name: "already exists", err: workspace.ErrAlreadyExists, want: http.StatusConflict},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			units := newFakeUnits(true)
+			units.writeErr = tc.err
+			h := newTestHandler(t, units)
+
+			rec := do(h, http.MethodPost, unitPath, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d; body %q", rec.Code, tc.want, rec.Body.String())
+			}
+		})
 	}
 }

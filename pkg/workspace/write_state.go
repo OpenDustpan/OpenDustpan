@@ -16,6 +16,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// refuseTimeout bounds the cleanup of a refused streamed write.
+const refuseTimeout = 30 * time.Second
+
 // placeholderSerial marks the serial of a streamed version before its body
 // is read. Readers never see it: a placeholder is pending until it finalizes.
 const placeholderSerial int64 = -1
@@ -229,11 +232,16 @@ func (s *Service) finalizeStream(ctx context.Context, sw *streamWrite, sv StateV
 // sweep finds the blob through it. A refused placeholder left pending would fill
 // the pending cap for the lock holder (ADR 49, decision 7).
 func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error) error {
-	if delErr := s.deleteBlobRetried(ctx, sw.key); delErr != nil {
+	// The cleanup outlives the request: a client that disconnects cancels ctx,
+	// and the delete and the discard must still run. The timeout bounds them.
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refuseTimeout)
+	defer cancel()
+
+	if delErr := s.deleteBlobRetried(cleanCtx, sw.key); delErr != nil {
 		return errors.Join(cause, fmt.Errorf("delete refused blob of %s: %w", sw.version.ID, delErr))
 	}
 
-	if discardErr := s.states.DiscardStateVersion(ctx, sw.version.ID, sw.fence); discardErr != nil {
+	if discardErr := s.states.DiscardStateVersion(cleanCtx, sw.version.ID, sw.fence); discardErr != nil {
 		return errors.Join(cause, fmt.Errorf("discard refused state version %s: %w", sw.version.ID, discardErr))
 	}
 

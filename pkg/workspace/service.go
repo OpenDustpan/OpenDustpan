@@ -405,7 +405,7 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 // decision 6).
 func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-		if lockErr := checkLockID(w, lockID); lockErr != nil {
+		if lockErr := checkLockID(w, Lock{ID: lockID}); lockErr != nil {
 			return Workspace{}, lockErr
 		}
 
@@ -413,10 +413,16 @@ func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) 
 	})
 }
 
-// checkLockID refuses a lock ID other than the current lock. An empty lockID
-// accepts any lock.
-func checkLockID(w Workspace, lockID string) error {
-	if lockID != "" && w.Lock.ID != lockID {
+// checkLockID refuses a lock other than the expected one. Only the ID and, when
+// it is set, the holder of expect are compared. An empty ID accepts any lock. A
+// lock ID the client chose can repeat after a force-unlock, so the holder is part
+// of the check, as in the finalize (ADR 49, decision 6).
+func checkLockID(w Workspace, expect Lock) error {
+	if expect.ID == "" {
+		return nil
+	}
+
+	if w.Lock.ID != expect.ID || (expect.Holder != "" && w.Lock.Holder != expect.Holder) {
 		return fmt.Errorf("%w: unit %s", ErrLockMismatch, w.Ref)
 	}
 
@@ -438,17 +444,18 @@ func checkLockID(w Workspace, lockID string) error {
 func (s *Service) ForceUnlock(
 	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {
-	return s.ForceUnlockLock(ctx, id, "", by, allow, record)
+	return s.ForceUnlockLock(ctx, id, Lock{}, by, allow, record)
 }
 
-// ForceUnlockLock is ForceUnlock for the lock lockID. An empty lockID releases
-// whatever lock the unit holds. A different lock is refused with ErrLockMismatch,
-// before the fence and in the same revision the release saves, so a lock taken
-// after the caller read the unit is not released.
+// ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
+// releases whatever lock the unit holds. A different lock, or the same ID under
+// another holder, is refused with ErrLockMismatch. The check runs before the
+// fence and in the revision the release saves, so a lock taken after the caller
+// read the unit is not released.
 //
-//nolint:revive // The lock ID is one argument more than the port takes, and the call names each part.
+//nolint:revive // The expected lock is one argument beyond the port's other parameters, named at the call.
 func (s *Service) ForceUnlockLock(
-	ctx context.Context, id ID, lockID, by string, allow namespace.Overrides, record func() error,
+	ctx context.Context, id ID, expect Lock, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
@@ -459,7 +466,7 @@ func (s *Service) ForceUnlockLock(
 		return Workspace{}, false, ErrNotLocked
 	}
 
-	if lockErr := checkLockID(w, lockID); lockErr != nil {
+	if lockErr := checkLockID(w, expect); lockErr != nil {
 		return Workspace{}, false, lockErr
 	}
 
@@ -469,7 +476,7 @@ func (s *Service) ForceUnlockLock(
 	case errors.Is(err, ErrNoState):
 		// A unit without state is a plain release: no override is used.
 		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-			if lockErr := checkLockID(w, lockID); lockErr != nil {
+			if lockErr := checkLockID(w, expect); lockErr != nil {
 				return Workspace{}, lockErr
 			}
 
@@ -2114,18 +2121,11 @@ func (s *Service) storeUploadBody(
 		return uploadedBody{}, fmt.Errorf("upload state %s: %w", sv.ID, storeErr)
 	}
 
-	// A body that is not a state object stores no outputs; the upload still
-	// stores the bytes the client sent, as before.
+	// A body the reader refuses is refused here, not stored: a state that OpenTofu
+	// cannot read must not become current (ADR 49, decision 8).
 	meta, metaErr := stream.finish(nil)
 	if metaErr != nil {
-		meta = streamedMeta{
-			Lineage:         "",
-			Outputs:         nil,
-			Serial:          0,
-			HasSerial:       false,
-			HasLineage:      false,
-			ClientEncrypted: false,
-		}
+		return uploadedBody{}, errors.Join(metaErr, s.blobs.Delete(ctx, key))
 	}
 
 	outputs, err := s.streamedOutputs(ctx, w, meta)

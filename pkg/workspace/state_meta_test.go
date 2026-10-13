@@ -1,6 +1,7 @@
 package workspace //nolint:testpackage // The meta reader is unexported; its test drives it directly.
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"runtime"
@@ -217,4 +218,90 @@ func TestReadStateMetaBoundsAllocations(t *testing.T) {
 			}
 		},
 	)
+}
+
+// v1State is the view of a state that encoding/json (v1) reads. OpenTofu reads a
+// state this way, so the reader must refuse or agree with it.
+type v1State struct {
+	Serial    int64           `json:"serial"`
+	Lineage   string          `json:"lineage"`
+	Outputs   json.RawMessage `json:"outputs"`
+	Encrypted json.RawMessage `json:"encrypted_data"`
+}
+
+// TestReadStateMetaAgreesWithEncodingJSON runs documents through encoding/json
+// (v1) and the reader. Each document is refused by the reader, or read to the
+// same serial, lineage, outputs and encryption marker that v1 reads. A key that
+// v1 folds to a member, a repeated member and trailing data are refused.
+func TestReadStateMetaAgreesWithEncodingJSON(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		doc    string
+		refuse bool
+	}{
+		{name: "plain", doc: `{"serial":1,"lineage":"a","outputs":{"n":1}}`, refuse: false},
+		{name: "upper-case key folds to serial", doc: `{"serial":1,"lineage":"a","SERIAL":7}`, refuse: true},
+		{name: "long s folds to serial", doc: `{"ſerial":7,"serial":1,"lineage":"a"}`, refuse: true},
+		{name: "repeated outputs", doc: `{"outputs":{"n":1},"serial":1,"lineage":"a","outputs":null}`, refuse: true},
+		{name: "repeated serial", doc: `{"serial":1,"serial":7,"lineage":"a"}`, refuse: true},
+		{name: "folded encryption marker", doc: `{"serial":1,"lineage":"a","ENCRYPTED_DATA":"c"}`, refuse: true},
+		{name: "trailing object", doc: `{"serial":1,"lineage":"a"}{"serial":99}`, refuse: true},
+		{name: "trailing junk", doc: `{"serial":1,"lineage":"a"} junk`, refuse: true},
+		{name: "trailing whitespace", doc: "{\"serial\":1,\"lineage\":\"a\"}\n \t", refuse: false},
+		{name: "unrelated key is skipped", doc: `{"resources":[],"serial":2,"lineage":"b"}`, refuse: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			meta, readErr := readStateMeta(strings.NewReader(tc.doc))
+			if tc.refuse {
+				if readErr == nil {
+					t.Fatalf("the reader accepted %s, want a refusal", tc.doc)
+				}
+
+				return
+			}
+
+			if readErr != nil {
+				t.Fatalf("the reader refused %s: %v", tc.doc, readErr)
+			}
+
+			var want v1State
+			if err := json.Unmarshal([]byte(tc.doc), &want); err != nil {
+				t.Fatalf("encoding/json refused a document the reader accepted: %v", err)
+			}
+
+			if meta.Serial != want.Serial || meta.Lineage != want.Lineage {
+				t.Fatalf("reader reads serial %d lineage %q, encoding/json reads %d %q",
+					meta.Serial, meta.Lineage, want.Serial, want.Lineage)
+			}
+
+			if meta.ClientEncrypted != (want.Encrypted != nil) {
+				t.Fatalf("client-encryption marker differs from encoding/json")
+			}
+		})
+	}
+}
+
+// TestReadStateMetaDepthMatchesEncodingJSON proves the depth limit is the one of
+// encoding/json: a state nested to 9990 levels is read, and one nested to 10000 is
+// refused. No state that OpenTofu accepts is refused for depth.
+func TestReadStateMetaDepthMatchesEncodingJSON(t *testing.T) {
+	t.Parallel()
+
+	nested := func(depth int) string {
+		return `{"x":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `,"serial":1,"lineage":"l"}`
+	}
+
+	if _, err := readStateMeta(strings.NewReader(nested(9990))); err != nil {
+		t.Fatalf("nesting of 9990 levels refused: %v", err)
+	}
+
+	if _, err := readStateMeta(strings.NewReader(nested(10000))); err == nil {
+		t.Fatal("nesting of 10000 levels accepted, want a refusal")
+	}
 }

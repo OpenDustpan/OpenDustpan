@@ -11,9 +11,10 @@ import (
 // holds a whole state: it passes one byte at a time through this buffer.
 const scanBufferBytes = 64 << 10
 
-// maxScanDepth bounds how deeply a state document may nest. A deeper document is
-// refused rather than walked.
-const maxScanDepth = 512
+// maxScanDepth bounds how deeply a state document may nest. It is the depth limit
+// of encoding/json, so no state that OpenTofu accepts is refused for depth. A
+// deeper document is refused rather than walked.
+const maxScanDepth = 10000
 
 // minCaptureBytes is the first size of a kept value's buffer.
 const minCaptureBytes = 4 << 10
@@ -58,6 +59,25 @@ func (c *capture) add(b byte) error {
 	c.buf = append(c.buf, b)
 
 	return nil
+}
+
+// end checks that only whitespace follows the state object up to the end of the
+// document. Trailing data would make OpenTofu refuse the state on every read.
+func (s *jsonScanner) end() error {
+	for {
+		b, err := s.r.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+
+		if err != nil {
+			return readFailure(err)
+		}
+
+		if b != ' ' && b != '\t' && b != '\n' && b != '\r' {
+			return syntaxError("data after the state object")
+		}
+	}
 }
 
 // newJSONScanner returns a scanner over r.

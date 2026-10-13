@@ -179,8 +179,8 @@ func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Worksp
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current
 // lock. An UNLOCK that names another lock, or a lock held by another principal,
-// answers 409 with the current lock info. Forced unlocks are served by
-// step.
+// answers 409 with the current lock info. A principal that does not hold the lock
+// makes a force-unlock, which forceUnlockWorkspace serves.
 func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call) {
 	ctx := r.Context()
 
@@ -205,7 +205,7 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 	}
 
 	if ws.Lock.Holder != c.principal.Subject {
-		h.forceUnlockWorkspace(w, r, c, ws, info.ID)
+		h.forceUnlockWorkspace(w, r, c, ws)
 
 		return
 	}

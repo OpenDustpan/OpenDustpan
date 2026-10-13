@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -58,6 +59,11 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testFinalizeSameLockIDOtherHolder,
 		},
 		{name: "discard removes a pending version and keeps a finalized one", test: testDiscardStateVersion},
+		{name: "discard under a stale fence is ErrFenced and keeps the row", test: testDiscardStaleFence},
+		{
+			name: "the conditional unlock and force-unlock check the lock ID and the holder",
+			test: testConditionalUnlock,
+		},
 		{name: "a placeholder pending version is never current", test: testPlaceholderNeverCurrent},
 		{
 			name: "a finalize under a stale fence keeps the placeholder pending",
@@ -3726,5 +3732,123 @@ func testDiscardStateVersion(t *testing.T, s WorkspaceStore) {
 	stored, err := s.GetStateVersion(t.Context(), second.ID)
 	if err != nil || stored.Status != workspace.StatusFinalized {
 		t.Fatalf("finalized version after a discard: status %v, err %v; want finalized and kept", stored.Status, err)
+	}
+}
+
+// testDiscardStaleFence proves a discard under a stale fence is refused with
+// ErrFenced, and the pending row stays.
+func testDiscardStaleFence(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("discard under a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil || stored.Status != workspace.StatusPending {
+		t.Fatalf(
+			"pending version after a refused discard: status %v, err %v; want pending and kept",
+			stored.Status,
+			err,
+		)
+	}
+}
+
+// serviceOver returns the namespace and workspace services over s, with blobs in
+// a temporary directory. The conditional unlock cases drive the services.
+func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
+	t.Helper()
+
+	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "eu-west"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         s,
+		States:             s,
+		Blobs:              blobs,
+		Namespaces:         nsSvc,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return now() },
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("workspace service: %v", err)
+	}
+
+	return svc
+}
+
+// testConditionalUnlock proves UnlockLock and ForceUnlockLock release only the
+// lock they name: the lock ID and, for a force-unlock, the holder must match. A
+// lock ID a client chose can repeat after a force-unlock, so the holder decides
+// (ADR 49, decision 6).
+func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	svc := serviceOver(t, s)
+	ctx := t.Context()
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if _, err := svc.LockWithID(ctx, w.ID, "bob", "apply", "lock-x"); err != nil {
+		t.Fatalf("lock as bob: %v", err)
+	}
+
+	if _, err := svc.UnlockLock(ctx, w.ID, "lock-y", "bob"); !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("unlock with another lock ID: err = %v, want ErrLockMismatch", err)
+	}
+
+	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "alice"}, "admin",
+		namespace.Overrides{Forced: true, Unlocked: false}, nil); !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("force-unlock naming another holder: err = %v, want ErrLockMismatch", err)
+	}
+
+	held, err := s.GetWorkspaceByID(ctx, w.ID)
+	if err != nil || held.Lock.Holder != "bob" {
+		t.Fatalf("after refused releases: holder %q, err %v; want bob still holding", held.Lock.Holder, err)
+	}
+
+	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin",
+		namespace.Overrides{Forced: true, Unlocked: false}, nil); err != nil {
+		t.Fatalf("force-unlock of the lock as seen: %v", err)
+	}
+
+	if _, err := svc.LockWithID(ctx, w.ID, "carol", "apply", "lock-x"); err != nil {
+		t.Fatalf("lock as carol with the same ID: %v", err)
+	}
+
+	// A caller that read bob's lock before the force-unlock must not release
+	// carol's lock, though the lock ID repeats.
+	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin",
+		namespace.Overrides{Forced: true, Unlocked: false}, nil); !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
+	}
+
+	after, err := s.GetWorkspaceByID(ctx, w.ID)
+	if err != nil || after.Lock.Holder != "carol" {
+		t.Fatalf("after the stale force-unlock: holder %q, err %v; want carol still holding", after.Lock.Holder, err)
 	}
 }

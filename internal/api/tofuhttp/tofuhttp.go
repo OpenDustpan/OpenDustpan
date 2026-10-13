@@ -47,11 +47,12 @@ type WorkspaceService interface {
 	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
 	// lock that changed after the caller read the unit is refused, not released.
 	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)
-	// ForceUnlockLock releases the lock lockID of any holder, writing the fence
-	// version of a unit with state (ADR 44, decision 1). It reports an unfenced
-	// release.
+	// ForceUnlockLock releases the lock expect names, whoever holds it, writing
+	// the fence version of a unit with state (ADR 44, decision 1). It reports an
+	// unfenced release.
 	ForceUnlockLock(
-		ctx context.Context, id workspace.ID, lockID, by string, allow namespace.Overrides, record func() error,
+		ctx context.Context, id workspace.ID, expect workspace.Lock, by string,
+		allow namespace.Overrides, record func() error,
 	) (workspace.Workspace, bool, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
