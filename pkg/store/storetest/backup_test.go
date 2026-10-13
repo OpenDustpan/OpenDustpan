@@ -2193,6 +2193,10 @@ func (s *fakeBackupStore) BumpFailoverVersions(_ context.Context) (int64, error)
 // implements, derived from the same table set the exporter covers, so both
 // drift directions can fail: extraSchemaTable adds a table the backup list
 // does not cover, and omitSchemaTable removes one it does cover.
+func (s *fakeBackupStore) CheckCoverage(_ context.Context) error {
+	return nil
+}
+
 func (s *fakeBackupStore) SchemaTables(_ context.Context) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -45,6 +45,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.Registry
 	backup.RestoreRegistry
 	backup.Inspector
+	backup.Coverage
 	maintenance.Store
 	backup.Stager
 	audit.Store
@@ -101,6 +102,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "round trip over every table keeps every row", test: testBackupRoundTrip},
 		{name: "export names checkpoint blobs", test: testBackupCheckpointBlob},
 		{name: "table list covers every table of the schema", test: testBackupTablesCoverSchema},
+		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "export does not tear a concurrent stack write", test: testBackupExportDoesNotTear},
 		{name: "import refuses a destination that is not empty", test: testBackupImportRefusesNonEmpty},
 		{name: "import refuses another dialect", test: testBackupImportRefusesDialect},
@@ -1344,6 +1346,19 @@ func sameEntry(a, b inventory.Entry) bool {
 // testBackupTablesCoverSchema fails when a table of the schema is missing
 // from backup.Tables. It reads the schema tables through the Inspector,
 // never through Tables itself, so the two cannot drift silently.
+// testBackupColumnsCoverSchema checks that the column list of each table of
+// backup.Tables matches the live columns of the migrated schema (ADR 42,
+// decision 5). A column that a migration adds fails here until its list names it.
+func testBackupColumnsCoverSchema(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	if err := s.CheckCoverage(t.Context()); err != nil {
+		t.Fatalf("column lists and schema differ: %v", err)
+	}
+}
+
 func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
