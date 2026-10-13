@@ -89,6 +89,9 @@ In this RFC they decide nothing (ADR 15).
 5. Free reference architectures, tested in CI: the single binary with
    SQLite, one virtual machine with PostgreSQL and S3-compatible storage,
    and AWS (ECS, Aurora, S3). This is not a setting. It is context only.
+   Each of them keeps backups and tested restores (ADR 30, ADR 42), with or
+   without replication. Replication does not replace a backup (owner,
+   2026-10-13, see RFC 37).
 
 "Organization" is the owner's word for a customer of the hosted service. In
 `GLOSSARY.md` an organization is a namespace in a tool protocol. With the
