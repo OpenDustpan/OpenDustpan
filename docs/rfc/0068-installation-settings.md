@@ -51,6 +51,28 @@ Facts from the code on `main` (commit `5f1292c`):
 This RFC decides nothing (ADR 15). It gives the inventory, the options for
 each design point, and a recommendation.
 
+## Owner direction (2026-10-13)
+
+The project owner gave this direction on 2026-10-13. The product manager
+relayed it, and the project lead passed it to this RFC. It decides nothing
+in this RFC (ADR 15). The design must meet it.
+
+The project designs with a hosted service in mind, on the model of Temporal:
+
+1. The open-source server stays feature complete.
+2. The hosted service sells only operations: the same software, run by the
+   project, at a flat price that covers costs and a modest margin.
+3. No feature is only in the hosted service. SSO, MFA, audit and RBAC stay
+   in the open-source server.
+4. Hosted limits and defaults are installation settings (this RFC), not code
+   paths. Sign-up and billing stay outside the server binary.
+5. Multi-tenancy has two options for a separate RFC: one small installation
+   for each customer first, or one shared installation with a tenant layer
+   above namespaces. The project lead decides.
+
+See "No setting gates a feature" and "Multi-tenancy" for what this RFC does
+with points 3 to 5.
+
 ## Terms in this RFC
 
 - **Setting**: one named value that changes how the server works, for
@@ -575,6 +597,46 @@ whether the database should hold a value for each instance.
   (simple, and the static layer can fix it), or skip a fixed list of keys
   that name the place of the installation.
 
+## No setting gates a feature
+
+Owner direction point 3 and point 4: settings set limits and defaults only.
+This section checks each inventory row against that rule.
+
+**The check.** A setting fails the check when it does one of these:
+
+- it reads a license, an edition, a plan or a "hosted" flag,
+- it makes a feature exist in one build or one deployment and not in
+  another,
+- its only purpose is to keep a feature away from the administrator of an
+  installation.
+
+**Result for the inventory: no row fails.**
+
+- No row reads a license, an edition, a plan or a "hosted" flag. No such
+  value exists in the code or in a plan.
+- These rows are switches: MFA on or off, require MFA, passkey sign-in,
+  trusted-header sign-in, the IP allowlist feature, revoke on removal, the
+  audit log, the hash chain, signed checkpoints, Pulumi journaling off, and
+  an empty backup target. Each one is a choice of the administrator of the
+  installation, with a default. Each one exists in every build. So each
+  one is a default, not a gate.
+- Size limits, lifetimes, retention times and rate limits are limits.
+
+**Rules that keep the check true later:**
+
+- No setting has a name or a value that names an edition, a plan or the
+  hosted service.
+- A hosted limit is a value of an ordinary setting, set in the static layer
+  of the hosted installation, for example the largest OpenTofu state.
+- The static layer of a hosted installation can lock a limit or a default.
+  It must not lock a feature off for the customer, for example the audit
+  log, MFA or SSO. Open question: is this a rule for the hosted service
+  only, or does the server enforce it with a list of switches that a lock
+  can set only to on?
+- The test of a later ADR can check the first rule: it fails when a declared
+  setting key holds a word from a short list (`edition`, `plan`, `hosted`,
+  `license`, `tier`).
+
 ## Multi-tenancy
 
 The aim is to keep a hosted service with many tenants possible. This RFC
@@ -584,7 +646,30 @@ under _Avoid_ for a namespace today, because the namespace is the unit of
 tenancy. A hosted tenant (one customer with many namespaces) is a different
 concept that does not exist yet.
 
-This design must not block these:
+Owner direction point 5 gives two options for the separate RFC:
+
+- **Option A. One installation for each customer.** Each customer gets its
+  own small installation: its own database, blob store and key-encryption
+  key. It needs no tenant model in the server. State, secrets and the key
+  stay apart for each customer. The settings of this RFC carry the hosted
+  limits and defaults (point 4). The cost is one set of processes and one
+  database for each customer, and an operations layer outside the server
+  that creates and upgrades installations.
+- **Option B. One shared installation with a tenant layer above
+  namespaces.** Lower cost for each customer. It needs a tenant model, a
+  tenant scope for settings, secrets and the audit log, and a tenant check
+  on every route. A bug in one of them can let one customer read the data
+  of another. The key-encryption key is shared, unless RFC 33 gives each
+  tenant its own wrapper.
+
+**Lead recommendation: option A first.** It needs no tenant model. It keeps
+state, secrets and the key-encryption key apart for each customer. It fits
+owner direction points 1 to 4: the hosted service runs the same binary, and
+its limits are settings. The shared tenant layer of option B stays a later
+RFC. The project lead decides (point 5).
+
+With option A, this RFC needs nothing more. The rest of this section keeps
+option B open. This design must not block these:
 
 - **A scope in the key.** Each database row holds a scope and a key. The
   scope is `@server` now. A later tenant scope, and later namespace
@@ -657,7 +742,9 @@ the owner's approval.
    stay static so an attacker with an administrator session cannot hide
    the next actions?
 10. Which RFC defines the boundary between the installation and a hosted
-   tenant?
+    tenant? The lead recommends one installation for each customer first.
+11. Does the server enforce that a lock in the static layer never turns a
+    feature off (see "No setting gates a feature")?
 
 ## Outcome
 
