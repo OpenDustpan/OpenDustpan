@@ -53,6 +53,11 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "finalize of a workspace that is not locked is ErrNotLocked", test: testFinalizeWithoutLock},
 		{name: "finalize under a lock held by another principal is ErrLockedByOther", test: testFinalizeLockedByOther},
 		{name: "finalize sets the declared serial, lineage, MD5 and outputs", test: testFinalizeSetsDeclaredFields},
+		{
+			name: "finalize under the same lock ID held by another principal is ErrLockedByOther",
+			test: testFinalizeSameLockIDOtherHolder,
+		},
+		{name: "discard removes a pending version and keeps a finalized one", test: testDiscardStateVersion},
 		{name: "a placeholder pending version is never current", test: testPlaceholderNeverCurrent},
 		{
 			name: "a finalize under a stale fence keeps the placeholder pending",
@@ -3645,5 +3650,81 @@ func testFinalizeStaleFenceKeepsPlaceholder(t *testing.T, s WorkspaceStore) {
 	if stored.Status != workspace.StatusPending || stored.Serial != -1 || stored.Lineage != "" {
 		t.Fatalf("placeholder after a refused finalize = status %s, serial %d, lineage %q; want pending, -1, empty",
 			stored.Status, stored.Serial, stored.Lineage)
+	}
+}
+
+// testFinalizeSameLockIDOtherHolder proves a finalize checks the holder as well
+// as the lock ID. A client-chosen lock ID can repeat after a force-unlock, so a
+// version declared by alice under lock X finalizes against nothing when bob holds
+// lock X.
+func testFinalizeSameLockIDOtherHolder(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	taken := locked
+	taken.Lock = workspace.Lock{LockedAt: now().Add(time.Hour), ID: locked.Lock.ID, Holder: "bob", Reason: "apply"}
+	taken.UpdatedAt = now().Add(2 * time.Hour)
+	taken.Revision++
+
+	if err := s.SaveWorkspace(t.Context(), taken, ns.Fence()); err != nil {
+		t.Fatalf("take the same lock ID as another principal: %v", err)
+	}
+
+	finalized := finalizedVersion(pending, now().Add(3*time.Hour), "v1")
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Errorf("finalize under the same lock ID, other holder: err = %v, want ErrLockedByOther", err)
+	}
+
+	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Errorf("a refused finalize made a version current: %v", err)
+	}
+}
+
+// testDiscardStateVersion proves a discard removes a pending row, and that a
+// finalized row, or one that does not exist, stays or matches nothing.
+func testDiscardStateVersion(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard pending: %v", err)
+	}
+
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("discarded pending version: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard of a missing version: %v", err)
+	}
+
+	second := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
+	))
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(second, now().Add(time.Hour), "v2")); err != nil {
+		t.Fatalf("finalize second: %v", err)
+	}
+
+	if err := s.DiscardStateVersion(t.Context(), second.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard of a finalized version: %v", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), second.ID)
+	if err != nil || stored.Status != workspace.StatusFinalized {
+		t.Fatalf("finalized version after a discard: status %v, err %v; want finalized and kept", stored.Status, err)
 	}
 }

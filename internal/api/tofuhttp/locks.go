@@ -109,11 +109,7 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 		return
 	}
 
-	ws, err := h.ws.Get(ctx, c.ref)
-	if errors.Is(err, workspace.ErrNotFound) {
-		ws, err = h.createWorkspace(ctx, c)
-	}
-
+	ws, err := h.workspaceOf(ctx, c)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -149,7 +145,27 @@ func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, 
 	h.writeLocked(w, current.Lock)
 }
 
-// createWorkspace creates the workspace of the path for a LOCK, after the caller
+// workspaceOf returns the workspace of the call, creating it on first use. Two
+// first requests can both find it missing: the create that loses answers
+// ErrAlreadyExists, and the workspace is read again, so it is not a 500.
+func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace, error) {
+	ws, err := h.ws.Get(ctx, c.ref)
+	if !errors.Is(err, workspace.ErrNotFound) {
+		return ws, err //nolint:wrapcheck // The caller classifies the error; the port error is already wrapped.
+	}
+
+	ws, err = h.createWorkspace(ctx, c)
+	if errors.Is(err, workspace.ErrAlreadyExists) {
+		return h.ws.Get(
+			ctx,
+			c.ref,
+		) //nolint:wrapcheck // The caller classifies the error; the port error is already wrapped.
+	}
+
+	return ws, err
+}
+
+// createWorkspace creates the workspace of the path for a first LOCK or POST, after the caller
 // holds unit:manage on its unit.
 func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Workspace, error) {
 	obj, err := unitObject(c.ref)
@@ -166,7 +182,7 @@ func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Worksp
 
 // unlockWorkspace serves UNLOCK. The lock ID of the body must be the current
 // lock. An UNLOCK that names another lock, or a lock held by another principal,
-// answers 409 with the current lock info. Forced unlocks land with their e2e
+// answers 409 with the current lock info. Forced unlocks are served by
 // step.
 func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call) {
 	ctx := r.Context()
@@ -192,13 +208,14 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 	}
 
 	if ws.Lock.Holder != c.principal.Subject {
-		h.forceUnlockWorkspace(w, r, c, ws)
+		h.forceUnlockWorkspace(w, r, c, ws, info.ID)
 
 		return
 	}
 
-	_, err = h.ws.Unlock(ctx, ws.ID, c.principal.Subject)
-	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) {
+	_, err = h.ws.UnlockLock(ctx, ws.ID, info.ID, c.principal.Subject)
+	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
+		errors.Is(err, workspace.ErrLockMismatch) {
 		h.writeHeldOrConflict(ctx, w, c, err)
 
 		return

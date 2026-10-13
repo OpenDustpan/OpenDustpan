@@ -4,7 +4,7 @@
 // workspace domain. It does not call the TFE-compatible adapter in
 // internal/api/tfe.
 //
-// The routes so far are GET, LOCK and UNLOCK. POST lands with its e2e step.
+// The routes are GET, POST, LOCK and UNLOCK.
 package tofuhttp
 
 import (
@@ -44,12 +44,14 @@ type WorkspaceService interface {
 	// LockWithID locks the workspace for holder under lockID, the ID the
 	// client chose (ADR 49, decision 6).
 	LockWithID(ctx context.Context, id workspace.ID, holder, reason, lockID string) (workspace.Workspace, error)
-	// Unlock releases holder's lock.
-	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
-	// ForceUnlock releases the lock of any holder, writing the fence version of
-	// a unit with state (ADR 44, decision 1). It reports an unfenced release.
-	ForceUnlock(
-		ctx context.Context, id workspace.ID, by string, allow namespace.Overrides, record func() error,
+	// UnlockLock releases holder's lock when it is lockID (ADR 49, decision 6). A
+	// lock that changed after the caller read the unit is refused, not released.
+	UnlockLock(ctx context.Context, id workspace.ID, lockID, holder string) (workspace.Workspace, error)
+	// ForceUnlockLock releases the lock lockID of any holder, writing the fence
+	// version of a unit with state (ADR 44, decision 1). It reports an unfenced
+	// release.
+	ForceUnlockLock(
+		ctx context.Context, id workspace.ID, lockID, by string, allow namespace.Overrides, record func() error,
 	) (workspace.Workspace, bool, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
@@ -264,6 +266,8 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, "invalid request"
 	case errors.Is(err, workspace.ErrLocked), errors.Is(err, workspace.ErrLockedByOther):
 		return http.StatusLocked, "workspace is locked"
+	case errors.Is(err, workspace.ErrAlreadyExists):
+		return http.StatusConflict, "workspace already exists"
 	case errors.Is(err, workspace.ErrConcurrentModification), errors.Is(err, workspace.ErrLockMismatch),
 		errors.Is(err, workspace.ErrStaleSerial), errors.Is(err, workspace.ErrLineageMismatch):
 		return http.StatusConflict, "state conflicts with the current state or lock"

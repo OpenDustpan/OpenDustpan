@@ -476,7 +476,7 @@ func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVers
 		switch {
 		case !w.Lock.Locked():
 			return workspace.ErrNotLocked
-		case w.Lock.ID != sv.LockID:
+		case w.Lock.ID != sv.LockID, w.Lock.Holder != sv.Holder:
 			return workspace.ErrLockedByOther
 		}
 	}
@@ -598,6 +598,23 @@ func (m *memStore) SaveSensitiveMarks(
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the pending versions of the workspace whose capability expired
 // before before, oldest expiry first, and returns them.
+func (m *memStore) DiscardStateVersion(
+	_ context.Context, id workspace.StateVersionID, fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if sv, ok := m.versions[id]; ok && sv.Status == workspace.StatusPending {
+		delete(m.versions, id)
+	}
+
+	return nil
+}
+
 func (m *memStore) DeleteExpiredPendingStateVersions(
 	_ context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
 ) ([]workspace.StateVersion, error) {

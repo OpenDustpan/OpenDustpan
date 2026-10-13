@@ -172,6 +172,13 @@ type StateStore interface {
 		before time.Time,
 		fence namespace.Fence,
 	) ([]StateVersion, error)
+	// DiscardStateVersion deletes the pending version id, with its row only. The
+	// caller deletes the blob of the attempt first. A version that is not pending
+	// matches no row and stays: a finalized version is never discarded. It returns
+	// namespace.ErrNotFound when the namespace does not exist, or namespace.ErrFenced
+	// when fence is stale. A refused streamed write uses it when the finalize
+	// outcome is known, so its placeholder does not fill the pending cap.
+	DiscardStateVersion(ctx context.Context, id StateVersionID, fence namespace.Fence) error
 	// ListUnsealedStateVersions returns the finalized state versions that
 	// still hold plain content, ordered by version ID, so the seal job
 	// seals them. A version without content stays out: a pending row names
@@ -388,9 +395,32 @@ func validLockID(id string) bool {
 
 // Unlock releases holder's lock.
 func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, error) {
+	return s.UnlockLock(ctx, id, "", holder)
+}
+
+// UnlockLock releases holder's lock when the lock is lockID. An empty lockID
+// releases any lock holder holds. The check and the release read and save the
+// same revision, so a lock that another caller took after this one read the
+// unit is refused with ErrLockMismatch, and it is not released (ADR 49,
+// decision 6).
+func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		if lockErr := checkLockID(w, lockID); lockErr != nil {
+			return Workspace{}, lockErr
+		}
+
 		return w.unlock(now, holder)
 	})
+}
+
+// checkLockID refuses a lock ID other than the current lock. An empty lockID
+// accepts any lock.
+func checkLockID(w Workspace, lockID string) error {
+	if lockID != "" && w.Lock.ID != lockID {
+		return fmt.Errorf("%w: unit %s", ErrLockMismatch, w.Ref)
+	}
+
+	return nil
 }
 
 // ForceUnlock releases the lock whoever holds it, as `tofu force-unlock` does.
@@ -408,6 +438,16 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 func (s *Service) ForceUnlock(
 	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {
+	return s.ForceUnlockLock(ctx, id, "", by, allow, record)
+}
+
+// ForceUnlockLock is ForceUnlock for the lock lockID. An empty lockID releases
+// whatever lock the unit holds. A different lock is refused with ErrLockMismatch,
+// before the fence and in the same revision the release saves, so a lock taken
+// after the caller read the unit is not released.
+func (s *Service) ForceUnlockLock(
+	ctx context.Context, id ID, lockID, by string, allow namespace.Overrides, record func() error,
+) (Workspace, bool, error) {
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return Workspace{}, false, err
@@ -417,12 +457,20 @@ func (s *Service) ForceUnlock(
 		return Workspace{}, false, ErrNotLocked
 	}
 
+	if lockErr := checkLockID(w, lockID); lockErr != nil {
+		return Workspace{}, false, lockErr
+	}
+
 	cur, err := s.states.CurrentStateVersion(ctx, id)
 
 	switch {
 	case errors.Is(err, ErrNoState):
 		// A unit without state is a plain release: no override is used.
 		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+			if lockErr := checkLockID(w, lockID); lockErr != nil {
+				return Workspace{}, lockErr
+			}
+
 			return w.forceUnlock(now)
 		})
 
@@ -439,7 +487,7 @@ func (s *Service) ForceUnlock(
 			}
 		}
 
-		unfenced, changeErr := s.releaseUnfenced(ctx, id)
+		unfenced, changeErr := s.releaseUnfenced(ctx, w)
 
 		return unfenced, true, changeErr
 	}
@@ -1755,7 +1803,9 @@ func (s *Service) createPending(
 
 	now := s.clock()
 
-	outputs := in.Outputs
+	// The client's JSON rendering of the outputs is never stored: the outputs of a
+	// version come from its body (ADR 49, decision 8).
+	var outputs []byte
 
 	// New rows land sealed when the service seals: the outputs document is
 	// sealed with the data key of the workspace scope. The stored row keeps
@@ -1989,12 +2039,7 @@ func (s *Service) clock() time.Time {
 }
 
 // releaseUnfenced releases the lock of the unit without writing a version.
-func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error) {
-	w, err := s.GetByID(ctx, id)
-	if err != nil {
-		return Workspace{}, err
-	}
-
+func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -2002,11 +2047,11 @@ func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error)
 
 	released, err := w.forceUnlock(s.clock())
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
 
 	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence); err != nil {
-		return Workspace{}, fmt.Errorf("release %s: %w", id, err)
+		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)
 	}
 
 	return released, nil

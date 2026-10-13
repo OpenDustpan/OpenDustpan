@@ -1678,6 +1678,12 @@ func (s *fakeBackupStore) SaveSensitiveMarks(
 
 // DeleteExpiredPendingStateVersions implements workspace.StateStore: it
 // deletes the expired pending versions of id, oldest expiry first.
+func (s *fakeBackupStore) DiscardStateVersion(
+	context.Context, workspace.StateVersionID, namespace.Fence,
+) error {
+	return nil
+}
+
 func (s *fakeBackupStore) DeleteExpiredPendingStateVersions(
 	_ context.Context, id workspace.ID, before time.Time, fence namespace.Fence,
 ) ([]workspace.StateVersion, error) {

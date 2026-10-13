@@ -3,7 +3,7 @@ package workspace
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/json/jsontext"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -21,78 +21,140 @@ type streamedMeta struct {
 	ClientEncrypted bool
 }
 
-// readStateMeta reads the top-level members of the state in r, one value at a
-// time, so it never holds the whole document. It skips every member that it does
-// not need. An outputs value above maxOutputsBytes fails with ErrTooLarge. A
-// document that is not a JSON object fails with ErrInvalidState.
+// maxMemberNameBytes bounds a top-level member name. A longer name is refused.
+const maxMemberNameBytes = 256
+
+// maxLineageBytes bounds the raw bytes of the lineage value. The domain then
+// checks the decoded length against maxLineageLength.
+const maxLineageBytes = 1024
+
+// maxSerialBytes bounds the raw bytes of the serial value.
+const maxSerialBytes = 32
+
+// readStateMeta reads the top-level members of the state in r. It checks the
+// JSON grammar of the whole document as it goes, and it buffers only the values
+// the domain keeps, each within a limit. A skipped value is consumed byte by byte
+// and never buffered, so a large string costs no memory. An outputs value above
+// maxOutputsBytes fails with ErrTooLarge. A document that is not a JSON object
+// fails with ErrInvalidState.
 func readStateMeta(r io.Reader) (streamedMeta, error) {
 	var meta streamedMeta
 
-	dec := jsontext.NewDecoder(r)
+	s := newJSONScanner(r)
 
-	if err := expectObjectStart(dec); err != nil {
+	if err := s.skipSpace(); err != nil {
 		return streamedMeta{}, err
 	}
 
+	if b, err := s.peek(); err != nil {
+		return streamedMeta{}, err
+	} else if b != '{' {
+		return streamedMeta{}, syntaxError("state is not a JSON object")
+	}
+
+	if err := s.topObject(&meta); err != nil {
+		return streamedMeta{}, err
+	}
+
+	return meta, nil
+}
+
+// topObject walks the members of the top-level object, and keeps the members the
+// domain reads.
+func (s *jsonScanner) topObject(meta *streamedMeta) error {
+	if err := s.expect('{'); err != nil {
+		return err
+	}
+
+	if err := s.skipSpace(); err != nil {
+		return err
+	}
+
+	if b, err := s.peek(); err != nil {
+		return err
+	} else if b == '}' {
+		_, err := s.read()
+
+		return err
+	}
+
 	for {
-		tok, err := dec.ReadToken()
+		name, err := s.memberName()
 		if err != nil {
-			return streamedMeta{}, fmt.Errorf("%w: read member of state: %w", ErrInvalidState, err)
+			return err
 		}
 
-		if tok.Kind() == '}' {
-			return meta, nil
+		if err := s.topMember(name, meta); err != nil {
+			return err
 		}
 
-		if tok.Kind() != '"' {
-			return streamedMeta{}, fmt.Errorf("%w: state member name", ErrInvalidState)
-		}
-
-		if err := readMember(dec, tok.String(), &meta); err != nil {
-			return streamedMeta{}, err
+		done, err := s.separator('}')
+		if err != nil || done {
+			return err
 		}
 	}
 }
 
-// expectObjectStart reads the opening brace of the state document.
-func expectObjectStart(dec *jsontext.Decoder) error {
-	tok, err := dec.ReadToken()
-	if err != nil || tok.Kind() != '{' {
-		return fmt.Errorf("%w: state is not a JSON object", ErrInvalidState)
+// memberName reads one member name, bounded by maxMemberNameBytes.
+func (s *jsonScanner) memberName() (string, error) {
+	raw, err := s.keepValue(maxMemberNameBytes)
+	if err != nil {
+		if errors.Is(err, errCaptureFull) {
+			return "", syntaxError("member name is too long")
+		}
+
+		return "", err
 	}
 
-	return nil
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return "", syntaxError("member name is not a string")
+	}
+
+	return name, nil
 }
 
-// readMember reads the value of one top-level member name into meta, or skips
-// it. The client-encryption marker sets meta and skips its value like any other
-// member.
-func readMember(dec *jsontext.Decoder, name string, meta *streamedMeta) error {
-	if name == encryptedStateKey {
-		meta.ClientEncrypted = true
+// topMember reads the colon and the value of one top-level member. The members
+// the domain reads are kept, each within its limit. Every other member is
+// skipped.
+func (s *jsonScanner) topMember(name string, meta *streamedMeta) error {
+	if err := s.skipSpace(); err != nil {
+		return err
+	}
+
+	if err := s.expect(':'); err != nil {
+		return err
+	}
+
+	if err := s.skipSpace(); err != nil {
+		return err
 	}
 
 	switch name {
 	case "serial":
-		return readSerial(dec, meta)
+		return keepSerial(s, meta)
 	case "lineage":
-		return readLineage(dec, meta)
+		return keepLineage(s, meta)
 	case "outputs":
-		return readOutputs(dec, meta)
+		return keepOutputs(s, meta)
+	case encryptedStateKey:
+		meta.ClientEncrypted = true
+
+		return s.value()
 	default:
-		return skipMember(dec, name)
+		return s.value()
 	}
 }
 
-// readSerial reads the serial member into meta.
-func readSerial(dec *jsontext.Decoder, meta *streamedMeta) error {
-	raw, err := dec.ReadValue()
+// keepSerial reads the serial value into meta.
+func keepSerial(s *jsonScanner, meta *streamedMeta) error {
+	raw, err := s.keepValue(maxSerialBytes)
 	if err != nil {
-		return fmt.Errorf("%w: serial: %w", ErrInvalidState, err)
+		return boundedError(err, "serial")
 	}
 
 	if err := json.Unmarshal(raw, &meta.Serial); err != nil {
-		return fmt.Errorf("%w: serial: %w", ErrInvalidState, err)
+		return syntaxError("serial is not a number")
 	}
 
 	meta.HasSerial = true
@@ -100,15 +162,15 @@ func readSerial(dec *jsontext.Decoder, meta *streamedMeta) error {
 	return nil
 }
 
-// readLineage reads the lineage member into meta.
-func readLineage(dec *jsontext.Decoder, meta *streamedMeta) error {
-	raw, err := dec.ReadValue()
+// keepLineage reads the lineage value into meta.
+func keepLineage(s *jsonScanner, meta *streamedMeta) error {
+	raw, err := s.keepValue(maxLineageBytes)
 	if err != nil {
-		return fmt.Errorf("%w: lineage: %w", ErrInvalidState, err)
+		return boundedError(err, "lineage")
 	}
 
 	if err := json.Unmarshal(raw, &meta.Lineage); err != nil {
-		return fmt.Errorf("%w: lineage: %w", ErrInvalidState, err)
+		return syntaxError("lineage is not a string")
 	}
 
 	meta.HasLineage = true
@@ -116,32 +178,50 @@ func readLineage(dec *jsontext.Decoder, meta *streamedMeta) error {
 	return nil
 }
 
-// readOutputs reads the outputs member into meta. A null value leaves no
-// outputs. An outputs value above maxOutputsBytes fails with ErrTooLarge.
-func readOutputs(dec *jsontext.Decoder, meta *streamedMeta) error {
-	raw, err := dec.ReadValue()
+// keepOutputs reads the outputs value into meta. A null value leaves no outputs.
+// An outputs value over maxOutputsBytes fails with ErrTooLarge, and the walk
+// stops at that byte, so no more than the limit is ever held.
+func keepOutputs(s *jsonScanner, meta *streamedMeta) error {
+	raw, err := s.keepValue(maxOutputsBytes)
 	if err != nil {
-		return fmt.Errorf("%w: outputs: %w", ErrInvalidState, err)
-	}
+		if errors.Is(err, errCaptureFull) {
+			return fmt.Errorf("%w: outputs of more than %d bytes", ErrTooLarge, maxOutputsBytes)
+		}
 
-	if len(raw) > maxOutputsBytes {
-		return fmt.Errorf("%w: outputs of %d bytes, limit %d", ErrTooLarge, len(raw), maxOutputsBytes)
+		return err
 	}
 
 	if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		meta.Outputs = bytes.Clone(raw)
+		meta.Outputs = raw
 	}
 
 	return nil
 }
 
-// skipMember skips the value of a member that the domain does not need.
-func skipMember(dec *jsontext.Decoder, name string) error {
-	if err := dec.SkipValue(); err != nil {
-		return fmt.Errorf("%w: %s: %w", ErrInvalidState, name, err)
+// keepValue reads one value and returns its bytes. The value must fit in limit
+// bytes: a longer value fails with errCaptureFull, and only limit bytes are held.
+func (s *jsonScanner) keepValue(limit int) ([]byte, error) {
+	keep := &capture{buf: nil, limit: limit}
+
+	s.keep = keep
+	err := s.value()
+	s.keep = nil
+
+	if err != nil {
+		return nil, err
 	}
 
-	return nil
+	return keep.buf, nil
+}
+
+// boundedError maps a kept value that is too long to a grammar error of its
+// member. Any other error passes through.
+func boundedError(err error, member string) error {
+	if errors.Is(err, errCaptureFull) {
+		return syntaxError(member + " is too long")
+	}
+
+	return err
 }
 
 // metaResult is what the reader of a state stream returns.

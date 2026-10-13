@@ -431,3 +431,44 @@ func TestWriteStateRecordsWithTheSerialAndKeepsNoVersionWhenRecordFails(t *testi
 
 // errRecordRefused is the audit failure that a write must refuse on.
 var errRecordRefused = errors.New("audit refused")
+
+// errDroppedBody is the failure of a body whose connection drops mid-stream.
+var errDroppedBody = errors.New("connection dropped")
+
+// droppedBody reads nothing and fails, as a dropped connection does.
+type droppedBody struct{}
+
+// Read returns errDroppedBody.
+func (droppedBody) Read([]byte) (int, error) {
+	return 0, errDroppedBody
+}
+
+// TestRefusedWritesDoNotFillThePendingCap proves a refused streamed write leaves
+// no placeholder pending. Eleven refusals, one of them a dropped body, leave the
+// cap of ten free, so the valid write after them succeeds (ADR 49, decision 7).
+func TestRefusedWritesDoNotFillThePendingCap(t *testing.T) {
+	t.Parallel()
+
+	f := lockedFixture(t)
+	ctx := t.Context()
+	in := workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""}
+
+	for range 10 {
+		_, err := f.svc.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil), strings.NewReader("not json"))
+		if err == nil {
+			t.Fatal("a body that is not JSON was accepted")
+		}
+	}
+
+	_, err := f.svc.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil), droppedBody{})
+	if !errors.Is(err, errDroppedBody) {
+		t.Fatalf("dropped body: err = %v, want the body error", err)
+	}
+
+	if _, err := f.svc.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-p", 1))); err != nil {
+		t.Fatalf("valid write after eleven refusals: %v", err)
+	}
+
+	assertNoOrphanBlobs(t, f)
+}

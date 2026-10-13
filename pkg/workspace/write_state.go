@@ -151,9 +151,9 @@ func (s *Service) admitStream(
 }
 
 // streamVersion streams the body into the blob of sw, reads its serial, lineage
-// and outputs as it passes, and finalizes the version. A refused body deletes
-// its blob. A failed store write leaves the blob to the sweep, as the attempt
-// names it.
+// and outputs as it passes, and finalizes the version. A refusal with a known
+// outcome ends the placeholder with refuseStream. A failed store write is refused
+// the same way: the body did not land, so nothing can name its blob.
 func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Reader) (StateVersion, error) {
 	sv := sw.version
 
@@ -171,29 +171,20 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 
 	meta, err := stream.finish(storeErr)
 	if err != nil {
-		// A body the decoder refuses is refused here, so its blob goes. A store
-		// error leaves the blob to the sweep, as its attempt names it.
-		if storeErr == nil {
-			err = errors.Join(err, s.blobs.Delete(ctx, sw.key))
-		}
-
-		return StateVersion{}, fmt.Errorf("write state %s: %w", sv.ID, err)
+		return StateVersion{}, s.refuseStream(ctx, sw, fmt.Errorf("write state %s: %w", sv.ID, err))
 	}
 
 	if metaErr := checkStreamedMeta(meta); metaErr != nil {
-		return StateVersion{}, errors.Join(
-			fmt.Errorf("write state %s: %w", sv.ID, metaErr),
-			s.blobs.Delete(ctx, sw.key),
-		)
+		return StateVersion{}, s.refuseStream(ctx, sw, fmt.Errorf("write state %s: %w", sv.ID, metaErr))
 	}
 
 	outputs, err := s.streamedOutputs(ctx, sw.workspace, meta)
 	if err != nil {
-		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, sw.key))
+		return StateVersion{}, s.refuseStream(ctx, sw, err)
 	}
 
 	if recErr := sw.recordUsed(meta.Serial); recErr != nil {
-		return StateVersion{}, errors.Join(recErr, s.blobs.Delete(ctx, sw.key))
+		return StateVersion{}, s.refuseStream(ctx, sw, recErr)
 	}
 
 	sv.Status = StatusFinalized
@@ -216,7 +207,8 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 
 // finalizeStream finalizes sv in one store transaction. The transaction runs
 // the namespace fence, the lock checks and the serial and lineage checks of ADR
-// 25. A refusal deletes the blob of sw, since nothing was written.
+// 25. A rejected finalize wrote nothing, so the write is refused. An unknown
+// outcome keeps the placeholder, because the version may point at its blob.
 func (s *Service) finalizeStream(ctx context.Context, sw *streamWrite, sv StateVersion) error {
 	finErr := s.states.FinalizeStateVersion(ctx, sv, sw.fence)
 	if finErr == nil {
@@ -225,11 +217,27 @@ func (s *Service) finalizeStream(ctx context.Context, sw *streamWrite, sv StateV
 
 	wrapped := fmt.Errorf("finalize state %s: %w", sv.ID, finErr)
 	if rejected(wrapped) {
-		return errors.Join(wrapped, s.blobs.Delete(ctx, sw.key))
+		return s.refuseStream(ctx, sw, wrapped)
 	}
 
-	// The outcome is unknown; the version may point at this blob. Keep it.
 	return wrapped
+}
+
+// refuseStream ends a streamed write whose outcome is known to be a refusal: no
+// version became current. It deletes the blob first. It discards the placeholder
+// row only once the blob is gone, so a failed blob delete leaves the row, and the
+// sweep finds the blob through it. A refused placeholder left pending would fill
+// the pending cap for the lock holder (ADR 49, decision 7).
+func (s *Service) refuseStream(ctx context.Context, sw *streamWrite, cause error) error {
+	if delErr := s.deleteBlobRetried(ctx, sw.key); delErr != nil {
+		return errors.Join(cause, fmt.Errorf("delete refused blob of %s: %w", sw.version.ID, delErr))
+	}
+
+	if discardErr := s.states.DiscardStateVersion(ctx, sw.version.ID, sw.fence); discardErr != nil {
+		return errors.Join(cause, fmt.Errorf("discard refused state version %s: %w", sw.version.ID, discardErr))
+	}
+
+	return cause
 }
 
 // checkStreamLock refuses a streamed write whose lock ID does not name the

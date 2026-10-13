@@ -737,7 +737,7 @@ func checkFinalizeHolder(
 	ctx context.Context, q *db.Queries, row codec.StateVersionRow, wrow db.Workspace,
 ) error {
 	if !row.UnlockedWrite {
-		return checkFinalizeLock(wrow, row.LockID)
+		return checkFinalizeLock(wrow, row.LockID, row.Holder)
 	}
 
 	if wrow.LockHolder != "" && wrow.LockHolder != row.Holder {
@@ -901,13 +901,14 @@ func checkUnlockedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace
 	return nil
 }
 
-// checkFinalizeLock checks that the workspace is still held by the lock the
-// version was declared under.
-func checkFinalizeLock(wrow db.Workspace, lockID string) error {
+// checkFinalizeLock checks that the workspace is still held by the lock ID and
+// the holder the version was declared under. A lock ID alone is not enough: a
+// lock ID the client chose can repeat after a force-unlock.
+func checkFinalizeLock(wrow db.Workspace, lockID, holder string) error {
 	switch {
 	case wrow.LockHolder == "":
 		return workspace.ErrNotLocked
-	case wrow.LockID != lockID:
+	case wrow.LockID != lockID || wrow.LockHolder != holder:
 		return workspace.ErrLockedByOther
 	default:
 		return nil
@@ -1159,4 +1160,19 @@ func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace)
 	default:
 		return workspace.ErrConcurrentModification
 	}
+}
+
+// DiscardStateVersion implements workspace.StateStore: it deletes the pending
+// version id in one fenced transaction. A version that is not pending matches
+// no row and stays.
+func (s *Store) DiscardStateVersion(
+	ctx context.Context, id workspace.StateVersionID, fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		if _, err := q.DeleteStateVersion(ctx, id.String()); err != nil {
+			return fmt.Errorf("discard pending state: %w", err)
+		}
+
+		return nil
+	})
 }

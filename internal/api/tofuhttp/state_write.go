@@ -41,11 +41,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		return
 	}
 
-	ws, err := h.ws.Get(ctx, c.ref)
-	if errors.Is(err, workspace.ErrNotFound) {
-		ws, err = h.createWorkspace(ctx, c)
-	}
-
+	ws, err := h.workspaceOf(ctx, c)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -127,7 +123,9 @@ func contentMD5(r *http.Request) (string, error) {
 // lock: a force-unlock (ADR 49, decision 6). It needs unit:write-forced. The
 // unlock writes the fence version of a unit with state; a client-encrypted state
 // unlocks unfenced only while the forced-write switches are on (ADR 44).
-func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace) {
+func (h *Handler) forceUnlockWorkspace(
+	w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace, lockID string,
+) {
 	ctx := r.Context()
 
 	obj, err := unitObject(c.ref)
@@ -158,8 +156,9 @@ func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c
 		return h.appendOverrideAudit(r, c.principal, obj, identity.ActionUnitWriteForced, "")
 	}
 
-	_, _, err = h.ws.ForceUnlock(ctx, ws.ID, c.principal.Subject, allow, record)
-	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) {
+	_, _, err = h.ws.ForceUnlockLock(ctx, ws.ID, lockID, c.principal.Subject, allow, record)
+	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
+		errors.Is(err, workspace.ErrLockMismatch) {
 		h.writeHeldOrConflict(ctx, w, c, err)
 
 		return

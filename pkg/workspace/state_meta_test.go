@@ -3,6 +3,7 @@ package workspace //nolint:testpackage // The meta reader is unexported; its tes
 import (
 	"errors"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,4 +117,99 @@ func TestMetaStreamFailsWithTheStoreError(t *testing.T) {
 	if _, err := ms.finish(storeErr); !errors.Is(err, storeErr) {
 		t.Fatalf("finish with a store error: %v, want the store error", err)
 	}
+}
+
+// fillReader yields prefix, then n filler bytes, then suffix. It holds no more
+// than one of its parts, so a test can stream a large document it never builds.
+type fillReader struct {
+	prefix string
+	suffix string
+	n      int
+}
+
+// Read yields the next bytes of the document.
+func (r *fillReader) Read(p []byte) (int, error) {
+	if r.prefix != "" {
+		n := copy(p, r.prefix)
+		r.prefix = r.prefix[n:]
+
+		return n, nil
+	}
+
+	if r.n > 0 {
+		k := min(len(p), r.n)
+		for i := range k {
+			p[i] = 'x'
+		}
+
+		r.n -= k
+
+		return k, nil
+	}
+
+	if r.suffix != "" {
+		n := copy(p, r.suffix)
+		r.suffix = r.suffix[n:]
+
+		return n, nil
+	}
+
+	return 0, io.EOF
+}
+
+// totalAllocated returns the bytes allocated so far by the process.
+func totalAllocated() uint64 {
+	var m runtime.MemStats
+
+	runtime.ReadMemStats(&m)
+
+	return m.TotalAlloc
+}
+
+// TestReadStateMetaBoundsAllocations proves the meta reader holds no large value
+// it does not keep. A 64 MiB member that the domain skips costs almost nothing:
+// the reader never buffers a skipped token. An outputs value over its limit is
+// refused once the limit is reached, so the reader allocates about the limit
+// and not the size of the document. The test runs alone, because it reads the
+// process-wide allocation count.
+func TestReadStateMetaBoundsAllocations(t *testing.T) {
+	const size = 64 << 20
+
+	t.Run("a skipped large string", func(t *testing.T) {
+		src := &fillReader{prefix: `{"skipped":"`, n: size, suffix: `","serial":3,"lineage":"l"}`}
+
+		before := totalAllocated()
+
+		meta, err := readStateMeta(src)
+		if err != nil {
+			t.Fatalf("read state with a large skipped string: %v", err)
+		}
+
+		if grew := totalAllocated() - before; grew > 4<<20 {
+			t.Fatalf("skipping a 64 MiB string allocated %d bytes, want under 4 MiB", grew)
+		}
+
+		if !meta.HasSerial || meta.Serial != 3 {
+			t.Fatalf("serial = %d (%t), want 3", meta.Serial, meta.HasSerial)
+		}
+	})
+
+	t.Run("an outputs value over the limit", func(t *testing.T) {
+		src := &fillReader{prefix: `{"outputs":"`, n: size, suffix: `","serial":1,"lineage":"l"}`}
+
+		before := totalAllocated()
+
+		_, err := readStateMeta(src)
+		if !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("outputs of 64 MiB: err = %v, want ErrTooLarge", err)
+		}
+
+		if grew := totalAllocated() - before; grew > 2*maxOutputsBytes+(4<<20) {
+			t.Fatalf(
+				"refusing 64 MiB of outputs allocated %d bytes, want about the %d-byte limit",
+				grew,
+				maxOutputsBytes,
+			)
+		}
+	})
 }

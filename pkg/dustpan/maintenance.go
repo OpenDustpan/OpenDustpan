@@ -133,8 +133,6 @@ type maintenanceTFEDocument struct {
 	Errors []maintenanceTFEError `json:"errors"`
 }
 
-// writeMaintenanceTFE answers 503 with Retry-After as a JSON:API error
-// document. The title names maintenance for callers that show only it.
 // writeMaintenanceHTTPBackend answers 503 with Retry-After and the message as
 // plain text, the shape that the OpenTofu http backend shows.
 func writeMaintenanceHTTPBackend(w http.ResponseWriter) {
@@ -142,6 +140,8 @@ func writeMaintenanceHTTPBackend(w http.ResponseWriter) {
 	http.Error(w, maintenanceMessage, http.StatusServiceUnavailable)
 }
 
+// writeMaintenanceTFE answers 503 with Retry-After as a JSON:API error
+// document. The title names maintenance for callers that show only it.
 func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slog.Logger) {
 	w.Header().Set("Content-Type", "application/vnd.api+json")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
