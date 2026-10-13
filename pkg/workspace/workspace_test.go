@@ -476,7 +476,7 @@ func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVers
 		switch {
 		case !w.Lock.Locked():
 			return workspace.ErrNotLocked
-		case w.Lock.ID != sv.LockID:
+		case w.Lock.ID != sv.LockID, w.Lock.Holder != sv.Holder:
 			return workspace.ErrLockedByOther
 		}
 	}
@@ -591,6 +591,25 @@ func (m *memStore) SaveSensitiveMarks(
 
 	sv.SensitiveMarks = marks
 	m.versions[id] = sv
+
+	return nil
+}
+
+// DiscardStateVersion implements workspace.StateStore: it deletes the pending
+// version id, and leaves a finalized one in place.
+func (m *memStore) DiscardStateVersion(
+	_ context.Context, id workspace.StateVersionID, fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if sv, ok := m.versions[id]; ok && sv.Status == workspace.StatusPending {
+		delete(m.versions, id)
+	}
 
 	return nil
 }
@@ -931,7 +950,7 @@ func TestStateVersions(t *testing.T) {
 	ctx := t.Context()
 	enableForced(t, f)
 
-	if err := f.push(t, newState("l1", 1, "v1"), "v1"); !errors.Is(err, workspace.ErrNotLocked) {
+	if err := f.push(t, newState("l1", 1, "{\"v\":1}"), "{\"v\":1}"); !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("push without lock: %v, want ErrNotLocked", err)
 	}
 
@@ -945,11 +964,26 @@ func TestStateVersions(t *testing.T) {
 		in      workspace.NewState
 		content string
 	}{
-		{name: "first state", in: newState("l1", 1, "v1"), content: "v1", want: nil},
+		{name: "first state", in: newState("l1", 1, "{\"v\":1}"), content: "{\"v\":1}", want: nil},
 		{name: "same serial", in: newState("l1", 1, "v1b"), content: "v1b", want: workspace.ErrStaleSerial},
-		{name: "lower serial", in: newState("l1", 0, "v0"), content: "v0", want: workspace.ErrStaleSerial},
-		{name: "other lineage", in: newState("l2", 2, "v2"), content: "v2", want: workspace.ErrLineageMismatch},
-		{name: "wrong md5", in: newState("l1", 2, "v2"), content: "tampered", want: workspace.ErrChecksumMismatch},
+		{
+			name:    "lower serial",
+			in:      newState("l1", 0, "{\"v\":0}"),
+			content: "{\"v\":0}",
+			want:    workspace.ErrStaleSerial,
+		},
+		{
+			name:    "other lineage",
+			in:      newState("l2", 2, "{\"v\":2}"),
+			content: "{\"v\":2}",
+			want:    workspace.ErrLineageMismatch,
+		},
+		{
+			name:    "wrong md5",
+			in:      newState("l1", 2, "{\"v\":2}"),
+			content: "tampered",
+			want:    workspace.ErrChecksumMismatch,
+		},
 		{
 			name: "too large", in: newState("l1", 2, strings.Repeat("x", 65)), content: strings.Repeat("x", 65),
 			want: workspace.ErrTooLarge,
@@ -960,11 +994,11 @@ func TestStateVersions(t *testing.T) {
 			content: "",
 			want:    workspace.ErrInvalidState,
 		},
-		{name: "next state", in: newState("l1", 2, "v2"), content: "v2", want: nil},
+		{name: "next state", in: newState("l1", 2, "{\"v\":2}"), content: "{\"v\":2}", want: nil},
 		{
 			name:    "forced other lineage",
-			in:      workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true},
-			content: "v9",
+			in:      workspace.NewState{Lineage: "l9", MD5: sum("{\"v\":9}"), Outputs: nil, Serial: 1, Force: true},
+			content: "{\"v\":9}",
 			want:    nil,
 		},
 	}
@@ -979,7 +1013,7 @@ func TestStateVersions(t *testing.T) {
 	// limit the "too large" case above proves.
 	oversized := workspace.NewState{
 		Lineage: "l1",
-		MD5:     sum("v3"),
+		MD5:     sum("{\"v\":3}"),
 		Outputs: make([]byte, (16<<20)+1),
 		Serial:  3,
 		Force:   false,
@@ -990,7 +1024,7 @@ func TestStateVersions(t *testing.T) {
 		t.Errorf("oversized outputs: %v, want ErrTooLarge", err)
 	}
 
-	checkCurrent(t, f, "l9", "v9")
+	checkCurrent(t, f, "l9", "{\"v\":9}")
 }
 
 // TestForcedStateNeedsTheLock proves force skips the lineage and serial
@@ -1004,7 +1038,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 	ctx := t.Context()
 	enableForced(t, f)
 
-	forced := workspace.NewState{Lineage: "l9", MD5: sum("v9"), Outputs: nil, Serial: 1, Force: true}
+	forced := workspace.NewState{Lineage: "l9", MD5: sum("{\"v\":9}"), Outputs: nil, Serial: 1, Force: true}
 
 	_, err := f.svc.BeginState(ctx, f.ws.ID, "alice", forced, authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrNotLocked) {
@@ -1024,7 +1058,7 @@ func TestForcedStateNeedsTheLock(t *testing.T) {
 		t.Fatalf("force unlock: %v", err)
 	}
 
-	_, err = f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v9"))
+	_, err = f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":9}"))
 	if !errors.Is(err, workspace.ErrNotLocked) {
 		t.Errorf("forced upload after losing the lock: %v, want ErrNotLocked", err)
 	}
@@ -1079,7 +1113,7 @@ func TestUploadCapability(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1091,16 +1125,16 @@ func TestUploadCapability(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 
-	if err = upload(pending.Version.ID, other, "v1"); !errors.Is(err, workspace.ErrUploadDenied) {
+	if err = upload(pending.Version.ID, other, "{\"v\":1}"); !errors.Is(err, workspace.ErrUploadDenied) {
 		t.Errorf("foreign capability: %v, want ErrUploadDenied", err)
 	}
 
-	if err = upload(pending.Version.ID, pending.Upload, "v1"); err != nil {
+	if err = upload(pending.Version.ID, pending.Upload, "{\"v\":1}"); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 
 	// go-tfe retries a PUT whose response was lost: the same content succeeds.
-	if err = upload(pending.Version.ID, pending.Upload, "v1"); err != nil {
+	if err = upload(pending.Version.ID, pending.Upload, "{\"v\":1}"); err != nil {
 		t.Errorf("retried upload: %v", err)
 	}
 
@@ -1112,7 +1146,7 @@ func TestUploadCapability(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1121,7 +1155,7 @@ func TestUploadCapability(t *testing.T) {
 
 	*f.now = f.now.Add(workspace.UploadWindow)
 
-	if err = upload(late.Version.ID, late.Upload, "v2"); !errors.Is(err, workspace.ErrUploadDenied) {
+	if err = upload(late.Version.ID, late.Upload, "{\"v\":2}"); !errors.Is(err, workspace.ErrUploadDenied) {
 		t.Errorf("expired capability: %v, want ErrUploadDenied", err)
 	}
 }
@@ -1148,7 +1182,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 5, "v5"),
+		newState("l1", 5, "{\"v\":5}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1163,7 +1197,7 @@ func TestUploadNeedsTheLockStill(t *testing.T) {
 		t.Fatalf("bob locks: %v", err)
 	}
 
-	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("v5"))
+	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("{\"v\":5}"))
 	if !errors.Is(err, workspace.ErrLockedByOther) {
 		t.Errorf("upload after losing the lock: %v, want ErrLockedByOther", err)
 	}
@@ -1197,7 +1231,7 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"ci",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1212,7 +1246,7 @@ func TestUploadNeedsTheSameLockAcquisition(t *testing.T) {
 		t.Fatalf("relock: %v", err)
 	}
 
-	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("v1"))
+	_, err = f.svc.Upload(ctx, stale.Version.ID, stale.Upload, strings.NewReader("{\"v\":1}"))
 	if !errors.Is(err, workspace.ErrLockedByOther) {
 		t.Errorf("upload under an older lock: %v, want ErrLockedByOther", err)
 	}
@@ -1234,11 +1268,11 @@ func TestUnknownFinalizeOutcomeKeepsContent(t *testing.T) {
 	f.store.lostAck = true
 	f.store.mu.Unlock()
 
-	if err := f.push(t, newState("l1", 1, "v1"), "v1"); !errors.Is(err, errConnectionLost) {
+	if err := f.push(t, newState("l1", 1, "{\"v\":1}"), "{\"v\":1}"); !errors.Is(err, errConnectionLost) {
 		t.Fatalf("push: %v, want the lost acknowledgement", err)
 	}
 
-	checkCurrent(t, f, "l1", "v1")
+	checkCurrent(t, f, "l1", "{\"v\":1}")
 }
 
 // checkUnreadable proves ReadState of id fails with
@@ -1270,7 +1304,7 @@ func TestReadState(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
@@ -1279,7 +1313,7 @@ func TestReadState(t *testing.T) {
 
 	checkUnreadable(t, f.svc, pending.Version.ID)
 
-	if pushErr := f.push(t, newState("l1", 1, "v1"), "v1"); pushErr != nil {
+	if pushErr := f.push(t, newState("l1", 1, "{\"v\":1}"), "{\"v\":1}"); pushErr != nil {
 		t.Fatalf("push: %v", pushErr)
 	}
 
@@ -1363,7 +1397,7 @@ func TestChecksumMismatchDeletesBlob(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1520,7 +1554,7 @@ func TestDiscardJSONRendering(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1549,7 +1583,7 @@ func TestDiscardJSONRendering(t *testing.T) {
 
 	// The rendering never consumes the capability: the state upload with the
 	// same capability still finalizes.
-	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if uploadErr != nil {
 		t.Fatalf("upload after discard: %v", uploadErr)
 	}
@@ -1570,7 +1604,7 @@ func TestDiscardJSONRendering(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
@@ -1605,13 +1639,13 @@ func TestPendingCap(t *testing.T) {
 	}
 
 	for _, serial := range []int64{1, 2} {
-		in := newState("l1", serial, "v1")
+		in := newState("l1", serial, "{\"v\":1}")
 		if _, beginErr := svc.BeginState(ctx, f.ws.ID, "alice", in, authority(forcedOnly(), nil)); beginErr != nil {
 			t.Fatalf("begin serial %d: %v", serial, beginErr)
 		}
 	}
 
-	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "v3"), authority(forcedOnly(), nil))
+	_, err := svc.BeginState(ctx, f.ws.ID, "alice", newState("l1", 3, "{\"v\":3}"), authority(forcedOnly(), nil))
 	if !errors.Is(err, workspace.ErrTooManyPending) {
 		t.Fatalf("begin past the cap: %v, want ErrTooManyPending", err)
 	}
@@ -1622,7 +1656,7 @@ func TestPendingCap(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 3, "v3"),
+		newState("l1", 3, "{\"v\":3}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1677,7 +1711,7 @@ func unknownUpload(t *testing.T, f fixture, in workspace.NewState) workspace.Pen
 	f.store.failFinalize = errFinalizeFailed
 	f.store.mu.Unlock()
 
-	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if !errors.Is(uploadErr, errFinalizeFailed) {
 		t.Fatalf("upload: %v, want the unknown outcome", uploadErr)
 	}
@@ -1698,7 +1732,7 @@ func TestUnknownOutcomeKeepsAttempt(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	stored, err := f.store.GetStateVersion(t.Context(), pending.Version.ID)
 	if err != nil {
@@ -1729,7 +1763,7 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	*f.now = f.now.Add(workspace.UploadWindow + time.Second)
 
@@ -1737,7 +1771,7 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1758,7 +1792,7 @@ func TestSweepExpiredPendingDeletesBlobs(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 3, "v3"),
+		newState("l1", 3, "{\"v\":3}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1805,13 +1839,13 @@ func TestRetryAfterUnknownDeletesSupersededBlob(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	f.store.mu.Lock()
 	f.store.failFinalize = errFinalizeFailed
 	f.store.mu.Unlock()
 
-	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); !errors.Is(
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}")); !errors.Is(
 		err, errFinalizeFailed,
 	) {
 		t.Fatalf("second upload: %v, want the unknown outcome", err)
@@ -1836,7 +1870,7 @@ func TestRetryAfterUnknownDeletesSupersededBlob(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1869,7 +1903,7 @@ func TestSupersededDeleteFailureKeepsReference(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
 	if err != nil {
@@ -1881,7 +1915,7 @@ func TestSupersededDeleteFailureKeepsReference(t *testing.T) {
 		t.Fatal("pending version names no attempted content")
 	}
 
-	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if !errors.Is(uploadErr, errFlakyBlob) {
 		t.Fatalf("second upload: %v, want the blob failure", uploadErr)
 	}
@@ -1892,7 +1926,7 @@ func TestSupersededDeleteFailureKeepsReference(t *testing.T) {
 	flaky.fails = 0
 	flaky.mu.Unlock()
 
-	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if err != nil {
 		t.Fatalf("retry upload: %v", err)
 	}
@@ -1945,7 +1979,7 @@ func assertSweepCollectsOrphan(
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -1971,9 +2005,9 @@ func TestRetryAfterUnknownSuccessKeepsOneBlob(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
-	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	sv, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if err != nil {
 		t.Fatalf("retry upload: %v", err)
 	}
@@ -2005,8 +2039,8 @@ func TestRetryAfterUnknownSuccessKeepsOneBlob(t *testing.T) {
 		t.Fatalf("close current state: %v", closeErr)
 	}
 
-	if string(content) != "v1" {
-		t.Fatalf("current content = %q, want %q", content, "v1")
+	if string(content) != "{\"v\":1}" {
+		t.Fatalf("current content = %q, want %q", content, "{\"v\":1}")
 	}
 }
 
@@ -2051,7 +2085,7 @@ func TestSweepRetriesBlobDeletes(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
@@ -2059,7 +2093,7 @@ func TestSweepRetriesBlobDeletes(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2095,14 +2129,14 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	current, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	current, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -2133,7 +2167,7 @@ func TestSweepDeletesUnreferencedBlobs(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2165,7 +2199,7 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending := unknownUpload(t, f, newState("l1", 1, "v1"))
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
 
 	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
@@ -2173,7 +2207,7 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 2, "v2"),
+		newState("l1", 2, "{\"v\":2}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2214,7 +2248,7 @@ func TestSweepBlobFailureKeepsDeclare(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 3, "v3"),
+		newState("l1", 3, "{\"v\":3}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2252,7 +2286,7 @@ func TestConcurrentBeginStateKeepsCap(t *testing.T) {
 				ctx,
 				f.ws.ID,
 				"alice",
-				newState("l1", int64(i+1), "v1"),
+				newState("l1", int64(i+1), "{\"v\":1}"),
 				authority(forcedOnly(), nil),
 			)
 		})
@@ -2310,7 +2344,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2326,7 +2360,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 			ctx,
 			f.ws.ID,
 			"alice",
-			newState("l1", 2, "v1"),
+			newState("l1", 2, "{\"v\":1}"),
 			authority(forcedOnly(), nil),
 		)
 	})
@@ -2335,7 +2369,7 @@ func TestConcurrentBeginStateAcrossInstancesKeepsCap(t *testing.T) {
 			ctx,
 			f.ws.ID,
 			"alice",
-			newState("l1", 3, "v1"),
+			newState("l1", 3, "{\"v\":1}"),
 			authority(forcedOnly(), nil),
 		)
 	})
@@ -2516,7 +2550,7 @@ func concurrentUploadAcrossServicesOnce(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if beginErr != nil {
@@ -2563,11 +2597,11 @@ func assertOneUploadWins(
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		_, errs[0] = first.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+		_, errs[0] = first.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	})
 
 	wg.Go(func() {
-		_, errs[1] = second.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+		_, errs[1] = second.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	})
 
 	wg.Wait()
@@ -2614,8 +2648,8 @@ func assertCurrentHoldsOnlyBlob(t *testing.T, f fixture, dir string) {
 		t.Fatalf("read current state: %v", readErr)
 	}
 
-	if string(content) != "v1" {
-		t.Fatalf("current content = %q, want %q", content, "v1")
+	if string(content) != "{\"v\":1}" {
+		t.Fatalf("current content = %q, want %q", content, "{\"v\":1}")
 	}
 
 	if listed := listBlobDir(t, dir); !slices.Equal(listed, []string{current.Content.String()}) {
@@ -2665,7 +2699,7 @@ func checkRejectedFinalizeDeletesBlob(t *testing.T, sentinel error) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2676,7 +2710,7 @@ func checkRejectedFinalizeDeletesBlob(t *testing.T, sentinel error) {
 	f.store.failFinalize = sentinel
 	f.store.mu.Unlock()
 
-	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1"))
+	_, uploadErr := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}"))
 	if !errors.Is(uploadErr, sentinel) {
 		t.Fatalf("upload: %v, want %v", uploadErr, sentinel)
 	}
@@ -2704,7 +2738,7 @@ func TestDiscardJSONRenderingTooLarge(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -2728,7 +2762,7 @@ func TestDiscardJSONRenderingTooLarge(t *testing.T) {
 		t.Errorf("discard after oversized: %v", discardErr)
 	}
 
-	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); err != nil {
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}")); err != nil {
 		t.Errorf("upload after oversized discard: %v", err)
 	}
 }
@@ -2750,14 +2784,14 @@ func TestDiscardJSONRenderingExpiryAfterFinalize(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("v1")); err != nil {
+	if _, err := f.svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader("{\"v\":1}")); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 
@@ -2973,8 +3007,8 @@ func TestHistory(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
-	second := pushVersion(t, f, 2, "v2")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
+	second := pushVersion(t, f, 2, "{\"v\":2}")
 
 	list, total, err := f.svc.History(ctx, f.ws.ID, workspace.Page{Limit: 0, Offset: 0})
 	if err != nil {
@@ -3022,9 +3056,9 @@ func TestRestoreMiddleVersion(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
-	second := pushVersion(t, f, 2, "v2")
-	third := pushVersion(t, f, 3, "v3")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
+	second := pushVersion(t, f, 2, "{\"v\":2}")
+	third := pushVersion(t, f, 3, "{\"v\":3}")
 
 	mustUnlock(t, f)
 
@@ -3037,8 +3071,8 @@ func TestRestoreMiddleVersion(t *testing.T) {
 
 	checkRestored(t, restored, second)
 
-	if got := readContent(t, f, restored); got != "v2" {
-		t.Errorf("restored content = %q, want %q", got, "v2")
+	if got := readContent(t, f, restored); got != "{\"v\":2}" {
+		t.Errorf("restored content = %q, want %q", got, "{\"v\":2}")
 	}
 
 	checkCurrentID(t, f, restored.ID)
@@ -3078,7 +3112,7 @@ func TestRestoreLockedByOther(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 	mustLock(t, f, "bob")
@@ -3121,8 +3155,8 @@ func TestRestoreWhileCallerHoldsLock(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
-	pushVersion(t, f, 2, "v2")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
+	pushVersion(t, f, 2, "{\"v\":2}")
 
 	before, err := f.svc.GetByID(ctx, f.ws.ID)
 	if err != nil {
@@ -3149,8 +3183,8 @@ func TestRestoreWhileCallerHoldsLock(t *testing.T) {
 		t.Errorf("lock = %+v, want the lock still held by alice under %q", after.Lock, before.Lock.ID)
 	}
 
-	if got := readContent(t, f, restored); got != "v1" {
-		t.Errorf("restored content = %q, want %q", got, "v1")
+	if got := readContent(t, f, restored); got != "{\"v\":1}" {
+		t.Errorf("restored content = %q, want %q", got, "{\"v\":1}")
 	}
 }
 
@@ -3165,8 +3199,8 @@ func TestRestoreConcurrentSameHolderWritesOnce(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
-	pushVersion(t, f, 2, "v2")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
+	pushVersion(t, f, 2, "{\"v\":2}")
 
 	*f.now = f.now.Add(time.Second)
 
@@ -3226,7 +3260,7 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
@@ -3256,14 +3290,14 @@ func TestRestoreUnknownVersion(t *testing.T) {
 		ctx,
 		other.ID,
 		"alice",
-		newState("l1", 1, "v1"),
+		newState("l1", 1, "{\"v\":1}"),
 		authority(forcedOnly(), nil),
 	)
 	if err != nil {
 		t.Fatalf("begin other: %v", err)
 	}
 
-	_, err = f.svc.Upload(ctx, otherPending.Version.ID, otherPending.Upload, strings.NewReader("v1"))
+	_, err = f.svc.Upload(ctx, otherPending.Version.ID, otherPending.Upload, strings.NewReader("{\"v\":1}"))
 	if err != nil {
 		t.Fatalf("upload other: %v", err)
 	}
@@ -3291,7 +3325,7 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 
@@ -3381,7 +3415,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 
@@ -3432,7 +3466,7 @@ func TestRestoreRetryMakesNoSecondVersion(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 
@@ -3475,7 +3509,7 @@ func TestRestoreRetryLockedByOther(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 
@@ -3540,7 +3574,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 
 	mustLock(t, f, "alice")
 
-	first := pushVersion(t, f, 1, "v1")
+	first := pushVersion(t, f, 1, "{\"v\":1}")
 
 	mustUnlock(t, f)
 
@@ -3764,7 +3798,10 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 
 	f := newSealedFixture(t)
 
-	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
+	// The outputs come from the body (ADR 49, decision 8), so the body carries
+	// the output value the test checks.
+	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}},` +
+		`"resources":[{"attr":"s3cr3t-state-attribute"}]}`
 	sensitive := "s3cr3t-state-attribute"
 	outputValue := "s3cr3t-output-value"
 
@@ -3783,7 +3820,12 @@ func TestSealedReadWithoutSealerFails(t *testing.T) {
 	t.Parallel()
 
 	f := newSealedFixture(t)
-	sv := uploadSealedState(t, f, `{"version":4}`, "s3cr3t-output-value")
+	sv := uploadSealedState(
+		t,
+		f,
+		`{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`,
+		"s3cr3t-output-value",
+	)
 	ctx := t.Context()
 
 	plain, err := workspace.NewService(workspace.Config{
@@ -3955,7 +3997,8 @@ func TestSealedDownloadTamper(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	content := strings.Repeat(`{"sensitive":"s3cr3t-state-attribute"}`, 5000)
+	content := `{"resources":[` + strings.Repeat(`{"sensitive":"s3cr3t-state-attribute"},`, 4999) +
+		`{"sensitive":"s3cr3t-state-attribute"}]}`
 
 	pending, err := f.svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
 		Lineage: "l1",

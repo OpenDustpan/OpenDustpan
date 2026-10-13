@@ -53,6 +53,7 @@ func (s *Service) releaseWithFence(
 		key:       sv.Content,
 		want:      sv.MD5,
 		content:   bytes.NewReader(content),
+		unchecked: false,
 	})
 	if err != nil {
 		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)

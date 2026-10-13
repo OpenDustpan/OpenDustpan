@@ -685,20 +685,22 @@ const (
 	// seedStateLineage is the lineage SeedTofuState writes when the workspace
 	// has no state yet.
 	seedStateLineage = "seed-lineage"
-	// seedStateOutputs is the json-state-outputs document SeedTofuState
-	// writes: the greeting output with its cty value and type, plus a
-	// sensitive output so the run also proves the single-output route the
-	// CLI uses for it.
+	// seedStateOutputs is the outputs document of the seeded state. The stored
+	// outputs come from the uploaded body, so SeedTofuState writes it there
+	// too: the greeting output with its cty value and type, plus a sensitive
+	// output so the run also proves the single-output route the CLI uses for
+	// it.
 	seedStateOutputs = `{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
 		`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}`
 )
 
 // seedStateDocument returns a minimal tfstate document with lineage, serial
-// and the greeting output.
+// and the outputs of the seed. The outputs come from this body, not from the
+// declared rendering (ADR 49, decision 8), so the body carries both outputs.
 func seedStateDocument(lineage string, serial int64) []byte {
 	doc := `{"version":4,"terraform_version":"1.11.0","serial":` + strconv.FormatInt(serial, 10) +
 		`,"lineage":` + strconv.Quote(lineage) +
-		`,"outputs":{"greeting":{"value":"hello","type":"string"}},"resources":[]}`
+		`,"outputs":` + seedStateOutputs + `,"resources":[]}`
 
 	return []byte(doc)
 }
