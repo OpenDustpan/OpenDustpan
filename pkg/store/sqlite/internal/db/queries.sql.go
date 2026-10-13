@@ -104,6 +104,21 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+const closeJournal = `-- name: CloseJournal :exec
+UPDATE updates SET journal_closed = 1
+WHERE stack_id = ? AND id = ?
+`
+
+type CloseJournalParams struct {
+	StackID string
+	ID      string
+}
+
+func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
+	_, err := q.db.ExecContext(ctx, closeJournal, arg.StackID, arg.ID)
+	return err
+}
+
 const countAuditEntries = `-- name: CountAuditEntries :one
 SELECT COUNT(*)
 FROM audit_entries
@@ -473,6 +488,36 @@ type DeleteInventoryParams struct {
 
 func (q *Queries) DeleteInventory(ctx context.Context, arg DeleteInventoryParams) error {
 	_, err := q.db.ExecContext(ctx, deleteInventory, arg.Namespace, arg.Tool, arg.Name)
+	return err
+}
+
+const deleteJournal = `-- name: DeleteJournal :exec
+DELETE FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournal(ctx context.Context, arg DeleteJournalParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournal, arg.StackID, arg.UpdateID)
+	return err
+}
+
+const deleteJournalSequences = `-- name: DeleteJournalSequences :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalSequencesParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournalSequences(ctx context.Context, arg DeleteJournalSequencesParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalSequences, arg.StackID, arg.UpdateID)
 	return err
 }
 
@@ -1333,9 +1378,9 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
-    stack_id, update_id, arrival, blob_key, sha256, size,
+    stack_id, update_id, arrival, blob_key, sha256, md5, size,
     lowest_sequence, sequence_ids, operation_ids
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertJournalParams struct {
@@ -1344,6 +1389,7 @@ type InsertJournalParams struct {
 	Arrival        int64
 	BlobKey        string
 	Sha256         []byte
+	Md5            []byte
 	Size           int64
 	LowestSequence int64
 	SequenceIds    string
@@ -1357,6 +1403,7 @@ func (q *Queries) InsertJournal(ctx context.Context, arg InsertJournalParams) er
 		arg.Arrival,
 		arg.BlobKey,
 		arg.Sha256,
+		arg.Md5,
 		arg.Size,
 		arg.LowestSequence,
 		arg.SequenceIds,
@@ -1389,6 +1436,40 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 	return err
 }
 
+const journalBlobKeys = `-- name: JournalBlobKeys :many
+SELECT blob_key FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival
+`
+
+type JournalBlobKeysParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) JournalBlobKeys(ctx context.Context, arg JournalBlobKeysParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, journalBlobKeys, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var blob_key string
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const journalSequenceSHA = `-- name: JournalSequenceSHA :one
 SELECT sha256 FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ? AND sequence = ?
@@ -1405,6 +1486,28 @@ func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHA
 	var sha256 []byte
 	err := row.Scan(&sha256)
 	return sha256, err
+}
+
+const journalState = `-- name: JournalState :one
+SELECT journal_closed, status FROM updates
+WHERE stack_id = ? AND id = ?
+`
+
+type JournalStateParams struct {
+	StackID string
+	ID      string
+}
+
+type JournalStateRow struct {
+	JournalClosed int64
+	Status        string
+}
+
+func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (JournalStateRow, error) {
+	row := q.db.QueryRowContext(ctx, journalState, arg.StackID, arg.ID)
+	var i JournalStateRow
+	err := row.Scan(&i.JournalClosed, &i.Status)
+	return i, err
 }
 
 const lastAuditEntry = `-- name: LastAuditEntry :one

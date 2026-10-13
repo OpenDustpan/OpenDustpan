@@ -134,7 +134,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, "id", "kind", "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
-				"created_by", "restored_from", "journal_version",
+				"created_by", "restored_from", "journal_version", "journal_closed",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -155,7 +155,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "update_journal",
 			columns: []string{
-				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", "sha256", pgColSize,
+				pgColStackID, pgColUpdateID, pgColArrival, "blob_key", "sha256", "md5", pgColSize,
 				"lowest_sequence", "sequence_ids", "operation_ids",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},

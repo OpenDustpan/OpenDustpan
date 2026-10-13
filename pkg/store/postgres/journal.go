@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -79,7 +80,8 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
-// check: the blob key, the lease and the update kind.
+// check: the blob key, the lease, the update kind, and an open journal. A closed journal
+// refuses every batch, so no batch can land after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
 	if err := checkJournalKey(stackID, row); err != nil {
 		return err
@@ -89,7 +91,20 @@ func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 		return err
 	}
 
-	return checkMutates(ctx, q, stackID, row.Update)
+	if err := checkMutates(ctx, q, stackID, row.Update); err != nil {
+		return err
+	}
+
+	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: row.Update.String()})
+	if err != nil {
+		return fmt.Errorf("read journal state: %w", err)
+	}
+
+	if state.JournalClosed {
+		return stack.ErrWrongUpdateState
+	}
+
+	return nil
 }
 
 // checkJournalKey refuses a row whose blob key does not belong to the stack and the
@@ -171,6 +186,7 @@ func insertJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 		Arrival:        arrival,
 		BlobKey:        string(row.BlobKey),
 		Sha256:         row.SHA256[:],
+		Md5:            row.MD5[:],
 		Size:           row.Size,
 		LowestSequence: lowestOf(row.SequenceIDs),
 		SequenceIds:    string(seqs),
@@ -233,4 +249,155 @@ func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 	}
 
 	return nil
+}
+
+// JournalKeys implements stack.JournalStore. It is keyed by the stack ID, as the blob
+// keys are. A missing update yields no keys.
+func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.UpdateID) ([]blob.Key, error) {
+	rows, err := s.queries.JournalBlobKeys(
+		ctx,
+		db.JournalBlobKeysParams{StackID: stackID.String(), UpdateID: update.String()},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("select journal blob keys: %w", err)
+	}
+
+	return journalBlobKeys(rows), nil
+}
+
+// JournalSweepable implements stack.JournalStore. It reports whether the journal is
+// closed or the update no longer runs. A missing update is ErrUpdateNotFound.
+func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
+	state, err := s.queries.JournalState(ctx, db.JournalStateParams{StackID: stackID.String(), ID: update.String()})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, stack.ErrUpdateNotFound
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("read journal state: %w", err)
+	}
+
+	return state.JournalClosed || state.Status != string(stack.StatusRunning), nil
+}
+
+// PutBuiltCheckpoint implements stack.BuiltCheckpointStore. The checkpoint write is the
+// one of PutCheckpoint, and the journal rows of the update are deleted in the same
+// transaction after it. A failed check deletes nothing.
+func (s *Store) PutBuiltCheckpoint(
+	ctx context.Context,
+	cp stack.Checkpoint,
+	fence namespace.Fence,
+) ([]blob.Key, error) {
+	var keys []blob.Key
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrWrongUpdateState
+		}
+
+		if err != nil {
+			return err
+		}
+
+		row, rowErr := codec.ToCheckpointRow(cp, stack.ID(stackID))
+		if rowErr != nil {
+			return rowErr
+		}
+
+		if lockErr := lockForBuild(ctx, q, stackID, cp.Update); lockErr != nil {
+			return lockErr
+		}
+
+		if writeErr := writeCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
+			return writeErr
+		}
+
+		removed, closeErr := closeAndRemove(ctx, q, stackID, cp.Update)
+		keys = removed
+
+		return closeErr
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return keys, nil
+}
+
+// closeAndRemove closes the journal of the update and removes its rows, in the caller's
+// transaction. A journal that is already closed keeps no rows, so a retry of the build
+// deletes nothing and returns no keys.
+func closeAndRemove(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) ([]blob.Key, error) {
+	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: update.String()})
+	if err != nil {
+		return nil, fmt.Errorf("read journal state: %w", err)
+	}
+
+	if state.JournalClosed {
+		return nil, nil
+	}
+
+	keys, err := removeJournal(ctx, q, stackID, update)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := q.CloseJournal(ctx, db.CloseJournalParams{StackID: stackID, ID: update.String()}); err != nil {
+		return nil, fmt.Errorf("close journal: %w", err)
+	}
+
+	return keys, nil
+}
+
+// removeJournal deletes the sequence rows and the batch rows of an update, and returns
+// the blob keys of the batches it deleted. It runs in the caller's transaction.
+func removeJournal(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) ([]blob.Key, error) {
+	found, err := q.JournalBlobKeys(ctx, db.JournalBlobKeysParams{StackID: stackID, UpdateID: update.String()})
+	if err != nil {
+		return nil, fmt.Errorf("select journal blob keys: %w", err)
+	}
+
+	seqErr := q.DeleteJournalSequences(
+		ctx,
+		db.DeleteJournalSequencesParams{StackID: stackID, UpdateID: update.String()},
+	)
+	if seqErr != nil {
+		return nil, fmt.Errorf("delete journal sequences: %w", seqErr)
+	}
+
+	rowsErr := q.DeleteJournal(ctx, db.DeleteJournalParams{StackID: stackID, UpdateID: update.String()})
+	if rowsErr != nil {
+		return nil, fmt.Errorf("delete journal rows: %w", rowsErr)
+	}
+
+	return journalBlobKeys(found), nil
+}
+
+// lockForBuild locks the update row FOR UPDATE, as the batch write does (#445), so a
+// batch and the build of one update run one after the other.
+func lockForBuild(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) error {
+	_, err := q.LockUpdateForJournal(ctx, db.LockUpdateForJournalParams{
+		StackID: stackID,
+		ID:      update.String(),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stack.ErrWrongUpdateState
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock update for journal: %w", err)
+	}
+
+	return nil
+}
+
+// journalBlobKeys converts stored blob keys to keys of the blob store.
+func journalBlobKeys(rows []string) []blob.Key {
+	keys := make([]blob.Key, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, blob.Key(row))
+	}
+
+	return keys
 }

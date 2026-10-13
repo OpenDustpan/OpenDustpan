@@ -3,11 +3,13 @@ package stack
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // The backup manifest records MD5 of stored bytes, for integrity, not security.
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -22,6 +24,15 @@ var ErrJournalConflict = errors.New("journal batch differs from the batch stored
 // ErrJournalKey is returned when a row names a blob key that does not belong to
 // its stack and update. The caller builds the key, so this is a bug in the caller.
 var ErrJournalKey = errors.New("journal blob key does not belong to the update")
+
+// ErrNilVerifier is returned by NewJournalEntries for a nil verifier. Without a
+// verifier a batch would be stored unchecked, so the writer is never built with one.
+var ErrNilVerifier = errors.New("journal writer needs a batch verifier")
+
+// journalSweepGrace is how long after its write a journal blob stays before the
+// sweep may delete it, so a blob written just before its row is not removed.
+// It matches the grace period of checkpoint blobs.
+const journalSweepGrace = time.Hour
 
 // ErrJournalBatch is returned for a batch body that has no entries, an entry with a
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
@@ -54,11 +65,13 @@ type JournalBatch struct {
 // JournalRow is the row of one stored batch: the blob that holds it, and the
 // parts that the retry check and the replay read (ADR 43, decision 6.1).
 type JournalRow struct {
-	Ref          Ref
-	Update       UpdateID
-	Lease        token.Digest
-	BlobKey      blob.Key
-	SHA256       [sha256.Size]byte
+	Ref     Ref
+	Update  UpdateID
+	Lease   token.Digest
+	BlobKey blob.Key
+	SHA256  [sha256.Size]byte
+	// MD5 is the MD5 of the stored bytes. The backup manifest names the blob by it.
+	MD5          [md5.Size]byte
 	Size         int64
 	SequenceIDs  []int64
 	OperationIDs []int64
@@ -81,6 +94,27 @@ type JournalStore interface {
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
 	// Verify function that returns an error is refused with ErrJournalBatch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
+	// JournalKeys returns the blob keys of the batches of the update, in arrival
+	// order. It is keyed by the stack ID, as the blob keys are. A missing update
+	// yields an empty list. The sweep compares this set with the stored blobs.
+	JournalKeys(ctx context.Context, stackID ID, update UpdateID) ([]blob.Key, error)
+	// JournalSweepable reports whether the sweep may delete the journal blobs of the
+	// update: its journal is closed, or the update no longer runs. Then no batch can
+	// be added while the sweep runs. It returns ErrUpdateNotFound for a missing update,
+	// so a sweep never deletes for a stack it cannot find.
+	JournalSweepable(ctx context.Context, stackID ID, update UpdateID) (bool, error)
+}
+
+// BuiltCheckpointStore writes the checkpoint of a built update and removes its
+// journal in one transaction (ADR 43, decision 6.7). The build (item 10) is the
+// only caller. An ordinary save uses CheckpointStore.PutCheckpoint, which keeps the
+// journal.
+type BuiltCheckpointStore interface {
+	// PutBuiltCheckpoint runs every check of PutCheckpoint and then deletes the
+	// batch rows and sequence rows of the update, in the same fenced transaction.
+	// When a check fails, it deletes nothing. It returns the blob keys of the
+	// deleted rows. The caller removes those blobs after the commit with RemoveBlobs.
+	PutBuiltCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) ([]blob.Key, error)
 }
 
 // KnownOperationIDs returns the operation IDs that the stored rows of an update
@@ -123,8 +157,76 @@ type JournalEntries struct {
 
 // NewJournalEntries returns a writer over the blob store, the row store and the
 // batch verifier.
-func NewJournalEntries(blobs blob.Store, rows JournalStore, verifier BatchVerifier) *JournalEntries {
-	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier}
+func NewJournalEntries(blobs blob.Store, rows JournalStore, verifier BatchVerifier) (*JournalEntries, error) {
+	if verifier == nil {
+		return nil, ErrNilVerifier
+	}
+
+	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier}, nil
+}
+
+// RemoveBlobs deletes the blobs of journal batches after the build has removed their
+// rows. A failed delete leaves the blob for the sweep. The returned error joins the
+// failures, and the caller logs it without failing the build.
+func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error {
+	var errs []error
+
+	for _, key := range keys {
+		if err := j.blobs.Delete(ctx, key); err != nil {
+			errs = append(errs, fmt.Errorf("delete journal blob %s: %w", key, err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// SweepUpdate deletes the journal blobs of one update that no row names and that are
+// older than the grace period at now: batches whose row never committed, and blobs
+// that a finished build left behind. It runs only when the store reports the journal
+// sweepable, so no batch can be added during the sweep. The listing covers one update
+// prefix. It returns the first error that it meets, joined with the others.
+func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update UpdateID, now time.Time) error {
+	sweepable, err := j.rows.JournalSweepable(ctx, stackID, update)
+	if err != nil {
+		return fmt.Errorf("check journal sweepable: %w", err)
+	}
+
+	if !sweepable {
+		return nil
+	}
+
+	prefix := "pulumi/" + stackID.String() + "/" + update.String() + "/journal/"
+
+	listed, err := j.blobs.List(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("list journal blobs: %w", err)
+	}
+
+	if len(listed) == 0 {
+		return nil
+	}
+
+	named, err := j.rows.JournalKeys(ctx, stackID, update)
+	if err != nil {
+		return fmt.Errorf("read journal keys: %w", err)
+	}
+
+	keep := make(map[blob.Key]bool, len(named))
+	for _, key := range named {
+		keep[key] = true
+	}
+
+	var orphans []blob.Key
+
+	for _, obj := range listed {
+		if keep[obj.Key] || now.Sub(obj.ModifiedAt) < journalSweepGrace {
+			continue
+		}
+
+		orphans = append(orphans, obj.Key)
+	}
+
+	return j.RemoveBlobs(ctx, orphans)
 }
 
 // Append stores one batch. It returns nil when the batch is stored, or when it is
@@ -146,6 +248,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 	}
 
 	sum := sha256.Sum256(batch.Content)
+	sumMD5 := md5.Sum(batch.Content) //nolint:gosec // Integrity checksum for the backup manifest, not security.
 	key := journalKey(batch.StackID, batch.Update, lowest(ids.sequences))
 
 	created, err := j.putBlob(ctx, key, batch.Content, sum)
@@ -159,6 +262,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Lease:        batch.Lease,
 		BlobKey:      key,
 		SHA256:       sum,
+		MD5:          sumMD5,
 		Size:         int64(len(batch.Content)),
 		SequenceIDs:  ids.sequences,
 		OperationIDs: ids.operations,

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -42,6 +43,7 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 		Lease:        u.Lease.Digest,
 		BlobKey:      blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", st.ID, u.ID, low)),
 		SHA256:       sum,
+		MD5:          [16]byte{sha},
 		Size:         1,
 		SequenceIDs:  seqs,
 		OperationIDs: ops,
@@ -272,5 +274,297 @@ func testJournalVerify(t *testing.T, f fixture) {
 
 	if retried, err := f.s.PutJournalRow(t.Context(), accepted, f.fence); err != nil || retried {
 		t.Fatalf("accepted batch: retried %t, err %v; want stored", retried, err)
+	}
+}
+
+// mustStackID returns the ID of the stack named by ref.
+func mustStackID(t *testing.T, s Store, ref stack.Ref) stack.ID {
+	t.Helper()
+
+	st, err := s.GetStack(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get stack: %v", err)
+	}
+
+	return st.ID
+}
+
+// sortedKeys returns the keys in order, for comparison.
+func sortedKeys(keys []blob.Key) []blob.Key {
+	out := slices.Clone(keys)
+	slices.Sort(out)
+
+	return out
+}
+
+// testJournalBuild shows that the built checkpoint removes the journal of the update
+// and returns the blob keys it removed, and that a refused build removes nothing.
+func testJournalBuild(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	first := journalRow(t, f.s, u, 1, 1, 2)
+	second := journalRow(t, f.s, u, 2, 3)
+
+	rows := []stack.JournalRow{first, second}
+	for i := range rows {
+		if _, err := f.s.PutJournalRow(t.Context(), rows[i], f.fence); err != nil {
+			t.Fatalf("journal batch: %v", err)
+		}
+	}
+
+	want := []blob.Key{first.BlobKey, second.BlobKey}
+
+	testJournalRefusedBuild(t, f, u, want)
+
+	removed, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if !slices.Equal(sortedKeys(removed), sortedKeys(want)) {
+		t.Fatalf("build removed keys %v, want %v", removed, want)
+	}
+
+	after, afterErr := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if afterErr != nil || len(after) != 0 {
+		t.Fatalf("journal after the build = %v, %v; want empty", after, afterErr)
+	}
+
+	// The journal is closed: a batch after the build is refused, not stored and lost.
+	if _, putErr := f.s.PutJournalRow(t.Context(), first, f.fence); !errors.Is(putErr, stack.ErrWrongUpdateState) {
+		t.Fatalf("batch after the build: err = %v, want ErrWrongUpdateState", putErr)
+	}
+
+	// A retry of the build finds the journal closed and removes nothing more.
+	again, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("retry of the build: keys %v, err %v; want no keys", again, err)
+	}
+}
+
+// testJournalRefusedBuild shows that a build refused by a stale fence or by another
+// lease removes nothing from the journal of the update.
+func testJournalRefusedBuild(t *testing.T, f fixture, u stack.Update, want []blob.Key) {
+	t.Helper()
+
+	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion - 1}
+
+	_, staleErr := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), stale)
+	if !errors.Is(staleErr, namespace.ErrFenced) {
+		t.Fatalf("build with a stale fence: err = %v, want namespace.ErrFenced", staleErr)
+	}
+
+	forged := newCheckpoint(u, 0, "{}")
+	forged.Lease = sha256.Sum256([]byte("another lease"))
+
+	_, forgedErr := f.s.PutBuiltCheckpoint(t.Context(), forged, f.fence)
+	if !errors.Is(forgedErr, stack.ErrWrongUpdateState) {
+		t.Fatalf("build under another lease: err = %v, want ErrWrongUpdateState", forgedErr)
+	}
+
+	got, keysErr := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if keysErr != nil || !slices.Equal(sortedKeys(got), sortedKeys(want)) {
+		t.Fatalf("journal after refused builds = %v, %v; want %v", got, keysErr, want)
+	}
+}
+
+// testJournalBuildRace starts a batch and the build of one update at once. A batch that
+// stored before the build has its key among the keys that the build removed. A batch
+// that the build beat is refused or stored after it, so its key is not lost.
+func testJournalBuildRace(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	row := journalRow(t, f.s, u, 1, 1)
+
+	var (
+		wg        sync.WaitGroup
+		putErr    error
+		removed   []blob.Key
+		buildErr  error
+		startLine = make(chan struct{})
+	)
+
+	wg.Go(func() {
+		<-startLine
+		_, putErr = f.s.PutJournalRow(t.Context(), row, f.fence)
+	})
+
+	wg.Go(func() {
+		<-startLine
+		removed, buildErr = f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence)
+	})
+
+	close(startLine)
+	wg.Wait()
+
+	if buildErr != nil {
+		t.Fatalf("build beside a batch: %v", buildErr)
+	}
+
+	// Exactly two outcomes are right. A batch that stored before the build has its key
+	// among the removed keys. A batch that the build beat is refused with ErrWrongUpdateState.
+	switch {
+	case putErr == nil && slices.Contains(removed, row.BlobKey):
+	case errors.Is(putErr, stack.ErrWrongUpdateState):
+	default:
+		t.Fatalf("batch err = %v with removed keys %v: want the batch in the build or ErrWrongUpdateState",
+			putErr, removed)
+	}
+}
+
+// testBackupJournalBlob shows that the backup names the blob of each journal batch,
+// with its MD5 and size, as it names a checkpoint blob (ADR 43, decision 6.8).
+func testBackupJournalBlob(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	row := journalRow(t, src, u, 7, 1)
+	row.Size = 33
+
+	if _, err := src.PutJournalRow(t.Context(), row, f.fence); errors.Is(err, errors.ErrUnsupported) {
+		t.Skip("the store keeps no journal rows")
+	} else if err != nil {
+		t.Fatalf("journal batch: %v", err)
+	}
+
+	sum, data := exportBackup(t, src)
+
+	want := []backup.BlobRef{{MD5: row.MD5, Key: string(row.BlobKey), Size: row.Size, Sealed: false}}
+	if !slices.EqualFunc(sum.Blobs, want, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, want)
+	}
+
+	// The restored store holds the same journal rows, under the same stack ID.
+	dst := newStore(t)
+	importBackup(t, dst, data, sum)
+
+	keys, err := dst.JournalKeys(t.Context(), mustStackID(t, src, f.ref), u.ID)
+	if err != nil || !slices.Equal(keys, []blob.Key{row.BlobKey}) {
+		t.Fatalf("journal after the restore = %v, %v; want %s", keys, err, row.BlobKey)
+	}
+}
+
+// testJournalBuildIsolation shows that a build removes the journal of its own update
+// only: the rows of an earlier update of the stack and of another stack survive it.
+func testJournalBuildIsolation(t *testing.T, f fixture) {
+	t.Helper()
+
+	earlier := f.run(t, f.ref, "u0", mutating())
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, earlier, 1, 1), f.fence); err != nil {
+		t.Fatalf("earlier batch: %v", err)
+	}
+
+	f.end(t, earlier, stack.StatusSucceeded)
+
+	current := f.run(t, f.ref, "u1", mutating())
+	other := f.run(t, f.other(t), "d1", mutating())
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, other, 2, 2), f.fence); err != nil {
+		t.Fatalf("batch of another stack: %v", err)
+	}
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(current, 0, "{}"), f.fence); err != nil {
+		t.Fatalf("build of the current update: %v", err)
+	}
+
+	for _, tc := range []struct {
+		ref stack.Ref
+		id  stack.UpdateID
+	}{{f.ref, earlier.ID}, {other.Ref, other.ID}} {
+		keys, err := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, tc.ref), tc.id)
+		if err != nil || len(keys) != 1 {
+			t.Fatalf("journal of %s after another build = %v, %v; want one batch", tc.id, keys, err)
+		}
+	}
+}
+
+// testJournalBuildRefusals shows that a build refused for a preview or for a stale
+// sequence removes nothing from the journal.
+func testJournalBuildRefusals(t *testing.T, f fixture) {
+	t.Helper()
+
+	preview := f.run(
+		t,
+		f.other(t),
+		"p1",
+		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+	)
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(preview, 0, "{}"), f.fence); !errors.Is(
+		err, stack.ErrWrongUpdateState,
+	) {
+		t.Fatalf("build of a preview: err = %v, want ErrWrongUpdateState", err)
+	}
+
+	u := f.run(t, f.ref, "u1", mutating())
+	want := []blob.Key{journalRow(t, f.s, u, 1, 1).BlobKey}
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 5, "{}"), f.fence); err != nil {
+		t.Fatalf("checkpoint at sequence 5: %v", err)
+	}
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 3, "{}"), f.fence); !errors.Is(
+		err, stack.ErrStaleCheckpoint,
+	) {
+		t.Fatalf("build at a stale sequence: err = %v, want ErrStaleCheckpoint", err)
+	}
+
+	keys, err := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if err != nil || !slices.Equal(sortedKeys(keys), sortedKeys(want)) {
+		t.Fatalf("journal after the refused builds = %v, %v; want %v", keys, err, want)
+	}
+}
+
+// testJournalSweepable shows when the sweep may delete the journal of an update: only
+// when the journal is closed or the update no longer runs. A missing update is an error,
+// so a sweep never deletes for a stack it cannot find.
+func testJournalSweepable(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	id := mustStackID(t, f.s, f.ref)
+
+	if ok, err := f.s.JournalSweepable(t.Context(), id, u.ID); err != nil || ok {
+		t.Fatalf("running update: sweepable %t, err %v; want not sweepable", ok, err)
+	}
+
+	if _, err := f.s.JournalSweepable(t.Context(), id, "missing-update"); !errors.Is(err, stack.ErrUpdateNotFound) {
+		t.Fatalf("missing update: err = %v, want ErrUpdateNotFound", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if ok, err := f.s.JournalSweepable(t.Context(), id, u.ID); err != nil || !ok {
+		t.Fatalf("ended update: sweepable %t, err %v; want sweepable", ok, err)
+	}
+}
+
+// testJournalKeysFollowRename shows that the journal is keyed by the stack ID, so a rename
+// of the stack keeps its journal findable by the ID that its blob keys hold.
+func testJournalKeysFollowRename(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	id := mustStackID(t, f.s, f.ref)
+
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	keys, err := f.s.JournalKeys(t.Context(), id, u.ID)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("journal after a rename = %v, %v; want one batch", keys, err)
 	}
 }
