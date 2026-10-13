@@ -18,9 +18,16 @@ const (
 	// the gate is full.
 	RetryAfterSeconds = "1"
 	// StreamCost is what a body that streams reserves: the fixed cost of
-	// its buffers (the copy buffers, the seal chunk and the decoder floor
-	// of the streaming meta reader), not its limit.
-	StreamCost = 4 << 20
+	// its buffers, not its limit (ADR 45, decision 2). It comes from a
+	// measurement (pkg/workspace/upload_memory_test.go): a 30 MiB OpenTofu
+	// state with thousands of resources, or one with a single 24 MiB string,
+	// holds at most 4.4 MiB at once through the TFE upload and the http
+	// backend write, sealed or not, and 3.7 MiB under the race detector.
+	// The cost is twice that peak. A state with a large outputs document is
+	// the exception: the upload buffers the outputs whole, and sealing
+	// buffers them again (a 7.9 MiB document peaks at 14.1 MiB unsealed and
+	// 27.6 MiB sealed), so such an upload can hold more than it reserved.
+	StreamCost = 8 << 20
 )
 
 // gzipExpansion is the size factor a gzip body reserves over its wire
