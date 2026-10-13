@@ -27,9 +27,22 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 		held[op] = true
 	}
 
+	// recordsChanged is set by an entry that changes the replay records. A write
+	// entry (kind 5) must come before all of them (upstream backend/journal.go of
+	// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that order).
+	recordsChanged := false
+
 	return DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
 		if err := replayable(entry); err != nil {
 			return err
+		}
+
+		if entry.Kind == JournalEntryKindWrite && recordsChanged {
+			return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
+		}
+
+		if changesRecords(entry.Kind) {
+			recordsChanged = true
 		}
 
 		for _, ref := range references(entry) {
@@ -44,14 +57,31 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 	})
 }
 
-// replayable refuses a kind that the replayer does not apply yet. Kinds 5 and 7 wait
-// for issue #430, and kind 10 waits for version 2 (item 12).
+// changesRecords reports whether an entry of kind changes the records of the
+// replay. A write entry must not come after one of them.
+func changesRecords(kind JournalEntryKind) bool {
+	switch kind {
+	case JournalEntryKindBegin, JournalEntryKindSuccess, JournalEntryKindFailure,
+		JournalEntryKindRefreshSuccess, JournalEntryKindOutputs, JournalEntryKindRebuiltBaseState:
+		return true
+	case JournalEntryKindSecretsManager, JournalEntryKindWrite, JournalEntryKindSnippets,
+		JournalEntryKindExtensionParameterize, JournalEntryKindStateMigration:
+		return false
+	}
+
+	return false
+}
+
+// replayable refuses a kind that the replayer does not apply yet, and a write
+// entry without a snapshot. Kind 10 waits for version 2 (item 12). Kinds 5 and 7
+// are replayed (issue #430).
 func replayable(entry JournalEntry) error {
-	unsupported := entry.Kind == JournalEntryKindWrite ||
-		entry.Kind == JournalEntryKindRebuiltBaseState ||
-		entry.Kind == JournalEntryKindStateMigration
-	if unsupported {
+	if entry.Kind == JournalEntryKindStateMigration {
 		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrUnsupportedKind)
+	}
+
+	if entry.Kind == JournalEntryKindWrite && len(entry.NewSnapshot) == 0 {
+		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrNoSnapshot)
 	}
 
 	return nil

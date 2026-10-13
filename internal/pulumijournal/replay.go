@@ -23,8 +23,9 @@
 //     output in memory.
 //   - A reference to an entry that is not applied is an error (ErrMissingReference).
 //     Upstream reads index 0 of a missing reference without an error.
-//   - Entries of kinds 5, 7 and 10 are refused (ErrUnsupportedKind). They replace
-//     the base in the middle of a replay; see issue #430.
+//   - A write entry (kind 5) and a rebuilt base state entry (kind 7) replace the
+//     base in the middle of a replay (issue #430). A kind 10 entry is refused
+//     (ErrUnsupportedKind) until item 12.
 //   - The operations that are pending are written in the order of their operation
 //     IDs. Upstream writes them in the order of a map, which is not stable.
 //   - The manifest time comes from the clock that the caller gives, and the
@@ -33,6 +34,7 @@
 package pulumijournal
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -48,6 +50,11 @@ import (
 
 // Errors that Replay returns.
 var (
+	// ErrWriteOrder reports a write entry after an entry that changes the records.
+	ErrWriteOrder = errors.New("pulumijournal: write entry follows an entry that changes the records")
+	// ErrNoSnapshot reports a write entry without a snapshot, or a rebuilt document
+	// without a deployment.
+	ErrNoSnapshot = errors.New("pulumijournal: journal entry has no snapshot")
 	// ErrUnsupportedKind reports an entry kind that this replayer does not replay yet.
 	// Kinds 5, 7 and 10 wait for issue #430.
 	ErrUnsupportedKind = errors.New("pulumijournal: journal entry kind is not replayed yet")
@@ -89,15 +96,21 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 // update are held in memory, because they are the replay state. The base
 // resources are held one at a time.
 func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
-	state := newReplayState()
-	if err := DecodeEntries(entries, journalVersion, state.apply); err != nil {
+	state := newReplayState(openBase, r)
+	decode := func(entry JournalEntry) error {
+		return state.apply(ctx, entry)
+	}
+
+	if err := DecodeEntries(entries, journalVersion, decode); err != nil {
 		return fmt.Errorf("pulumijournal: replay entries: %w", err)
 	}
-	scan, err := state.scanBase(ctx, openBase)
+
+	scan, err := state.scanBase(ctx, state.base)
 	if err != nil {
 		return err
 	}
-	return state.write(ctx, openBase, out, scan, r)
+
+	return state.write(ctx, state.base, out, scan, r)
 }
 
 // stateRecord is one resource state of the update, kept as raw JSON, with the
@@ -131,6 +144,12 @@ type operationView struct {
 // replayState is the state of one replay. It is built from the entries in the
 // order of arrival and read by the two passes over the base.
 type replayState struct {
+	// base opens the base deployment. A kind 5 entry or a kind 7 entry replaces it
+	// with a source that can also be opened more than once (issue #430).
+	base OpenBase
+	// replayer carries the clock and the CLI version of the update, which a kind 7
+	// entry needs to write the deployment it rebuilds.
+	replayer            *Replayer
 	toRemove            map[int64]struct{}
 	toDeleteInSnapshot  map[int64]struct{}
 	toReplaceInSnapshot map[int64]stateRecord
@@ -151,9 +170,12 @@ type replayState struct {
 	extensions  map[string]jsontext.Value
 }
 
-// newReplayState returns an empty replay state.
-func newReplayState() *replayState {
+// newReplayState returns a replay state over the base, with the replayer that
+// writes the rebuilt deployments of kind 7 entries.
+func newReplayState(base OpenBase, replayer *Replayer) *replayState {
 	return &replayState{
+		base:                base,
+		replayer:            replayer,
 		toRemove:            make(map[int64]struct{}),
 		toDeleteInSnapshot:  make(map[int64]struct{}),
 		toReplaceInSnapshot: make(map[int64]stateRecord),
@@ -196,7 +218,7 @@ func (s *replayState) lookup(op int64, name, field string) (int64, error) {
 
 // apply applies one entry. It is the callback of DecodeEntries, so it runs for
 // each entry before the later entries of the batch are checked.
-func (s *replayState) apply(entry JournalEntry) error {
+func (s *replayState) apply(ctx context.Context, entry JournalEntry) error {
 	name := entryLabel(entry)
 	if entry.RequiresByteString {
 		s.byteString = true
@@ -216,17 +238,125 @@ func (s *replayState) apply(entry JournalEntry) error {
 		return s.applyOutputs(entry, name)
 	case JournalEntryKindSecretsManager:
 		return s.applySecrets(entry, name)
+	case JournalEntryKindSnippets, JournalEntryKindExtensionParameterize,
+		JournalEntryKindWrite, JournalEntryKindRebuiltBaseState, JournalEntryKindStateMigration:
+		return s.applyBaseKind(ctx, entry, name)
+	default:
+		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnknownKind)
+	}
+}
+
+// applyWrite applies a write entry (kind 5). The base becomes the snapshot, as
+// upstream does (backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0,
+// lines 295 to 298). The secrets and snippets that earlier entries set are part of
+// the base that the snapshot replaces, so they are dropped. The verifier refuses a
+// write that follows an entry that changes the records (ErrWriteOrder), so the
+// records are not cleared here. A write without a snapshot is refused.
+func (s *replayState) applyWrite(entry JournalEntry, name string) error {
+	if len(entry.NewSnapshot) == 0 {
+		return fmt.Errorf("pulumijournal: entry %s: write without a snapshot: %w", name, ErrNoSnapshot)
+	}
+
+	s.base = snapshotOpener(entry.NewSnapshot)
+	s.secrets = nil
+	s.snippets = nil
+	s.snippetsSet = false
+
+	return nil
+}
+
+// applyRebuild applies a rebuilt base state entry (kind 7). The deployment of the
+// replay so far becomes the base, and the records are dropped, as upstream does in
+// backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 313
+// to 329. The secrets and snippets stay, because the rebuilt
+// base holds them. The rebuilt deployment is held in memory until issue #456
+// adds a temporary blob for it.
+func (s *replayState) applyRebuild(ctx context.Context, name string) error {
+	scan, err := s.scanBase(ctx, s.base)
+	if err != nil {
+		return fmt.Errorf("pulumijournal: entry %s: rebuild base: %w", name, err)
+	}
+
+	var buf bytes.Buffer
+
+	err = s.write(ctx, s.base, &buf, scan, s.replayer)
+	if err != nil {
+		return fmt.Errorf("pulumijournal: entry %s: rebuild base: %w", name, err)
+	}
+
+	deployment, err := deploymentOf(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("pulumijournal: entry %s: rebuild base: %w", name, err)
+	}
+
+	s.base = snapshotOpener(deployment)
+	s.clearRecords()
+	s.extensions = make(map[string]jsontext.Value)
+
+	return nil
+}
+
+// clearRecords drops the records that the base replaces: the resources to remove,
+// delete, replace or mark, the operation index, the incomplete operations and the
+// new resources (upstream backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 321 to 328).
+func (s *replayState) clearRecords() {
+	s.toRemove = make(map[int64]struct{})
+	s.toDeleteInSnapshot = make(map[int64]struct{})
+	s.toReplaceInSnapshot = make(map[int64]stateRecord)
+	s.markAsDeletion = make(map[int64]struct{})
+	s.markAsPending = make(map[int64]struct{})
+	s.opToIndex = make(map[int64]int64)
+	s.incomplete = make(map[int64]jsontext.Value)
+	s.newRecords = nil
+}
+
+// snapshotOpener returns an OpenBase over doc. Each call returns a new reader.
+func snapshotOpener(doc []byte) OpenBase {
+	return func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(doc)), nil
+	}
+}
+
+// deploymentOf returns the deployment of a checkpoint document, which is the
+// document the replayer writes: the format version and the deployment. A resource
+// marked for deletion stays, with its delete mark, as upstream GenerateDeployment
+// keeps it (backend/journal.go of github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 437 to 441).
+func deploymentOf(document []byte) ([]byte, error) {
+	var doc struct {
+		Deployment jsontext.Value `json:"deployment"`
+	}
+
+	if err := json.Unmarshal(document, &doc); err != nil {
+		return nil, fmt.Errorf("read rebuilt document: %w", err)
+	}
+
+	if len(doc.Deployment) == 0 {
+		return nil, fmt.Errorf("rebuilt document has no deployment: %w", ErrNoSnapshot)
+	}
+
+	return doc.Deployment, nil
+}
+
+// applyBaseKind applies the entries that set or replace the base: snippets,
+// extensions, a write (kind 5), a rebuilt base state (kind 7), and a state
+// migration, which is refused until item 12.
+func (s *replayState) applyBaseKind(ctx context.Context, entry JournalEntry, name string) error {
+	//nolint:exhaustive // apply sends only the base kinds here, and default refuses the rest.
+	switch entry.Kind {
 	case JournalEntryKindSnippets:
 		s.snippets = entry.Snippets
 		s.snippetsSet = true
+
 		return nil
 	case JournalEntryKindExtensionParameterize:
 		return s.applyExtension(entry, name)
-	case JournalEntryKindWrite, JournalEntryKindRebuiltBaseState, JournalEntryKindStateMigration:
-		// These kinds replace the base in the middle of a replay (issue #430).
-		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnsupportedKind)
+	case JournalEntryKindWrite:
+		return s.applyWrite(entry, name)
+	case JournalEntryKindRebuiltBaseState:
+		return s.applyRebuild(ctx, name)
 	default:
-		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnknownKind)
+		// The state migration of item 12 is not replayed yet.
+		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnsupportedKind)
 	}
 }
 
