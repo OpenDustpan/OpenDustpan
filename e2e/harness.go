@@ -685,10 +685,11 @@ const (
 	// seedStateLineage is the lineage SeedTofuState writes when the workspace
 	// has no state yet.
 	seedStateLineage = "seed-lineage"
-	// seedStateOutputs is the json-state-outputs document SeedTofuState
-	// writes: the greeting output with its cty value and type, plus a
-	// sensitive output so the run also proves the single-output route the
-	// CLI uses for it.
+	// seedStateOutputs is the outputs document of the seeded state. The stored
+	// outputs come from the uploaded body, so SeedTofuState writes it there
+	// too: the greeting output with its cty value and type, plus a sensitive
+	// output so the run also proves the single-output route the CLI uses for
+	// it.
 	seedStateOutputs = `{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
 		`"secret":{"sensitive":true,"value":"s3cr3t","type":"string"}}`
 )
