@@ -62,6 +62,12 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
+		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
+		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
+		{name: "a new stage discards the previous staging area", test: testRestoreStagingReplacesPrevious},
+		{name: "staging keeps a checkpoint held in blobs", test: testRestoreStagingKeepsCheckpointBlobs},
+		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
+		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 	}
 
 	for _, tc := range cases {

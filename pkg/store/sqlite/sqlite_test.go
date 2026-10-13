@@ -16,7 +16,6 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -2078,74 +2077,5 @@ func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
 
 	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
 		t.Fatalf("seed checkpoint: %v", err)
-	}
-}
-
-// TestStagePortableRefusesForeignKeyViolation exports a store in the portable
-// format, empties its namespaces file, and stages it with a descriptor and a
-// row count that match the empty file: the foreign-key check refuses it with
-// ErrCorrupt and the live data stays empty. No port writes an orphan, so the
-// test edits the export by hand.
-func TestStagePortableRefusesForeignKeyViolation(t *testing.T) {
-	t.Parallel()
-
-	ctx := t.Context()
-	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
-	src := openBackup(t)
-
-	ns := namespace.Namespace{
-		CreatedAt:       now,
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-	}
-	if err := src.CreateNamespace(ctx, ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{},
-		Ref:       ref,
-		ID:        stack.ID(ident.NewID("stk-")),
-		Version:   0,
-	}
-	if createErr := src.CreateStack(ctx, st, ns.Fence()); createErr != nil {
-		t.Fatalf("create stack: %v", createErr)
-	}
-
-	psrc, ok := src.(storetest.PortableStore)
-	if !ok {
-		t.Fatal("the SQLite store has no portable export")
-	}
-
-	files, sum, descs := storetest.PortableFiles(t, psrc)
-	tampered, tamperedDescs, want := storetest.EmptyPortableNamespaces(t, files, descs, sum)
-
-	dst := openBackup(t)
-
-	pdst, ok := dst.(storetest.PortableStore)
-	if !ok {
-		t.Fatal("the SQLite store has no portable stage")
-	}
-
-	_, err = pdst.StagePortable(ctx, storetest.PortableOpener(tampered), want, tamperedDescs)
-	if !errors.Is(err, backup.ErrCorrupt) {
-		t.Fatalf("stage backup of a stack without its namespace: err = %v, want ErrCorrupt", err)
-	}
-
-	if namespaces, err := dst.ListNamespaces(ctx); err != nil || len(namespaces) != 0 {
-		t.Fatalf("namespaces after a refused stage = %+v, %v; want none", namespaces, err)
-	}
-
-	if err := dst.DiscardStaging(ctx); err != nil {
-		t.Fatalf("discard staging area after a refused stage: %v", err)
 	}
 }

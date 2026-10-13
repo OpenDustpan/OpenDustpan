@@ -169,9 +169,6 @@ var (
 	ErrAlreadyExists = errors.New("backup already exists")
 	// ErrNotRunning reports that a backup is not running, so it cannot finish.
 	ErrNotRunning = errors.New("backup is not running")
-	// ErrNotEmpty reports that a restore destination holds rows, so loading
-	// would mix two installations. Restore needs an empty store.
-	ErrNotEmpty = errors.New("restore destination is not empty")
 	// ErrSchemaMismatch reports that the backup schema version differs from
 	// the schema version of the destination. A backup restores into the same
 	// schema version only.

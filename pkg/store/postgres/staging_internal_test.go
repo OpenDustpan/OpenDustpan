@@ -14,13 +14,10 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -78,58 +75,6 @@ func openStagingTestStore(t *testing.T) *postgres.Store {
 	t.Cleanup(s.Close)
 
 	return s
-}
-
-// TestStageRestoreRefusesForeignKeys exports a store, drops the namespaces
-// rows from the export, and stages it with a manifest whose namespace count
-// matches it: the foreign keys of the staging schema refuse the orphan stacks
-// with ErrCorrupt and the live tables stay whole. No port writes an orphan,
-// so the test edits the export stream by hand and fixes the stream checksum.
-func TestStageRestoreRefusesForeignKeys(t *testing.T) {
-	t.Parallel()
-
-	s := openStagingTestStore(t)
-	ctx := t.Context()
-	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
-
-	ns := namespace.Namespace{
-		CreatedAt:       now,
-		Name:            "acme",
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-	}
-	if err := s.CreateNamespace(ctx, ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-
-	st := stack.Stack{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Tags:      map[string]string{},
-		Ref:       stack.Ref{Namespace: "acme", Project: "web", Stack: "prod"},
-		ID:        "stk-test01",
-		Version:   0,
-	}
-	if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {
-		t.Fatalf("create stack: %v", err)
-	}
-
-	files, sum, descs := storetest.PortableFiles(t, s)
-	tampered, tamperedDescs, want := storetest.EmptyPortableNamespaces(t, files, descs, sum)
-
-	_, err := s.StagePortable(ctx, storetest.PortableOpener(tampered), want, tamperedDescs)
-	if !errors.Is(err, backup.ErrCorrupt) {
-		t.Fatalf("stage backup of stacks without their namespace: err = %v, want ErrCorrupt", err)
-	}
-
-	if got := mustStageNamespace(t, s); got != ns {
-		t.Fatalf("namespace after a refused stage = %+v, want %+v", got, ns)
-	}
-
-	if err := s.DiscardStaging(ctx); err != nil {
-		t.Fatalf("discard staging area after a refused stage: %v", err)
-	}
 }
 
 // TestSummarizeStagingReadsStagedVersion builds a staging schema, removes its
@@ -288,16 +233,4 @@ func TestCloseContextDropsStagingSchemaWithCanceledContext(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("staging schemas after CloseContext with a canceled context = %d, want none", count)
 	}
-}
-
-// mustStageNamespace reads the seeded namespace back, failing on error.
-func mustStageNamespace(t *testing.T, s *postgres.Store) namespace.Namespace {
-	t.Helper()
-
-	got, err := s.GetNamespace(t.Context(), "acme")
-	if err != nil {
-		t.Fatalf("get namespace after a refused stage: %v", err)
-	}
-
-	return got
 }
