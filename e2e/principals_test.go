@@ -1,0 +1,288 @@
+//go:build e2e
+
+package e2e_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"opendustpan.org/opendustpan/e2e"
+)
+
+// e2ePrincipal and e2eGroup decode the principal and group wire forms.
+type e2ePrincipal struct {
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	DisplayName string `json:"displayName"`
+	Kind        string `json:"kind"`
+	Disabled    bool   `json:"disabled"`
+}
+
+type e2eGroup struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// TestPrincipalsAndGroups drives every principal and group route of the
+// installation API (ADR 52) through the real binary, on each store. No CLI
+// calls these routes, so the harness calls them with the bootstrap admin
+// token, and the steps prove that the token keeps working (ADR 6).
+func TestPrincipalsAndGroups(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runPrincipalsOnStore(t, cli, db)
+		})
+	}
+}
+
+// runPrincipalsOnStore runs the principal and group steps on one store.
+func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	checkReady(ctx, t, env)
+
+	var alice, deploy e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, &alice)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"ci-deploy","kind":"service"}`, http.StatusCreated,
+	}, &deploy)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","kind":"person"}`, http.StatusConflict,
+	}, nil)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"admin","kind":"person"}`, http.StatusBadRequest,
+	}, nil)
+
+	if !strings.HasPrefix(alice.ID, "prn-") || alice.Kind != "person" {
+		t.Fatalf("created principal = %+v, want a person with a prn- ID", alice)
+	}
+
+	var group e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/groups",
+		`{"name":"ops","description":"Runs the platform"}`, http.StatusCreated,
+	}, &group)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/groups", `{"name":"OPS"}`,
+		http.StatusConflict,
+	}, nil)
+
+	members := "/api/server/groups/" + group.ID + "/members"
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, members, `{"principalID":"` + alice.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, members, `{"principalID":"` + deploy.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	fx := principalFixture{alice: alice, deploy: deploy, group: group}
+	checkPrincipalLists(ctx, t, env, fx)
+	checkPrincipalMembers(ctx, t, env, fx)
+	checkPrincipalChanges(ctx, t, env, fx)
+
+	for _, step := range []principalStep{
+		{http.MethodDelete, members + "/" + alice.ID, "", http.StatusNoContent},
+		{http.MethodDelete, "/api/server/groups/" + group.ID, "", http.StatusNoContent},
+		{http.MethodGet, "/api/server/groups/" + group.ID, "", http.StatusNotFound},
+		{http.MethodDelete, "/api/server/principals/" + alice.ID, "", http.StatusNoContent},
+		{http.MethodGet, "/api/server/principals/" + alice.ID, "", http.StatusNotFound},
+	} {
+		principalCall(ctx, t, env, step, nil)
+	}
+
+	status, _, err := env.ServerAPIStatusBare(ctx, http.MethodGet, "/api/server/principals")
+	if err != nil || status != http.StatusUnauthorized {
+		t.Fatalf("list without a token = %d, %v; want 401", status, err)
+	}
+}
+
+// principalStep is one installation API request of the principal steps and
+// the status it must answer.
+type principalStep struct {
+	method string
+	path   string
+	body   string
+	want   int
+}
+
+// principalFixture holds the records that the steps create.
+type principalFixture struct {
+	alice  e2ePrincipal
+	deploy e2ePrincipal
+	group  e2eGroup
+}
+
+// e2ePrincipalList, e2eGroupList, e2eMember and e2eMemberList decode the
+// lists.
+type e2ePrincipalList struct {
+	Principals []e2ePrincipal `json:"principals"`
+}
+
+type e2eGroupList struct {
+	Groups []e2eGroup `json:"groups"`
+}
+
+type e2eMember struct {
+	Principal e2ePrincipal `json:"principal"`
+}
+
+type e2eMemberList struct {
+	Members []e2eMember `json:"members"`
+}
+
+// checkPrincipalLists reads the principals, one principal, the groups and
+// one group.
+func checkPrincipalLists(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
+	t.Helper()
+
+	var list e2ePrincipalList
+	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
+
+	if len(list.Principals) != 2 || list.Principals[0].ID != fx.alice.ID || list.Principals[1].ID != fx.deploy.ID {
+		t.Fatalf("principals = %+v, want alice then ci-deploy", list.Principals)
+	}
+
+	var one e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals/" + fx.deploy.ID, "",
+		http.StatusOK,
+	}, &one)
+
+	if one.Subject != "ci-deploy" || one.Kind != "service" || one.DisplayName != "ci-deploy" {
+		t.Fatalf("principal = %+v, want the ci-deploy service", one)
+	}
+
+	var groups e2eGroupList
+	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/groups", "", http.StatusOK}, &groups)
+
+	if len(groups.Groups) != 1 || groups.Groups[0].ID != fx.group.ID {
+		t.Fatalf("groups = %+v, want ops", groups.Groups)
+	}
+
+	var got e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + fx.group.ID, "",
+		http.StatusOK,
+	}, &got)
+
+	if got.Name != "ops" || got.Description != "Runs the platform" {
+		t.Fatalf("group = %+v, want ops", got)
+	}
+}
+
+// checkPrincipalMembers reads the members of the group and the groups of
+// one principal.
+func checkPrincipalMembers(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
+	t.Helper()
+
+	var members e2eMemberList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/groups/" + fx.group.ID + "/members", "",
+		http.StatusOK,
+	}, &members)
+
+	if len(members.Members) != 2 {
+		t.Fatalf("members = %+v, want alice and ci-deploy", members.Members)
+	}
+
+	var of e2eGroupList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals/" + fx.deploy.ID + "/groups", "",
+		http.StatusOK,
+	}, &of)
+
+	if len(of.Groups) != 1 || of.Groups[0].ID != fx.group.ID {
+		t.Fatalf("groups of ci-deploy = %+v, want ops", of.Groups)
+	}
+}
+
+// checkPrincipalChanges disables a principal and renames a group.
+func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
+	t.Helper()
+
+	var changed e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPatch, "/api/server/principals/" + fx.alice.ID,
+		`{"displayName":"Alice A.","disabled":true}`, http.StatusOK,
+	}, &changed)
+
+	if !changed.Disabled || changed.DisplayName != "Alice A." || changed.Subject != fx.alice.Subject {
+		t.Fatalf("changed principal = %+v, want disabled with the new display name", changed)
+	}
+
+	var renamed e2eGroup
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPatch, "/api/server/groups/" + fx.group.ID,
+		`{"name":"operations"}`, http.StatusOK,
+	}, &renamed)
+
+	if renamed.Name != "operations" {
+		t.Fatalf("renamed group = %+v, want operations", renamed)
+	}
+}
+
+// principalCall sends one installation API request with the bootstrap admin
+// token and fails unless it answers step.want. It decodes the answer into
+// out when out is not nil.
+func principalCall(ctx context.Context, t *testing.T, env *e2e.Env, step principalStep, out any) {
+	t.Helper()
+
+	status, resp, err := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
+	if err != nil {
+		t.Fatalf("%s %s: %v", step.method, step.path, err)
+	}
+
+	if status != step.want {
+		t.Fatalf("%s %s answers %d, want %d (%s)", step.method, step.path, status, step.want, resp)
+	}
+
+	if out == nil {
+		return
+	}
+
+	if err := json.Unmarshal([]byte(resp), out); err != nil {
+		t.Fatalf("decode %s %s answer %q: %v", step.method, step.path, resp, err)
+	}
+}

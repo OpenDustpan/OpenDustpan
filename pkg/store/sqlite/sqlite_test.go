@@ -19,6 +19,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -31,6 +33,17 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestPrincipalConformance runs the principal and group store suite.
+func TestPrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.Run(t, func(t *testing.T) principal.Store {
 		t.Helper()
 
 		return open(t)

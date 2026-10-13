@@ -735,3 +735,81 @@ WHERE stack_id = $1 AND id = $2;
 -- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2;
+
+-- name: CreatePrincipal :execrows
+INSERT INTO principals (id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING;
+
+-- name: GetPrincipal :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE id = $1;
+
+-- name: GetPrincipalBySubject :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE subject = $1;
+
+-- name: ListPrincipals :many
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals ORDER BY subject COLLATE "C";
+
+-- name: UpdatePrincipal :execrows
+UPDATE principals SET display_name = $1, disabled = $2, updated_at_ms = $3
+WHERE id = $4;
+
+-- name: DeletePrincipal :execrows
+DELETE FROM principals WHERE id = $1;
+
+-- name: CreateGroup :execrows
+INSERT INTO principal_groups (id, name, name_key, description, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING;
+
+-- name: GetGroup :one
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups WHERE id = $1;
+
+-- name: GroupIDByNameKey :one
+SELECT id FROM principal_groups WHERE name_key = $1;
+
+-- name: ListGroups :many
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups ORDER BY name_key COLLATE "C", name COLLATE "C";
+
+-- name: UpdateGroup :execrows
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
+WHERE id = $5;
+
+-- name: DeleteGroup :execrows
+DELETE FROM principal_groups WHERE id = $1;
+
+-- name: PrincipalExists :one
+SELECT COUNT(*) FROM principals WHERE id = $1;
+
+-- name: GroupExists :one
+SELECT COUNT(*) FROM principal_groups WHERE id = $1;
+
+-- name: AddGroupMember :execrows
+INSERT INTO group_members (group_id, principal_id, added_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: RemoveGroupMember :execrows
+DELETE FROM group_members WHERE group_id = $1 AND principal_id = $2;
+
+-- name: ListGroupMembers :many
+SELECT p.id, p.subject, p.display_name, p.kind, p.disabled, p.created_at_ms, p.updated_at_ms, m.added_at_ms
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = $1
+ORDER BY p.subject COLLATE "C";
+
+-- name: ListGroupsOfPrincipal :many
+SELECT g.id, g.name, g.description, g.created_at_ms, g.updated_at_ms
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1
+ORDER BY g.name_key COLLATE "C", g.name COLLATE "C";
+
+-- name: LockServerAuditScope :exec
+-- Orders the appends of the audit scope @server, which has no namespace row
+-- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
+SELECT pg_advisory_xact_lock(418581342580);

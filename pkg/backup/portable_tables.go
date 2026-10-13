@@ -16,6 +16,8 @@ const (
 	portColSize        = "size"
 	portColArrival     = "arrival"
 	portColState       = "state"
+	portColUpdatedAtMs = "updated_at_ms"
+	portColKind        = "kind"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -49,7 +51,7 @@ func portableSpec() []PortableTable {
 				{Name: portColName, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: "id", Kind: KindText},
 			},
 		},
@@ -68,7 +70,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColStackID, Kind: KindText},
 				{Name: "id", Kind: KindText},
-				{Name: "kind", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
 				{Name: "dry_run", Kind: KindBool},
 				{Name: portColStatus, Kind: KindText},
 				{Name: portColVersion, Kind: KindInteger},
@@ -185,7 +187,7 @@ func portableSpec() []PortableTable {
 				{Name: "locked_at_ms", Kind: KindTime},
 				{Name: "current_state_version_id", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: "allow_forced_writes", Kind: KindBool},
 				{Name: "allow_unlocked_writes", Kind: KindBool},
 			},
@@ -234,12 +236,46 @@ func portableSpec() []PortableTable {
 				{Name: "source_ip", Kind: KindText},
 				{Name: "user_agent", Kind: KindText},
 				{Name: "channel", Kind: KindText},
-				{Name: "kind", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
 				{Name: "outcome", Kind: KindText},
 				{Name: "request_id", Kind: KindText},
 				{Name: "prev_hash", Kind: KindText},
 				{Name: "hash", Kind: KindText},
 				{Name: "value_count", Kind: KindInteger},
+			},
+		},
+		{
+			Table:   "principals",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: "subject", Kind: KindText},
+				{Name: "display_name", Kind: KindText},
+				{Name: portColKind, Kind: KindText},
+				{Name: "disabled", Kind: KindBool},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "principal_groups",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: "name_key", Kind: KindText},
+				{Name: "description", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "group_members",
+			OrderBy: []string{"group_id", "principal_id"},
+			Columns: []Column{
+				{Name: "group_id", Kind: KindText},
+				{Name: "principal_id", Kind: KindText},
+				{Name: "added_at_ms", Kind: KindTime},
 			},
 		},
 		{

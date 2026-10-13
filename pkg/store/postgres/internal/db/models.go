@@ -57,6 +57,12 @@ type Checkpoint struct {
 	BlobMd5       []byte
 }
 
+type GroupMember struct {
+	GroupID     string
+	PrincipalID string
+	AddedAtMs   int64
+}
+
 type Installation struct {
 	ID    int64
 	State string
@@ -83,6 +89,25 @@ type Namespace struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+}
+
+type Principal struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Disabled    bool
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+type PrincipalGroup struct {
+	ID          string
+	Name        string
+	NameKey     string
+	Description string
+	CreatedAtMs int64
+	UpdatedAtMs int64
 }
 
 type Restore struct {

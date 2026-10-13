@@ -65,6 +65,26 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 	return i, err
 }
 
+const addGroupMember = `-- name: AddGroupMember :execrows
+INSERT INTO group_members (group_id, principal_id, added_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING
+`
+
+type AddGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+	AddedAtMs   int64
+}
+
+func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addGroupMember, arg.GroupID, arg.PrincipalID, arg.AddedAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const appendEvent = `-- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -291,6 +311,36 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 	return result.RowsAffected(), nil
 }
 
+const createGroup = `-- name: CreateGroup :execrows
+INSERT INTO principal_groups (id, name, name_key, description, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING
+`
+
+type CreateGroupParams struct {
+	ID          string
+	Name        string
+	NameKey     string
+	Description string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createGroup,
+		arg.ID,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createNamespace = `-- name: CreateNamespace :execrows
 INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -310,6 +360,38 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createPrincipal = `-- name: CreatePrincipal :execrows
+INSERT INTO principals (id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreatePrincipalParams struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Disabled    bool
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createPrincipal,
+		arg.ID,
+		arg.Subject,
+		arg.DisplayName,
+		arg.Kind,
+		arg.Disabled,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -580,6 +662,18 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return result.RowsAffected(), nil
 }
 
+const deleteGroup = `-- name: DeleteGroup :execrows
+DELETE FROM principal_groups WHERE id = $1
+`
+
+func (q *Queries) DeleteGroup(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteGroup, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteInventory = `-- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3
@@ -624,6 +718,18 @@ type DeleteJournalSequencesParams struct {
 func (q *Queries) DeleteJournalSequences(ctx context.Context, arg DeleteJournalSequencesParams) error {
 	_, err := q.db.Exec(ctx, deleteJournalSequences, arg.StackID, arg.UpdateID)
 	return err
+}
+
+const deletePrincipal = `-- name: DeletePrincipal :execrows
+DELETE FROM principals WHERE id = $1
+`
+
+func (q *Queries) DeletePrincipal(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePrincipal, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSecretKeysOfStack = `-- name: DeleteSecretKeysOfStack :exec
@@ -1038,6 +1144,32 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	return failover_version, err
 }
 
+const getGroup = `-- name: GetGroup :one
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups WHERE id = $1
+`
+
+type GetGroupRow struct {
+	ID          string
+	Name        string
+	Description string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
+	row := q.db.QueryRow(ctx, getGroup, id)
+	var i GetGroupRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getInstallationState = `-- name: GetInstallationState :one
 SELECT state
 FROM installation
@@ -1144,6 +1276,46 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namesp
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+	)
+	return i, err
+}
+
+const getPrincipal = `-- name: GetPrincipal :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE id = $1
+`
+
+func (q *Queries) GetPrincipal(ctx context.Context, id string) (Principal, error) {
+	row := q.db.QueryRow(ctx, getPrincipal, id)
+	var i Principal
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.Kind,
+		&i.Disabled,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE subject = $1
+`
+
+func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Principal, error) {
+	row := q.db.QueryRow(ctx, getPrincipalBySubject, subject)
+	var i Principal
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.Kind,
+		&i.Disabled,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
 	)
 	return i, err
 }
@@ -1486,6 +1658,28 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.AllowUnlockedWrites,
 	)
 	return i, err
+}
+
+const groupExists = `-- name: GroupExists :one
+SELECT COUNT(*) FROM principal_groups WHERE id = $1
+`
+
+func (q *Queries) GroupExists(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, groupExists, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const groupIDByNameKey = `-- name: GroupIDByNameKey :one
+SELECT id FROM principal_groups WHERE name_key = $1
+`
+
+func (q *Queries) GroupIDByNameKey(ctx context.Context, nameKey string) (string, error) {
+	row := q.db.QueryRow(ctx, groupIDByNameKey, nameKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const highestUpdateVersion = `-- name: HighestUpdateVersion :one
@@ -2048,6 +2242,133 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 	return items, nil
 }
 
+const listGroupMembers = `-- name: ListGroupMembers :many
+SELECT p.id, p.subject, p.display_name, p.kind, p.disabled, p.created_at_ms, p.updated_at_ms, m.added_at_ms
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = $1
+ORDER BY p.subject COLLATE "C"
+`
+
+type ListGroupMembersRow struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Disabled    bool
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	AddedAtMs   int64
+}
+
+func (q *Queries) ListGroupMembers(ctx context.Context, groupID string) ([]ListGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listGroupMembers, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupMembersRow
+	for rows.Next() {
+		var i ListGroupMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.DisplayName,
+			&i.Kind,
+			&i.Disabled,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.AddedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroups = `-- name: ListGroups :many
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups ORDER BY name_key COLLATE "C", name COLLATE "C"
+`
+
+type ListGroupsRow struct {
+	ID          string
+	Name        string
+	Description string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) ListGroups(ctx context.Context) ([]ListGroupsRow, error) {
+	rows, err := q.db.Query(ctx, listGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupsRow
+	for rows.Next() {
+		var i ListGroupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
+SELECT g.id, g.name, g.description, g.created_at_ms, g.updated_at_ms
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1
+ORDER BY g.name_key COLLATE "C", g.name COLLATE "C"
+`
+
+type ListGroupsOfPrincipalRow struct {
+	ID          string
+	Name        string
+	Description string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, principalID string) ([]ListGroupsOfPrincipalRow, error) {
+	rows, err := q.db.Query(ctx, listGroupsOfPrincipal, principalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupsOfPrincipalRow
+	for rows.Next() {
+		var i ListGroupsOfPrincipalRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventory = `-- name: ListInventory :many
 SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
        lock_holder, lock_since_ms, lock_operation
@@ -2141,6 +2462,39 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrincipals = `-- name: ListPrincipals :many
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals ORDER BY subject COLLATE "C"
+`
+
+func (q *Queries) ListPrincipals(ctx context.Context) ([]Principal, error) {
+	rows, err := q.db.Query(ctx, listPrincipals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Principal
+	for rows.Next() {
+		var i Principal
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.DisplayName,
+			&i.Kind,
+			&i.Disabled,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -2594,6 +2948,17 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const lockServerAuditScope = `-- name: LockServerAuditScope :exec
+SELECT pg_advisory_xact_lock(418581342580)
+`
+
+// Orders the appends of the audit scope @server, which has no namespace row
+// to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
+func (q *Queries) LockServerAuditScope(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockServerAuditScope)
+	return err
+}
+
 const lockStackForUpdates = `-- name: LockStackForUpdates :one
 SELECT id, version
 FROM stacks
@@ -2743,6 +3108,17 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	return arrival, err
 }
 
+const principalExists = `-- name: PrincipalExists :one
+SELECT COUNT(*) FROM principals WHERE id = $1
+`
+
+func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, principalExists, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -2802,6 +3178,23 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobMd5,
 	)
 	return err
+}
+
+const removeGroupMember = `-- name: RemoveGroupMember :execrows
+DELETE FROM group_members WHERE group_id = $1 AND principal_id = $2
+`
+
+type RemoveGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+}
+
+func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, removeGroupMember, arg.GroupID, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const renameStack = `-- name: RenameStack :execrows
@@ -3115,6 +3508,33 @@ func (q *Queries) UpdateExists(ctx context.Context, arg UpdateExistsParams) (boo
 	return exists, err
 }
 
+const updateGroup = `-- name: UpdateGroup :execrows
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
+WHERE id = $5
+`
+
+type UpdateGroupParams struct {
+	Name        string
+	NameKey     string
+	Description string
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateGroup,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateInventoryLock = `-- name: UpdateInventoryLock :exec
 UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
@@ -3143,6 +3563,31 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 		arg.Name,
 	)
 	return err
+}
+
+const updatePrincipal = `-- name: UpdatePrincipal :execrows
+UPDATE principals SET display_name = $1, disabled = $2, updated_at_ms = $3
+WHERE id = $4
+`
+
+type UpdatePrincipalParams struct {
+	DisplayName string
+	Disabled    bool
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePrincipal,
+		arg.DisplayName,
+		arg.Disabled,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertInstallationState = `-- name: UpsertInstallationState :exec

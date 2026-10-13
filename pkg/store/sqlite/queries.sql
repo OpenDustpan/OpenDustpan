@@ -656,3 +656,76 @@ WHERE stack_id = ? AND id = ?;
 -- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?;
+
+-- name: CreatePrincipal :execrows
+INSERT INTO principals (id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetPrincipal :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE id = ?;
+
+-- name: GetPrincipalBySubject :one
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals WHERE subject = ?;
+
+-- name: ListPrincipals :many
+SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
+FROM principals ORDER BY subject;
+
+-- name: UpdatePrincipal :execrows
+UPDATE principals SET display_name = ?, disabled = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: DeletePrincipal :execrows
+DELETE FROM principals WHERE id = ?;
+
+-- name: CreateGroup :execrows
+INSERT INTO principal_groups (id, name, name_key, description, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetGroup :one
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups WHERE id = ?;
+
+-- name: GroupIDByNameKey :one
+SELECT id FROM principal_groups WHERE name_key = ?;
+
+-- name: ListGroups :many
+SELECT id, name, description, created_at_ms, updated_at_ms
+FROM principal_groups ORDER BY name_key, name;
+
+-- name: UpdateGroup :execrows
+UPDATE principal_groups SET name = ?, name_key = ?, description = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: DeleteGroup :execrows
+DELETE FROM principal_groups WHERE id = ?;
+
+-- name: PrincipalExists :one
+SELECT COUNT(*) FROM principals WHERE id = ?;
+
+-- name: GroupExists :one
+SELECT COUNT(*) FROM principal_groups WHERE id = ?;
+
+-- name: AddGroupMember :execrows
+INSERT INTO group_members (group_id, principal_id, added_at_ms)
+VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: RemoveGroupMember :execrows
+DELETE FROM group_members WHERE group_id = ? AND principal_id = ?;
+
+-- name: ListGroupMembers :many
+SELECT p.id, p.subject, p.display_name, p.kind, p.disabled, p.created_at_ms, p.updated_at_ms, m.added_at_ms
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = ?
+ORDER BY p.subject;
+
+-- name: ListGroupsOfPrincipal :many
+SELECT g.id, g.name, g.description, g.created_at_ms, g.updated_at_ms
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = ?
+ORDER BY g.name_key, g.name;

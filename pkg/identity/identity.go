@@ -92,6 +92,17 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerReadPrincipals allows reading the principals and the
+	// groups of the installation, and the members of each group (ADR 52).
+	// Its object is ServerObject.
+	ActionServerReadPrincipals Action = "server:read-principals"
+	// ActionServerManagePrincipals allows creating, changing, disabling and
+	// deleting principals (ADR 52). Its object is ServerObject.
+	ActionServerManagePrincipals Action = "server:manage-principals"
+	// ActionServerManageGroups allows creating, changing and deleting groups,
+	// and adding and removing their members (ADR 52). Its object is
+	// ServerObject.
+	ActionServerManageGroups Action = "server:manage-groups"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

@@ -14,7 +14,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-var _ audit.Store = (*Store)(nil)
+var (
+	_ audit.Store       = (*Store)(nil)
+	_ audit.ServerStore = (*Store)(nil)
+)
 
 // Append implements audit.Store: it reads the last hash of the namespace of
 // fence and writes the entry in one transaction with the fence check, so the
@@ -33,58 +36,102 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 	var stored audit.Entry
 
 	txErr := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
-		var prevHash string
+		var err error
 
-		var seq int64 = 1
+		stored, err = appendAuditEntry(ctx, q, e)
 
-		last, err := q.LastAuditEntry(ctx, fence.Namespace.String())
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-		case err != nil:
-			return fmt.Errorf("read last audit entry: %w", err)
-		default:
-			prevHash = last.Hash
-			seq = last.Sequence + 1
-		}
-
-		e.Sequence = seq
-		e.PrevHash = prevHash
-		e.Hash = audit.ComputeHash(e, prevHash)
-
-		insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
-			Namespace:  e.Namespace.String(),
-			Sequence:   e.Sequence,
-			Subject:    e.Subject,
-			IdpSubject: e.IDPSubject,
-			TokenID:    e.TokenID,
-			Action:     e.Action,
-			Object:     e.Object,
-			Version:    e.Version,
-			ValuePath:  e.ValuePath,
-			AtMs:       e.AtMs(),
-			SourceIp:   e.SourceIP,
-			UserAgent:  e.UserAgent,
-			Channel:    string(e.Channel),
-			Kind:       string(e.Kind),
-			Outcome:    string(e.Outcome),
-			RequestID:  e.RequestID,
-			PrevHash:   e.PrevHash,
-			Hash:       e.Hash,
-			ValueCount: toInt8(e.ValueCount),
-		})
-		if insertErr != nil {
-			return fmt.Errorf("insert audit entry: %w", insertErr)
-		}
-
-		stored = e
-
-		return nil
+		return err
 	})
 	if txErr != nil {
 		return audit.Entry{}, txErr
 	}
 
 	return stored, nil
+}
+
+// AppendServer implements audit.ServerStore: it reads the last hash of
+// audit.ServerScope and writes the entry in one transaction, so the appends
+// of the scope form one sequence. A transaction-scoped advisory lock orders
+// appends that run at the same time, as the namespace row lock does for a
+// namespace.
+func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, err
+	}
+
+	if e.Namespace != audit.ServerScope {
+		return audit.Entry{}, fmt.Errorf("%w: entry names %q, want the scope %q",
+			audit.ErrInvalidEntry, e.Namespace, audit.ServerScope)
+	}
+
+	var stored audit.Entry
+
+	txErr := s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		var err error
+
+		stored, err = appendAuditEntry(ctx, q, e)
+
+		return err
+	})
+	if txErr != nil {
+		return audit.Entry{}, txErr
+	}
+
+	return stored, nil
+}
+
+// appendAuditEntry reads the last entry of the scope of e and inserts e as
+// the next one, with its sequence, previous hash and hash. The caller runs
+// it in a transaction that orders the appends of the scope.
+func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	var prevHash string
+
+	var seq int64 = 1
+
+	last, err := q.LastAuditEntry(ctx, e.Namespace.String())
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return audit.Entry{}, fmt.Errorf("read last audit entry: %w", err)
+	default:
+		prevHash = last.Hash
+		seq = last.Sequence + 1
+	}
+
+	e.Sequence = seq
+	e.PrevHash = prevHash
+	e.Hash = audit.ComputeHash(e, prevHash)
+
+	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
+		Namespace:  e.Namespace.String(),
+		Sequence:   e.Sequence,
+		Subject:    e.Subject,
+		IdpSubject: e.IDPSubject,
+		TokenID:    e.TokenID,
+		Action:     e.Action,
+		Object:     e.Object,
+		Version:    e.Version,
+		ValuePath:  e.ValuePath,
+		AtMs:       e.AtMs(),
+		SourceIp:   e.SourceIP,
+		UserAgent:  e.UserAgent,
+		Channel:    string(e.Channel),
+		Kind:       string(e.Kind),
+		Outcome:    string(e.Outcome),
+		RequestID:  e.RequestID,
+		PrevHash:   e.PrevHash,
+		Hash:       e.Hash,
+		ValueCount: toInt8(e.ValueCount),
+	})
+	if insertErr != nil {
+		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
+	}
+
+	return e, nil
 }
 
 // inFencedUpdateTx runs fn in a transaction that first checks fence, holding

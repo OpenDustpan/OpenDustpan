@@ -1,0 +1,657 @@
+package server_test
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+)
+
+// principalDoc, groupDoc and memberDoc decode the wire forms in tests.
+type principalDoc struct {
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	DisplayName string `json:"displayName"`
+	Kind        string `json:"kind"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	Disabled    bool   `json:"disabled"`
+}
+
+type groupDoc struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type memberDoc struct {
+	AddedAt   string       `json:"addedAt"`
+	Principal principalDoc `json:"principal"`
+}
+
+// newTestPrincipals returns a principal service over a fresh, empty SQLite
+// store that the test closes at cleanup.
+func newTestPrincipals(t *testing.T) *principal.Service {
+	t.Helper()
+
+	svc, _ := newTestPrincipalStore(t)
+
+	return svc
+}
+
+// newTestPrincipalStore returns a principal service and its fresh, empty
+// SQLite store, which also keeps the audit entries.
+func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	principals, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	return principals, st
+}
+
+// newPrincipalHandler builds a Handler with principals as its principal
+// service. Nil principals means a store that keeps none.
+func newPrincipalHandler(t *testing.T, principals *principal.Service) *apiserver.Handler {
+	t.Helper()
+
+	return newAuditedPrincipalHandler(t, principals, nil)
+}
+
+// newAuditedPrincipalHandler builds a Handler with principals as its
+// principal service and entries as its audit store of the scope @server.
+func newAuditedPrincipalHandler(
+	t *testing.T, principals *principal.Service, entries audit.ServerStore,
+) *apiserver.Handler {
+	t.Helper()
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     newTestNamespaces(t),
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "",
+		Schema:         stubSchema{migrations: nil},
+		Principals:     principals,
+		OnAuditFailure: nil,
+		Audit:          entries,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// apiCall is one request of a principal test and the status it must answer.
+type apiCall struct {
+	method string
+	path   string
+	body   string
+	want   int
+}
+
+// call sends one request with the test token and returns its status and
+// body.
+func call(t *testing.T, handler *apiserver.Handler, c apiCall) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// mustCall sends c and fails unless it answers c.want. It decodes a JSON
+// answer into out when out is not nil.
+func mustCall(t *testing.T, handler *apiserver.Handler, c apiCall, out any) {
+	t.Helper()
+
+	status, got := call(t, handler, c)
+	if status != c.want {
+		t.Fatalf("%s %s answers %d, want %d (%s)", c.method, c.path, status, c.want, got)
+	}
+
+	if out == nil {
+		return
+	}
+
+	if err := json.Unmarshal([]byte(got), out); err != nil {
+		t.Fatalf("decode %s %s answer %q: %v", c.method, c.path, got, err)
+	}
+}
+
+// memberListDoc, groupListDoc and principalListDoc decode the lists.
+type memberListDoc struct {
+	Members []memberDoc `json:"members"`
+}
+
+type groupListDoc struct {
+	Groups []groupDoc `json:"groups"`
+}
+
+type principalListDoc struct {
+	Principals []principalDoc `json:"principals"`
+}
+
+// TestPrincipalLifeCycle creates a person and a service, puts both in a
+// group, changes and disables one, takes it out and deletes the group, then
+// the principal.
+func TestPrincipalLifeCycle(t *testing.T) {
+	t.Parallel()
+
+	h := newPrincipalHandler(t, newTestPrincipals(t))
+
+	created := createLifeCyclePrincipals(t, h)
+	alice, deploy := created.alice, created.deploy
+
+	var group groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups", `{"name":"Ops","description":"Runs it"}`,
+		http.StatusCreated,
+	}, &group)
+
+	addLifeCycleMembers(t, h, group, alice, deploy)
+	changeLifeCyclePrincipal(t, h, group, alice)
+
+	members := "/api/server/groups/" + group.ID + "/members/" + alice.ID
+	mustCall(t, h, apiCall{http.MethodDelete, members, "", http.StatusNoContent}, nil)
+	mustCall(t, h, apiCall{http.MethodDelete, members, "", http.StatusNotFound}, nil)
+
+	var renamed groupDoc
+	mustCall(t, h, apiCall{
+		http.MethodPatch, "/api/server/groups/" + group.ID, `{"name":"operations"}`,
+		http.StatusOK,
+	}, &renamed)
+
+	if renamed.Name != "operations" || renamed.Description != "Runs it" {
+		t.Fatalf("renamed group = %+v", renamed)
+	}
+
+	deleteLifeCycleRecords(t, h, group, alice, deploy)
+}
+
+// createLifeCyclePrincipals creates a person and a service.
+func createLifeCyclePrincipals(t *testing.T, h *apiserver.Handler) lifeCyclePrincipals {
+	t.Helper()
+
+	var alice, deploy principalDoc
+
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"alice@example.com","displayName":"Alice","kind":"person"}`, http.StatusCreated,
+	}, &alice)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"ci-deploy","kind":"service"}`, http.StatusCreated,
+	}, &deploy)
+
+	if !strings.HasPrefix(alice.ID, "prn-") || alice.Kind != "person" || alice.Disabled {
+		t.Fatalf("created principal = %+v", alice)
+	}
+
+	if deploy.DisplayName != "ci-deploy" {
+		t.Fatalf("display name = %q, want the subject when the body names none", deploy.DisplayName)
+	}
+
+	return lifeCyclePrincipals{alice: alice, deploy: deploy}
+}
+
+// lifeCyclePrincipals holds the person and the service of the life cycle.
+type lifeCyclePrincipals struct {
+	alice  principalDoc
+	deploy principalDoc
+}
+
+// addLifeCycleMembers puts both principals in group and reads the members.
+func addLifeCycleMembers(t *testing.T, h *apiserver.Handler, group groupDoc, alice, deploy principalDoc) {
+	t.Helper()
+
+	path := "/api/server/groups/" + group.ID + "/members"
+
+	for _, id := range []string{alice.ID, deploy.ID} {
+		var m memberDoc
+		mustCall(t, h, apiCall{http.MethodPost, path, `{"principalID":"` + id + `"}`, http.StatusCreated}, &m)
+
+		if m.Principal.ID != id || m.AddedAt == "" {
+			t.Fatalf("added member = %+v, want %s", m, id)
+		}
+	}
+
+	var members memberListDoc
+	mustCall(t, h, apiCall{http.MethodGet, path, "", http.StatusOK}, &members)
+
+	if len(members.Members) != 2 || members.Members[0].Principal.Subject != "alice@example.com" {
+		t.Fatalf("members = %+v, want alice and ci-deploy", members.Members)
+	}
+}
+
+// changeLifeCyclePrincipal disables alice and reads her groups.
+func changeLifeCyclePrincipal(t *testing.T, h *apiserver.Handler, group groupDoc, alice principalDoc) {
+	t.Helper()
+
+	var changed principalDoc
+	mustCall(t, h, apiCall{
+		http.MethodPatch, "/api/server/principals/" + alice.ID,
+		`{"displayName":"Alice A.","disabled":true}`, http.StatusOK,
+	}, &changed)
+
+	if changed.DisplayName != "Alice A." || !changed.Disabled || changed.Subject != "alice@example.com" {
+		t.Fatalf("changed principal = %+v", changed)
+	}
+
+	var groups groupListDoc
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals/" + alice.ID + "/groups", "", http.StatusOK},
+		&groups)
+
+	if len(groups.Groups) != 1 || groups.Groups[0].ID != group.ID {
+		t.Fatalf("groups of alice = %+v, want %s", groups.Groups, group.ID)
+	}
+}
+
+// deleteLifeCycleRecords deletes the group, then alice, and lists the rest.
+func deleteLifeCycleRecords(t *testing.T, h *apiserver.Handler, group groupDoc, alice, deploy principalDoc) {
+	t.Helper()
+
+	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/groups/" + group.ID, "", http.StatusNoContent}, nil)
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/groups/" + group.ID, "", http.StatusNotFound}, nil)
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals/" + deploy.ID, "", http.StatusOK}, nil)
+	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/principals/" + alice.ID, "", http.StatusNoContent}, nil)
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals/" + alice.ID, "", http.StatusNotFound}, nil)
+
+	var list principalListDoc
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals", "", http.StatusOK}, &list)
+
+	if len(list.Principals) != 1 || list.Principals[0].ID != deploy.ID {
+		t.Fatalf("principals = %+v, want only ci-deploy", list.Principals)
+	}
+}
+
+// TestPrincipalRefusals answers 400 for each bad body, subject, kind and
+// name, 409 for each taken subject, name and membership, and 404 for each
+// unknown ID.
+func TestPrincipalRefusals(t *testing.T) {
+	t.Parallel()
+
+	h := newPrincipalHandler(t, newTestPrincipals(t))
+
+	var alice principalDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"alice","kind":"person"}`,
+		http.StatusCreated,
+	}, &alice)
+
+	var group groupDoc
+	mustCall(t, h, apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &group)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/" + group.ID + "/members",
+		`{"principalID":"` + alice.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	cases := refusalCases(alice.ID, group.ID)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, body := call(t, h, tc.call)
+			if status != tc.call.want {
+				t.Fatalf("%s %s answers %d, want %d (%s)", tc.call.method, tc.call.path, status, tc.call.want, body)
+			}
+
+			var doc struct {
+				Message string `json:"message"`
+				Code    int    `json:"code"`
+			}
+
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Code != tc.call.want || doc.Message == "" {
+				t.Fatalf("error body = %q, want a JSON error with code %d", body, tc.call.want)
+			}
+		})
+	}
+}
+
+// refusalCase is one request that the principal routes must refuse.
+type refusalCase struct {
+	name string
+	call apiCall
+}
+
+// refusalCases returns the refused requests for the principal aliceID, who
+// is a member of the group groupID.
+func refusalCases(aliceID, groupID string) []refusalCase {
+	one := "/api/server/principals/" + aliceID
+	grp := "/api/server/groups/" + groupID
+	members := grp + "/members"
+	addAlice := `{"principalID":"` + aliceID + `"}`
+
+	return []refusalCase{
+		{
+			name: "not JSON",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "unknown field",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"b","kind":"person","x":1}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "no kind",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"b"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "unknown kind",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"b","kind":"robot"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "empty subject",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "padded subject",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":" b","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved admin",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"admin","kind":"person"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "reserved admin-2",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"admin-2","kind":"service"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "two objects",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"b","kind":"person"}{}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "taken subject",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/principals",
+				body:   `{"subject":"alice","kind":"service"}`,
+				want:   http.StatusConflict,
+			},
+		},
+		{
+			name: "empty change",
+			call: apiCall{method: http.MethodPatch, path: one, body: `{}`, want: http.StatusBadRequest},
+		},
+		{
+			name: "subject change",
+			call: apiCall{
+				method: http.MethodPatch,
+				path:   one,
+				body:   `{"subject":"mallory"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "change of unknown",
+			call: apiCall{
+				method: http.MethodPatch,
+				path:   "/api/server/principals/prn-missing",
+				body:   `{"disabled":true}`,
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "get unknown",
+			call: apiCall{
+				method: http.MethodGet,
+				path:   "/api/server/principals/prn-missing",
+				body:   "",
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "delete unknown",
+			call: apiCall{
+				method: http.MethodDelete,
+				path:   "/api/server/principals/prn-missing",
+				body:   "",
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "groups of unknown",
+			call: apiCall{
+				method: http.MethodGet,
+				path:   "/api/server/principals/prn-missing/groups",
+				body:   "",
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "bad group name",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/groups",
+				body:   `{"name":"a b"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "no group name",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/groups",
+				body:   `{"description":"x"}`,
+				want:   http.StatusBadRequest,
+			},
+		},
+		{
+			name: "taken group name",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/groups",
+				body:   `{"name":"OPS"}`,
+				want:   http.StatusConflict,
+			},
+		},
+		{
+			name: "empty group change",
+			call: apiCall{method: http.MethodPatch, path: grp, body: `{}`, want: http.StatusBadRequest},
+		},
+		{
+			name: "group change of unknown",
+			call: apiCall{
+				method: http.MethodPatch,
+				path:   "/api/server/groups/grp-missing",
+				body:   `{"name":"x"}`,
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "members of unknown",
+			call: apiCall{
+				method: http.MethodGet,
+				path:   "/api/server/groups/grp-missing/members",
+				body:   "",
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "add to unknown group",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   "/api/server/groups/grp-missing/members",
+				body:   addAlice,
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "add unknown principal",
+			call: apiCall{
+				method: http.MethodPost,
+				path:   members,
+				body:   `{"principalID":"prn-missing"}`,
+				want:   http.StatusNotFound,
+			},
+		},
+		{
+			name: "add twice",
+			call: apiCall{method: http.MethodPost, path: members, body: addAlice, want: http.StatusConflict},
+		},
+		{
+			name: "add without ID",
+			call: apiCall{method: http.MethodPost, path: members, body: `{}`, want: http.StatusBadRequest},
+		},
+		{
+			name: "remove unknown member",
+			call: apiCall{
+				method: http.MethodDelete,
+				path:   members + "/prn-missing",
+				body:   "",
+				want:   http.StatusNotFound,
+			},
+		},
+	}
+}
+
+// TestPrincipalRoutesWithoutStore answers 501 that names the cause when the
+// store keeps no principals.
+func TestPrincipalRoutesWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	h := newPrincipalHandler(t, nil)
+
+	status, body := call(t, h, apiCall{http.MethodGet, "/api/server/principals", "", http.StatusNotImplemented})
+	if status != http.StatusNotImplemented || !strings.Contains(body, "keeps no principals") {
+		t.Fatalf("list without a store answers %d (%s), want 501", status, body)
+	}
+}
+
+// TestPrincipalChangesWriteAuditEntries proves that each change of a
+// principal or a group writes one entry of the kind change in the scope
+// @server, with the outcome success or failure, and that a read writes none
+// (ADR 60, decisions 4 and 7).
+func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	var alice principalDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"alice","kind":"person"}`,
+		http.StatusCreated,
+	}, &alice)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"alice","kind":"person"}`,
+		http.StatusConflict,
+	}, nil)
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals", "", http.StatusOK}, nil)
+
+	var group groupDoc
+	mustCall(t, h, apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &group)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/" + group.ID + "/members",
+		`{"principalID":"` + alice.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	want := []struct {
+		action, object string
+		outcome        audit.Outcome
+	}{
+		{"server:manage-groups", "group:" + group.ID + "#member:" + alice.ID, audit.OutcomeSuccess},
+		{"server:manage-groups", "group:" + group.ID, audit.OutcomeSuccess},
+		{"server:manage-principals", "principals", audit.OutcomeFailure},
+		{"server:manage-principals", "principal:" + alice.ID, audit.OutcomeSuccess},
+	}
+
+	if len(listing.Entries) != len(want) {
+		t.Fatalf("server entries = %d, want %d: %+v", len(listing.Entries), len(want), listing.Entries)
+	}
+
+	for i, w := range want {
+		e := listing.Entries[i]
+		if e.Action != w.action || e.Object != w.object || e.Outcome != w.outcome ||
+			e.Kind != audit.KindChange || e.Subject != "tester" || e.Namespace != audit.ServerScope {
+			t.Fatalf("entry %d = %+v, want %s on %s with %s", i, e, w.action, w.object, w.outcome)
+		}
+	}
+
+	check, err := st.Check(t.Context(), audit.ServerScope)
+	if err != nil || !check.Valid {
+		t.Fatalf("server chain check = %+v, %v; want valid", check, err)
+	}
+}

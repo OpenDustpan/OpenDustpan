@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -181,22 +182,91 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: authn,
-		Authorizer:    authz,
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       service,
-		Restores:      restores,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        st,
+		Authenticator:  authn,
+		Authorizer:     authz,
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        service,
+		Restores:       restores,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         st,
+		Principals:     seedRoutePrincipals(t, st),
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
 
 	return handler
+}
+
+// Principal and group IDs that the handler builders seed, so the routes with
+// an ID in the path answer their success status in the generic enforcement
+// tests. testPrincipalID is a member of testGroupID, and testOtherPrincipalID
+// is in no group, so the member add answers 201 and the member remove 204.
+const (
+	testPrincipalID      = "prn-routes0000000000001"
+	testOtherPrincipalID = "prn-routes0000000000002"
+	testGroupID          = "grp-routes0000000000001"
+)
+
+// seedRoutePrincipals writes the principals, the group and the membership
+// that the principal and group routes name, and returns the service over st.
+func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
+	t.Helper()
+
+	ctx := t.Context()
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+
+	for _, p := range []principal.Principal{
+		{
+			CreatedAt: at, UpdatedAt: at, ID: testPrincipalID, Subject: "alice",
+			DisplayName: "Alice", Kind: principal.KindPerson, Disabled: false,
+		},
+		{
+			CreatedAt: at, UpdatedAt: at, ID: testOtherPrincipalID, Subject: "ci-deploy",
+			DisplayName: "CI deploy", Kind: principal.KindService, Disabled: false,
+		},
+	} {
+		if err := st.CreatePrincipal(ctx, p); err != nil {
+			t.Fatalf("seed principal: %v", err)
+		}
+	}
+
+	group := principal.Group{CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: ""}
+	if err := st.CreateGroup(ctx, group); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	member := principal.Membership{AddedAt: at, GroupID: testGroupID, PrincipalID: testPrincipalID}
+	if err := st.AddMember(ctx, member); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	svc, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	return svc
+}
+
+// routeBodies holds the body of each route that needs one in the generic
+// enforcement tests, by method and path.
+//
+//nolint:gochecknoglobals // A constant table of request bodies for the route tests.
+var routeBodies = map[string]string{
+	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"POST /api/server/namespaces":                              `{"name":"acme"}`,
+	"POST /api/server/restores":                                `{"backupID":"` + string(testBackupID) + `"}`,
+	"POST /api/server/principals":                              `{"subject":"bob","kind":"person"}`,
+	"PATCH /api/server/principals/{id}":                        `{"disabled":true}`,
+	"POST /api/server/groups":                                  `{"name":"dev"}`,
+	"PATCH /api/server/groups/{id}":                            `{"description":"Runs the platform"}`,
+	"POST /api/server/groups/{id}/members":                     `{"principalID":"` + testOtherPrincipalID + `"}`,
 }
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
@@ -462,30 +532,33 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	t.Helper()
 
 	id := string(testBackupID)
-	if strings.HasPrefix(route.Path, "/api/server/restores") {
+
+	switch {
+	case strings.HasPrefix(route.Path, "/api/server/restores"):
 		id = string(testRestoreID)
+	case strings.HasPrefix(route.Path, "/api/server/principals"):
+		id = testPrincipalID
+	case strings.HasPrefix(route.Path, "/api/server/groups"):
+		id = testGroupID
+	default:
 	}
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
+	path = strings.ReplaceAll(path, "{principalId}", testPrincipalID)
 
 	var body io.Reader = http.NoBody
-	if route.Method == http.MethodPut && strings.HasSuffix(route.Path, "/override-switches") {
-		body = strings.NewReader(`{"allowForcedWrites":false,"allowUnlockedWrites":false}`)
-	}
-
-	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
-		body = strings.NewReader(`{"name":"acme"}`)
-	}
-
-	if route.Method == http.MethodPost && route.Path == "/api/server/restores" {
-		body = strings.NewReader(`{"backupID":"` + string(testBackupID) + `"}`)
+	if text, ok := routeBodies[route.Method+" "+route.Path]; ok {
+		body = strings.NewReader(text)
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, path, body)
 
-	// The resolvers read the path value, which the mux sets in production.
+	// The resolvers and the handlers read the path values, which the mux
+	// sets in production.
 	req.SetPathValue("namespace", testNamespace)
+	req.SetPathValue("id", id)
+	req.SetPathValue("principalId", testPrincipalID)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -504,8 +577,14 @@ func wantSuccessStatus(route apiserver.Route) int {
 		return http.StatusAccepted
 	}
 
-	if route.Method == http.MethodPost && route.Path == "/api/server/namespaces" {
+	if route.Method == http.MethodPost && (route.Path == "/api/server/namespaces" ||
+		route.Path == "/api/server/principals" || route.Path == "/api/server/groups" ||
+		route.Path == "/api/server/groups/{id}/members") {
 		return http.StatusCreated
+	}
+
+	if route.Method == http.MethodDelete {
+		return http.StatusNoContent
 	}
 
 	return http.StatusOK
@@ -739,16 +818,19 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        nil,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         nil,
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	}
 
 	cases := []struct {
@@ -865,16 +947,19 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       service,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        nil,
+		Authenticator:  stubAuthenticator{},
+		Authorizer:     stubAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        service,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         nil,
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -885,16 +970,19 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: stubAuthenticator{},
-		Authorizer:    stubAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        nil,
+		Authenticator:  stubAuthenticator{},
+		Authorizer:     stubAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         nil,
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

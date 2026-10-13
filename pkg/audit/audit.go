@@ -46,7 +46,16 @@ const (
 	// KindOverride records that a person used an override of ADR 44: a forced
 	// write, a write without the lock, or an unfenced force-unlock.
 	KindOverride Kind = "override"
+	// KindChange records an action that changes something, for example a
+	// principal or a group of the installation (ADR 60, decision 4).
+	KindChange Kind = "change"
 )
+
+// ServerScope is the scope of the entries of actions that are not in a
+// namespace, for example a change of a principal or a group (ADR 60,
+// decision 7). It has its own sequence and chain. Its wire form starts with
+// '@', which namespace names never contain, so it never equals a namespace.
+const ServerScope = namespace.Name("@server")
 
 // Channel names where the request came from, as the client declares it.
 type Channel string
@@ -186,7 +195,7 @@ func (e Entry) validateHow() error {
 	switch {
 	case e.Channel != ChannelAPI && e.Channel != ChannelConsole:
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
-	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride:
+	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)
@@ -323,10 +332,23 @@ type Store interface {
 	// namespace.ErrFenced if the fence carries a stale failover version.
 	Append(ctx context.Context, fence namespace.Fence, e Entry) (Entry, error)
 	// List answers one page of the entries of ns, newest first, with the
-	// total count. A namespace with no entries reads as an empty list.
+	// total count. A namespace with no entries reads as an empty list. ns
+	// can be ServerScope.
 	List(ctx context.Context, ns namespace.Name, page Page) (Listing, error)
 	// Check walks the chain of ns oldest first in pages of CheckPageSize
 	// entries and reports the first entry that does not match. A namespace
-	// with no entries checks as valid.
+	// with no entries checks as valid. ns can be ServerScope.
 	Check(ctx context.Context, ns namespace.Name) (CheckResult, error)
+}
+
+// ServerStore appends the entries of ServerScope. It is a port of its own,
+// so a store that keeps only namespace entries still meets Store. List and
+// Check of Store read the scope.
+type ServerStore interface {
+	// AppendServer writes e in ServerScope and returns the stored entry with
+	// its sequence, previous hash and hash. The scope has no fence: it
+	// describes the installation. The appends of the scope form one
+	// sequence, also when they run at the same time. It returns
+	// ErrInvalidEntry if e fails validation or names another scope.
+	AppendServer(ctx context.Context, e Entry) (Entry, error)
 }
