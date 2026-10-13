@@ -684,23 +684,41 @@ func (s *Service) Upload(
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.store(ctx, storeInput{
+	// The outputs come from the body, read as it streams (ADR 49, decision 8),
+	// so the client's JSON rendering of the outputs is never stored.
+	reader, stream := newMetaStream(content)
+
+	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
 		seal:      sv.Sealed,
 		key:       key,
 		want:      sv.MD5,
-		content:   content,
+		content:   reader,
 		unchecked: false,
 	})
+
+	if storeErr != nil {
+		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, storeErr)
+	}
+
+	// A body that is not a state object stores no outputs; the upload still
+	// stores the bytes the client sent, as before.
+	meta, metaErr := stream.finish(nil)
+	if metaErr != nil {
+		meta = streamedMeta{}
+	}
+
+	outputs, err := s.streamedOutputs(ctx, w, meta)
 	if err != nil {
-		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
+		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
 	}
 
 	sv.Status = StatusFinalized
 	sv.FinalizedAt = s.clock()
 	sv.Size = size
 	sv.Content = key
+	sv.Outputs = outputs.stored
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		err = fmt.Errorf("finalize state %s: %w", id, err)

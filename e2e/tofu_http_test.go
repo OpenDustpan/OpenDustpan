@@ -144,6 +144,79 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		Fail:   false,
 		Redact: false,
 	})
+
+	runTofuHTTPForceUnlock(t, env, backendEnv)
+}
+
+// tofuHTTPForceLock is the lock that principal B holds in the force-unlock
+// scenario, so principal A is not its holder.
+const tofuHTTPForceLock = `{"ID":"e2e-lock-2","Operation":"OperationTypeApply","Info":"","Who":"e2e-b@host","Version":"1.13.1","Created":"2026-10-13T00:00:00Z","Path":""}`
+
+// runTofuHTTPForceUnlock proves a force-unlock by a principal that does not hold
+// the lock (ADR 49, decision 6, and ADR 44). Principal B takes the lock. Principal
+// A force-unlocks it with the CLI, which needs both switches on. A write that
+// names the released lock then answers 409, so a stale writer cannot overwrite
+// the state. The switches are off again when the scenario ends.
+func runTofuHTTPForceUnlock(t *testing.T, env *e2e.Env, backendEnv []string) {
+	t.Helper()
+
+	ctx := t.Context()
+	path := "/tofu/state/" + e2e.Namespace + "/" + e2e.Workspace
+	wsID := env.WorkspaceID(ctx, t)
+	nsSwitches := "/api/server/namespaces/" + e2e.Namespace + "/override-switches"
+	unitSwitches := "/api/v2/workspaces/" + wsID + "/override-switches"
+	on := `{"allowForcedWrites":true,"allowUnlockedWrites":false}`
+	off := `{"allowForcedWrites":false,"allowUnlockedWrites":false}`
+
+	// The unit route names its switches in kebab case; the namespace route in
+	// camel case, as the override tests do.
+	unitOn := `{"allow-forced-writes":true,"allow-unlocked-writes":false}`
+	unitOff := `{"allow-forced-writes":false,"allow-unlocked-writes":false}`
+
+	setSwitches(t, env, nsSwitches, on)
+	setSwitches(t, env, unitSwitches, unitOn)
+
+	defer func() {
+		setSwitches(t, env, nsSwitches, off)
+		setSwitches(t, env, unitSwitches, unitOff)
+	}()
+
+	status, body, err := env.TFEStatusB(ctx, "LOCK", path, tofuHTTPForceLock)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("LOCK by principal B: status %d, body %q, err %v", status, body, err)
+	}
+
+	env.Step(ctx, t, e2e.StepSpec{
+		Check:  nil,
+		Name:   "force-unlock by another principal",
+		Args:   []string{"force-unlock", "-force", "e2e-lock-2"},
+		Env:    backendEnv,
+		Stdin:  "",
+		Fail:   false,
+		Redact: false,
+	})
+
+	stale := `{"version":4,"serial":99,"lineage":"e2e-stale","resources":[]}`
+
+	status, body, err = env.TFEStatusB(ctx, "POST", path+"?ID=e2e-lock-2", stale)
+	if err != nil || status != http.StatusConflict {
+		t.Fatalf("stale write after the force-unlock: status %d, want 409; body %q, err %v", status, body, err)
+	}
+}
+
+// setSwitches sets the override switches at path to body, as principal A.
+func setSwitches(t *testing.T, env *e2e.Env, path, body string) {
+	t.Helper()
+
+	env.APIStepA(t.Context(), t, e2e.APIStepSpec{
+		UserAgent: overrideAgent,
+		Name:      "set override switches",
+		Method:    http.MethodPut,
+		Path:      path,
+		Body:      body,
+		Want:      http.StatusOK,
+		Check:     nil,
+	})
 }
 
 // writeTofuHTTPConfig replaces the main configuration of the project with the

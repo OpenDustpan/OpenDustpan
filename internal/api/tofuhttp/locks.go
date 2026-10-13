@@ -191,6 +191,12 @@ func (h *Handler) unlockWorkspace(w http.ResponseWriter, r *http.Request, c call
 		return
 	}
 
+	if ws.Lock.Holder != c.principal.Subject {
+		h.forceUnlockWorkspace(w, r, c, ws)
+
+		return
+	}
+
 	_, err = h.ws.Unlock(ctx, ws.ID, c.principal.Subject)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) {
 		h.writeHeldOrConflict(ctx, w, c, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -49,20 +50,19 @@ func (h *Handler) permits(ctx context.Context, p identity.Principal, action iden
 	return h.authz.Authorize(ctx, p, action, obj) == nil
 }
 
-// recordOverride returns the audit callback of one streamed write. Each override
-// the write uses gets its entry before the first byte streams (ADR 41, decision
-// 5). The version is empty: the serial of a streamed write is read from its body
-// after the write declares.
+// recordOverride returns the audit callback of one streamed write. The write
+// calls it after the body streams and before it finalizes, with the serial of
+// the body (ADR 41, decision 5).
 func (h *Handler) recordOverride(
 	r *http.Request, p identity.Principal, obj identity.Object,
-) func(workspace.Override) error {
-	return func(override workspace.Override) error {
+) func(workspace.Override, int64) error {
+	return func(override workspace.Override, serial int64) error {
 		action := identity.ActionUnitWriteUnlocked
 		if override == workspace.OverrideForced {
 			action = identity.ActionUnitWriteForced
 		}
 
-		return h.appendOverrideAudit(r, p, obj, action)
+		return h.appendOverrideAudit(r, p, obj, action, strconv.FormatInt(serial, 10))
 	}
 }
 
@@ -70,7 +70,7 @@ func (h *Handler) recordOverride(
 // action and the unit (ADR 44, decision 7). A nil audit store writes no entry.
 // It returns the append error, so the write is refused when the entry is lost.
 func (h *Handler) appendOverrideAudit(
-	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action,
+	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) error {
 	if h.audit == nil {
 		return nil
@@ -86,7 +86,7 @@ func (h *Handler) appendOverrideAudit(
 		TokenID:    "",
 		Action:     string(action),
 		Object:     obj.String(),
-		Version:    "",
+		Version:    version,
 		ValuePath:  "",
 		ValueCount: nil,
 		SourceIP:   sourceIP(r),

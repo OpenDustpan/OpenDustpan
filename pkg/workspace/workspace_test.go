@@ -3764,7 +3764,10 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 
 	f := newSealedFixture(t)
 
-	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-state-attribute"}}}`
+	// The outputs come from the body (ADR 49, decision 8), so the body carries
+	// the output value the test checks.
+	content := `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}},` +
+		`"resources":[{"attr":"s3cr3t-state-attribute"}]}`
 	sensitive := "s3cr3t-state-attribute"
 	outputValue := "s3cr3t-output-value"
 
@@ -3783,7 +3786,7 @@ func TestSealedReadWithoutSealerFails(t *testing.T) {
 	t.Parallel()
 
 	f := newSealedFixture(t)
-	sv := uploadSealedState(t, f, `{"version":4}`, "s3cr3t-output-value")
+	sv := uploadSealedState(t, f, `{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`, "s3cr3t-output-value")
 	ctx := t.Context()
 
 	plain, err := workspace.NewService(workspace.Config{

@@ -44,6 +44,11 @@ type WorkspaceService interface {
 	LockWithID(ctx context.Context, id workspace.ID, holder, reason, lockID string) (workspace.Workspace, error)
 	// Unlock releases holder's lock.
 	Unlock(ctx context.Context, id workspace.ID, holder string) (workspace.Workspace, error)
+	// ForceUnlock releases the lock of any holder, writing the fence version of
+	// a unit with state (ADR 44, decision 1). It reports an unfenced release.
+	ForceUnlock(
+		ctx context.Context, id workspace.ID, by string, allow namespace.Overrides, record func() error,
+	) (workspace.Workspace, bool, error)
 	// Current returns the workspace's current state version, or
 	// workspace.ErrNoState.
 	Current(ctx context.Context, id workspace.ID) (workspace.StateVersion, error)
@@ -52,7 +57,7 @@ type WorkspaceService interface {
 	// WriteState stores one state version streamed from body (ADR 49, decision 7).
 	WriteState(
 		ctx context.Context, id workspace.ID, in workspace.StreamInput,
-		auth workspace.Authority, body io.Reader,
+		auth workspace.StreamAuthority, body io.Reader,
 	) (workspace.StateVersion, error)
 }
 
@@ -260,7 +265,8 @@ func classify(err error) (int, string) {
 	case errors.Is(err, workspace.ErrConcurrentModification), errors.Is(err, workspace.ErrLockMismatch),
 		errors.Is(err, workspace.ErrStaleSerial), errors.Is(err, workspace.ErrLineageMismatch):
 		return http.StatusConflict, "state conflicts with the current state or lock"
-	case errors.Is(err, workspace.ErrNotLocked), errors.Is(err, workspace.ErrOverrideRefused):
+	case errors.Is(err, workspace.ErrNotLocked), errors.Is(err, workspace.ErrOverrideRefused),
+		errors.Is(err, workspace.ErrClientEncrypted):
 		return http.StatusForbidden, "write refused: an override is off or not granted"
 	case errors.Is(err, workspace.ErrChecksumMismatch), errors.Is(err, workspace.ErrInvalidState):
 		return http.StatusBadRequest, "invalid state"

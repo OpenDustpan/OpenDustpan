@@ -299,8 +299,10 @@ func TestSealUnsealedStatesSealsOldRows(t *testing.T) {
 		t.Fatalf("current state: %v", err)
 	}
 
-	if !bytes.Contains(current.Outputs, []byte("output-two")) {
-		t.Fatalf("current outputs lack the output value: %q", current.Outputs)
+	// The outputs come from the body, not from the declared rendering (ADR 49,
+	// decision 8), so the body's value is what the current version holds.
+	if !bytes.Contains(current.Outputs, []byte("s3cr3t-two")) {
+		t.Fatalf("current outputs lack the body's output value: %q", current.Outputs)
 	}
 
 	again, err := f.sealed.SealUnsealedStates(t.Context())

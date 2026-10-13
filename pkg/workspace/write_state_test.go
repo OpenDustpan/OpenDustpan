@@ -53,7 +53,7 @@ func TestWriteStateTakesSerialAndLineageFromTheBody(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(doc),
 	)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestWriteStateRefusesLockIDsThatDoNotMatch(t *testing.T) {
 			ctx,
 			f.ws.ID,
 			workspace.StreamInput{Holder: tc.holder, LockID: tc.lockID, MD5: ""},
-			authority(noOverrides(), nil),
+			streamAuthority(noOverrides(), nil),
 			strings.NewReader(doc),
 		)
 		if !errors.Is(err, tc.want) {
@@ -134,7 +134,7 @@ func TestWriteStateRefusesAStaleSerialAndDeletesItsBlob(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(streamDoc("lin-s", 5)),
 	)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestWriteStateRefusesAStaleSerialAndDeletesItsBlob(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(streamDoc("lin-s", 5)),
 	)
 	if !errors.Is(err, workspace.ErrStaleSerial) {
@@ -156,7 +156,7 @@ func TestWriteStateRefusesAStaleSerialAndDeletesItsBlob(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(streamDoc("other", 6)),
 	)
 	if !errors.Is(err, workspace.ErrLineageMismatch) {
@@ -187,7 +187,7 @@ func TestWriteStateChecksTheDeclaredMD5(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: md5Hex("other")},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(streamDoc("lin-m", 1)),
 	)
 	if !errors.Is(err, workspace.ErrChecksumMismatch) {
@@ -211,7 +211,7 @@ func TestWriteStateKeepsClientEncryptedStateWithoutOutputs(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(doc),
 	)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestWriteStateNeedsTheUnlockedOverride(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		strings.NewReader(doc),
 	)
 	if !errors.Is(err, workspace.ErrNotLocked) {
@@ -266,7 +266,7 @@ func TestWriteStateNeedsTheUnlockedOverride(t *testing.T) {
 	var recorded []workspace.Override
 
 	sv, err := f.svc.WriteState(ctx, f.ws.ID, workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
-		authority(on, func(o workspace.Override) error {
+		streamAuthority(on, func(o workspace.Override, _ int64) error {
 			recorded = append(recorded, o)
 
 			return nil
@@ -314,7 +314,7 @@ func TestWriteStateRecordsTheAttemptBeforeTheFirstByte(t *testing.T) {
 		ctx,
 		f.ws.ID,
 		workspace.StreamInput{Holder: "alice", LockID: "lock-1", MD5: ""},
-		authority(noOverrides(), nil),
+		streamAuthority(noOverrides(), nil),
 		body,
 	)
 	if err != nil {
@@ -376,3 +376,55 @@ func assertNoOrphanBlobs(t *testing.T, f fixture) {
 		}
 	}
 }
+
+// streamAuthority returns the caller's side of a streamed write.
+func streamAuthority(allow namespace.Overrides, record func(workspace.Override, int64) error) workspace.StreamAuthority {
+	return workspace.StreamAuthority{Allow: allow, Record: record}
+}
+
+// TestWriteStateRecordsWithTheSerialAndKeepsNoVersionWhenRecordFails proves the
+// audit entry of an override carries the serial of the body, and that a failed
+// entry refuses the write: no version becomes current and the blob is deleted
+// (ADR 41, decision 5).
+func TestWriteStateRecordsWithTheSerialAndKeepsNoVersionWhenRecordFails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	on := namespace.Overrides{Unlocked: true, Forced: false}
+
+	if _, err := f.namespaces.SetOverrides(ctx, f.ws.Ref.Namespace, on); err != nil {
+		t.Fatalf("namespace switch: %v", err)
+	}
+
+	if _, err := f.svc.SetOverrides(ctx, f.ws.ID, on); err != nil {
+		t.Fatalf("unit switch: %v", err)
+	}
+
+	var serials []int64
+
+	_, err := f.svc.WriteState(ctx, f.ws.ID,
+		workspace.StreamInput{Holder: "alice", LockID: "", MD5: ""},
+		streamAuthority(on, func(_ workspace.Override, serial int64) error {
+			serials = append(serials, serial)
+
+			return errRecordRefused
+		}),
+		strings.NewReader(streamDoc("lin-a", 4)))
+	if !errors.Is(err, errRecordRefused) {
+		t.Fatalf("write with a failed record: err = %v, want the record error", err)
+	}
+
+	if len(serials) != 1 || serials[0] != 4 {
+		t.Fatalf("record serials = %v, want [4] from the body", serials)
+	}
+
+	if _, err := f.svc.Current(t.Context(), f.ws.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("current after a failed record: err = %v, want ErrNoState", err)
+	}
+
+	assertNoOrphanBlobs(t, f)
+}
+
+// errRecordRefused is the audit failure that a write must refuse on.
+var errRecordRefused = errors.New("audit refused")

@@ -72,7 +72,7 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 		MD5:    sum,
 	}
 
-	auth := workspace.Authority{Allow: allow, Record: h.recordOverride(r, c.principal, obj)}
+	auth := workspace.StreamAuthority{Allow: allow, Record: h.recordOverride(r, c.principal, obj)}
 
 	_, err = h.ws.WriteState(ctx, ws.ID, in, auth, r.Body)
 	if err != nil {
@@ -121,4 +121,51 @@ func contentMD5(r *http.Request) (string, error) {
 	}
 
 	return hex.EncodeToString(sum), nil
+}
+
+// forceUnlockWorkspace serves an UNLOCK by a principal that does not hold the
+// lock: a force-unlock (ADR 49, decision 6). It needs unit:write-forced. The
+// unlock writes the fence version of a unit with state; a client-encrypted state
+// unlocks unfenced only while the forced-write switches are on (ADR 44).
+func (h *Handler) forceUnlockWorkspace(w http.ResponseWriter, r *http.Request, c call, ws workspace.Workspace) {
+	ctx := r.Context()
+
+	obj, err := unitObject(c.ref)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if !h.permits(ctx, c.principal, identity.ActionUnitWriteForced, obj) {
+		h.writeError(ctx, w, fmt.Errorf("%w: force-unlock needs %s", identity.ErrDenied, identity.ActionUnitWriteForced))
+
+		return
+	}
+
+	allow, err := h.allowance(ctx, c.principal, ws, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	record := func() error {
+		return h.appendOverrideAudit(r, c.principal, obj, identity.ActionUnitWriteForced, "")
+	}
+
+	_, _, err = h.ws.ForceUnlock(ctx, ws.ID, c.principal.Subject, allow, record)
+	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) {
+		h.writeHeldOrConflict(ctx, w, c, err)
+
+		return
+	}
+
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

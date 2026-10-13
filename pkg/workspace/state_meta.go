@@ -166,11 +166,11 @@ func newMetaStream(content io.Reader) (io.Reader, *metaStream) {
 	ms := &metaStream{pipe: pw, done: make(chan metaResult, 1)}
 
 	go func() {
+		// A document the decoder refuses still streams to the end, so the store
+		// keeps its bytes. The caller decides whether the refusal counts.
 		meta, err := readStateMeta(pr)
-		if err != nil {
-			_ = pr.CloseWithError(err)
-		} else if _, err = io.Copy(io.Discard, pr); err != nil {
-			_ = pr.CloseWithError(err)
+		if _, drainErr := io.Copy(io.Discard, pr); err == nil && drainErr != nil {
+			err = drainErr
 		}
 
 		ms.done <- metaResult{err: err, meta: meta}

@@ -36,9 +36,22 @@ type StreamInput struct {
 	MD5 string
 }
 
+// StreamAuthority is the caller's side of a streamed write: the overrides it may
+// use, and the callback that writes the audit entry of each override the write
+// uses. Record receives the serial of the body, which is known only after the
+// body streams.
+type StreamAuthority struct {
+	// Allow holds the overrides the caller may use.
+	Allow namespace.Overrides
+	// Record writes the audit entry of one override with the serial of the body.
+	// A nil Record writes nothing. A failed record refuses the write.
+	Record func(Override, int64) error
+}
+
 // WriteState stores one state version streamed from body, for the caller
 // holder. It checks the lock of in and the overrides of auth before the body
-// streams, and records each override that it uses. It records the attempt
+// streams. After the body streams and before the finalize, it records each
+// override that the write uses, with the serial of the body (ADR 41, decision 5). It records the attempt
 // before the first byte, so a sweep finds the blob even when the write stops
 // midway. After the body streams, it finalizes the version in one store
 // transaction. That transaction runs the namespace fence and the lock checks,
@@ -50,7 +63,7 @@ type StreamInput struct {
 // sweep. The outcome is unknown when a finalize fails for another reason than
 // a refusal, so its blob stays.
 func (s *Service) WriteState(
-	ctx context.Context, id ID, in StreamInput, auth Authority, body io.Reader,
+	ctx context.Context, id ID, in StreamInput, auth StreamAuthority, body io.Reader,
 ) (StateVersion, error) {
 	sum, hasSum, err := parseStreamMD5(in.MD5)
 	if err != nil {
@@ -83,13 +96,19 @@ type streamWrite struct {
 	fence     namespace.Fence
 	want      [md5.Size]byte
 	checked   bool
+	// used holds the overrides the write uses. record writes their entries after
+	// the body streams, once its serial is known.
+	used   []Override
+	record func(Override, int64) error
 }
 
 // admitStream checks the lock and the overrides of a streamed write, records
 // each override it uses, and declares its placeholder row. The attempt is noted
 // before the body streams, so a write that stops midway leaves a row that names
 // its blob.
-func (s *Service) admitStream(ctx context.Context, w Workspace, in StreamInput, auth Authority) (*streamWrite, error) {
+func (s *Service) admitStream(
+	ctx context.Context, w Workspace, in StreamInput, auth StreamAuthority,
+) (*streamWrite, error) {
 	if lockErr := checkStreamLock(w, in.LockID); lockErr != nil {
 		return nil, lockErr
 	}
@@ -103,10 +122,6 @@ func (s *Service) admitStream(ctx context.Context, w Workspace, in StreamInput, 
 	)
 	if err != nil {
 		return nil, fmt.Errorf("new state for %s: %w", w.Ref, err)
-	}
-
-	if recordErr := recordOverrides(w, used, auth.Record); recordErr != nil {
-		return nil, recordErr
 	}
 
 	fence, err := s.fence(ctx, w.Ref.Namespace)
@@ -123,7 +138,16 @@ func (s *Service) admitStream(ctx context.Context, w Workspace, in StreamInput, 
 		return nil, noteErr
 	}
 
-	return &streamWrite{workspace: w, version: sv, key: key, fence: fence, want: [md5.Size]byte{}, checked: false}, nil
+	return &streamWrite{
+		workspace: w,
+		version:   sv,
+		key:       key,
+		fence:     fence,
+		want:      [md5.Size]byte{},
+		checked:   false,
+		used:      used,
+		record:    auth.Record,
+	}, nil
 }
 
 // streamVersion streams the body into the blob of sw, reads its serial, lineage
@@ -147,7 +171,8 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 
 	meta, err := stream.finish(storeErr)
 	if err != nil {
-		return StateVersion{}, fmt.Errorf("write state %s: %w", sv.ID, err)
+		// A body the decoder refuses keeps its blob until the refusal deletes it.
+		return StateVersion{}, errors.Join(fmt.Errorf("write state %s: %w", sv.ID, err), s.blobsDeleteIf(ctx, sw.key, storeErr))
 	}
 
 	if metaErr := checkStreamedMeta(meta); metaErr != nil {
@@ -160,6 +185,10 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 	outputs, err := s.streamedOutputs(ctx, sw.workspace, meta)
 	if err != nil {
 		return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, sw.key))
+	}
+
+	if recErr := sw.recordUsed(meta.Serial); recErr != nil {
+		return StateVersion{}, errors.Join(recErr, s.blobs.Delete(ctx, sw.key))
 	}
 
 	sv.Status = StatusFinalized
@@ -358,4 +387,32 @@ func parseStreamMD5(s string) ([md5.Size]byte, bool, error) {
 	copy(sum[:], raw)
 
 	return sum, true, nil
+}
+
+// recordUsed writes the audit entry of each override the write uses, with the
+// serial of the body. It stops at the first entry that fails, and the write
+// does not finalize.
+func (sw *streamWrite) recordUsed(serial int64) error {
+	if sw.record == nil {
+		return nil
+	}
+
+	for _, override := range sw.used {
+		if err := sw.record(override, serial); err != nil {
+			return fmt.Errorf("record override of %s: %w", sw.workspace.Ref, err)
+		}
+	}
+
+	return nil
+}
+
+// blobsDeleteIf deletes the blob under key when the write has no store error:
+// a refusal after the body streamed owns its blob, while a store error leaves
+// the attempt to the sweep. It returns nil when the blob is kept.
+func (s *Service) blobsDeleteIf(ctx context.Context, key blob.Key, storeErr error) error {
+	if storeErr != nil {
+		return nil
+	}
+
+	return s.blobs.Delete(ctx, key)
 }
