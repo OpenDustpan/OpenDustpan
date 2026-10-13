@@ -9,60 +9,15 @@ package postgres
 // .golangci.yml; the staging tests themselves stay in package postgres_test.
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
-	"maps"
 	"slices"
-	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 // StagingSchemaPrefixForTest is the prefix of every staging schema name.
 const StagingSchemaPrefixForTest = stagingSchemaPrefix
-
-// EmptyNamespacesForStagingTest decodes the export, empties the namespaces
-// table, and fixes the stream checksum, leaving orphan stacks. It returns the
-// tampered stream with a manifest whose namespace count matches it, so only
-// the foreign-key check of the stage can fail.
-func EmptyNamespacesForStagingTest(
-	t *testing.T, data []byte, sum backup.Summary,
-) ([]byte, backup.Summary) {
-	t.Helper()
-
-	var dump pgDump
-
-	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&dump); err != nil {
-		t.Fatalf("decode export: %v", err)
-	}
-
-	for i := range dump.Tables {
-		if dump.Tables[i].Table == "namespaces" {
-			dump.Tables[i].Copy = nil
-			dump.Tables[i].Rows = 0
-		}
-	}
-
-	checksum, err := pgChecksum(dump.Tables)
-	if err != nil {
-		t.Fatalf("hash tampered export: %v", err)
-	}
-
-	dump.SHA256 = checksum
-
-	var tampered bytes.Buffer
-
-	if err := gob.NewEncoder(&tampered).Encode(dump); err != nil {
-		t.Fatalf("encode tampered export: %v", err)
-	}
-
-	sum.RowCounts = maps.Clone(sum.RowCounts)
-	sum.RowCounts["namespaces"] = 0
-
-	return tampered.Bytes(), sum
-}
 
 // CopyColumnsForTest returns the COPY column list of every table of
 // pgCopyTables, by table name.

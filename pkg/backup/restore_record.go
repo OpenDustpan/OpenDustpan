@@ -100,7 +100,7 @@ type RestoreRegistry interface {
 // Applier swaps the staged restore data into the live data in one step and
 // fences it (ADR 38 decisions 6 and 7): a file rename plus a fence for
 // SQLite, a schema swap plus a fence in one transaction for PostgreSQL. The
-// staging area holds checked data from StageRestore; the apply step moves it
+// staging area holds checked data from the stage step; the apply step moves it
 // live and increments the failover version of every namespace, so leases,
 // locks and update tokens from before the restore stop working even when the
 // server crashes right after the swap.

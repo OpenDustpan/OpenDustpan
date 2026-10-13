@@ -14,14 +14,15 @@ import (
 )
 
 // CheckStore is the live store ports that a server-side restore check needs
-// (ADR 38 decision 3): it reads the live dialect and version through Export,
-// proves the key-encryption key through PeekKey, and stages the SQL part
-// through StageRestore. It never loads into the live data.
+// (ADR 38 decision 3): it reads the live dialect and version through
+// ExportPortable, proves the key-encryption key through PeekPortableKey, and
+// stages the SQL part through StagePortable. It never loads into the live data.
 type CheckStore interface {
 	PortableExporter
 	KeyPeeker
 	PortableStager
-	// DiscardStaging removes the staging area, if any (Stager).
+	// DiscardStaging removes the staging area, if any. It leaves the live data
+	// unchanged. A check-only restore calls it after the checks.
 	DiscardStaging(ctx context.Context) error
 }
 

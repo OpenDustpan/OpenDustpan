@@ -315,7 +315,7 @@ func WithCheckpointDeltaCutoff(n int) Option {
 }
 
 // WithBackupTarget sets the backup target that holds blobs/<key>,
-// backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
+// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
 // "dir:/path". name is the target setting for operators, for example
 // "dir:/var/backups": the backups table keeps it. Empty name with a target

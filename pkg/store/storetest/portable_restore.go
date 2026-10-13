@@ -1,0 +1,456 @@
+package storetest
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
+	"testing"
+
+	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/stack"
+)
+
+// discardStaging removes the staging area of dst, failing on error.
+func discardStaging(t *testing.T, dst BackupStore) {
+	t.Helper()
+
+	if err := dst.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging area: %v", err)
+	}
+}
+
+// portableSummaryOf exports s in the portable format and returns its summary.
+func portableSummaryOf(t *testing.T, s PortableStore) backup.Summary {
+	t.Helper()
+
+	_, sum, _ := exportPortable(t, s)
+
+	return sum
+}
+
+// assertSameSummary compares two summaries field by field.
+func assertSameSummary(t *testing.T, got, want backup.Summary) {
+	t.Helper()
+
+	if got.Dialect != want.Dialect || got.SchemaVersion != want.SchemaVersion {
+		t.Fatalf("summary dialect or version = %q %d, want %q %d",
+			got.Dialect, got.SchemaVersion, want.Dialect, want.SchemaVersion)
+	}
+
+	if !slices.Equal(got.HomeRegions, want.HomeRegions) {
+		t.Fatalf("summary home regions = %v, want %v", got.HomeRegions, want.HomeRegions)
+	}
+
+	if !slices.Equal(got.WrapperIDs, want.WrapperIDs) {
+		t.Fatalf("summary wrapper IDs = %v, want %v", got.WrapperIDs, want.WrapperIDs)
+	}
+
+	if !maps.Equal(got.RowCounts, want.RowCounts) {
+		t.Fatalf("summary row counts = %v, want %v", got.RowCounts, want.RowCounts)
+	}
+
+	if !slices.EqualFunc(got.Blobs, want.Blobs, sameBlobRef) {
+		t.Fatalf("summary blobs = %+v, want %+v", got.Blobs, want.Blobs)
+	}
+}
+
+// testRestoreStagingKeepsLive stages a portable backup into a store that holds
+// live rows: the staged summary equals the export, the live rows stay, and
+// discarding the staging area keeps them too.
+func testRestoreStagingKeepsLive(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	seedBackupStore(t, ps.src)
+	sink, sum, files := exportPortable(t, ps.src)
+
+	live := seedBackupStore(t, ps.dst)
+	before := portableSummaryOf(t, ps.dst)
+	beforeNS := mustGetNamespace(t, ps.dst, live.acme.Name)
+
+	staged, err := ps.dst.StagePortable(ctx, sink.read, sum, files)
+	if err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	assertSameSummary(t, staged, sum)
+	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+
+	if got := mustGetNamespace(t, ps.dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after staging = %+v, want %+v", got, beforeNS)
+	}
+
+	discardStaging(t, ps.dst)
+	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+
+	// The staging area is gone: the same bytes stage cleanly again.
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage portable backup again: %v", err)
+	}
+
+	discardStaging(t, ps.dst)
+	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+}
+
+// testRestoreStagingReplacesPrevious stages two portable backups without an
+// intervening discard: only one staging area exists at a time, so the second
+// stage discards the first. Stores with the StagingWitness capability also prove
+// the first staging area is gone after the second stage.
+func testRestoreStagingReplacesPrevious(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	seed := seedBackupStore(t, ps.src)
+	sink1, sum1, files1 := exportPortable(t, ps.src)
+	mustCreateStack(t, ps.src, seed.acme, "extra")
+	sink2, sum2, files2 := exportPortable(t, ps.src)
+
+	if sum2.RowCounts["stacks"] != sum1.RowCounts["stacks"]+1 {
+		t.Fatalf("second export stacks = %d, want one more than %d",
+			sum2.RowCounts["stacks"], sum1.RowCounts["stacks"])
+	}
+
+	live := seedBackupStore(t, ps.dst)
+	before := portableSummaryOf(t, ps.dst)
+	beforeNS := mustGetNamespace(t, ps.dst, live.acme.Name)
+
+	witness, hasWitness := ps.dst.(StagingWitness)
+
+	if _, err := ps.dst.StagePortable(ctx, sink1.read, sum1, files1); err != nil {
+		t.Fatalf("stage first backup: %v", err)
+	}
+
+	firstID := ""
+	if hasWitness {
+		firstID = witness.CurrentStagingID()
+		if firstID == "" {
+			t.Fatal("no staging area after the first stage")
+		}
+	}
+
+	if _, err := ps.dst.StagePortable(ctx, sink2.read, sum2, files2); err != nil {
+		t.Fatalf("stage second backup: %v", err)
+	}
+
+	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+
+	if got := mustGetNamespace(t, ps.dst, live.acme.Name); got != beforeNS {
+		t.Fatalf("namespace after the second stage = %+v, want %+v", got, beforeNS)
+	}
+
+	secondID := ""
+	if hasWitness {
+		secondID = requireOnlySecondStaging(t, witness, firstID)
+	}
+
+	discardStaging(t, ps.dst)
+
+	if hasWitness {
+		requireNoStagingLeft(t, witness, secondID)
+	}
+
+	assertSameSummary(t, portableSummaryOf(t, ps.dst), before)
+}
+
+// requireOnlySecondStaging checks the staging area after a second stage: it is
+// a new area, the first area is gone, and the second area is alive. It returns
+// the ID of the second area.
+func requireOnlySecondStaging(t *testing.T, witness StagingWitness, firstID string) string {
+	t.Helper()
+
+	secondID := witness.CurrentStagingID()
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("staging area after the second stage = %q, want a new area", secondID)
+	}
+
+	if witness.StagingAlive(firstID) {
+		t.Fatal("the first staging area is still alive after the second stage")
+	}
+
+	if !witness.StagingAlive(secondID) {
+		t.Fatal("the second staging area is gone after its stage")
+	}
+
+	return secondID
+}
+
+// requireNoStagingLeft checks that a discard removed the second staging area.
+func requireNoStagingLeft(t *testing.T, witness StagingWitness, secondID string) {
+	t.Helper()
+
+	if witness.StagingAlive(secondID) || witness.CurrentStagingID() != "" {
+		t.Fatal("a staging area survives the discard")
+	}
+}
+
+// testRestoreStagingKeepsCheckpointBlobs stages a portable backup that holds a
+// checkpoint kept in blobs: the staged summary names the blob, like the export
+// does.
+func testRestoreStagingKeepsCheckpointBlobs(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	f := newFixture(t, ps.src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	st := mustGetStack(t, ps.src, f.ref)
+
+	key, err := blob.ParseKey("pulumi/" + st.ID.String() + "/" + u.ID.String() + "/0")
+	if err != nil {
+		t.Fatalf("parse blob key: %v", err)
+	}
+
+	want := newBlobCheckpoint(u, key, 0, `{"v":1}`)
+
+	if putErr := ps.src.PutCheckpoint(t.Context(), want, f.fence); putErr != nil {
+		t.Fatalf("put checkpoint: %v", putErr)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	wantBlobs := []backup.BlobRef{{MD5: want.BlobMD5, Key: key.String(), Size: want.BlobSize, Sealed: false}}
+	if !slices.EqualFunc(sum.Blobs, wantBlobs, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, wantBlobs)
+	}
+
+	staged, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files)
+	if err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	assertSameSummary(t, staged, sum)
+	discardStaging(t, ps.dst)
+}
+
+// testRestoreJournalBlob shows that a restore keeps the journal rows of a
+// running update, with the blob each batch names (ADR 43, decision 6.8). The
+// update stays running after the export, so the rows belong to a running update.
+func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	f := newFixture(t, ps.src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	row := journalRow(t, ps.src, u, 7, 1)
+	row.Size = 33
+
+	if _, err := ps.src.PutJournalRow(ctx, row, f.fence); errors.Is(err, errors.ErrUnsupported) {
+		t.Skip("the store keeps no journal rows")
+	} else if err != nil {
+		t.Fatalf("journal batch: %v", err)
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	keys, err := ps.dst.JournalKeys(ctx, mustStackID(t, ps.dst, f.ref), u.ID)
+	if err != nil || !slices.Equal(keys, []blob.Key{row.BlobKey}) {
+		t.Fatalf("journal after the restore = %v, %v; want %s", keys, err, row.BlobKey)
+	}
+}
+
+// testRestoreRoundTrip restores a portable export and exports the restored
+// store again: every table holds the rows it held, and every table file except
+// the namespaces file is byte-identical. The namespaces file changes, because
+// the apply moves every namespace to a new failover version.
+func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	seedBackupStore(t, ps.src)
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	again, sum2, _ := exportPortable(t, ps.dst)
+
+	if !maps.Equal(sum2.RowCounts, sum.RowCounts) || !slices.EqualFunc(sum2.Blobs, sum.Blobs, sameBlobRef) {
+		t.Fatalf("restored summary rows = %v, want %v", sum2.RowCounts, sum.RowCounts)
+	}
+
+	for _, table := range backup.Tables {
+		path := backup.PortablePath(table)
+
+		if table == "namespaces" {
+			continue
+		}
+
+		want := sink.files[path].Bytes()
+		got := again.files[path].Bytes()
+
+		if !bytes.Equal(got, want) {
+			t.Fatalf("table %q after the restore differs from the export: %d bytes, want %d",
+				table, len(got), len(want))
+		}
+	}
+}
+
+// writeBackupStacksTask adds total stacks for one writer, calling signal after
+// the first stack, so the caller can start the export while the remaining
+// writes are still pending. It returns the first error.
+func writeBackupStacksTask(t *testing.T, task backupWriteTask) error {
+	t.Helper()
+
+	project := fmt.Sprintf("w%d", task.worker)
+	signaled := false
+
+	for j := range task.total {
+		st := newStack(task.ns.Name, project, fmt.Sprintf("s%d", j))
+		st.Tags = map[string]string{"writer": project}
+
+		if err := task.src.CreateStack(t.Context(), st, task.ns.Fence()); err != nil {
+			if !signaled {
+				task.signal()
+			}
+
+			return fmt.Errorf("create stack %s: %w", st.Ref, err)
+		}
+
+		if !signaled {
+			signaled = true
+			task.signal()
+		}
+	}
+
+	return nil
+}
+
+// backupWriteTask is one concurrent writer of the no-tear case: worker numbers
+// the writer, total counts its stacks, and signal runs after its first stack.
+type backupWriteTask struct {
+	src    BackupStore
+	ns     namespace.Namespace
+	signal func()
+	worker int
+	total  int
+}
+
+// testRestoreExportDoesNotTear exports while writers add stacks, each in one
+// store transaction with its tags and inventory entry. The export is one
+// snapshot: every stack the restore holds equals its source row and carries
+// its inventory entry, all in it or all out of it.
+func testRestoreExportDoesNotTear(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	ns := newNamespace(t, ps.src, "acme")
+
+	const writers = 8
+
+	const perWriter = 8
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, writers)
+	firstDone := make(chan struct{}, writers)
+
+	for w := range writers {
+		wg.Go(func() {
+			errs[w] = writeBackupStacksTask(t, backupWriteTask{
+				src: ps.src, ns: ns, worker: w, total: perWriter, signal: func() { firstDone <- struct{}{} },
+			})
+		})
+	}
+
+	for range writers {
+		<-firstDone
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+	wg.Wait()
+
+	for w, err := range errs {
+		if err != nil {
+			t.Fatalf("writer %d: %v", w, err)
+		}
+	}
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
+	}
+
+	verifyBackupNoTear(t, ps.src, ps.dst, ns)
+}
+
+// verifyBackupNoTear checks that the restored store holds a non-empty snapshot,
+// that every stack equals its source row, and that every stack carries its
+// inventory entry. The non-empty check keeps a fast store from passing with an
+// empty capture taken before any writer wrote.
+func verifyBackupNoTear(t *testing.T, src, dst BackupStore, ns namespace.Namespace) {
+	t.Helper()
+
+	imported, err := dst.ListStacks(t.Context(), stack.Filter{Namespace: ns.Name, Project: ""})
+	if err != nil {
+		t.Fatalf("list restored stacks: %v", err)
+	}
+
+	if len(imported) == 0 {
+		t.Fatal("restored stacks after a concurrent export = 0, want a non-empty snapshot")
+	}
+
+	for i := range imported {
+		assertStack(t, imported[i], mustGetStack(t, src, imported[i].Ref))
+	}
+
+	entries, err := dst.ListUnits(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("list restored inventory: %v", err)
+	}
+
+	if len(entries) != len(imported) {
+		t.Fatalf("inventory entries after restore = %d, want one per stack (%d)", len(entries), len(imported))
+	}
+
+	byUnit := make(map[string]inventory.Entry, len(entries))
+	for i := range entries {
+		byUnit[entries[i].UnitID] = entries[i]
+	}
+
+	for i := range imported {
+		e, ok := byUnit[imported[i].ID.String()]
+		if !ok {
+			t.Fatalf("stack %s misses its inventory entry after restore", imported[i].Ref)
+		}
+
+		if e.Name != imported[i].Ref.Project.String()+"/"+imported[i].Ref.Stack.String() {
+			t.Fatalf("inventory entry of %s = %q, want the stack name", imported[i].Ref, e.Name)
+		}
+	}
+}

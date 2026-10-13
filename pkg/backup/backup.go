@@ -11,9 +11,9 @@
 // PostgreSQL) implements these ports in a later change. The conformance suite
 // store/storetest.RunBackup exercises them before any adapter does.
 //
-// Naming: Exporter reads, Importer loads, Registry tracks the backups table,
-// Inspector lists the schema tables, and Summary is the manifest subset that
-// the SQL data alone determines. The names say what each port moves, not
+// Naming: PortableExporter reads, PortableStager stages, Registry tracks the
+// backups table, Inspector lists the schema tables, and Summary is the manifest
+// subset that the SQL data alone determines. The names say what each port moves, not
 // which tool the data belongs to, so the ports stay tool-neutral.
 package backup
 
@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"time"
@@ -170,72 +169,18 @@ var (
 	ErrAlreadyExists = errors.New("backup already exists")
 	// ErrNotRunning reports that a backup is not running, so it cannot finish.
 	ErrNotRunning = errors.New("backup is not running")
-	// ErrNotEmpty reports that a restore destination holds rows, so loading
-	// would mix two installations. Restore needs an empty store.
-	ErrNotEmpty = errors.New("restore destination is not empty")
-	// ErrDialectMismatch reports that the backup dialect differs from the
-	// dialect of the destination. A backup restores into the same dialect only.
-	ErrDialectMismatch = errors.New("backup dialect differs from destination dialect")
 	// ErrSchemaMismatch reports that the backup schema version differs from
 	// the schema version of the destination. A backup restores into the same
 	// schema version only.
 	ErrSchemaMismatch = errors.New("backup schema version differs from destination schema version")
-	// ErrCorrupt reports that the stream does not hold a complete export, or
-	// that its row counts differ from the manifest.
+	// ErrCorrupt reports that the backup data is incomplete, or that it does
+	// not match its descriptors, row counts or manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
 	// ErrInvalidID reports a backup ID that fails validation: empty,
 	// overlong, without the bkp- prefix, or with characters outside the
 	// identifier set.
 	ErrInvalidID = errors.New("invalid backup ID")
 )
-
-// Exporter captures the SQL data in one read transaction and writes it to w.
-// The bytes stay opaque: SQLite writes its file image, PostgreSQL its table
-// dump. The returned Summary describes what was captured: the dialect, the
-// schema version, the home regions, the wrapper IDs, the row count of each
-// table in Tables, and the blob references. It returns storage errors
-// without a dedicated value. Export stops and returns promptly when w.Write
-// reports an error, so a failed target unblocks the backup instead of
-// hanging it.
-type Exporter interface {
-	// Export captures the SQL data in one read transaction and writes it to
-	// w, so concurrent writes land all in the capture or all out of it.
-	Export(ctx context.Context, w io.Writer) (Summary, error)
-}
-
-// Importer loads an export into an empty store of the same dialect and
-// schema version. The want Summary is the manifest of the export: Import
-// checks it before reading r and compares the loaded row counts with it
-// after. It returns the Summary of what it loaded.
-type Importer interface {
-	// Import loads the export in r into an empty store in one transaction.
-	// It returns ErrNotEmpty if the destination holds any row,
-	// ErrDialectMismatch if want.Dialect differs from the destination
-	// dialect, ErrSchemaMismatch if want.SchemaVersion differs from the
-	// destination schema version, and ErrCorrupt if r does not hold a
-	// complete export or its row counts differ from want. A failed import
-	// leaves an empty store: it never leaves partial rows.
-	Import(ctx context.Context, r io.Reader, want Summary) (Summary, error)
-}
-
-// Stager stages an export for an online restore (ADR 38 decision 3): it loads
-// the export into a staging area without touching the live data, then checks
-// the staged data. SQLite stages into a separate file, PostgreSQL into a
-// separate schema. A later change applies the staged data; this port only
-// checks it.
-type Stager interface {
-	// StageRestore loads the export in r into the staging area and checks it:
-	// the dialect and schema version against want, the row counts against
-	// want.RowCounts, the foreign keys, and the blob references against
-	// want.Blobs with size and checksum. It returns the Summary of the staged
-	// data. It returns ErrDialectMismatch, ErrSchemaMismatch or ErrCorrupt. A
-	// failed stage removes the staging area: the live data stays unchanged.
-	// Only one staging exists at a time: a new stage discards the previous one.
-	StageRestore(ctx context.Context, r io.Reader, want Summary) (Summary, error)
-	// DiscardStaging removes the staging area, if any. It leaves the live
-	// data unchanged. A check-only restore calls it after the checks.
-	DiscardStaging(ctx context.Context) error
-}
 
 // Registry tracks the backups table: one row for each backup that this
 // installation made. Rows carry no fence: they describe the installation,

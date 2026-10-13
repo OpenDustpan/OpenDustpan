@@ -468,12 +468,8 @@ func sanitizeRestoreError(err error) string {
 		return ErrCorrupt.Error()
 	case errors.Is(err, ErrNativeFormat):
 		return ErrNativeFormat.Error()
-	case errors.Is(err, ErrDialectMismatch):
-		return ErrDialectMismatch.Error()
 	case errors.Is(err, ErrSchemaMismatch):
 		return ErrSchemaMismatch.Error()
-	case errors.Is(err, ErrNotEmpty):
-		return ErrNotEmpty.Error()
 	case errors.Is(err, maintenance.ErrActiveWork):
 		return activeWorkMessage(err)
 	case errors.Is(err, ErrNotFound):
@@ -562,7 +558,7 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
-// "backups/bkp-1/db" or "blobs/pulumi/stk-1/upd-1/0": storage layout, not
+// "backups/bkp-1/manifest.json" or "blobs/pulumi/stk-1/upd-1/0": storage layout, not
 // data. Blob content keys without the target prefix stay, so the log still
 // names the blob that failed.
 var logObjectPath = regexp.MustCompile(`"[^"]*(?:backups|blobs)/[^"]*"`)
@@ -687,9 +683,7 @@ func isLogSentinel(err error) bool {
 	switch {
 	case errors.Is(err, ErrCorrupt),
 		errors.Is(err, ErrNativeFormat),
-		errors.Is(err, ErrDialectMismatch),
 		errors.Is(err, ErrSchemaMismatch),
-		errors.Is(err, ErrNotEmpty),
 		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrAlreadyExists),
 		errors.Is(err, ErrNotRunning),

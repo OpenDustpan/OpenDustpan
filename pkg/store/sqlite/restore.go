@@ -194,7 +194,7 @@ func restoreFromRow(row db.Restore) (backup.RestoreRecord, error) {
 // of every namespace inside the staged file (ADR 38 decisions 6 and 7), then
 // swaps the staged restore file into the live database with one file rename
 // and drops the staging area. The staged file passed every check in
-// StageRestore, so the rename cannot mix two installations. With no staged
+// StagePortable, so the rename cannot mix two installations. With no staged
 // file it reports ErrCorrupt and changes nothing. The swap holds the store
 // lock exclusive, so concurrent readers wait out the rename instead of
 // reading a closed handle. Fencing the staged image before the rename means
