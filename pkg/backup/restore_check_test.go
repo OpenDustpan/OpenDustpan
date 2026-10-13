@@ -539,3 +539,25 @@ func TestCheckRestoreStageFailureRemovesStaging(t *testing.T) {
 
 	s.assertTargetIntact(t)
 }
+
+// TestCheckRefusesForeignDescriptorPath proves Check and CheckRestore refuse a
+// descriptor whose path is not the path of its table, before any object is
+// opened, with ErrCorrupt.
+func TestCheckRefusesForeignDescriptorPath(t *testing.T) {
+	t.Parallel()
+
+	s := newCheckSetup(t)
+	renameSecretKeysPath(t, &s.manifest, "manifest.json")
+	s.rewriteCheckManifest(t)
+
+	if err := backup.Check(t.Context(), s.target, s.id); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check: err = %v, want ErrCorrupt", err)
+	}
+
+	_, _, err := s.check(t, testWrapper(), "")
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("check restore: err = %v, want ErrCorrupt", err)
+	}
+
+	s.assertNoStage(t)
+}

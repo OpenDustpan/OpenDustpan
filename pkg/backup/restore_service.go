@@ -66,7 +66,7 @@ type RestoreConfig struct {
 	// Blobs is the live content store the restore copies into.
 	Blobs blob.Store
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/db and backups/<id>/manifest.json.
+	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
 	Target blob.Store
 	// Key is the key-encryption key the checks prove against the backup.
 	Key secret.Wrapper
@@ -466,6 +466,8 @@ func sanitizeRestoreError(err error) string {
 		return ErrRestoreRunning.Error()
 	case errors.Is(err, ErrCorrupt):
 		return ErrCorrupt.Error()
+	case errors.Is(err, ErrNativeFormat):
+		return ErrNativeFormat.Error()
 	case errors.Is(err, ErrDialectMismatch):
 		return ErrDialectMismatch.Error()
 	case errors.Is(err, ErrSchemaMismatch):
@@ -684,6 +686,7 @@ func redactLogFrame(text string) string {
 func isLogSentinel(err error) bool {
 	switch {
 	case errors.Is(err, ErrCorrupt),
+		errors.Is(err, ErrNativeFormat),
 		errors.Is(err, ErrDialectMismatch),
 		errors.Is(err, ErrSchemaMismatch),
 		errors.Is(err, ErrNotEmpty),

@@ -11533,7 +11533,7 @@ func corruptServerBackupTarget(ctx context.Context, t *testing.T, env *e2e.Env, 
 		t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
 	}
 
-	key := "backups/" + id + "/db"
+	key := "backups/" + id + "/" + backup.PortablePath("namespaces")
 	if len(doc.Manifest.Blobs) > 0 {
 		key = "blobs/" + doc.Manifest.Blobs[0].Key
 	}
@@ -11624,6 +11624,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	id := startBackupAndConflict(ctx, t, env)
 	doc := pollBackupState(ctx, t, env, id, "succeeded")
 	checkBackupManifest(t, store, doc)
+	checkPortableObjects(t, env, id, doc.Manifest.SQLFiles)
 	checkBackupList(ctx, t, env, id)
 	checkBackupUnauthorized(ctx, t, env, id)
 
@@ -11715,7 +11716,19 @@ type backupManifestDoc struct {
 	Blobs         []backupManifestBlob `json:"blobs"`
 	SQLSize       int64                `json:"sqlSize"`
 	SQLSHA256     string               `json:"sqlSha256"`
+	SQLFormat     string               `json:"sqlFormat"`
+	SQLFiles      []backupSQLFileDoc   `json:"sqlFiles"`
 	SchemaVersion int                  `json:"schemaVersion"`
+}
+
+// backupSQLFileDoc holds one table file descriptor of the manifest.
+type backupSQLFileDoc struct {
+	Table   string   `json:"table"`
+	Path    string   `json:"path"`
+	SHA256  string   `json:"sha256"`
+	Columns []string `json:"columns"`
+	Rows    int64    `json:"rows"`
+	Size    int64    `json:"size"`
 }
 
 // backupManifestBlob holds one copied blob of the manifest.
@@ -11834,9 +11847,15 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatalf("manifest id = %q, want backup %q", manifest.ID, doc.ID)
 	}
 
-	if manifest.Format != 1 {
-		t.Fatalf("manifest format = %d, want 1", manifest.Format)
+	if manifest.Format != 2 {
+		t.Fatalf("manifest format = %d, want 2", manifest.Format)
 	}
+
+	if manifest.SQLFormat != "portable" {
+		t.Fatalf("manifest SQL format = %q, want %q", manifest.SQLFormat, "portable")
+	}
+
+	checkPortableFiles(t, manifest.SQLFiles)
 
 	if manifest.Dialect != string(store) {
 		t.Fatalf("manifest dialect = %q, want %q", manifest.Dialect, store)
@@ -11864,6 +11883,61 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 
 	if len(manifest.HomeRegions) == 0 {
 		t.Fatal("manifest holds no home region")
+	}
+}
+
+// checkPortableFiles proves the SQL part of a format 2 manifest holds exactly
+// one descriptor for each table of the portable spec, at the path of its table.
+func checkPortableFiles(t *testing.T, files []backupSQLFileDoc) {
+	t.Helper()
+
+	tables := backup.PortableTables()
+	if len(files) != len(tables) {
+		t.Fatalf("manifest holds %d table files, want %d", len(files), len(tables))
+	}
+
+	seen := make(map[string]bool, len(files))
+
+	for _, file := range files {
+		if seen[file.Table] {
+			t.Fatalf("manifest holds two files of table %q", file.Table)
+		}
+
+		seen[file.Table] = true
+
+		if file.Path != backup.PortablePath(file.Table) {
+			t.Fatalf("file of table %q at %q, want %q", file.Table, file.Path, backup.PortablePath(file.Table))
+		}
+	}
+
+	for _, table := range tables {
+		if !seen[table.Table] {
+			t.Fatalf("manifest holds no file of table %q", table.Table)
+		}
+	}
+}
+
+// checkPortableObjects proves each table file of a backup is in the target with
+// the size its descriptor names, and that the native db object of format 1 is
+// gone.
+func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupSQLFileDoc) {
+	t.Helper()
+
+	dir := env.BackupTargetDir(t)
+
+	for _, file := range files {
+		info, err := os.Stat(filepath.Join(dir, "backups", id, filepath.FromSlash(file.Path)))
+		if err != nil {
+			t.Fatalf("stat table file %q of backup %s: %v", file.Path, id, err)
+		}
+
+		if info.Size() != file.Size {
+			t.Fatalf("table file %q holds %d bytes, the descriptor says %d", file.Path, info.Size(), file.Size)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "backups", id, "db")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("backup %s still holds the native db object: stat err = %v", id, err)
 	}
 }
 

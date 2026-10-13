@@ -24,7 +24,9 @@ const nativeFormatVersion = 1
 
 // ErrNativeFormat reports a backup in the native format of ADR 30, which this
 // server does not restore. A new backup is necessary.
-var ErrNativeFormat = errors.New("backup uses the native format, which is no longer restored")
+var ErrNativeFormat = errors.New(
+	"backup uses the native format, which this server does not restore; take a new backup",
+)
 
 // FormatVersion is the manifest format number of the portable format (ADR 42,
 // decision 4). Check and restore refuse a manifest with another number,
@@ -103,7 +105,7 @@ type Config struct {
 	// without sealed state.
 	StateOpener StateOpener
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/db and backups/<id>/manifest.json.
+	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
 	Target blob.Store
 	// TargetName names the target for operators, for example
 	// "dir:/var/backups". The registry row keeps it.
@@ -1002,9 +1004,16 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 		)
 	case manifest.ID != id:
 		return Manifest{}, fmt.Errorf("backup %s holds a manifest of %s: %w", id, manifest.ID, ErrCorrupt)
-	default:
-		return manifest, nil
 	}
+
+	// The descriptors name the objects that Check, restore and the key peek
+	// read. Check their names here, before any object is opened. The row counts
+	// are checked when the data is staged, in both dialects.
+	if _, err := indexPortableDescriptors(manifest.SQLFiles); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, err)
+	}
+
+	return manifest, nil
 }
 
 // checkObject checks that the target holds key with wantSize bytes. It Gets

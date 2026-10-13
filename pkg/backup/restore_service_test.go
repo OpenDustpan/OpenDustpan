@@ -1647,3 +1647,170 @@ func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
 		t.Fatalf("restore state = %q, want failed", row.State)
 	}
 }
+
+// TestRestoreRefusesForeignDescriptorPath proves a manifest whose descriptor
+// names an object outside the table files, here the manifest itself, fails the
+// restore with ErrCorrupt before any object is opened or applied.
+func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	raw := setup.target.readObject(t, "backups/"+setup.id.String()+"/manifest.json")
+
+	var manifest backup.Manifest
+
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+
+	renameSecretKeysPath(t, &manifest, "manifest.json")
+
+	tampered, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode tampered manifest: %v", err)
+	}
+
+	proxy := &foreignManifestTarget{
+		&mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0},
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        setup.live,
+		Registry:    setup.regs,
+		Backups:     setup.backups,
+		Maintenance: setup.maint,
+		Blobs:       setup.blobs,
+		Target:      proxy,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	id := backup.RestoreID("rst-foreignpath0000001")
+
+	startErr := service.Start(t.Context(), id, backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	})
+	if startErr != nil {
+		t.Fatalf("start restore: %v", startErr)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
+	}
+
+	if row.Error != backup.ErrCorrupt.Error() {
+		t.Fatalf("restore error = %q, want %q", row.Error, backup.ErrCorrupt)
+	}
+
+	if got := setup.live.counts(); got.applied != 0 || got.bumped != 0 {
+		t.Fatalf("applied = %d, bumped = %d, want no apply for a foreign descriptor path", got.applied, got.bumped)
+	}
+}
+
+// foreignManifestTarget serves the tampered manifest on every read, so the
+// restore reads the foreign descriptor path first.
+type foreignManifestTarget struct {
+	*mutatingTarget
+}
+
+func (f *foreignManifestTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	if strings.HasSuffix(key.String(), "/manifest.json") {
+		return io.NopCloser(strings.NewReader(string(f.tampered))), nil
+	}
+
+	return f.inner.Get(ctx, key)
+}
+
+// renameSecretKeysPath sets the path of the secret_keys descriptor of manifest.
+func renameSecretKeysPath(t *testing.T, manifest *backup.Manifest, path string) {
+	t.Helper()
+
+	for i := range manifest.SQLFiles {
+		if manifest.SQLFiles[i].Table == "secret_keys" {
+			manifest.SQLFiles[i].Path = path
+
+			return
+		}
+	}
+
+	t.Fatal("manifest holds no descriptor of secret_keys")
+}
+
+// TestRestoreRefusesNativeFormat proves a backup of the native format of ADR 30
+// fails the restore with the text that tells the operator to take a new backup,
+// before any object is applied.
+func TestRestoreRefusesNativeFormat(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+
+	native, err := json.Marshal(map[string]any{"id": setup.id.String(), "format": 1})
+	if err != nil {
+		t.Fatalf("encode native manifest: %v", err)
+	}
+
+	proxy := &foreignManifestTarget{
+		&mutatingTarget{inner: setup.target, tampered: native, mu: sync.Mutex{}, manifests: 0},
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        setup.live,
+		Registry:    setup.regs,
+		Backups:     setup.backups,
+		Maintenance: setup.maint,
+		Blobs:       setup.blobs,
+		Target:      proxy,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	id := backup.RestoreID("rst-nativeformat00001")
+
+	startErr := service.Start(t.Context(), id, backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	})
+	if startErr != nil {
+		t.Fatalf("start restore: %v", startErr)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
+	}
+
+	if row.Error != backup.ErrNativeFormat.Error() {
+		t.Fatalf("restore error = %q, want %q", row.Error, backup.ErrNativeFormat)
+	}
+
+	if !strings.Contains(row.Error, "take a new backup") {
+		t.Fatalf("restore error = %q, want it to tell the operator to take a new backup", row.Error)
+	}
+
+	if got := setup.live.counts(); got.applied != 0 || got.bumped != 0 {
+		t.Fatalf("applied = %d, bumped = %d, want no apply for a native backup", got.applied, got.bumped)
+	}
+}
