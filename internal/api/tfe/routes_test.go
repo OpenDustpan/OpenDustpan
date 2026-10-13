@@ -165,6 +165,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -692,6 +693,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -712,6 +714,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -734,6 +737,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -1565,6 +1569,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Workspaces:     errorWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {

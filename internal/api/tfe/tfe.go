@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -190,6 +191,8 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
+	// Gate bounds concurrent large bodies by bytes held at once.
+	Gate *bodygate.Gate
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -203,6 +206,7 @@ type Handler struct {
 	baseURL        baseurl.Resolver
 	audit          audit.Store
 	onAuditFailure func()
+	gate           *bodygate.Gate
 	mux            *patternMux
 	routes         []Route
 }
@@ -231,6 +235,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
+		gate:           cfg.Gate,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}

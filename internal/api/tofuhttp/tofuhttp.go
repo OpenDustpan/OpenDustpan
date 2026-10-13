@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -75,6 +76,8 @@ type Config struct {
 	Namespaces    NamespaceService
 	// Audit receives the entry of each override a write uses. Nil writes none.
 	Audit audit.Store
+	// Gate bounds concurrent large bodies by bytes held at once.
+	Gate *bodygate.Gate
 }
 
 // Handler serves the http backend under /tofu/state/.
@@ -86,6 +89,7 @@ type Handler struct {
 	// namespaces and audit serve the override allowance and its audit entries.
 	namespaces NamespaceService
 	audit      audit.Store
+	gate       *bodygate.Gate
 	mux        *http.ServeMux
 	routes     []Route
 }
@@ -129,6 +133,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		ws:         cfg.Workspaces,
 		namespaces: cfg.Namespaces,
 		audit:      cfg.Audit,
+		gate:       cfg.Gate,
 		mux:        http.NewServeMux(),
 		routes:     nil,
 	}

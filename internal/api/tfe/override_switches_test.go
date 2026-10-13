@@ -114,6 +114,7 @@ func newSwitchedHandler(
 		Workspaces:     ws,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

@@ -126,6 +126,7 @@ func newAuditFixture(t *testing.T, err error) auditFixture {
 		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:       baseurl.Resolver{},
 		Audit:         entries,
+		Gate:          nil,
 		OnAuditFailure: func() {
 			failures++
 		},

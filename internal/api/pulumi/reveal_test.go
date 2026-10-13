@@ -121,6 +121,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   cfg.store,
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,

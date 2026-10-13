@@ -64,6 +64,7 @@ func newWriteHandler(t *testing.T, ws tfe.WorkspaceService, base baseurl.Resolve
 		Workspaces:     ws,
 		BaseURL:        base,
 		Audit:          nil,
+		Gate:           nil,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
