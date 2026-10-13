@@ -71,17 +71,15 @@ func TestVerifierKnowsEarlierEntriesOfTheBatch(t *testing.T) {
 	}
 }
 
-// TestVerifierRefusesKindsTheReplayerDoesNotApply checks that kinds 5, 7 and 10 are
-// refused with ErrUnsupportedKind, as the replayer refuses them.
+// TestVerifierRefusesKindsTheReplayerDoesNotApply checks that kind 10 is refused
+// with ErrUnsupportedKind, as the replayer refuses it (item 12).
 func TestVerifierRefusesKindsTheReplayerDoesNotApply(t *testing.T) {
 	t.Parallel()
 
-	for _, kind := range []int64{5, 7} {
-		body := batchOf(entryJSON(kind, 1, 1, ""))
-		err := (pulumijournal.Verifier{}).VerifyBatch(body, 1, nil)
-		if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
-			t.Fatalf("kind %d: err = %v, want ErrUnsupportedKind", kind, err)
-		}
+	body := batchOf(`{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`)
+	err := (pulumijournal.Verifier{}).VerifyBatch(body, 2, nil)
+	if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
+		t.Fatalf("kind 10: err = %v, want ErrUnsupportedKind", err)
 	}
 }
 

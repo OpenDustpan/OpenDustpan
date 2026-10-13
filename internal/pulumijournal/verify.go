@@ -44,14 +44,16 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 	})
 }
 
-// replayable refuses a kind that the replayer does not apply yet. Kinds 5 and 7 wait
-// for issue #430, and kind 10 waits for version 2 (item 12).
+// replayable refuses a kind that the replayer does not apply yet, and a write
+// entry without a snapshot. Kind 10 waits for version 2 (item 12). Kinds 5 and 7
+// are replayed (issue #430).
 func replayable(entry JournalEntry) error {
-	unsupported := entry.Kind == JournalEntryKindWrite ||
-		entry.Kind == JournalEntryKindRebuiltBaseState ||
-		entry.Kind == JournalEntryKindStateMigration
-	if unsupported {
+	if entry.Kind == JournalEntryKindStateMigration {
 		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrUnsupportedKind)
+	}
+
+	if entry.Kind == JournalEntryKindWrite && len(entry.NewSnapshot) == 0 {
+		return fmt.Errorf("entry %s: kind %d: %w", entryLabel(entry), entry.Kind, ErrNoSnapshot)
 	}
 
 	return nil
