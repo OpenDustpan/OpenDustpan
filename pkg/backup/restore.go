@@ -16,15 +16,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
-// KeyPeeker reads one wrapped data key from an export stream without loading
-// it into a store. The server-side restore check calls it on the SQL part to
-// prove that the key-encryption key opens the backup before it writes
-// anything (ADR 30 decision 7). Each store adapter implements it for its own
-// stream: SQLite reads one row of secret_keys from the file image,
-// PostgreSQL from the COPY bytes of secret_keys.
+// KeyPeeker reads one wrapped data key from the table file of secret_keys
+// without loading it into a store. The server-side restore check calls it on
+// the SQL part to prove that the key-encryption key opens the backup before it
+// writes anything (ADR 30 decision 7, ADR 42 decision 8). Each store adapter
+// delegates to the codec of its tables.
 type KeyPeeker interface {
-	// PeekKey returns one data key wrapped by wrapperID from the export in
-	// r. It returns ErrCorrupt when r holds no key of wrapperID.
+	// PeekPortableKey returns one data key wrapped by wrapperID from the table
+	// file of secret_keys. It returns ErrCorrupt when the file holds no key of
+	// wrapperID.
 	PeekPortableKey(
 		ctx context.Context,
 		open PortableOpener,

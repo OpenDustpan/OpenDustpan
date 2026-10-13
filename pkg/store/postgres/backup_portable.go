@@ -12,7 +12,7 @@ import (
 
 // ExportPortable implements backup.PortableExporter. It checks the column lists
 // against the live schema (ADR 42, decision 5), then reads every table of
-// backup.Tables in the one repeatable-read, read-only transaction of the native
+// backup.Tables in the one repeatable-read, read-only transaction of the
 // capture (decision 6), and writes one table file for each table. The summary
 // is read in the same transaction, so every file and the summary describe one
 // point in time.

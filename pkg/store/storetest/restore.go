@@ -1,7 +1,6 @@
 package storetest
 
 import (
-	"bytes"
 	"errors"
 	"slices"
 	"testing"
@@ -21,6 +20,15 @@ type RestoreStore interface {
 	BackupStore
 	backup.Applier
 	backup.Fencer
+}
+
+// PortableRestoreStore is a RestoreStore that also exports and stages the
+// portable format. The swap cases need it: a RestoreStore without the portable
+// ports skips them.
+type PortableRestoreStore interface {
+	RestoreStore
+	backup.PortableExporter
+	backup.PortableStager
 }
 
 // RestoreFactory returns a fresh, empty store for one subtest.
@@ -415,6 +423,29 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 	}
 }
 
+// portableStores holds the source and the destination of a swap case as
+// portable restore stores.
+type portableStores struct {
+	src PortableRestoreStore
+	dst PortableRestoreStore
+}
+
+// portableRestoreStores returns src and dst as portable restore stores. A
+// store without the portable ports skips the test: the portable format is its
+// only export, so the swap cases have nothing to run.
+func portableRestoreStores(t *testing.T, src, dst RestoreStore) portableStores {
+	t.Helper()
+
+	portableSrc, srcOK := src.(PortableRestoreStore)
+	portableDst, dstOK := dst.(PortableRestoreStore)
+
+	if !srcOK || !dstOK {
+		t.Skip("the store has no portable export and stage")
+	}
+
+	return portableStores{src: portableSrc, dst: portableDst}
+}
+
 // testRestoreApplySwapsStaged stages an export of one store into another and
 // applies it: the live data becomes the staged data in one step, every
 // namespace is fenced by one version, and the staging area is gone after the
@@ -426,30 +457,27 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 	src := newStore(t)
 	ns := newNamespace(t, src, "acme")
 
-	var buf bytes.Buffer
+	ps := portableRestoreStores(t, src, newStore(t))
+	psrc, pdst := ps.src, ps.dst
 
-	sum, err := src.Export(ctx, &buf)
-	if err != nil {
-		t.Fatalf("export source: %v", err)
-	}
+	sink, sum, files := exportPortable(t, psrc)
 
-	dst := newStore(t)
-	other := newNamespace(t, dst, "other")
+	other := newNamespace(t, pdst, "other")
 
-	staged, err := dst.StageRestore(ctx, bytes.NewReader(buf.Bytes()), sum)
+	staged, err := pdst.StagePortable(ctx, sink.read, sum, files)
 	if err != nil {
 		t.Fatalf("stage restore: %v", err)
 	}
 
-	if len(mustListNamespaces(t, dst)) != 1 {
+	if len(mustListNamespaces(t, pdst)) != 1 {
 		t.Fatal("live namespaces changed during the stage, want only the seeded one")
 	}
 
-	if err := dst.ApplyStaging(ctx); err != nil {
+	if err := pdst.ApplyStaging(ctx); err != nil {
 		t.Fatalf("apply staging area: %v", err)
 	}
 
-	got := mustListNamespaces(t, dst)
+	got := mustListNamespaces(t, pdst)
 
 	if len(got) != 1 || got[0].Name != ns.Name || got[0].FailoverVersion != ns.FailoverVersion+1 {
 		t.Fatalf("namespaces after apply = %+v, want [%+v] fenced by one", got, ns)
@@ -458,11 +486,11 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 	_ = other
 	_ = staged
 
-	if err := dst.DiscardStaging(ctx); err != nil {
+	if err := pdst.DiscardStaging(ctx); err != nil {
 		t.Fatalf("discard staging area after apply: %v", err)
 	}
 
-	if err := dst.ApplyStaging(ctx); !errors.Is(err, backup.ErrCorrupt) {
+	if err := pdst.ApplyStaging(ctx); !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("apply after the swap: err = %v, want ErrCorrupt", err)
 	}
 }
@@ -481,36 +509,33 @@ func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 	src := newStore(t)
 	newNamespace(t, src, "acme")
 
-	var buf bytes.Buffer
+	ps := portableRestoreStores(t, src, newStore(t))
+	psrc, pdst := ps.src, ps.dst
 
-	sum, exportErr := src.Export(ctx, &buf)
-	if exportErr != nil {
-		t.Fatalf("export source: %v", exportErr)
-	}
+	sink, sum, files := exportPortable(t, psrc)
 
-	dst := newStore(t)
-	newNamespace(t, dst, "other")
+	newNamespace(t, pdst, "other")
 
-	if _, stageErr := dst.StageRestore(ctx, bytes.NewReader(buf.Bytes()), sum); stageErr != nil {
+	if _, stageErr := pdst.StagePortable(ctx, sink.read, sum, files); stageErr != nil {
 		t.Fatalf("stage restore: %v", stageErr)
 	}
 
 	pre := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
 
-	if createErr := dst.CreateBackup(ctx, pre); createErr != nil {
+	if createErr := pdst.CreateBackup(ctx, pre); createErr != nil {
 		t.Fatalf("create pre-backup %s: %v", pre.ID, createErr)
 	}
 
-	finished, finishErr := dst.FinishBackup(ctx, pre.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+	finished, finishErr := pdst.FinishBackup(ctx, pre.ID, backup.StateSucceeded, "", now().Add(time.Hour))
 	if finishErr != nil {
 		t.Fatalf("finish pre-backup %s: %v", pre.ID, finishErr)
 	}
 
-	if applyErr := dst.ApplyStaging(ctx); applyErr != nil {
+	if applyErr := pdst.ApplyStaging(ctx); applyErr != nil {
 		t.Fatalf("apply staging area: %v", applyErr)
 	}
 
-	assertPreBackupRerecorded(t, dst, finished)
+	assertPreBackupRerecorded(t, pdst, finished)
 }
 
 // assertPreBackupRerecorded proves the swap dropped the pre-backup row and

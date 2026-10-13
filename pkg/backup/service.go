@@ -184,7 +184,7 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // Run captures the SQL data in one read transaction, writes it to
-// backups/<id>/db, copies each blob the SQL data names to blobs/<blob key>,
+// backups/<id>/sql/<table>.jsonl.gz, copies each blob the SQL data names to blobs/<blob key>,
 // and writes backups/<id>/manifest.json last. A blob the target already holds
 // is not copied again. It returns ErrAlreadyRunning while another backup
 // runs. A failed backup marks its registry row failed with the error text and

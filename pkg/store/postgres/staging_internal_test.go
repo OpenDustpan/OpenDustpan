@@ -6,7 +6,6 @@ package postgres_test
 // tests need that surgery.
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -23,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // stagingTestURL names the variable holding a PostgreSQL URL for the staging
@@ -115,16 +115,11 @@ func TestStageRestoreRefusesForeignKeys(t *testing.T) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	var buf bytes.Buffer
+	files, sum, descs := storetest.PortableFiles(t, s)
+	tampered, tamperedDescs, want := storetest.EmptyPortableNamespaces(t, files, descs, sum)
 
-	sum, err := s.Export(ctx, &buf)
-	if err != nil {
-		t.Fatalf("export: %v", err)
-	}
-
-	tampered, want := postgres.EmptyNamespacesForStagingTest(t, buf.Bytes(), sum)
-
-	if _, err := s.StageRestore(ctx, bytes.NewReader(tampered), want); !errors.Is(err, backup.ErrCorrupt) {
+	_, err := s.StagePortable(ctx, storetest.PortableOpener(tampered), want, tamperedDescs)
+	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage backup of stacks without their namespace: err = %v, want ErrCorrupt", err)
 	}
 
@@ -201,14 +196,9 @@ func TestCloseDropsStagingSchema(t *testing.T) {
 	s := openStagingTestStore(t)
 	ctx := t.Context()
 
-	var buf bytes.Buffer
+	files, sum, descs := storetest.PortableFiles(t, s)
 
-	sum, exportErr := s.Export(ctx, &buf)
-	if exportErr != nil {
-		t.Fatalf("export: %v", exportErr)
-	}
-
-	if _, stageErr := s.StageRestore(ctx, bytes.NewReader(buf.Bytes()), sum); stageErr != nil {
+	if _, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs); stageErr != nil {
 		t.Fatalf("stage backup: %v", stageErr)
 	}
 
@@ -258,14 +248,9 @@ func TestCloseContextDropsStagingSchemaWithCanceledContext(t *testing.T) {
 	s := openStagingTestStore(t)
 	ctx := t.Context()
 
-	var buf bytes.Buffer
+	files, sum, descs := storetest.PortableFiles(t, s)
 
-	sum, exportErr := s.Export(ctx, &buf)
-	if exportErr != nil {
-		t.Fatalf("export: %v", exportErr)
-	}
-
-	if _, stageErr := s.StageRestore(ctx, bytes.NewReader(buf.Bytes()), sum); stageErr != nil {
+	if _, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs); stageErr != nil {
 		t.Fatalf("stage backup: %v", stageErr)
 	}
 

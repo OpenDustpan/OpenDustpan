@@ -1,7 +1,6 @@
 package sqlite_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -21,7 +20,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -339,7 +337,6 @@ type backupStore struct {
 
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
-	_ storetest.ExportTamperer = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
 )
 
@@ -382,23 +379,6 @@ func (s *backupStore) Close() error {
 	}
 
 	return nil
-}
-
-// TamperNamespaces implements storetest.ExportTamperer: it deletes every
-// namespace from the exported file with the foreign keys off, leaving orphan
-// stacks, and returns the tampered bytes with a manifest whose namespace
-// count matches them, so only the foreign-key check of the stage can fail.
-func (s *backupStore) TamperNamespaces(
-	t *testing.T, data []byte, sum backup.Summary,
-) ([]byte, backup.Summary) {
-	t.Helper()
-
-	tampered := breakExportedNamespace(t, data)
-
-	sum.RowCounts = maps.Clone(sum.RowCounts)
-	sum.RowCounts["namespaces"] = 0
-
-	return tampered, sum
 }
 
 // Reopen returns a new handle to the same database file. It leaves running
@@ -2101,79 +2081,12 @@ func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
 	}
 }
 
-// TestPeekKeyReadsOneWrappedKey exports a store with one data key and reads
-// it back through PeekKey without loading a destination.
-func TestPeekKeyReadsOneWrappedKey(t *testing.T) {
-	t.Parallel()
-
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ctx := t.Context()
-	ns := namespace.Namespace{
-		CreatedAt:       time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		Name:            namespace.Name("acme"),
-		HomeRegion:      namespace.Region("eu-west"),
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-	}
-
-	if err = s.CreateNamespace(ctx, ns); err != nil {
-		t.Fatalf("create namespace: %v", err)
-	}
-
-	scope, err := secret.NewScope(ns.Name, "stk-test01")
-	if err != nil {
-		t.Fatalf("new scope: %v", err)
-	}
-
-	want := secret.WrappedKey{
-		CreatedAt:  time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		Scope:      scope,
-		WrapperID:  "kek-1",
-		Ciphertext: []byte("wrapped-1"),
-	}
-
-	if _, err = s.CreateKey(ctx, want, ns.Fence()); err != nil {
-		t.Fatalf("create key: %v", err)
-	}
-
-	var buf bytes.Buffer
-
-	if _, err = s.Export(ctx, &buf); err != nil {
-		t.Fatalf("export: %v", err)
-	}
-
-	var got secret.WrappedKey
-
-	if got, err = s.PeekKey(ctx, bytes.NewReader(buf.Bytes()), "kek-1"); err != nil {
-		t.Fatalf("peek key: %v", err)
-	}
-
-	if got.Scope != want.Scope || got.WrapperID != want.WrapperID || !bytes.Equal(got.Ciphertext, want.Ciphertext) {
-		t.Fatalf("peeked key = %+v, want %+v", got, want)
-	}
-
-	_, peekErr := s.PeekKey(ctx, bytes.NewReader(buf.Bytes()), "kek-2")
-	if !errors.Is(peekErr, backup.ErrCorrupt) {
-		t.Fatalf("peek missing wrapper: err = %v, want ErrCorrupt", peekErr)
-	}
-}
-
-// TestStageRestoreRefusesForeignKeyViolation exports a store, deletes the
-// namespace from the exported file with the foreign keys off, and stages the
-// file with a manifest whose namespace count matches it: the foreign-key
-// check refuses it with ErrCorrupt and the live data stays empty. No port
-// writes an orphan, so the test edits the file by hand.
-func TestStageRestoreRefusesForeignKeyViolation(t *testing.T) {
+// TestStagePortableRefusesForeignKeyViolation exports a store in the portable
+// format, empties its namespaces file, and stages it with a descriptor and a
+// row count that match the empty file: the foreign-key check refuses it with
+// ErrCorrupt and the live data stays empty. No port writes an orphan, so the
+// test edits the export by hand.
+func TestStagePortableRefusesForeignKeyViolation(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -2208,24 +2121,23 @@ func TestStageRestoreRefusesForeignKeyViolation(t *testing.T) {
 		t.Fatalf("create stack: %v", createErr)
 	}
 
-	var buf bytes.Buffer
-
-	sum, err := src.Export(ctx, &buf)
-	if err != nil {
-		t.Fatalf("export: %v", err)
+	psrc, ok := src.(storetest.PortableStore)
+	if !ok {
+		t.Fatal("the SQLite store has no portable export")
 	}
 
-	tampered := breakExportedNamespace(t, buf.Bytes())
-
-	// The manifest counts the tampered file, so the row counts match and only
-	// the foreign-key check can fail.
-	want := sum
-	want.RowCounts = maps.Clone(sum.RowCounts)
-	want.RowCounts["namespaces"] = 0
+	files, sum, descs := storetest.PortableFiles(t, psrc)
+	tampered, tamperedDescs, want := storetest.EmptyPortableNamespaces(t, files, descs, sum)
 
 	dst := openBackup(t)
 
-	if _, err := dst.StageRestore(ctx, bytes.NewReader(tampered), want); !errors.Is(err, backup.ErrCorrupt) {
+	pdst, ok := dst.(storetest.PortableStore)
+	if !ok {
+		t.Fatal("the SQLite store has no portable stage")
+	}
+
+	_, err = pdst.StagePortable(ctx, storetest.PortableOpener(tampered), want, tamperedDescs)
+	if !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("stage backup of a stack without its namespace: err = %v, want ErrCorrupt", err)
 	}
 
@@ -2236,43 +2148,4 @@ func TestStageRestoreRefusesForeignKeyViolation(t *testing.T) {
 	if err := dst.DiscardStaging(ctx); err != nil {
 		t.Fatalf("discard staging area after a refused stage: %v", err)
 	}
-}
-
-// breakExportedNamespace writes data to a temporary file and deletes every
-// namespace row with the foreign keys off, leaving orphan stacks. It returns
-// the file bytes.
-func breakExportedNamespace(t *testing.T, data []byte) []byte {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "export.db")
-
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write exported file: %v", err)
-	}
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open exported file: %v", err)
-	}
-
-	// The raw handle enforces no foreign keys after the pragma, so the delete
-	// leaves orphans.
-	if _, pragmaErr := conn.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); pragmaErr != nil {
-		t.Fatalf("disable foreign keys: %v", errors.Join(pragmaErr, conn.Close()))
-	}
-
-	if _, deleteErr := conn.ExecContext(t.Context(), `DELETE FROM namespaces`); deleteErr != nil {
-		t.Fatalf("delete namespaces: %v", errors.Join(deleteErr, conn.Close()))
-	}
-
-	if closeErr := conn.Close(); closeErr != nil {
-		t.Fatalf("close exported file: %v", closeErr)
-	}
-
-	tampered, err := os.ReadFile(path) //nolint:gosec // The test reads the file it just wrote.
-	if err != nil {
-		t.Fatalf("read exported file: %v", err)
-	}
-
-	return tampered
 }

@@ -16,7 +16,7 @@ Set a backup target on the server. Use the flag or the variable. An empty target
 DUSTPAN_BACKUP_TARGET=dir:/var/backups/dustpan ./bin/opendustpan serve
 ```
 
-The target holds `blobs/<key>`, `backups/<id>/db`, and `backups/<id>/manifest.json`. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
+The target holds `blobs/<key>`, one `backups/<id>/sql/<table>.jsonl.gz` file for each table, and `backups/<id>/manifest.json`. The server writes the manifest last. A backup holds sealed OpenTofu state. Protect the target. Use a directory that only the server owner can read.
 
 Start a backup with the backup command. It calls the server and waits until the backup leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from the file in `DUSTPAN_ADMIN_TOKEN_FILE`. It never comes from a flag.
 
@@ -59,8 +59,8 @@ The command takes only `--server`, `--ca-file` and `--backup`. A complete backup
 Restore loads a backup from the configured backup target into the running
 installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
-backup. Use the same key-encryption key, the same dialect, and the same schema version as
-the backup source. A backup from before the seal change still restores.
+backup. Use the same key-encryption key and the same schema version as the backup
+source. The dialect may differ. A backup from before the seal change still restores.
 After the apply, the server seals the rows that the backup holds unsealed.
 
 Run the restore command. It calls the server and waits until the restore
@@ -122,12 +122,16 @@ The command checks the key before the server writes anything. With no key or
 with another key it stops and names `DUSTPAN_KEY_ENCRYPTION_KEY`. A restore
 with a wrong key leaves the live data unchanged.
 
-The command refuses a backup of another dialect or another schema version.
-The error names both versions. Restore into the same dialect and the same
-schema version only. To change version, upgrade the server instead.
+The command refuses a backup of another schema version. The error names both
+versions. Restore into the same schema version only. To change version, upgrade
+the server instead. A backup of the other dialect restores: SQLite to
+PostgreSQL and PostgreSQL to SQLite.
 
 The command refuses a backup with no manifest or with an unknown format
-number. The manifest is internal in this milestone.
+number. A backup in the native format of ADR 30 (manifest format 1) is refused
+too, with a message that says a new backup is necessary. Take a new backup on
+the server that wrote it, and restore that one. The manifest is internal in
+this milestone.
 
 Disaster recovery on a new machine: start the server on an empty database
 with the same key-encryption key, then restore through the API. The

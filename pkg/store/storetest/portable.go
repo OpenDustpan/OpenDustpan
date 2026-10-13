@@ -50,6 +50,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
 		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
 		{name: "a summary with a wrong row count is refused", test: testPortableStageRefusesRowCount},
+		{name: "export names journal blobs with their MD5 and size", test: testPortableJournalBlob},
 		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
@@ -378,6 +379,34 @@ func testPortableValueForms(t *testing.T, newStore PortableFactory) {
 			checkpoints[0]["features"],
 			checkpoints[0]["features"],
 		)
+	}
+}
+
+// testPortableJournalBlob shows that the portable summary names the blob of
+// each journal batch, with its MD5 and size, as it names a checkpoint blob
+// (ADR 43, decision 6.8, ADR 42 decision 3). The restore of the rows is
+// covered by the restore suite.
+func testPortableJournalBlob(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	row := journalRow(t, src, u, 7, 1)
+	row.Size = 33
+
+	if _, err := src.PutJournalRow(t.Context(), row, f.fence); errors.Is(err, errors.ErrUnsupported) {
+		t.Skip("the store keeps no journal rows")
+	} else if err != nil {
+		t.Fatalf("journal batch: %v", err)
+	}
+
+	_, sum, _ := exportPortable(t, src)
+
+	want := []backup.BlobRef{{MD5: row.MD5, Key: string(row.BlobKey), Size: row.Size, Sealed: false}}
+	if !slices.EqualFunc(sum.Blobs, want, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, want)
 	}
 }
 

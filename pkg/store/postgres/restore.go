@@ -187,7 +187,7 @@ func restoreRecord(row db.Restore) (backup.RestoreRecord, error) {
 
 // ApplyStaging implements backup.Applier: it swaps the staged restore schema
 // into the live schema in one transaction (ADR 38 decision 6) and drops the
-// staging area. The staged schema passed every check in StageRestore, so the
+// staging area. The staged schema passed every check in StagePortable, so the
 // swap cannot mix two installations. With no staged schema it reports
 // ErrCorrupt and changes nothing.
 func (s *Store) ApplyStaging(ctx context.Context) error {
