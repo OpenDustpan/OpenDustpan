@@ -28,6 +28,8 @@ const (
 	shapeInventory
 	// shapeTFE renders a JSON:API error document as OpenTofu expects.
 	shapeTFE
+	// shapeHTTPBackend renders plain text, as the OpenTofu http backend shows it.
+	shapeHTTPBackend
 )
 
 // withMaintenance refuses tool calls with 503 while the installation is in
@@ -60,6 +62,8 @@ func withMaintenance(
 			writeMaintenanceInventory(ctx, w, logger)
 		case shapeTFE:
 			writeMaintenanceTFE(ctx, w, logger)
+		case shapeHTTPBackend:
+			writeMaintenanceHTTPBackend(w)
 		default:
 			// Unreachable: every call site passes a valid shape. Refuse
 			// rather than serve, and log the programmer error.
@@ -127,6 +131,13 @@ type maintenanceTFEError struct {
 // maintenanceTFEDocument is the error shape OpenTofu reads.
 type maintenanceTFEDocument struct {
 	Errors []maintenanceTFEError `json:"errors"`
+}
+
+// writeMaintenanceHTTPBackend answers 503 with Retry-After and the message as
+// plain text, the shape that the OpenTofu http backend shows.
+func writeMaintenanceHTTPBackend(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", maintenanceRetryAfter)
+	http.Error(w, maintenanceMessage, http.StatusServiceUnavailable)
 }
 
 // writeMaintenanceTFE answers 503 with Retry-After as a JSON:API error

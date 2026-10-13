@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -52,6 +53,22 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "save persists a lock and an unlock by the holder", test: testLockRoundTrip},
 		{name: "finalize of a workspace that is not locked is ErrNotLocked", test: testFinalizeWithoutLock},
 		{name: "finalize under a lock held by another principal is ErrLockedByOther", test: testFinalizeLockedByOther},
+		{name: "finalize sets the declared serial, lineage, MD5 and outputs", test: testFinalizeSetsDeclaredFields},
+		{
+			name: "finalize under the same lock ID held by another principal is ErrLockedByOther",
+			test: testFinalizeSameLockIDOtherHolder,
+		},
+		{name: "discard removes a pending version and keeps a finalized one", test: testDiscardStateVersion},
+		{name: "discard under a stale fence is ErrFenced and keeps the row", test: testDiscardStaleFence},
+		{
+			name: "the conditional unlock and force-unlock check the lock ID and the holder",
+			test: testConditionalUnlock,
+		},
+		{name: "a placeholder pending version is never current", test: testPlaceholderNeverCurrent},
+		{
+			name: "a finalize under a stale fence keeps the placeholder pending",
+			test: testFinalizeStaleFenceKeepsPlaceholder,
+		},
 		{name: "a pending state version reads back and is not current yet", test: testPendingRoundTrip},
 		{name: "create of a state version for a missing workspace is ErrNotFound", test: testCreateStateVersionMissing},
 		{name: "finalize makes the highest finalized serial current", test: testFinalizeMakesCurrent},
@@ -3515,4 +3532,344 @@ func currentVersionID(t *testing.T, s WorkspaceStore, id workspace.ID) workspace
 	}
 
 	return cur.ID
+}
+
+// placeholderVersion returns the row a streamed write creates before its
+// first byte: serial -1, an empty lineage and an all-zero MD5. The row stays
+// pending until its finalize sets the declared fields (ADR 49, decision 7).
+func placeholderVersion(t *testing.T, w workspace.Workspace) workspace.StateVersion {
+	t.Helper()
+
+	sv := newPendingVersion(t, w, w.Lock.ID, stateInput("", "", -1))
+	sv.MD5 = [md5.Size]byte{}
+
+	return sv
+}
+
+// testFinalizeSetsDeclaredFields proves a finalize sets the serial, lineage,
+// MD5 and outputs that the streamed write declares, in the same transaction as
+// the status change.
+func testFinalizeSetsDeclaredFields(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	declared := finalizedVersion(pending, now().Add(time.Hour), "v1")
+	declared.Serial = 1
+	declared.Lineage = "lin-1"
+	declared.MD5 = md5.Sum([]byte("v1")) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+	declared.Outputs = []byte(`{"greeting":{"value":"hello"}}`)
+
+	if err := finalizeRecorded(t, s, ns.Fence(), declared); err != nil {
+		t.Fatalf("finalize with the declared fields: %v", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get finalized state version: %v", err)
+	}
+
+	if stored.Status != workspace.StatusFinalized || stored.Serial != 1 || stored.Lineage != "lin-1" ||
+		stored.MD5 != declared.MD5 || !bytes.Equal(stored.Outputs, declared.Outputs) {
+		t.Fatalf("finalized row = status %s, serial %d, lineage %q, outputs %s; want the declared fields",
+			stored.Status, stored.Serial, stored.Lineage, stored.Outputs)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil || current.ID != pending.ID {
+		t.Fatalf("current state = %v, %v; want the finalized version", current.ID, err)
+	}
+}
+
+// testPlaceholderNeverCurrent proves a pending placeholder row is not current,
+// and does not replace the finalized version that is current.
+func testPlaceholderNeverCurrent(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-1", "v1", 1),
+	))
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(first, now().Add(time.Hour), "v1")); err != nil {
+		t.Fatalf("finalize the first version: %v", err)
+	}
+
+	placeholder := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state with a placeholder pending: %v", err)
+	}
+
+	if current.ID != first.ID || current.Serial != 1 {
+		t.Fatalf("current state = %s serial %d, want the first version serial 1", current.ID, current.Serial)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), placeholder.ID)
+	if err != nil {
+		t.Fatalf("get placeholder: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Fatalf("placeholder status = %s, want pending", stored.Status)
+	}
+}
+
+// testFinalizeStaleFenceKeepsPlaceholder proves a finalize under a stale
+// namespace fence is refused, and leaves the placeholder row pending with its
+// placeholder fields.
+func testFinalizeStaleFenceKeepsPlaceholder(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, placeholderVersion(t, locked))
+
+	declared := finalizedVersion(pending, now().Add(time.Hour), "v1")
+	declared.Serial = 1
+	declared.Lineage = "lin-1"
+
+	if _, err := s.RecordUploadAttempt(t.Context(), declared.ID, declared.Content, ns.Fence()); err != nil {
+		t.Fatalf("record attempt: %v", err)
+	}
+
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+	if err := s.FinalizeStateVersion(t.Context(), declared, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("finalize with a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil {
+		t.Fatalf("get placeholder after a refused finalize: %v", err)
+	}
+
+	if stored.Status != workspace.StatusPending || stored.Serial != -1 || stored.Lineage != "" {
+		t.Fatalf("placeholder after a refused finalize = status %s, serial %d, lineage %q; want pending, -1, empty",
+			stored.Status, stored.Serial, stored.Lineage)
+	}
+}
+
+// testFinalizeSameLockIDOtherHolder proves a finalize checks the holder as well
+// as the lock ID. A client-chosen lock ID can repeat after a force-unlock, so a
+// version declared by alice under lock X finalizes against nothing when bob holds
+// lock X.
+func testFinalizeSameLockIDOtherHolder(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	taken := locked
+	taken.Lock = workspace.Lock{LockedAt: now().Add(time.Hour), ID: locked.Lock.ID, Holder: "bob", Reason: "apply"}
+	taken.UpdatedAt = now().Add(2 * time.Hour)
+	taken.Revision++
+
+	if err := s.SaveWorkspace(t.Context(), taken, ns.Fence()); err != nil {
+		t.Fatalf("take the same lock ID as another principal: %v", err)
+	}
+
+	finalized := finalizedVersion(pending, now().Add(3*time.Hour), "v1")
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); !errors.Is(err, workspace.ErrLockedByOther) {
+		t.Errorf("finalize under the same lock ID, other holder: err = %v, want ErrLockedByOther", err)
+	}
+
+	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Errorf("a refused finalize made a version current: %v", err)
+	}
+}
+
+// testDiscardStateVersion proves a discard removes a pending row, and that a
+// finalized row, or one that does not exist, stays or matches nothing.
+func testDiscardStateVersion(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard pending: %v", err)
+	}
+
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("discarded pending version: err = %v, want ErrStateVersionNotFound", err)
+	}
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard of a missing version: %v", err)
+	}
+
+	second := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v2", 2),
+	))
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(second, now().Add(time.Hour), "v2")); err != nil {
+		t.Fatalf("finalize second: %v", err)
+	}
+
+	if err := s.DiscardStateVersion(t.Context(), second.ID, ns.Fence()); err != nil {
+		t.Fatalf("discard of a finalized version: %v", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), second.ID)
+	if err != nil || stored.Status != workspace.StatusFinalized {
+		t.Fatalf("finalized version after a discard: status %v, err %v; want finalized and kept", stored.Status, err)
+	}
+}
+
+// testDiscardStaleFence proves a discard under a stale fence is refused with
+// ErrFenced, and the pending row stays.
+func testDiscardStaleFence(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("l1", "v1", 1),
+	))
+	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
+
+	if err := s.DiscardStateVersion(t.Context(), pending.ID, stale); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("discard under a stale fence: err = %v, want ErrFenced", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), pending.ID)
+	if err != nil || stored.Status != workspace.StatusPending {
+		t.Fatalf(
+			"pending version after a refused discard: status %v, err %v; want pending and kept",
+			stored.Status,
+			err,
+		)
+	}
+}
+
+// serviceOver returns the namespace and workspace services over s, with blobs in
+// a temporary directory. The conditional unlock cases drive the services.
+func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
+	t.Helper()
+
+	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "eu-west"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         s,
+		States:             s,
+		Blobs:              blobs,
+		Namespaces:         nsSvc,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                now,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+	})
+	if err != nil {
+		t.Fatalf("workspace service: %v", err)
+	}
+
+	return svc
+}
+
+// testConditionalUnlock proves UnlockLock and ForceUnlockLock release only the
+// lock they name: the lock ID and, for a force-unlock, the holder must match. A
+// lock ID a client chose can repeat after a force-unlock, so the holder decides
+// (ADR 49, decision 6).
+func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	svc := serviceOver(t, s)
+	ctx := t.Context()
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if _, err := svc.LockWithID(ctx, w.ID, "bob", "apply", "lock-x"); err != nil {
+		t.Fatalf("lock as bob: %v", err)
+	}
+
+	if _, err := svc.UnlockLock(ctx, w.ID, "lock-y", "bob"); !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("unlock with another lock ID: err = %v, want ErrLockMismatch", err)
+	}
+
+	_, _, err := svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "alice", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("force-unlock naming another holder: err = %v, want ErrLockMismatch", err)
+	}
+
+	held, err := s.GetWorkspaceByID(ctx, w.ID)
+	if err != nil || held.Lock.Holder != "bob" {
+		t.Fatalf("after refused releases: holder %q, err %v; want bob still holding", held.Lock.Holder, err)
+	}
+
+	_, _, err = svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("force-unlock of the lock as seen: %v", err)
+	}
+
+	if _, lockErr := svc.LockWithID(ctx, w.ID, "carol", "apply", "lock-x"); lockErr != nil {
+		t.Fatalf("lock as carol with the same ID: %v", lockErr)
+	}
+
+	// A caller that read bob's lock before the force-unlock must not release
+	// carol's lock, though the lock ID repeats.
+	_, _, err = svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if !errors.Is(err, workspace.ErrLockMismatch) {
+		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
+	}
+
+	after, err := s.GetWorkspaceByID(ctx, w.ID)
+	if err != nil || after.Lock.Holder != "carol" {
+		t.Fatalf("after the stale force-unlock: holder %q, err %v; want carol still holding", after.Lock.Holder, err)
+	}
 }

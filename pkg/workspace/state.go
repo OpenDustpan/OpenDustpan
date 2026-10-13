@@ -205,6 +205,9 @@ func (sv StateVersion) accepts(tok token.Token, now time.Time) error {
 	switch {
 	case sv.Status != StatusPending:
 		return fmt.Errorf("%w: state version %s is %s", ErrUploadDenied, sv.ID, sv.Status)
+	case sv.Upload == (token.Digest{}):
+		// A streamed version's placeholder holds no capability (ADR 49, decision 7).
+		return fmt.Errorf("%w: state version %s takes no upload", ErrUploadDenied, sv.ID)
 	case !sv.Upload.Matches(tok):
 		return fmt.Errorf("%w: wrong capability for state version %s", ErrUploadDenied, sv.ID)
 	case !now.Before(sv.UploadExpiresAt):

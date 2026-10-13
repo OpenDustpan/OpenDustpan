@@ -453,9 +453,12 @@ WHERE id = ?;
 -- Marks one pending version finalized with its recorded attempt. The write
 -- matches only the recorded content key, so a superseded attempt reports no
 -- change instead of finalizing over a newer one; a finalized version also
--- matches no row, so a retry reports no change.
+-- matches no row, so a retry reports no change. It also sets the declared
+-- serial, lineage, MD5 and outputs: a streamed write declares them only after
+-- its content is read (ADR 49, decision 7), and its row holds placeholders
+-- until then.
 UPDATE state_versions
-SET status = @status, finalized_at_ms = @finalized_at_ms, size = @size
+SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = @status, finalized_at_ms = @finalized_at_ms, size = @size
 WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec

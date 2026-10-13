@@ -172,6 +172,13 @@ type StateStore interface {
 		before time.Time,
 		fence namespace.Fence,
 	) ([]StateVersion, error)
+	// DiscardStateVersion deletes the pending version id, with its row only. The
+	// caller deletes the blob of the attempt first. A version that is not pending
+	// matches no row and stays: a finalized version is never discarded. It returns
+	// namespace.ErrNotFound when the namespace does not exist, or namespace.ErrFenced
+	// when fence is stale. A refused streamed write uses it when the finalize
+	// outcome is known, so its placeholder does not fill the pending cap.
+	DiscardStateVersion(ctx context.Context, id StateVersionID, fence namespace.Fence) error
 	// ListUnsealedStateVersions returns the finalized state versions that
 	// still hold plain content, ordered by version ID, so the seal job
 	// seals them. A version without content stays out: a pending row names
@@ -346,11 +353,80 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 	})
 }
 
+// LockWithID locks the workspace for holder under lockID, an ID that the
+// caller chose. The HTTP backend sends its lock ID in the LOCK request and
+// names it again in each write (ADR 49, decision 6). An ID that is empty, too
+// long or has characters outside the lock ID set fails with ErrInvalidLockID.
+func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID string) (Workspace, error) {
+	if holder == "" {
+		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
+	}
+
+	if !validLockID(lockID) {
+		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
+	}
+
+	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		return w.lockAs(now, holder, reason, lockID)
+	})
+}
+
+// maxLockIDLength bounds a lock ID the caller chooses.
+const maxLockIDLength = 128
+
+// validLockID reports whether id is a lock ID the domain accepts: 1 to 128
+// characters of letters, digits, '-', '_' and '.'.
+func validLockID(id string) bool {
+	if id == "" || len(id) > maxLockIDLength {
+		return false
+	}
+
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
 // Unlock releases holder's lock.
 func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, error) {
+	return s.UnlockLock(ctx, id, "", holder)
+}
+
+// UnlockLock releases holder's lock when the lock is lockID. An empty lockID
+// releases any lock holder holds. The check and the release read and save the
+// same revision, so a lock that another caller took after this one read the
+// unit is refused with ErrLockMismatch, and it is not released (ADR 49,
+// decision 6).
+func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		if lockErr := checkLockID(w, Lock{LockedAt: time.Time{}, ID: lockID, Holder: "", Reason: ""}); lockErr != nil {
+			return Workspace{}, lockErr
+		}
+
 		return w.unlock(now, holder)
 	})
+}
+
+// checkLockID refuses a lock other than the expected one. Only the ID and, when
+// it is set, the holder of expect are compared. An empty ID accepts any lock. A
+// lock ID the client chose can repeat after a force-unlock, so the holder is part
+// of the check, as in the finalize (ADR 49, decision 6).
+func checkLockID(w Workspace, expect Lock) error {
+	if expect.ID == "" {
+		return nil
+	}
+
+	if w.Lock.ID != expect.ID || (expect.Holder != "" && w.Lock.Holder != expect.Holder) {
+		return fmt.Errorf("%w: unit %s", ErrLockMismatch, w.Ref)
+	}
+
+	return nil
 }
 
 // ForceUnlock releases the lock whoever holds it, as `tofu force-unlock` does.
@@ -368,6 +444,19 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 func (s *Service) ForceUnlock(
 	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {
+	return s.ForceUnlockLock(ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record)
+}
+
+// ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
+// releases whatever lock the unit holds. A different lock, or the same ID under
+// another holder, is refused with ErrLockMismatch. The check runs before the
+// fence and in the revision the release saves, so a lock taken after the caller
+// read the unit is not released.
+//
+//nolint:revive // The expected lock is one argument beyond the port's other parameters, named at the call.
+func (s *Service) ForceUnlockLock(
+	ctx context.Context, id ID, expect Lock, by string, allow namespace.Overrides, record func() error,
+) (Workspace, bool, error) {
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return Workspace{}, false, err
@@ -377,12 +466,20 @@ func (s *Service) ForceUnlock(
 		return Workspace{}, false, ErrNotLocked
 	}
 
+	if lockErr := checkLockID(w, expect); lockErr != nil {
+		return Workspace{}, false, lockErr
+	}
+
 	cur, err := s.states.CurrentStateVersion(ctx, id)
 
 	switch {
 	case errors.Is(err, ErrNoState):
 		// A unit without state is a plain release: no override is used.
 		released, changeErr := s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+			if lockErr := checkLockID(w, expect); lockErr != nil {
+				return Workspace{}, lockErr
+			}
+
 			return w.forceUnlock(now)
 		})
 
@@ -399,7 +496,7 @@ func (s *Service) ForceUnlock(
 			}
 		}
 
-		unfenced, changeErr := s.releaseUnfenced(ctx, id)
+		unfenced, changeErr := s.releaseUnfenced(ctx, w)
 
 		return unfenced, true, changeErr
 	}
@@ -483,35 +580,12 @@ func (s *Service) BeginState(
 	// which trims contention on the cap check below. The store enforces
 	// the cap where concurrent declares serialize, so the check below is
 	// only an early refusal with a count.
-	unlock := s.lockKey("begin/" + id.String())
-	defer unlock()
-
-	// Best effort only: a cleanup failure never fails the declare. The
-	// rows stay for the next sweep, and the cap check below still bounds
-	// the workspace.
-	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
-		s.logger.WarnContext(
-			ctx,
-			"sweep expired state",
-			slog.String("workspace", w.ID.String()),
-			slog.String("error", sweepErr.Error()),
-		)
-	}
-
-	pending, err := s.states.CountPendingStateVersions(ctx, id)
+	unlock, err := s.admitDeclare(ctx, w)
 	if err != nil {
-		return PendingState{}, fmt.Errorf("count pending state of %s: %w", w.Ref, err)
+		return PendingState{}, err
 	}
 
-	if pending >= s.maxPending {
-		return PendingState{}, fmt.Errorf(
-			"%w for %s: %d pending, limit %d",
-			ErrTooManyPending,
-			w.Ref,
-			pending,
-			s.maxPending,
-		)
-	}
+	defer unlock()
 
 	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
 }
@@ -667,22 +741,16 @@ func (s *Service) Upload(
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.store(ctx, storeInput{
-		namespace: w.Ref.Namespace,
-		workspace: w.ID,
-		seal:      sv.Sealed,
-		key:       key,
-		want:      sv.MD5,
-		content:   content,
-	})
+	body, err := s.storeUploadBody(ctx, w, sv, key, content)
 	if err != nil {
-		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
+		return StateVersion{}, err
 	}
 
 	sv.Status = StatusFinalized
 	sv.FinalizedAt = s.clock()
-	sv.Size = size
+	sv.Size = body.size
 	sv.Content = key
+	sv.Outputs = body.outputs.stored
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		err = fmt.Errorf("finalize state %s: %w", id, err)
@@ -696,6 +764,13 @@ func (s *Service) Upload(
 	}
 
 	return sv, nil
+}
+
+// uploadedBody is what a state upload stores: the size of its bytes, and the
+// outputs read from them as they streamed.
+type uploadedBody struct {
+	size    int64
+	outputs streamedOutputs
 }
 
 // DiscardJSONRendering accepts the JSON rendering the CLI uploads alongside
@@ -1482,6 +1557,7 @@ func (s *Service) copyBlob(
 		key:       key,
 		want:      src.MD5,
 		content:   r,
+		unchecked: false,
 	})
 	closeErr := r.Close()
 
@@ -1736,7 +1812,9 @@ func (s *Service) createPending(
 
 	now := s.clock()
 
-	outputs := in.Outputs
+	// The client's JSON rendering of the outputs is never stored: the outputs of a
+	// version come from its body (ADR 49, decision 8).
+	var outputs []byte
 
 	// New rows land sealed when the service seals: the outputs document is
 	// sealed with the data key of the workspace scope. The stored row keeps
@@ -1798,6 +1876,16 @@ type storeInput struct {
 	key       blob.Key
 	want      [md5.Size]byte
 	content   io.Reader
+	// unchecked skips the MD5 comparison: a streamed write with no declared MD5
+	// records the MD5 that the bytes produce.
+	unchecked bool
+}
+
+// storedContent is what storeContent reports: the size and the MD5 of the
+// plain bytes.
+type storedContent struct {
+	size int64
+	sum  [md5.Size]byte
 }
 
 // store writes content under key, checking size and MD5 as it streams. The
@@ -1807,8 +1895,16 @@ type storeInput struct {
 // without a sealer fails closed instead of storing plain bytes under a
 // sealed flag. On any mismatch the object is deleted.
 func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
+	stored, err := s.storeContent(ctx, in)
+
+	return stored.size, err
+}
+
+// storeContent is store, and it also reports the MD5 of the plain bytes. With
+// unchecked set, it checks only the size.
+func (s *Service) storeContent(ctx context.Context, in storeInput) (storedContent, error) {
 	if in.seal && s.sealer == nil {
-		return 0, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
+		return storedContent{}, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
 	}
 
 	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
@@ -1818,28 +1914,30 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 	if in.seal {
 		sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), checked)
 		if err != nil {
-			return 0, err
+			return storedContent{}, err
 		}
 
 		checked = sealedReader
 	}
 
 	if err := s.blobs.Put(ctx, in.key, checked); err != nil {
-		return 0, fmt.Errorf("store content: %w", err)
+		return storedContent{}, fmt.Errorf("store content: %w", err)
 	}
+
+	sum := [md5.Size]byte(hash.Sum(nil))
 
 	var problem error
 
 	switch {
 	case counted.n > s.maxState:
 		problem = fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
-	case [md5.Size]byte(hash.Sum(nil)) != in.want:
+	case !in.unchecked && sum != in.want:
 		problem = ErrChecksumMismatch
 	default:
-		return counted.n, nil
+		return storedContent{size: counted.n, sum: sum}, nil
 	}
 
-	return 0, errors.Join(problem, s.blobs.Delete(ctx, in.key))
+	return storedContent{}, errors.Join(problem, s.blobs.Delete(ctx, in.key))
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain
@@ -1950,12 +2048,7 @@ func (s *Service) clock() time.Time {
 }
 
 // releaseUnfenced releases the lock of the unit without writing a version.
-func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error) {
-	w, err := s.GetByID(ctx, id)
-	if err != nil {
-		return Workspace{}, err
-	}
-
+func (s *Service) releaseUnfenced(ctx context.Context, w Workspace) (Workspace, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -1963,11 +2056,11 @@ func (s *Service) releaseUnfenced(ctx context.Context, id ID) (Workspace, error)
 
 	released, err := w.forceUnlock(s.clock())
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
 
 	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence); err != nil {
-		return Workspace{}, fmt.Errorf("release %s: %w", id, err)
+		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)
 	}
 
 	return released, nil
@@ -1999,4 +2092,52 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += int64(n)
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// storeUploadBody stores the bytes of an upload under key and reads the outputs
+// from them (ADR 49, decision 8). The outputs come from the body, so the
+// client's JSON rendering of the outputs is never stored. A refused body deletes
+// its blob.
+func (s *Service) storeUploadBody(
+	ctx context.Context, w Workspace, sv StateVersion, key blob.Key, content io.Reader,
+) (uploadedBody, error) {
+	reader, stream := newMetaStream(content)
+
+	size, storeErr := s.store(ctx, storeInput{
+		namespace: w.Ref.Namespace,
+		workspace: w.ID,
+		seal:      sv.Sealed,
+		key:       key,
+		want:      sv.MD5,
+		content:   reader,
+		unchecked: false,
+	})
+
+	if storeErr != nil {
+		// Closing the stream lets the reader beside the store finish. The
+		// store error is the one the caller sees.
+		abandonStream(stream, storeErr)
+
+		return uploadedBody{}, fmt.Errorf("upload state %s: %w", sv.ID, storeErr)
+	}
+
+	// A body the reader refuses is refused here, not stored: a state that OpenTofu
+	// cannot read must not become current (ADR 49, decision 8).
+	meta, metaErr := stream.finish(nil)
+	if metaErr != nil {
+		return uploadedBody{}, errors.Join(metaErr, s.blobs.Delete(ctx, key))
+	}
+
+	outputs, err := s.streamedOutputs(ctx, w, meta)
+	if err != nil {
+		return uploadedBody{}, errors.Join(err, s.blobs.Delete(ctx, key))
+	}
+
+	return uploadedBody{size: size, outputs: outputs}, nil
+}
+
+// abandonStream ends a meta stream whose store failed. The stream's own result
+// adds nothing: the caller returns the store error.
+func abandonStream(stream *metaStream, cause error) {
+	_, _ = stream.finish(cause) //nolint:errcheck // The caller returns the store error.
 }

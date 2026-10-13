@@ -614,6 +614,15 @@ func (s *Store) SaveSensitiveMarks(
 	return s.inner.SaveSensitiveMarks(ctx, id, marks, fence)
 }
 
+// DiscardStateVersion discards the pending version, unless a fault fires first.
+func (s *Store) DiscardStateVersion(ctx context.Context, id workspace.StateVersionID, fence namespace.Fence) error {
+	if err := s.before(ctx, "DiscardStateVersion"); err != nil {
+		return err
+	}
+
+	return s.inner.DiscardStateVersion(ctx, id, fence)
+}
+
 // DeleteExpiredPendingStateVersions deletes the expired pending versions,
 // unless a fault fires first.
 func (s *Store) DeleteExpiredPendingStateVersions(
