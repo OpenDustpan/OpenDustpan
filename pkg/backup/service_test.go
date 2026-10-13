@@ -173,23 +173,59 @@ func mustKey(t *testing.T, s string) blob.Key {
 	return key
 }
 
-// stubExporter is a fake backup.Exporter with canned bytes and summary.
+// stubExporter is a fake backup.PortableExporter with canned bytes and summary.
 type stubExporter struct {
 	sum  backup.Summary
 	data []byte
 	err  error
 }
 
-func (f *stubExporter) Export(_ context.Context, w io.Writer) (backup.Summary, error) {
+func (f *stubExporter) ExportPortable(
+	_ context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
 	if f.err != nil {
-		return backup.Summary{}, f.err
+		return backup.Summary{}, nil, f.err
 	}
 
-	if _, err := w.Write(f.data); err != nil {
-		return backup.Summary{}, fmt.Errorf("write test SQL data: %w", err)
+	return writeTestTableFile(sink, f.data, f.sum)
+}
+
+// writeTestTableFile writes data as the table file of every table of a test
+// export, as a real export writes every table, and returns the summary with the
+// descriptors.
+func writeTestTableFile(
+	sink backup.PortableSink, data []byte, sum backup.Summary,
+) (backup.Summary, []backup.PortableFile, error) {
+	files := make([]backup.PortableFile, 0, len(backup.Tables))
+
+	for _, table := range backup.Tables {
+		path := backup.PortablePath(table)
+
+		w, err := sink(path)
+		if err != nil {
+			return backup.Summary{}, nil, fmt.Errorf("open test table file: %w", err)
+		}
+
+		if _, err := w.Write(data); err != nil {
+			return backup.Summary{}, nil, fmt.Errorf("write test SQL data: %w", err)
+		}
+
+		if err := w.Close(); err != nil {
+			return backup.Summary{}, nil, fmt.Errorf("close test table file: %w", err)
+		}
+
+		digest := sha256.Sum256(data)
+		files = append(files, backup.PortableFile{
+			Table:   table,
+			Path:    path,
+			SHA256:  hex.EncodeToString(digest[:]),
+			Columns: nil,
+			Rows:    0,
+			Size:    int64(len(data)),
+		})
 	}
 
-	return f.sum, nil
+	return sum, files, nil
 }
 
 // blockingExporter blocks inside Export until release closes, so a test can
@@ -202,20 +238,18 @@ type blockingExporter struct {
 	once    sync.Once
 }
 
-func (f *blockingExporter) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
+func (f *blockingExporter) ExportPortable(
+	ctx context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
 	f.once.Do(func() { close(f.started) })
 
 	select {
 	case <-f.release:
 	case <-ctx.Done():
-		return backup.Summary{}, fmt.Errorf("wait for test release: %w", ctx.Err())
+		return backup.Summary{}, nil, fmt.Errorf("wait for test release: %w", ctx.Err())
 	}
 
-	if _, err := w.Write(f.data); err != nil {
-		return backup.Summary{}, fmt.Errorf("write test SQL data: %w", err)
-	}
-
-	return f.sum, nil
+	return writeTestTableFile(sink, f.data, f.sum)
 }
 
 // fakeRegistry is an in-memory backup.Registry.
@@ -315,7 +349,7 @@ type fixture struct {
 	now      time.Time
 }
 
-func newFixture(t *testing.T, exporter backup.Exporter, maxSQL int64) *fixture {
+func newFixture(t *testing.T, exporter backup.PortableExporter, maxSQL int64) *fixture {
 	t.Helper()
 
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
@@ -443,7 +477,7 @@ func assertBackupObjects(
 ) {
 	t.Helper()
 
-	if got := target.readObject(t, "backups/"+id.String()+"/db"); !bytes.Equal(got, sql) {
+	if got := target.readObject(t, sqlPartKey(id)); !bytes.Equal(got, sql) {
 		t.Fatalf("backup db = %q, want %q", got, sql)
 	}
 
@@ -457,7 +491,8 @@ func assertBackupObjects(
 // wantManifest builds the manifest a whole backup of the SQL part with the
 // two blobs must write.
 func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup.Manifest {
-	sha := sha256.Sum256(sql)
+	files := sqlPartAllFiles(sql)
+	sqlSize, sqlSHA := sqlPartAggregate(files)
 	firstMD5 := md5.Sum(first)   //nolint:gosec // The test recomputes the MD5 the manifest records.
 	secondMD5 := md5.Sum(second) //nolint:gosec // The test recomputes the MD5 the manifest records.
 
@@ -472,11 +507,13 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 			{Key: "tofu/ws1/sv2/a1", Size: int64(len(second)), MD5: hex.EncodeToString(secondMD5[:]), Sealed: false},
 		},
 		Version:       "test-1.0",
-		SQLSHA256:     hex.EncodeToString(sha[:]),
+		SQLSHA256:     sqlSHA,
 		Format:        backup.FormatVersion,
 		SchemaVersion: 7,
-		SQLSize:       int64(len(sql)),
+		SQLSize:       sqlSize,
 		RowCounts:     map[string]int64{"namespaces": 1},
+		SQLFormat:     backup.PortableFormat,
+		SQLFiles:      files,
 	}
 }
 
@@ -524,6 +561,8 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"id",
 		"rowCounts",
 		"schemaVersion",
+		"sqlFiles",
+		"sqlFormat",
 		"sqlSha256",
 		"sqlSize",
 		"version",
@@ -569,9 +608,9 @@ func assertManifestBlobKeys(t *testing.T, raw map[string]any) {
 func TestManifestFormatIsPinned(t *testing.T) {
 	t.Parallel()
 
-	if backup.FormatVersion != 1 {
+	if backup.FormatVersion != 2 {
 		t.Fatalf(
-			"format version = %d, want 1: the manifest format is internal and changes only with a new ADR",
+			"format version = %d, want 2: the portable format of ADR 42 is the manifest format, and it changes only with a new ADR",
 			backup.FormatVersion,
 		)
 	}
@@ -593,7 +632,7 @@ func TestRunSecondBackupReusesBlobs(t *testing.T) {
 		t.Fatalf("reused blob = %q, want the first copy %q", got, content)
 	}
 
-	if got := fix.target.readObject(t, "backups/bkp-second/db"); !bytes.Equal(got, sql) {
+	if got := fix.target.readObject(t, sqlPartKey("bkp-second")); !bytes.Equal(got, sql) {
 		t.Fatalf("second backup db = %q, want %q", got, sql)
 	}
 
@@ -687,7 +726,7 @@ func TestRunFailsWhenDatabaseWriteFails(t *testing.T) {
 	sql := []byte("sqlite-image-bytes")
 	fix := newFixture(t, &stubExporter{sum: testSummary(blobRef("tofu/ws1/sv1/a1", content)), data: sql, err: nil}, 0)
 	seedSource(t, fix.source, map[string][]byte{"tofu/ws1/sv1/a1": content})
-	fix.target.failPut["backups/bkp-db/db"] = errTargetUnavailable
+	fix.target.failPut[sqlPartKey("bkp-db")] = errTargetUnavailable
 
 	finished := make(chan error, 1)
 
@@ -724,7 +763,7 @@ func TestRunWritesManifestLast(t *testing.T) {
 
 	assertFailed(t, fix.registry, "bkp-partial")
 
-	if got := fix.target.readObject(t, "backups/bkp-partial/db"); !bytes.Equal(got, sql) {
+	if got := fix.target.readObject(t, sqlPartKey("bkp-partial")); !bytes.Equal(got, sql) {
 		t.Fatalf("backup db = %q, want %q: the manifest is last, so earlier objects stay", got, sql)
 	}
 
@@ -846,8 +885,8 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			name:    "missing database",
-			breakIt: func(t *testing.T, target *memStore) { t.Helper(); mustDelete(t, target, "backups/bkp-check/db") },
-			wantKey: "backups/bkp-check/db",
+			breakIt: func(t *testing.T, target *memStore) { t.Helper(); mustDelete(t, target, sqlPartKey("bkp-check")) },
+			wantKey: sqlPartKey("bkp-check"),
 		},
 		{
 			name: "missing manifest",

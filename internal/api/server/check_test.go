@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -149,5 +150,44 @@ func TestBackupCheckInvalidID(t *testing.T) {
 		if doc.Code != http.StatusBadRequest || doc.Message != "invalid backup ID" {
 			t.Fatalf("backup check error = %+v, want code 400 with invalid backup ID", doc)
 		}
+	}
+}
+
+// TestBackupCheckNativeFormat proves the check of a backup in the native format
+// of ADR 30 answers complete false, with the text that tells the operator to
+// take a new backup, and not a server error.
+func TestBackupCheckNativeFormat(t *testing.T) {
+	t.Parallel()
+
+	held := openCheckFixture(t)
+	id := startBackup(t, held.fixture.handler)
+	pollBackupSucceeded(t, held.fixture.handler, id)
+
+	key, err := blob.ParseKey("backups/" + id + "/manifest.json")
+	if err != nil {
+		t.Fatalf("parse manifest key: %v", err)
+	}
+
+	if err := held.stores.target.Delete(t.Context(), key); err != nil {
+		t.Fatalf("delete manifest: %v", err)
+	}
+
+	native := []byte(`{"id":"` + id + `","format":1}`)
+
+	if err := held.stores.target.Put(t.Context(), key, bytes.NewReader(native)); err != nil {
+		t.Fatalf("put native manifest: %v", err)
+	}
+
+	status, doc := readBackupCheck(t, held.fixture, id)
+	if status != http.StatusOK {
+		t.Fatalf("GET backup %s check answers %d, want %d", id, status, http.StatusOK)
+	}
+
+	if doc.Complete || doc.ID != id {
+		t.Fatalf("backup check = %+v, want complete false for %q", doc, id)
+	}
+
+	if !strings.Contains(doc.Error, "take a new backup") {
+		t.Fatalf("backup check error = %q, want it to tell the operator to take a new backup", doc.Error)
 	}
 }

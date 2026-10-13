@@ -230,7 +230,7 @@ func (h *Handler) checkBackup(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	if err := h.backups.Check(ctx, id); err != nil {
-		if errors.Is(err, backup.ErrCorrupt) {
+		if errors.Is(err, backup.ErrCorrupt) || errors.Is(err, backup.ErrNativeFormat) {
 			h.writeJSON(ctx, w, http.StatusOK, checkBackupResponse{
 				ID:       id.String(),
 				Complete: false,

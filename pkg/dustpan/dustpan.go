@@ -1185,7 +1185,7 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 		return nil, nil
 	}
 
-	exporter, ok := cfg.namespaceStore.(backup.Exporter)
+	exporter, ok := cfg.namespaceStore.(backup.PortableExporter)
 	if !ok {
 		return nil, errBackupNeedsExporter
 	}

@@ -2210,6 +2210,14 @@ func (s *fakeBackupStore) BumpFailoverVersions(_ context.Context) (int64, error)
 // implements, derived from the same table set the exporter covers, so both
 // drift directions can fail: extraSchemaTable adds a table the backup list
 // does not cover, and omitSchemaTable removes one it does cover.
+// PeekPortableKey is not used by the fake: the portable suite runs on the real
+// stores only.
+func (s *fakeBackupStore) PeekPortableKey(
+	_ context.Context, _ backup.PortableOpener, _ backup.PortableFile, _ string,
+) (secret.WrappedKey, error) {
+	return secret.WrappedKey{}, fmt.Errorf("fake peeks no portable key: %w", backup.ErrCorrupt)
+}
+
 func (s *fakeBackupStore) CheckCoverage(_ context.Context) error {
 	return nil
 }

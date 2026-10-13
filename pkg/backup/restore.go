@@ -25,7 +25,12 @@ import (
 type KeyPeeker interface {
 	// PeekKey returns one data key wrapped by wrapperID from the export in
 	// r. It returns ErrCorrupt when r holds no key of wrapperID.
-	PeekKey(ctx context.Context, r io.Reader, wrapperID string) (secret.WrappedKey, error)
+	PeekPortableKey(
+		ctx context.Context,
+		open PortableOpener,
+		file PortableFile,
+		wrapperID string,
+	) (secret.WrappedKey, error)
 }
 
 // parseSQLSHA decodes the SHA-256 of the manifest. A bad value is a corrupt
@@ -61,17 +66,6 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 	return out, nil
 }
 
-// checkRestoreDialect refuses a backup of another dialect. The error names
-// both dialects, so the operator knows which release to use.
-func checkRestoreDialect(manifest Manifest, dst Summary, id ID) error {
-	if manifest.Dialect == dst.Dialect {
-		return nil
-	}
-
-	return fmt.Errorf("restore backup %s of dialect %q into %q: %w",
-		id, manifest.Dialect, dst.Dialect, ErrDialectMismatch)
-}
-
 // checkRestoreSchema refuses a backup of another schema version. The error
 // names both versions, so the operator knows which release to use.
 func checkRestoreSchema(manifest Manifest, dst Summary, id ID) error {
@@ -83,40 +77,58 @@ func checkRestoreSchema(manifest Manifest, dst Summary, id ID) error {
 		id, manifest.SchemaVersion, dst.SchemaVersion, ErrSchemaMismatch)
 }
 
-// verifySQLPart Gets the SQL part and counts its bytes through SHA-256. It
-// writes nothing: the bytes go to the hash only.
-func verifySQLPart(ctx context.Context, target blob.Store, id ID, wantSize int64, wantSHA []byte) error {
-	key, err := blob.ParseKey("backups/" + id.String() + "/db")
-	if err != nil {
-		return fmt.Errorf("restore backup %s: %w", id, err)
-	}
+// verifySQLPart reads each table file of the SQL part and checks its size and
+// SHA-256 against its descriptor. It writes nothing: the bytes go to the hash
+// only.
+func verifySQLPart(ctx context.Context, target blob.Store, id ID, files []PortableFile) error {
+	open := portableOpener(ctx, target, id)
 
-	reader, err := target.Get(ctx, key)
-	if err != nil {
-		if isNotFound(err) {
-			return fmt.Errorf("backup is incomplete: object %q is missing: %w", key, ErrCorrupt)
+	for _, file := range files {
+		reader, err := open(file.Path)
+		if err != nil {
+			return err
 		}
 
-		return fmt.Errorf("read backup object %q: %w", key, err)
-	}
+		size, sum, readErr := hashStream(reader)
+		closeErr := reader.Close()
 
-	size, sum, readErr := hashStream(reader)
-	closeErr := reader.Close()
+		if readErr != nil {
+			return fmt.Errorf("read backup object %q: %w", file.Path, readErr)
+		}
 
-	if readErr != nil {
-		return fmt.Errorf("read backup object %q: %w", key, readErr)
-	}
+		if closeErr != nil {
+			return fmt.Errorf("close backup object %q: %w", file.Path, closeErr)
+		}
 
-	if closeErr != nil {
-		return fmt.Errorf("close backup object %q: %w", key, closeErr)
-	}
-
-	if size != wantSize || !bytes.Equal(sum, wantSHA) {
-		return fmt.Errorf("backup object %q holds %d bytes, the manifest names %d: %w",
-			key, size, wantSize, ErrCorrupt)
+		want, err := hex.DecodeString(file.SHA256)
+		if err != nil || size != file.Size || !bytes.Equal(sum, want) {
+			return fmt.Errorf("backup object %q does not match its descriptor: %w", file.Path, ErrCorrupt)
+		}
 	}
 
 	return nil
+}
+
+// portableOpener opens the table files of backup id from the target. A missing
+// object is an incomplete backup.
+func portableOpener(ctx context.Context, target blob.Store, id ID) PortableOpener {
+	return func(path string) (io.ReadCloser, error) {
+		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
+		if err != nil {
+			return nil, fmt.Errorf("restore backup %s: %w", id, err)
+		}
+
+		reader, err := target.Get(ctx, key)
+		if err != nil {
+			if isNotFound(err) {
+				return nil, fmt.Errorf("backup is incomplete: object %q is missing: %w", key, ErrCorrupt)
+			}
+
+			return nil, fmt.Errorf("read backup object %q: %w", key, err)
+		}
+
+		return reader, nil
+	}
 }
 
 // copyRestoreBlob streams one blob from the target into the destination.
