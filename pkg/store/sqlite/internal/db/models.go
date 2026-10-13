@@ -61,6 +61,7 @@ type GroupMember struct {
 	GroupID     string
 	PrincipalID string
 	AddedAtMs   int64
+	RemovedAtMs sql.NullInt64
 }
 
 type Installation struct {
@@ -96,9 +97,9 @@ type Principal struct {
 	Subject     string
 	DisplayName string
 	Kind        string
-	Disabled    bool
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	DeletedAtMs sql.NullInt64
 }
 
 type PrincipalGroup struct {
@@ -108,6 +109,7 @@ type PrincipalGroup struct {
 	Description string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	DeletedAtMs sql.NullInt64
 }
 
 type Restore struct {

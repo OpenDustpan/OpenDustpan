@@ -8,6 +8,15 @@ package server
 //   - server:manage-principals creates, changes and deletes principals,
 //   - server:manage-groups creates, changes and deletes groups and their
 //     memberships.
+//
+// Each change writes its audit entry in the transaction of the change (fail
+// closed): when the entry cannot be written, the change fails with 500 and
+// the store does not change. A refused change writes a failure entry after
+// the fact, best effort: a lost failure entry is logged and counted.
+//
+// The list routes answer one page: the query parameters limit (1 to 1000,
+// default 100), cursor (the nextCursor of the page before) and prefix (the
+// start of the subject, or of the group name without regard to case).
 
 import (
 	"bytes"
@@ -15,6 +24,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -31,12 +41,12 @@ var (
 	errPrincipalBody = errors.New(
 		`invalid principal body: provide {"subject":"...","displayName":"...","kind":"person|service|workload"}`,
 	)
-	errPrincipalChangeBody = errors.New(
-		`invalid principal change body: provide {"displayName":"..."} or {"disabled":true|false}`,
-	)
-	errGroupBody       = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
-	errGroupChangeBody = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
-	errMemberBody      = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errPrincipalChangeBody = errors.New(`invalid principal change body: provide {"displayName":"..."}`)
+	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
+	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
+	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errBodyTooLarge        = errors.New("request body too large: the limit is 16384 bytes")
+	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
 // errNoPrincipalStore reports a server whose store keeps no principals.
@@ -56,7 +66,6 @@ type principalResponse struct {
 	Kind        string `json:"kind"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
-	Disabled    bool   `json:"disabled"`
 }
 
 // groupResponse is one group on the wire.
@@ -78,18 +87,21 @@ type memberResponse struct {
 	Principal principalResponse `json:"principal"`
 }
 
-// principalListResponse, groupListResponse and memberListResponse wrap the
-// lists, so a later field (a cursor) can join without a break.
+// principalListResponse, groupListResponse and memberListResponse wrap one
+// page of a list. NextCursor is empty on the last page.
 type principalListResponse struct {
 	Principals []principalResponse `json:"principals"`
+	NextCursor string              `json:"nextCursor"`
 }
 
 type groupListResponse struct {
-	Groups []groupResponse `json:"groups"`
+	Groups     []groupResponse `json:"groups"`
+	NextCursor string          `json:"nextCursor"`
 }
 
 type memberListResponse struct {
-	Members []memberResponse `json:"members"`
+	Members    []memberResponse `json:"members"`
+	NextCursor string           `json:"nextCursor"`
 }
 
 // createPrincipalRequest is the body of a principal create.
@@ -103,7 +115,6 @@ type createPrincipalRequest struct {
 // keeps its value.
 type changePrincipalRequest struct {
 	DisplayName *string `json:"displayName"`
-	Disabled    *bool   `json:"disabled"`
 }
 
 // createGroupRequest is the body of a group create.
@@ -137,7 +148,6 @@ func principalOf(p principal.Principal) principalResponse {
 		Kind:        string(p.Kind),
 		CreatedAt:   wireTime(p.CreatedAt),
 		UpdatedAt:   wireTime(p.UpdatedAt),
-		Disabled:    p.Disabled,
 	}
 }
 
@@ -151,9 +161,9 @@ func groupOf(g principal.Group) groupResponse {
 	}
 }
 
-func groupsOf(gs []principal.Group) groupListResponse {
-	out := groupListResponse{Groups: make([]groupResponse, 0, len(gs))}
-	for _, g := range gs {
+func groupsOf(page principal.Page[principal.Group]) groupListResponse {
+	out := groupListResponse{Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor}
+	for _, g := range page.Items {
 		out.Groups = append(out.Groups, groupOf(g))
 	}
 
@@ -179,43 +189,35 @@ type principalResult struct {
 }
 
 // principalOp is one principal or group operation. It answers its result,
-// or an error with the result so far: a change names its record in both.
-type principalOp func(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error)
-
-// Audit object names of the records that a change acts on. An entry keeps
-// the name as text (ADR 60, decision 6), never a request path.
-func principalRef(id string) string { return "principal:" + id }
-
-func groupRef(id string) string { return "group:" + id }
-
-func memberRef(groupID, principalID string) string {
-	return "group:" + groupID + "#member:" + principalID
-}
+// or an error with the result so far: a change names its record in both. e
+// is the audit entry of the caller, which a change hands to the Service.
+type principalOp func(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error)
 
 // servePrincipalRead adapts a read to a route handler: it finds the
 // principal service, runs op and writes its answer or its error.
 func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
-		if res, ok := h.runPrincipalOp(w, r, op); ok {
+		var none audit.Entry
+
+		if res, ok := h.runPrincipalOp(w, r, op, none); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// servePrincipalChange adapts a change to a route handler. It writes one
-// audit entry of the kind change in the scope @server for each change that
-// the service runs, with the outcome success or failure.
+// servePrincipalChange adapts a change to a route handler. The Service
+// writes the success entry in the transaction of the change. A refused
+// change writes one failure entry here, best effort.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op)
+		res, ok := h.runPrincipalOp(w, r, op, callerEntry(r, p, action))
 
-		outcome := audit.OutcomeSuccess
-		if !ok {
-			outcome = audit.OutcomeFailure
-		}
-
-		if res.object != "" {
-			h.appendServerChange(r, p, serverChange{action: action, object: res.object, outcome: outcome})
+		if !ok && res.object != "" && h.principals != nil {
+			h.appendServerChange(r, p, serverChange{
+				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
+			})
 		}
 
 		if ok {
@@ -226,7 +228,9 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 
 // runPrincipalOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
-func (h *Handler) runPrincipalOp(w http.ResponseWriter, r *http.Request, op principalOp) (principalResult, bool) {
+func (h *Handler) runPrincipalOp(
+	w http.ResponseWriter, r *http.Request, op principalOp, e audit.Entry,
+) (principalResult, bool) {
 	ctx := r.Context()
 
 	if h.principals == nil {
@@ -235,7 +239,7 @@ func (h *Handler) runPrincipalOp(w http.ResponseWriter, r *http.Request, op prin
 		return principalResult{body: nil, object: "", status: 0}, false
 	}
 
-	res, err := op(w, r, h.principals)
+	res, err := op(w, r, h.principals, e)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -363,7 +367,7 @@ func (h *Handler) groupRoutes() []Route {
 		},
 		{
 			Method:  http.MethodDelete,
-			Path:    membersPath + "/{principalId}",
+			Path:    membersPath + "/{principal}",
 			Scope:   ScopeAuthorized,
 			Actions: manage,
 			Resolve: resolveServer,
@@ -376,6 +380,10 @@ func (h *Handler) groupRoutes() []Route {
 // and nothing after it. Any failure answers bad.
 func decodeStrict(w http.ResponseWriter, r *http.Request, dst any, bad error) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPrincipalBodyBytes))
+	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
+		return errBodyTooLarge
+	}
+
 	if err != nil {
 		return bad
 	}
@@ -408,10 +416,30 @@ func decodeChange(w http.ResponseWriter, r *http.Request, dst any, bad error, em
 	return nil
 }
 
+// pageRequest reads the query parameters limit, cursor and prefix of a
+// list route. A limit that is not a number answers 400.
+func pageRequest(r *http.Request) (principal.PageRequest, error) {
+	q := r.URL.Query()
+	req := principal.PageRequest{Prefix: q.Get("prefix"), Cursor: q.Get("cursor"), Limit: 0}
+
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return principal.PageRequest{}, errPageQuery
+		}
+
+		req.Limit = n
+	}
+
+	return req, nil
+}
+
 // createPrincipal serves POST /api/server/principals: it answers 201 with
 // the new principal. A taken subject answers 409. A bad or reserved subject,
 // an unknown kind or a bad body answers 400.
-func createPrincipal(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func createPrincipal(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
 	var req createPrincipalRequest
 	if err := decodeStrict(w, r, &req, errPrincipalBody); err != nil {
 		return failed("principals"), err
@@ -426,29 +454,39 @@ func createPrincipal(w http.ResponseWriter, r *http.Request, svc *principal.Serv
 		return failed("principals"), err
 	}
 
-	displayName := ""
+	in := principal.Input{Subject: *req.Subject, DisplayName: "", Kind: kind}
 	if req.DisplayName != nil {
-		displayName = *req.DisplayName
+		in.DisplayName = *req.DisplayName
 	}
 
-	p, err := svc.CreatePrincipal(r.Context(), *req.Subject, displayName, kind)
+	p, err := svc.CreatePrincipal(r.Context(), e, in)
 	if err != nil {
 		return failed("principals"), err
 	}
 
-	return ok(http.StatusCreated, principalOf(p), principalRef(p.ID)), nil
+	return ok(http.StatusCreated, principalOf(p), principal.Ref(p.ID)), nil
 }
 
-// listPrincipals serves GET /api/server/principals, ordered by subject.
-func listPrincipals(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	ps, err := svc.ListPrincipals(r.Context())
+// listPrincipals serves GET /api/server/principals: one page, ordered by
+// subject.
+func listPrincipals(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
+	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	out := principalListResponse{Principals: make([]principalResponse, 0, len(ps))}
-	for i := range ps {
-		out.Principals = append(out.Principals, principalOf(ps[i]))
+	page, err := svc.ListPrincipals(r.Context(), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	out := principalListResponse{
+		Principals: make([]principalResponse, 0, len(page.Items)), NextCursor: page.NextCursor,
+	}
+	for i := range page.Items {
+		out.Principals = append(out.Principals, principalOf(page.Items[i]))
 	}
 
 	return ok(http.StatusOK, out, ""), nil
@@ -456,7 +494,9 @@ func listPrincipals(_ http.ResponseWriter, r *http.Request, svc *principal.Servi
 
 // getPrincipal serves GET /api/server/principals/{id}. An unknown ID
 // answers 404.
-func getPrincipal(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func getPrincipal(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
 	p, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return failed(""), err
@@ -466,23 +506,21 @@ func getPrincipal(_ http.ResponseWriter, r *http.Request, svc *principal.Service
 }
 
 // changePrincipal serves PATCH /api/server/principals/{id}: it changes the
-// display name, the disabled flag or both, and answers 200 with the stored
-// principal. A body that sets neither field answers 400.
-func changePrincipal(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	object := principalRef(r.PathValue("id"))
+// display name and answers 200 with the stored principal. A body that sets
+// no field answers 400.
+func changePrincipal(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
+	object := principal.Ref(r.PathValue("id"))
 
 	var req changePrincipalRequest
 
-	err := decodeChange(w, r, &req, errPrincipalChangeBody, func() bool {
-		return req.DisplayName == nil && req.Disabled == nil
-	})
+	err := decodeChange(w, r, &req, errPrincipalChangeBody, func() bool { return req.DisplayName == nil })
 	if err != nil {
 		return failed(object), err
 	}
 
-	change := principal.Change{DisplayName: req.DisplayName, Disabled: req.Disabled}
-
-	p, err := svc.UpdatePrincipal(r.Context(), r.PathValue("id"), change)
+	p, err := svc.UpdatePrincipal(r.Context(), e, r.PathValue("id"), principal.Change{DisplayName: req.DisplayName})
 	if err != nil {
 		return failed(object), err
 	}
@@ -490,30 +528,44 @@ func changePrincipal(w http.ResponseWriter, r *http.Request, svc *principal.Serv
 	return ok(http.StatusOK, principalOf(p), object), nil
 }
 
-// deletePrincipal serves DELETE /api/server/principals/{id}: it deletes the
-// principal and its memberships, and answers 204.
-func deletePrincipal(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	if err := svc.DeletePrincipal(r.Context(), r.PathValue("id")); err != nil {
-		return failed(principalRef(r.PathValue("id"))), err
+// deletePrincipal serves DELETE /api/server/principals/{id}: it ends the
+// principal and its memberships, and answers 204. The rows stay for the
+// access-review history.
+func deletePrincipal(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
+	object := principal.Ref(r.PathValue("id"))
+
+	if err := svc.DeletePrincipal(r.Context(), e, r.PathValue("id")); err != nil {
+		return failed(object), err
 	}
 
-	return ok(http.StatusNoContent, nil, principalRef(r.PathValue("id"))), nil
+	return ok(http.StatusNoContent, nil, object), nil
 }
 
-// listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups,
-// ordered by name.
-func listGroupsOfPrincipal(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	gs, err := svc.ListGroupsOf(r.Context(), r.PathValue("id"))
+// listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
+// page, ordered by name.
+func listGroupsOfPrincipal(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
+	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, groupsOf(gs), ""), nil
+	page, err := svc.ListGroupsOf(r.Context(), r.PathValue("id"), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, groupsOf(page), ""), nil
 }
 
 // createGroup serves POST /api/server/groups: it answers 201 with the new
 // group. A name that another group holds without regard to case answers 409.
-func createGroup(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func createGroup(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
 	var req createGroupRequest
 	if err := decodeStrict(w, r, &req, errGroupBody); err != nil {
 		return failed("groups"), err
@@ -523,31 +575,40 @@ func createGroup(w http.ResponseWriter, r *http.Request, svc *principal.Service)
 		return failed("groups"), errGroupBody
 	}
 
-	description := ""
+	in := principal.GroupInput{Name: *req.Name, Description: ""}
 	if req.Description != nil {
-		description = *req.Description
+		in.Description = *req.Description
 	}
 
-	g, err := svc.CreateGroup(r.Context(), *req.Name, description)
+	g, err := svc.CreateGroup(r.Context(), e, in)
 	if err != nil {
 		return failed("groups"), err
 	}
 
-	return ok(http.StatusCreated, groupOf(g), groupRef(g.ID)), nil
+	return ok(http.StatusCreated, groupOf(g), principal.GroupRef(g.ID)), nil
 }
 
-// listGroups serves GET /api/server/groups, ordered by name.
-func listGroups(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	gs, err := svc.ListGroups(r.Context())
+// listGroups serves GET /api/server/groups: one page, ordered by name.
+func listGroups(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
+	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, groupsOf(gs), ""), nil
+	page, err := svc.ListGroups(r.Context(), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, groupsOf(page), ""), nil
 }
 
 // getGroup serves GET /api/server/groups/{id}. An unknown ID answers 404.
-func getGroup(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func getGroup(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
 	g, err := svc.GetGroup(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return failed(""), err
@@ -558,10 +619,12 @@ func getGroup(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (p
 
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
 // changes its description or both, and answers 200 with the stored group.
-func changeGroup(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func changeGroup(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
 	var req changeGroupRequest
 
-	object := groupRef(r.PathValue("id"))
+	object := principal.GroupRef(r.PathValue("id"))
 	empty := func() bool { return req.Name == nil && req.Description == nil }
 
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
@@ -569,7 +632,7 @@ func changeGroup(w http.ResponseWriter, r *http.Request, svc *principal.Service)
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), r.PathValue("id"), principal.GroupChange{
+	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
 		Name:        req.Name,
 		Description: req.Description,
 	})
@@ -580,29 +643,40 @@ func changeGroup(w http.ResponseWriter, r *http.Request, svc *principal.Service)
 	return ok(http.StatusOK, groupOf(g), object), nil
 }
 
-// deleteGroup serves DELETE /api/server/groups/{id}: it deletes the group
-// and its memberships, and answers 204. The members keep their records.
-func deleteGroup(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	if err := svc.DeleteGroup(r.Context(), r.PathValue("id")); err != nil {
-		return failed(groupRef(r.PathValue("id"))), err
+// deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and
+// its memberships, and answers 204. The members keep their records.
+func deleteGroup(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
+	object := principal.GroupRef(r.PathValue("id"))
+
+	if err := svc.DeleteGroup(r.Context(), e, r.PathValue("id")); err != nil {
+		return failed(object), err
 	}
 
-	return ok(http.StatusNoContent, nil, groupRef(r.PathValue("id"))), nil
+	return ok(http.StatusNoContent, nil, object), nil
 }
 
-// listMembers serves GET /api/server/groups/{id}/members, ordered by
-// subject.
-func listMembers(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	ms, err := svc.ListMembers(r.Context(), r.PathValue("id"))
+// listMembers serves GET /api/server/groups/{id}/members: one page, ordered
+// by subject.
+func listMembers(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+) (principalResult, error) {
+	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	out := memberListResponse{Members: make([]memberResponse, 0, len(ms))}
-	for i := range ms {
+	page, err := svc.ListMembers(r.Context(), r.PathValue("id"), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	out := memberListResponse{Members: make([]memberResponse, 0, len(page.Items)), NextCursor: page.NextCursor}
+	for i := range page.Items {
 		out.Members = append(out.Members, memberResponse{
-			AddedAt:   wireTime(ms[i].AddedAt),
-			Principal: principalOf(ms[i].Principal),
+			AddedAt:   wireTime(page.Items[i].AddedAt),
+			Principal: principalOf(page.Items[i].Principal),
 		})
 	}
 
@@ -613,42 +687,46 @@ func listMembers(_ http.ResponseWriter, r *http.Request, svc *principal.Service)
 // principal of the body in the group and answers 201 with the member. A
 // principal that is a member answers 409. An unknown group or principal
 // answers 404.
-func addMember(w http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
+func addMember(
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
 	var req addMemberRequest
 	if err := decodeStrict(w, r, &req, errMemberBody); err != nil {
-		return failed(groupRef(r.PathValue("id"))), err
+		return failed(principal.GroupRef(r.PathValue("id"))), err
 	}
 
 	if req.PrincipalID == nil || *req.PrincipalID == "" {
-		return failed(groupRef(r.PathValue("id"))), errMemberBody
+		return failed(principal.GroupRef(r.PathValue("id"))), errMemberBody
 	}
 
 	ctx := r.Context()
-	object := memberRef(r.PathValue("id"), *req.PrincipalID)
+	object := principal.MemberRef(r.PathValue("id"), *req.PrincipalID)
 
 	p, err := svc.GetPrincipal(ctx, *req.PrincipalID)
 	if err != nil {
 		return failed(object), err
 	}
 
-	m, err := svc.AddMember(ctx, r.PathValue("id"), p.ID)
+	m, err := svc.AddMember(ctx, e, r.PathValue("id"), p.ID)
 	if err != nil {
 		return failed(object), err
 	}
 
-	return ok(http.StatusCreated, memberResponse{AddedAt: wireTime(m.AddedAt), Principal: principalOf(p)},
-		memberRef(m.GroupID, m.PrincipalID)), nil
+	return ok(http.StatusCreated, memberResponse{AddedAt: wireTime(m.AddedAt), Principal: principalOf(p)}, object), nil
 }
 
-// removeMember serves DELETE /api/server/groups/{id}/members/{principalId}:
-// it takes the principal out of the group and answers 204. The principal
-// keeps its record.
-func removeMember(_ http.ResponseWriter, r *http.Request, svc *principal.Service) (principalResult, error) {
-	if err := svc.RemoveMember(r.Context(), r.PathValue("id"), r.PathValue("principalId")); err != nil {
-		return failed(memberRef(r.PathValue("id"), r.PathValue("principalId"))), err
+// removeMember serves DELETE /api/server/groups/{id}/members/{principal}:
+// it ends the membership and answers 204. The principal keeps its record.
+func removeMember(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+) (principalResult, error) {
+	object := principal.MemberRef(r.PathValue("id"), r.PathValue("principal"))
+
+	if err := svc.RemoveMember(r.Context(), e, r.PathValue("id"), r.PathValue("principal")); err != nil {
+		return failed(object), err
 	}
 
-	return ok(http.StatusNoContent, nil, memberRef(r.PathValue("id"), r.PathValue("principalId"))), nil
+	return ok(http.StatusNoContent, nil, object), nil
 }
 
 // classifyPrincipal maps the principal and group errors to their status and
@@ -661,8 +739,11 @@ func classifyPrincipal(err error) (int, string, bool) {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
 		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody):
 		return http.StatusBadRequest, err.Error(), true
-	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject):
+	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
+		errors.Is(err, errPageQuery):
 		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, errBodyTooLarge):
+		return http.StatusRequestEntityTooLarge, err.Error(), true
 	case errors.Is(err, principal.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, principal.ErrNotFound):

@@ -9,11 +9,16 @@
 package principaltest
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -56,6 +61,14 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "remove of a missing membership is ErrNotFound", test: testRemoveMissingMember},
 		{name: "list of a missing group or principal is ErrNotFound", test: testListMissing},
 		{name: "every kind of principal can be a member", test: testEveryKindIsMember},
+		{name: "a deleted principal has no groups and frees its subject", test: testDeletedPrincipalHistory},
+		{name: "a principal can join a group again after a removal", test: testRejoin},
+		{name: "list principals pages by subject with a prefix", test: testPagePrincipals},
+		{name: "list groups pages by name without regard to case", test: testPageGroups},
+		{name: "list members and groups of a principal page", test: testPageMembers},
+		{name: "a change appends its audit entry in @server", test: testChangeAppendsEntry},
+		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
+		{name: "concurrent creates of one subject or group name: one wins", test: testConcurrentCreates},
 	}
 
 	for _, tc := range cases {
@@ -71,6 +84,45 @@ func at(minute int) time.Time {
 	return time.Date(2026, time.October, 13, 21, minute, 0, 0, time.UTC)
 }
 
+// entry returns a valid audit entry of the kind change in the scope
+// @server, as a Service builds it.
+func entry() audit.Entry {
+	return audit.Entry{
+		At:         at(9),
+		Namespace:  audit.ServerScope,
+		Subject:    "admin",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "server:manage-principals",
+		Object:     "principal:prn-test",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "principaltest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
+// refused returns an entry that fails validation: it names no subject.
+func refused() audit.Entry {
+	e := entry()
+	e.Subject = ""
+
+	return e
+}
+
+// all is a query for every row.
+func all() principal.Query {
+	return principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1}
+}
+
 func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 	return principal.Principal{
 		CreatedAt:   at(0),
@@ -79,7 +131,6 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 		Subject:     subject,
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
-		Disabled:    false,
 	}
 }
 
@@ -96,7 +147,7 @@ func newGroup(id, name string) principal.Group {
 func mustCreatePrincipal(t *testing.T, s principal.Store, p principal.Principal) {
 	t.Helper()
 
-	if err := s.CreatePrincipal(t.Context(), p); err != nil {
+	if err := s.CreatePrincipal(t.Context(), p, entry()); err != nil {
 		t.Fatalf("create principal %q: %v", p.Subject, err)
 	}
 }
@@ -104,7 +155,7 @@ func mustCreatePrincipal(t *testing.T, s principal.Store, p principal.Principal)
 func mustCreateGroup(t *testing.T, s principal.Store, g principal.Group) {
 	t.Helper()
 
-	if err := s.CreateGroup(t.Context(), g); err != nil {
+	if err := s.CreateGroup(t.Context(), g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", g.Name, err)
 	}
 }
@@ -113,7 +164,7 @@ func mustAddMember(t *testing.T, s principal.Store, groupID, principalID string)
 	t.Helper()
 
 	m := principal.Membership{AddedAt: at(1), GroupID: groupID, PrincipalID: principalID}
-	if err := s.AddMember(t.Context(), m); err != nil {
+	if err := s.AddMember(t.Context(), m, entry()); err != nil {
 		t.Fatalf("add %q to %q: %v", principalID, groupID, err)
 	}
 }
@@ -223,7 +274,7 @@ func testDuplicateSubject(t *testing.T, s principal.Store) {
 
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 
-	err := s.CreatePrincipal(t.Context(), newPrincipal("prn-2", "alice", principal.KindService))
+	err := s.CreatePrincipal(t.Context(), newPrincipal("prn-2", "alice", principal.KindService), entry())
 	wantErr(t, "second principal with the subject", err, principal.ErrAlreadyExists)
 }
 
@@ -232,7 +283,7 @@ func testDuplicatePrincipalID(t *testing.T, s principal.Store) {
 
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 
-	err := s.CreatePrincipal(t.Context(), newPrincipal("prn-1", "bob", principal.KindPerson))
+	err := s.CreatePrincipal(t.Context(), newPrincipal("prn-1", "bob", principal.KindPerson), entry())
 	wantErr(t, "second principal with the ID", err, principal.ErrAlreadyExists)
 }
 
@@ -262,7 +313,7 @@ func testMissingPrincipal(t *testing.T, s principal.Store) {
 func testListPrincipals(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	got, err := s.ListPrincipals(t.Context())
+	got, err := s.ListPrincipals(t.Context(), all())
 	if err != nil {
 		t.Fatalf("list an empty store: %v", err)
 	}
@@ -275,7 +326,7 @@ func testListPrincipals(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-3", "bob", principal.KindWorkload))
 
-	got, err = s.ListPrincipals(t.Context())
+	got, err = s.ListPrincipals(t.Context(), all())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -291,12 +342,11 @@ func testUpdatePrincipal(t *testing.T, s principal.Store) {
 
 	changed := p
 	changed.DisplayName = "Alice A."
-	changed.Disabled = true
 	changed.UpdatedAt = at(5)
 	changed.Subject = "mallory"
 	changed.Kind = principal.KindService
 
-	if err := s.UpdatePrincipal(t.Context(), changed); err != nil {
+	if err := s.UpdatePrincipal(t.Context(), changed, entry()); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -307,7 +357,6 @@ func testUpdatePrincipal(t *testing.T, s principal.Store) {
 
 	want := p
 	want.DisplayName = "Alice A."
-	want.Disabled = true
 	want.UpdatedAt = at(5)
 	equalPrincipal(t, got, want)
 }
@@ -315,7 +364,7 @@ func testUpdatePrincipal(t *testing.T, s principal.Store) {
 func testUpdateMissingPrincipal(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	err := s.UpdatePrincipal(t.Context(), newPrincipal("prn-missing", "alice", principal.KindPerson))
+	err := s.UpdatePrincipal(t.Context(), newPrincipal("prn-missing", "alice", principal.KindPerson), entry())
 	wantErr(t, "update a missing principal", err, principal.ErrNotFound)
 }
 
@@ -328,14 +377,14 @@ func testDeletePrincipal(t *testing.T, s principal.Store) {
 	mustAddMember(t, s, "grp-1", "prn-1")
 	mustAddMember(t, s, "grp-1", "prn-2")
 
-	if err := s.DeletePrincipal(t.Context(), "prn-1"); err != nil {
+	if err := s.DeletePrincipal(t.Context(), "prn-1", entry()); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
 	_, err := s.GetPrincipal(t.Context(), "prn-1")
 	wantErr(t, "get a deleted principal", err, principal.ErrNotFound)
 
-	members, err := s.ListMembers(t.Context(), "grp-1")
+	members, err := s.ListMembers(t.Context(), "grp-1", all())
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
@@ -349,7 +398,7 @@ func testDeletePrincipal(t *testing.T, s principal.Store) {
 func testDeleteMissingPrincipal(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	err := s.DeletePrincipal(t.Context(), "prn-missing")
+	err := s.DeletePrincipal(t.Context(), "prn-missing", entry())
 	wantErr(t, "delete a missing principal", err, principal.ErrNotFound)
 }
 
@@ -372,10 +421,10 @@ func testDuplicateGroupName(t *testing.T, s principal.Store) {
 
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
-	err := s.CreateGroup(t.Context(), newGroup("grp-2", "OPS"))
+	err := s.CreateGroup(t.Context(), newGroup("grp-2", "OPS"), entry())
 	wantErr(t, "second group with the name in another case", err, principal.ErrAlreadyExists)
 
-	err = s.CreateGroup(t.Context(), newGroup("grp-1", "dev"))
+	err = s.CreateGroup(t.Context(), newGroup("grp-1", "dev"), entry())
 	wantErr(t, "second group with the ID", err, principal.ErrAlreadyExists)
 }
 
@@ -389,7 +438,7 @@ func testMissingGroup(t *testing.T, s principal.Store) {
 func testListGroups(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	got, err := s.ListGroups(t.Context())
+	got, err := s.ListGroups(t.Context(), all())
 	if err != nil {
 		t.Fatalf("list an empty store: %v", err)
 	}
@@ -402,7 +451,7 @@ func testListGroups(t *testing.T, s principal.Store) {
 	mustCreateGroup(t, s, newGroup("grp-2", "Billing"))
 	mustCreateGroup(t, s, newGroup("grp-3", "audit"))
 
-	got, err = s.ListGroups(t.Context())
+	got, err = s.ListGroups(t.Context(), all())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -421,7 +470,7 @@ func testUpdateGroup(t *testing.T, s principal.Store) {
 	changed.Description = "Runs the platform"
 	changed.UpdatedAt = at(7)
 
-	if err := s.UpdateGroup(t.Context(), changed); err != nil {
+	if err := s.UpdateGroup(t.Context(), changed, entry()); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -445,7 +494,7 @@ func testRenameGroupTaken(t *testing.T, s principal.Store) {
 	mustCreateGroup(t, s, g)
 
 	g.Name = "Ops"
-	err := s.UpdateGroup(t.Context(), g)
+	err := s.UpdateGroup(t.Context(), g, entry())
 	wantErr(t, "rename to a taken name", err, principal.ErrAlreadyExists)
 
 	got, err := s.GetGroup(t.Context(), "grp-2")
@@ -465,7 +514,7 @@ func testRenameGroupCase(t *testing.T, s principal.Store) {
 	mustCreateGroup(t, s, g)
 
 	g.Name = "Ops"
-	if err := s.UpdateGroup(t.Context(), g); err != nil {
+	if err := s.UpdateGroup(t.Context(), g, entry()); err != nil {
 		t.Fatalf("rename to another case of the same name: %v", err)
 	}
 
@@ -482,7 +531,7 @@ func testRenameGroupCase(t *testing.T, s principal.Store) {
 func testUpdateMissingGroup(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	err := s.UpdateGroup(t.Context(), newGroup("grp-missing", "ops"))
+	err := s.UpdateGroup(t.Context(), newGroup("grp-missing", "ops"), entry())
 	wantErr(t, "update a missing group", err, principal.ErrNotFound)
 }
 
@@ -495,14 +544,14 @@ func testDeleteGroup(t *testing.T, s principal.Store) {
 	mustAddMember(t, s, "grp-1", "prn-1")
 	mustAddMember(t, s, "grp-2", "prn-1")
 
-	if err := s.DeleteGroup(t.Context(), "grp-1"); err != nil {
+	if err := s.DeleteGroup(t.Context(), "grp-1", entry()); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
 	_, err := s.GetGroup(t.Context(), "grp-1")
 	wantErr(t, "get a deleted group", err, principal.ErrNotFound)
 
-	groups, err := s.ListGroupsOf(t.Context(), "prn-1")
+	groups, err := s.ListGroupsOf(t.Context(), "prn-1", all())
 	if err != nil {
 		t.Fatalf("list groups of: %v", err)
 	}
@@ -517,7 +566,7 @@ func testDeleteGroup(t *testing.T, s principal.Store) {
 func testDeleteMissingGroup(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	err := s.DeleteGroup(t.Context(), "grp-missing")
+	err := s.DeleteGroup(t.Context(), "grp-missing", entry())
 	wantErr(t, "delete a missing group", err, principal.ErrNotFound)
 }
 
@@ -531,7 +580,7 @@ func testMemberRoundTrip(t *testing.T, s principal.Store) {
 	mustAddMember(t, s, "grp-1", "prn-1")
 	mustAddMember(t, s, "grp-1", "prn-2")
 
-	members, err := s.ListMembers(t.Context(), "grp-1")
+	members, err := s.ListMembers(t.Context(), "grp-1", all())
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
@@ -544,11 +593,11 @@ func testMemberRoundTrip(t *testing.T, s principal.Store) {
 
 	equalPrincipal(t, members[1].Principal, p)
 
-	if removeErr := s.RemoveMember(t.Context(), "grp-1", "prn-1"); removeErr != nil {
+	if removeErr := s.RemoveMember(t.Context(), "grp-1", "prn-1", entry()); removeErr != nil {
 		t.Fatalf("remove: %v", removeErr)
 	}
 
-	members, err = s.ListMembers(t.Context(), "grp-1")
+	members, err = s.ListMembers(t.Context(), "grp-1", all())
 	if err != nil {
 		t.Fatalf("list members after the remove: %v", err)
 	}
@@ -566,7 +615,7 @@ func testManyGroups(t *testing.T, s principal.Store) {
 	mustAddMember(t, s, "grp-1", "prn-1")
 	mustAddMember(t, s, "grp-2", "prn-1")
 
-	groups, err := s.ListGroupsOf(t.Context(), "prn-1")
+	groups, err := s.ListGroupsOf(t.Context(), "prn-1", all())
 	if err != nil {
 		t.Fatalf("list groups of: %v", err)
 	}
@@ -581,7 +630,11 @@ func testDuplicateMember(t *testing.T, s principal.Store) {
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 	mustAddMember(t, s, "grp-1", "prn-1")
 
-	err := s.AddMember(t.Context(), principal.Membership{AddedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-1"})
+	err := s.AddMember(
+		t.Context(),
+		principal.Membership{AddedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-1"},
+		entry(),
+	)
 	wantErr(t, "add a member twice", err, principal.ErrAlreadyExists)
 }
 
@@ -591,10 +644,18 @@ func testMemberMissing(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
-	err := s.AddMember(t.Context(), principal.Membership{AddedAt: at(1), GroupID: "grp-missing", PrincipalID: "prn-1"})
+	err := s.AddMember(
+		t.Context(),
+		principal.Membership{AddedAt: at(1), GroupID: "grp-missing", PrincipalID: "prn-1"},
+		entry(),
+	)
 	wantErr(t, "add to a missing group", err, principal.ErrNotFound)
 
-	err = s.AddMember(t.Context(), principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-missing"})
+	err = s.AddMember(
+		t.Context(),
+		principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-missing"},
+		entry(),
+	)
 	wantErr(t, "add a missing principal", err, principal.ErrNotFound)
 }
 
@@ -604,28 +665,28 @@ func testRemoveMissingMember(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
-	err := s.RemoveMember(t.Context(), "grp-1", "prn-1")
+	err := s.RemoveMember(t.Context(), "grp-1", "prn-1", entry())
 	wantErr(t, "remove a principal that is not a member", err, principal.ErrNotFound)
 }
 
 func testListMissing(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	_, err := s.ListMembers(t.Context(), "grp-missing")
+	_, err := s.ListMembers(t.Context(), "grp-missing", all())
 	wantErr(t, "list members of a missing group", err, principal.ErrNotFound)
 
-	_, err = s.ListGroupsOf(t.Context(), "prn-missing")
+	_, err = s.ListGroupsOf(t.Context(), "prn-missing", all())
 	wantErr(t, "list groups of a missing principal", err, principal.ErrNotFound)
 
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
-	members, err := s.ListMembers(t.Context(), "grp-1")
+	members, err := s.ListMembers(t.Context(), "grp-1", all())
 	if err != nil || len(members) != 0 {
 		t.Fatalf("list members of an empty group = %v, %v; want none", members, err)
 	}
 
-	groups, err := s.ListGroupsOf(t.Context(), "prn-1")
+	groups, err := s.ListGroupsOf(t.Context(), "prn-1", all())
 	if err != nil || len(groups) != 0 {
 		t.Fatalf("list groups of a principal in no group = %v, %v; want none", groups, err)
 	}
@@ -642,10 +703,308 @@ func testEveryKindIsMember(t *testing.T, s principal.Store) {
 		mustAddMember(t, s, "grp-1", id)
 	}
 
-	members, err := s.ListMembers(t.Context(), "grp-1")
+	members, err := s.ListMembers(t.Context(), "grp-1", all())
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
 
 	equalStrings(t, "members", memberSubjects(members), []string{"a-person", "b-service", "c-workload"})
+}
+
+func testDeletedPrincipalHistory(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+	mustAddMember(t, s, "grp-1", "prn-1")
+
+	if err := s.DeletePrincipal(t.Context(), "prn-1", entry()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	_, err := s.ListGroupsOf(t.Context(), "prn-1", all())
+	wantErr(t, "list groups of a deleted principal", err, principal.ErrNotFound)
+
+	_, err = s.GetPrincipalBySubject(t.Context(), "alice")
+	wantErr(t, "get a deleted principal by subject", err, principal.ErrNotFound)
+
+	err = s.DeletePrincipal(t.Context(), "prn-1", entry())
+	wantErr(t, "delete a deleted principal", err, principal.ErrNotFound)
+
+	err = s.AddMember(
+		t.Context(),
+		principal.Membership{AddedAt: at(3), GroupID: "grp-1", PrincipalID: "prn-1"},
+		entry(),
+	)
+	wantErr(t, "add a deleted principal", err, principal.ErrNotFound)
+
+	mustCreateGroup(t, s, newGroup("grp-2", "dev"))
+
+	if err := s.DeleteGroup(t.Context(), "grp-2", entry()); err != nil {
+		t.Fatalf("delete group: %v", err)
+	}
+
+	// The name of a deleted group is free again.
+	mustCreateGroup(t, s, newGroup("grp-3", "DEV"))
+}
+
+func testRejoin(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+	mustAddMember(t, s, "grp-1", "prn-1")
+
+	if err := s.RemoveMember(t.Context(), "grp-1", "prn-1", entry()); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	err := s.RemoveMember(t.Context(), "grp-1", "prn-1", entry())
+	wantErr(t, "remove an ended membership", err, principal.ErrNotFound)
+
+	m := principal.Membership{AddedAt: at(4), GroupID: "grp-1", PrincipalID: "prn-1"}
+	if err = s.AddMember(t.Context(), m, entry()); err != nil {
+		t.Fatalf("join again: %v", err)
+	}
+
+	members, err := s.ListMembers(t.Context(), "grp-1", all())
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	if len(members) != 1 || !members[0].AddedAt.Equal(at(4)) {
+		t.Fatalf("members = %+v, want alice once, added at %v", members, at(4))
+	}
+}
+
+func testPagePrincipals(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	for i, subject := range []string{"b1", "a3", "a1", "ab", "a2", "A1"} {
+		mustCreatePrincipal(t, s, newPrincipal(fmt.Sprintf("prn-%d", i), subject, principal.KindPerson))
+	}
+
+	ctx := t.Context()
+
+	cases := []struct {
+		name string
+		q    principal.Query
+		want []string
+	}{
+		{"first page", principal.Query{After: "", Low: "", High: "", Limit: 2}, []string{"A1", "a1"}},
+		{"after a key", principal.Query{After: "a1", Low: "", High: "", Limit: 3}, []string{"a2", "a3", "ab"}},
+		{"a prefix", principal.Query{After: "", Low: "a", High: "b", Limit: 10}, []string{"a1", "a2", "a3", "ab"}},
+		{"a prefix after a key", principal.Query{After: "a2", Low: "a", High: "b", Limit: 10}, []string{"a3", "ab"}},
+		{"an exact prefix", principal.Query{After: "", Low: "A", High: "B", Limit: 10}, []string{"A1"}},
+	}
+
+	for _, tc := range cases {
+		got, err := s.ListPrincipals(ctx, tc.q)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		equalStrings(t, tc.name, subjects(got), tc.want)
+	}
+}
+
+func testPageGroups(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	for i, name := range []string{"Ops", "ops-2", "dev", "OPERATIONS"} {
+		mustCreateGroup(t, s, newGroup(fmt.Sprintf("grp-%d", i), name))
+	}
+
+	got, err := s.ListGroups(t.Context(), principal.Query{After: "", Low: "op", High: "oq", Limit: 2})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	equalStrings(t, "first page of op", groupNames(got), []string{"OPERATIONS", "Ops"})
+
+	got, err = s.ListGroups(t.Context(), principal.Query{After: "ops", Low: "op", High: "oq", Limit: 2})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	equalStrings(t, "page after ops", groupNames(got), []string{"ops-2"})
+}
+
+func testPageMembers(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	mustCreateGroup(t, s, newGroup("grp-a", "alpha"))
+	mustCreateGroup(t, s, newGroup("grp-b", "Beta"))
+	mustCreateGroup(t, s, newGroup("grp-c", "beacon"))
+
+	for i, subject := range []string{"carol", "alice", "bob"} {
+		id := fmt.Sprintf("prn-%d", i)
+		mustCreatePrincipal(t, s, newPrincipal(id, subject, principal.KindPerson))
+		mustAddMember(t, s, "grp-a", id)
+	}
+
+	for _, g := range []string{"grp-b", "grp-c"} {
+		mustAddMember(t, s, g, "prn-1")
+	}
+
+	members, err := s.ListMembers(t.Context(), "grp-a", principal.Query{After: "alice", Low: "", High: "", Limit: 1})
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	equalStrings(t, "members after alice", memberSubjects(members), []string{"bob"})
+
+	groups, err := s.ListGroupsOf(t.Context(), "prn-1", principal.Query{After: "", Low: "be", High: "bf", Limit: 10})
+	if err != nil {
+		t.Fatalf("list groups of: %v", err)
+	}
+
+	equalStrings(t, "groups of alice with be", groupNames(groups), []string{"beacon", "Beta"})
+}
+
+// auditLister is the read side of the audit log, when the store keeps it.
+type auditLister interface {
+	List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
+}
+
+func testChangeAppendsEntry(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	entries, ok := s.(auditLister)
+	if !ok {
+		t.Skip("the store keeps no audit log to read")
+	}
+
+	e := entry()
+	e.Object = "principal:prn-1"
+
+	if err := s.CreatePrincipal(t.Context(), newPrincipal("prn-1", "alice", principal.KindPerson), e); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	if len(listing.Entries) != 1 || listing.Entries[0].Object != "principal:prn-1" || listing.Entries[0].Sequence != 1 {
+		t.Fatalf("entries = %+v, want the entry of the create", listing.Entries)
+	}
+}
+
+func testRefusedEntryChangesNothing(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	err := s.CreatePrincipal(ctx, newPrincipal("prn-x", "xavier", principal.KindPerson), refused())
+	wantErr(t, "create with a refused entry", err, audit.ErrInvalidEntry)
+
+	_, err = s.GetPrincipal(ctx, "prn-x")
+	wantErr(t, "principal of a refused create", err, principal.ErrNotFound)
+
+	err = s.CreateGroup(ctx, newGroup("grp-x", "x"), refused())
+	wantErr(t, "group create with a refused entry", err, audit.ErrInvalidEntry)
+
+	_, err = s.GetGroup(ctx, "grp-x")
+	wantErr(t, "group of a refused create", err, principal.ErrNotFound)
+
+	p := newPrincipal("prn-1", "alice", principal.KindPerson)
+	mustCreatePrincipal(t, s, p)
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+	mustCreateGroup(t, s, newGroup("grp-2", "dev"))
+	mustAddMember(t, s, "grp-1", "prn-1")
+
+	changed := p
+	changed.DisplayName = "Mallory"
+	changed.UpdatedAt = at(8)
+
+	refusals := []struct {
+		write func() error
+		name  string
+	}{
+		{func() error { return s.UpdatePrincipal(ctx, changed, refused()) }, "update"},
+		{func() error { return s.DeletePrincipal(ctx, "prn-1", refused()) }, "delete principal"},
+		{func() error { return s.DeleteGroup(ctx, "grp-1", refused()) }, "delete group"},
+		{func() error { return s.RemoveMember(ctx, "grp-1", "prn-1", refused()) }, "remove member"},
+		{func() error {
+			return s.AddMember(
+				ctx,
+				principal.Membership{AddedAt: at(2), GroupID: "grp-2", PrincipalID: "prn-1"},
+				refused(),
+			)
+		}, "add member"},
+	}
+
+	for _, r := range refusals {
+		wantErr(t, r.name+" with a refused entry", r.write(), audit.ErrInvalidEntry)
+	}
+
+	got, err := s.GetPrincipal(ctx, "prn-1")
+	if err != nil {
+		t.Fatalf("get after the refusals: %v", err)
+	}
+
+	equalPrincipal(t, got, p)
+
+	groups, err := s.ListGroupsOf(ctx, "prn-1", all())
+	if err != nil {
+		t.Fatalf("list groups of: %v", err)
+	}
+
+	equalStrings(t, "groups after the refusals", groupNames(groups), []string{"ops"})
+}
+
+func testConcurrentCreates(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	const racers = 8
+
+	ctx := t.Context()
+
+	count := func(create func(i int) error) (int, error) {
+		var (
+			wg   sync.WaitGroup
+			mu   sync.Mutex
+			won  int
+			fail error
+		)
+
+		for i := range racers {
+			wg.Go(func() {
+				err := create(i)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				switch {
+				case err == nil:
+					won++
+				case !errors.Is(err, principal.ErrAlreadyExists):
+					fail = err
+				default:
+				}
+			})
+		}
+
+		wg.Wait()
+
+		return won, fail
+	}
+
+	won, err := count(func(i int) error {
+		return s.CreatePrincipal(ctx, newPrincipal(fmt.Sprintf("prn-%d", i), "alice", principal.KindPerson), entry())
+	})
+	if err != nil || won != 1 {
+		t.Fatalf("concurrent creates of one subject: %d won, error %v; want 1 and nil", won, err)
+	}
+
+	won, err = count(func(i int) error {
+		name := []string{"ops", "OPS", "Ops", "oPs"}[i%4]
+
+		return s.CreateGroup(ctx, newGroup(fmt.Sprintf("grp-%d", i), name), entry())
+	})
+	if err != nil || won != 1 {
+		t.Fatalf("concurrent creates of one group name: %d won, error %v; want 1 and nil", won, err)
+	}
 }

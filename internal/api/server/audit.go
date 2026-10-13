@@ -16,49 +16,62 @@ import (
 // values are "api".
 const channelHeader = "Dustpan-Channel"
 
-// serverChange is one change of the installation that an audit entry
-// records: the action, the changed record and how it ended.
+// serverChange is one refused change of the installation that a failure
+// entry records: the time on the Service clock, the action, the record and
+// how it ended.
 type serverChange struct {
+	at      time.Time
 	action  identity.Action
 	object  string
 	outcome audit.Outcome
 }
 
-// appendServerChange writes one entry of the kind change in the scope
-// @server (ADR 60, decisions 4 and 7). A nil audit store writes no entry.
-// The change already happened, so a lost entry does not change the answer:
-// the server logs it and counts it on the failure metric instead.
-func (h *Handler) appendServerChange(r *http.Request, p identity.Principal, c serverChange) {
-	if h.audit == nil {
-		return
-	}
-
-	ctx := r.Context()
-
-	entry := audit.Entry{
-		At:         time.Now().UTC(),
-		Namespace:  audit.ServerScope,
+// callerEntry returns the audit entry of the caller p for action: who acted,
+// from where and through which channel. The Service of a change sets the
+// time, the scope, the kind, the outcome and the record.
+func callerEntry(r *http.Request, p identity.Principal, action identity.Action) audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
+		Namespace:  "",
 		Subject:    p.Subject,
 		IDPSubject: "",
 		TokenID:    "",
-		Action:     string(c.action),
-		Object:     c.object,
+		Action:     string(action),
+		Object:     "",
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
 		SourceIP:   sourceIP(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:       audit.KindChange,
-		Outcome:    c.outcome,
-		RequestID:  requestid.FromContext(ctx),
+		Kind:       "",
+		Outcome:    "",
+		RequestID:  requestid.FromContext(r.Context()),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
 	}
+}
 
-	if _, err := h.audit.AppendServer(ctx, entry); err != nil {
-		h.failAudit(ctx)
+// appendServerChange writes one entry of the kind change in the scope
+// @server for a change that did not happen (ADR 60, decisions 4 and 7),
+// outside any transaction. A nil audit store writes no entry. A lost entry
+// does not change the answer: the server logs it and counts it on the
+// failure metric instead.
+func (h *Handler) appendServerChange(r *http.Request, p identity.Principal, c serverChange) {
+	if h.audit == nil {
+		return
+	}
+
+	entry := callerEntry(r, p, c.action)
+	entry.At = c.at
+	entry.Namespace = audit.ServerScope
+	entry.Kind = audit.KindChange
+	entry.Outcome = c.outcome
+	entry.Object = c.object
+
+	if _, err := h.audit.AppendServer(r.Context(), entry); err != nil {
+		h.failAudit(r.Context())
 	}
 }
 

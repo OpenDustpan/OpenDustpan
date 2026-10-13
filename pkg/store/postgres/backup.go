@@ -46,6 +46,7 @@ const (
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
 	pgColUpdatedAtMs = "updated_at_ms"
+	pgColDeletedAtMs = "deleted_at_ms"
 	pgColKind        = "kind"
 )
 
@@ -72,6 +73,7 @@ func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
+	tables = append(tables, pgCopyIdentityTables()...)
 
 	return tables
 }
@@ -196,23 +198,6 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
 		{
-			table: "principals",
-			columns: []string{
-				"id", "subject", "display_name", pgColKind, "disabled", pgColCreatedAtMs, pgColUpdatedAtMs,
-			},
-			orderBy: []string{"id"},
-		},
-		{
-			table:   "principal_groups",
-			columns: []string{"id", pgColName, "name_key", "description", pgColCreatedAtMs, pgColUpdatedAtMs},
-			orderBy: []string{"id"},
-		},
-		{
-			table:   "group_members",
-			columns: []string{"group_id", "principal_id", "added_at_ms"},
-			orderBy: []string{"group_id", "principal_id"},
-		},
-		{
 			table:   "backups",
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
@@ -229,6 +214,38 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table:   "installation",
 			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
+		},
+	}
+}
+
+// pgCopyIdentityTables holds the COPY columns of the principal and group
+// tables (ADR 52).
+func pgCopyIdentityTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: "principals",
+			columns: []string{
+				"id", "subject", "display_name", pgColKind, pgColCreatedAtMs, pgColUpdatedAtMs, pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "principal_groups",
+			columns: []string{
+				"id",
+				pgColName,
+				"name_key",
+				"description",
+				pgColCreatedAtMs,
+				pgColUpdatedAtMs,
+				pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "group_members",
+			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
+			orderBy: []string{"group_id", "principal_id", "added_at_ms"},
 		},
 	}
 }

@@ -1,11 +1,14 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,7 +28,6 @@ type principalDoc struct {
 	Kind        string `json:"kind"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
-	Disabled    bool   `json:"disabled"`
 }
 
 type groupDoc struct {
@@ -216,7 +218,7 @@ func createLifeCyclePrincipals(t *testing.T, h *apiserver.Handler) lifeCyclePrin
 		`{"subject":"ci-deploy","kind":"service"}`, http.StatusCreated,
 	}, &deploy)
 
-	if !strings.HasPrefix(alice.ID, "prn-") || alice.Kind != "person" || alice.Disabled {
+	if !strings.HasPrefix(alice.ID, "prn-") || alice.Kind != "person" {
 		t.Fatalf("created principal = %+v", alice)
 	}
 
@@ -256,17 +258,17 @@ func addLifeCycleMembers(t *testing.T, h *apiserver.Handler, group groupDoc, ali
 	}
 }
 
-// changeLifeCyclePrincipal disables alice and reads her groups.
+// changeLifeCyclePrincipal renames alice and reads her groups.
 func changeLifeCyclePrincipal(t *testing.T, h *apiserver.Handler, group groupDoc, alice principalDoc) {
 	t.Helper()
 
 	var changed principalDoc
 	mustCall(t, h, apiCall{
 		http.MethodPatch, "/api/server/principals/" + alice.ID,
-		`{"displayName":"Alice A.","disabled":true}`, http.StatusOK,
+		`{"displayName":"Alice A."}`, http.StatusOK,
 	}, &changed)
 
-	if changed.DisplayName != "Alice A." || !changed.Disabled || changed.Subject != "alice@example.com" {
+	if changed.DisplayName != "Alice A." || changed.Subject != "alice@example.com" {
 		t.Fatalf("changed principal = %+v", changed)
 	}
 
@@ -464,7 +466,7 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 			call: apiCall{
 				method: http.MethodPatch,
 				path:   "/api/server/principals/prn-missing",
-				body:   `{"disabled":true}`,
+				body:   `{"displayName":"x"}`,
 				want:   http.StatusNotFound,
 			},
 		},
@@ -653,5 +655,138 @@ func TestPrincipalChangesWriteAuditEntries(t *testing.T) {
 	check, err := st.Check(t.Context(), audit.ServerScope)
 	if err != nil || !check.Valid {
 		t.Fatalf("server chain check = %+v, %v; want valid", check, err)
+	}
+}
+
+// failingStore is a principal store whose principal create fails the way a
+// lost audit append fails: inside the transaction, so nothing is stored.
+type failingStore struct {
+	*sqlite.Store
+}
+
+var errAppendLost = errors.New("append audit entry: disk I/O error at /var/lib/secret")
+
+func (failingStore) CreatePrincipal(context.Context, principal.Principal, audit.Entry) error {
+	return errAppendLost
+}
+
+// TestPrincipalChangeFailsClosed proves that a change whose audit entry
+// cannot be written answers 500 with no driver text, and writes a failure
+// entry after the fact.
+func TestPrincipalChangeFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	_, st := newTestPrincipalStore(t)
+
+	svc, err := principal.NewService(principal.Config{Store: failingStore{st}, Now: nil, NewID: nil})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	status, body := call(t, h, apiCall{
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"alice","kind":"person"}`,
+		http.StatusInternalServerError,
+	})
+	if status != http.StatusInternalServerError || strings.Contains(body, "secret") {
+		t.Fatalf("create with a lost entry = %d %s, want 500 with no driver text", status, body)
+	}
+
+	if _, getErr := st.GetPrincipalBySubject(t.Context(), "alice"); !errors.Is(getErr, principal.ErrNotFound) {
+		t.Fatalf("principal after a lost entry = %v, want ErrNotFound", getErr)
+	}
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || len(listing.Entries) != 1 || listing.Entries[0].Outcome != audit.OutcomeFailure {
+		t.Fatalf("entries = %+v, %v; want one failure entry", listing.Entries, err)
+	}
+}
+
+// TestPrincipalFailureObjectsNeverHoldRequestText proves that a refused
+// change of a malformed ID names "invalid" in its entry, never the path.
+func TestPrincipalFailureObjectsNeverHoldRequestText(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	h := newAuditedPrincipalHandler(t, svc, st)
+
+	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/principals/prn-x%0Aforged", "", http.StatusNotFound}, nil)
+	mustCall(t, h, apiCall{http.MethodDelete, "/api/server/groups/drop%20table", "", http.StatusNotFound}, nil)
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	objects := make([]string, 0, len(listing.Entries))
+	for i := range listing.Entries {
+		objects = append(objects, listing.Entries[i].Object)
+	}
+
+	if want := []string{"group:invalid", "principal:invalid"}; !slices.Equal(objects, want) {
+		t.Fatalf("failure objects = %q, want %q", objects, want)
+	}
+}
+
+func TestPrincipalBodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	h := newPrincipalHandler(t, newTestPrincipals(t))
+	big := `{"subject":"` + strings.Repeat("a", 20_000) + `","kind":"person"}`
+
+	mustCall(t, h, apiCall{http.MethodPost, "/api/server/principals", big, http.StatusRequestEntityTooLarge}, nil)
+}
+
+func TestPrincipalPaging(t *testing.T) {
+	t.Parallel()
+
+	h := newPrincipalHandler(t, newTestPrincipals(t))
+
+	for _, subject := range []string{"carol", "alice", "bob", "dave"} {
+		mustCall(t, h, apiCall{
+			http.MethodPost,
+			"/api/server/principals",
+			`{"subject":"` + subject + `","kind":"person"}`,
+			http.StatusCreated,
+		}, nil)
+	}
+
+	var got []string
+
+	path := "/api/server/principals?limit=3"
+
+	for path != "" {
+		var page struct {
+			NextCursor string         `json:"nextCursor"`
+			Principals []principalDoc `json:"principals"`
+		}
+		mustCall(t, h, apiCall{http.MethodGet, path, "", http.StatusOK}, &page)
+
+		for i := range page.Principals {
+			got = append(got, page.Principals[i].Subject)
+		}
+
+		path = ""
+		if page.NextCursor != "" {
+			path = "/api/server/principals?limit=3&cursor=" + page.NextCursor
+		}
+	}
+
+	if want := []string{"alice", "bob", "carol", "dave"}; !slices.Equal(got, want) {
+		t.Fatalf("pages = %q, want %q", got, want)
+	}
+
+	var prefixed principalListDoc
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?prefix=ca", "", http.StatusOK}, &prefixed)
+
+	if len(prefixed.Principals) != 1 || prefixed.Principals[0].Subject != "carol" {
+		t.Fatalf("prefix ca = %+v, want carol", prefixed.Principals)
+	}
+
+	for _, bad := range []string{"limit=x", "limit=0x10", "limit=1001", "limit=-1", "cursor=%21%21"} {
+		mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?" + bad, "", http.StatusBadRequest}, nil)
 	}
 }

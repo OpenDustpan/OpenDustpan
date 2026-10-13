@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // packageSources holds every Go file in this package, so TestNoMuxBypass can
@@ -221,28 +222,30 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 	ctx := t.Context()
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 
-	for _, p := range []principal.Principal{
+	seeds := []principal.Principal{
 		{
 			CreatedAt: at, UpdatedAt: at, ID: testPrincipalID, Subject: "alice",
-			DisplayName: "Alice", Kind: principal.KindPerson, Disabled: false,
+			DisplayName: "Alice", Kind: principal.KindPerson,
 		},
 		{
 			CreatedAt: at, UpdatedAt: at, ID: testOtherPrincipalID, Subject: "ci-deploy",
-			DisplayName: "CI deploy", Kind: principal.KindService, Disabled: false,
+			DisplayName: "CI deploy", Kind: principal.KindService,
 		},
-	} {
-		if err := st.CreatePrincipal(ctx, p); err != nil {
+	}
+	for i := range seeds {
+		if err := st.CreatePrincipal(ctx, seeds[i], storetest.ServerChange(at, "principal:"+seeds[i].ID)); err != nil {
 			t.Fatalf("seed principal: %v", err)
 		}
 	}
 
 	group := principal.Group{CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: ""}
-	if err := st.CreateGroup(ctx, group); err != nil {
+	if err := st.CreateGroup(ctx, group, storetest.ServerChange(at, "group:"+testGroupID)); err != nil {
 		t.Fatalf("seed group: %v", err)
 	}
 
 	member := principal.Membership{AddedAt: at, GroupID: testGroupID, PrincipalID: testPrincipalID}
-	if err := st.AddMember(ctx, member); err != nil {
+	joined := storetest.ServerChange(at, "group:"+testGroupID+"#member:"+testPrincipalID)
+	if err := st.AddMember(ctx, member, joined); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 
@@ -263,7 +266,7 @@ var routeBodies = map[string]string{
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/server/restores":                                `{"backupID":"` + string(testBackupID) + `"}`,
 	"POST /api/server/principals":                              `{"subject":"bob","kind":"person"}`,
-	"PATCH /api/server/principals/{id}":                        `{"disabled":true}`,
+	"PATCH /api/server/principals/{id}":                        `{"displayName":"Alice A."}`,
 	"POST /api/server/groups":                                  `{"name":"dev"}`,
 	"PATCH /api/server/groups/{id}":                            `{"description":"Runs the platform"}`,
 	"POST /api/server/groups/{id}/members":                     `{"principalID":"` + testOtherPrincipalID + `"}`,
@@ -545,7 +548,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
-	path = strings.ReplaceAll(path, "{principalId}", testPrincipalID)
+	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
 
 	var body io.Reader = http.NoBody
 	if text, ok := routeBodies[route.Method+" "+route.Path]; ok {
@@ -558,7 +561,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	// sets in production.
 	req.SetPathValue("namespace", testNamespace)
 	req.SetPathValue("id", id)
-	req.SetPathValue("principalId", testPrincipalID)
+	req.SetPathValue("principal", testPrincipalID)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

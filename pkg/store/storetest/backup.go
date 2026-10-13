@@ -246,10 +246,11 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	}
 }
 
-// seedBackupPrincipals writes a disabled person, a service, a group and two
-// memberships when s keeps principals, so the round trip compares the
-// principal tables row by row (ADR 52). A store with no principal port skips
-// it: the fake of this package's own tests is one.
+// seedBackupPrincipals writes a person, a service, a deleted principal, a
+// group, a current membership and an ended one when s keeps principals, so
+// the round trip compares the principal tables row by row, nullable end
+// times included (ADR 52). A store with no principal port skips it: the
+// fake of this package's own tests is one.
 func seedBackupPrincipals(t *testing.T, s BackupStore) {
 	t.Helper()
 
@@ -260,33 +261,76 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 
 	ctx := t.Context()
 
-	for _, p := range []principal.Principal{
+	principals := []principal.Principal{
 		{
 			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "prn-alice",
-			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson, Disabled: true,
+			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), ID: "prn-deploy",
-			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService, Disabled: false,
+			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
 		},
-	} {
-		if err := ps.CreatePrincipal(ctx, p); err != nil {
-			t.Fatalf("create principal %q: %v", p.Subject, err)
+		{
+			CreatedAt: now(), UpdatedAt: now(), ID: "prn-gone",
+			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
+		},
+	}
+	for i := range principals {
+		e := ServerChange(now(), "principal:"+principals[i].ID)
+		if err := ps.CreatePrincipal(ctx, principals[i], e); err != nil {
+			t.Fatalf("create principal %q: %v", principals[i].Subject, err)
 		}
 	}
 
 	g := principal.Group{
 		CreatedAt: now(), UpdatedAt: now(), ID: "grp-ops", Name: "Ops", Description: "Runs the platform",
 	}
-	if err := ps.CreateGroup(ctx, g); err != nil {
+	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
 		t.Fatalf("create group: %v", err)
 	}
 
 	for _, id := range []string{"prn-alice", "prn-deploy"} {
 		m := principal.Membership{AddedAt: now().Add(time.Hour), GroupID: g.ID, PrincipalID: id}
-		if err := ps.AddMember(ctx, m); err != nil {
+		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
 			t.Fatalf("add member %q: %v", id, err)
 		}
+	}
+
+	later := now().Add(2 * time.Hour)
+	removal := ServerChange(later, "group:grp-ops#member:prn-alice")
+	if err := ps.RemoveMember(ctx, g.ID, "prn-alice", removal); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+
+	if err := ps.DeletePrincipal(ctx, "prn-gone", ServerChange(later, "principal:prn-gone")); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+}
+
+// ServerChange returns a valid audit entry of the kind change in the scope
+// @server, for the record object at the time at: the entry that a write to
+// an installation store takes.
+func ServerChange(at time.Time, object string) audit.Entry {
+	return audit.Entry{
+		At:         at,
+		Namespace:  audit.ServerScope,
+		Subject:    "admin",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "server:manage-principals",
+		Object:     object,
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "storetest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
 	}
 }
 

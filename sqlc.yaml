@@ -33,8 +33,6 @@ sql:
             go_type: bool
           - column: state_versions.unlocked_write
             go_type: bool
-          - column: principals.disabled
-            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql

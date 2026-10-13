@@ -658,28 +658,39 @@ UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
-FROM principals WHERE id = ?;
+SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
+FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
-FROM principals WHERE subject = ?;
+SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
+FROM principals WHERE subject = sqlc.arg('subject') AND deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT id, subject, display_name, kind, disabled, created_at_ms, updated_at_ms
-FROM principals ORDER BY subject;
+SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
+FROM principals
+WHERE deleted_at_ms IS NULL
+  AND subject > sqlc.arg('after')
+  AND subject >= sqlc.arg('low')
+  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
+ORDER BY subject
+LIMIT sqlc.arg('row_limit');
 
 -- name: UpdatePrincipal :execrows
-UPDATE principals SET display_name = ?, disabled = ?, updated_at_ms = ?
-WHERE id = ?;
+UPDATE principals SET display_name = ?, updated_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: DeletePrincipal :execrows
-DELETE FROM principals WHERE id = ?;
+UPDATE principals SET deleted_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: EndMembershipsOfPrincipal :exec
+UPDATE group_members SET removed_at_ms = ?
+WHERE principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: CreateGroup :execrows
 INSERT INTO principal_groups (id, name, name_key, description, created_at_ms, updated_at_ms)
@@ -688,27 +699,38 @@ ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
 SELECT id, name, description, created_at_ms, updated_at_ms
-FROM principal_groups WHERE id = ?;
+FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: GroupIDByNameKey :one
-SELECT id FROM principal_groups WHERE name_key = ?;
+SELECT id FROM principal_groups WHERE name_key = sqlc.arg('name_key') AND deleted_at_ms IS NULL;
 
 -- name: ListGroups :many
 SELECT id, name, description, created_at_ms, updated_at_ms
-FROM principal_groups ORDER BY name_key, name;
+FROM principal_groups
+WHERE deleted_at_ms IS NULL
+  AND name_key > sqlc.arg('after')
+  AND name_key >= sqlc.arg('low')
+  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR name_key < sqlc.arg('high'))
+ORDER BY name_key
+LIMIT sqlc.arg('row_limit');
 
 -- name: UpdateGroup :execrows
 UPDATE principal_groups SET name = ?, name_key = ?, description = ?, updated_at_ms = ?
-WHERE id = ?;
+WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: DeleteGroup :execrows
-DELETE FROM principal_groups WHERE id = ?;
+UPDATE principal_groups SET deleted_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: EndMembershipsInGroup :exec
+UPDATE group_members SET removed_at_ms = ?
+WHERE group_id = ? AND removed_at_ms IS NULL;
 
 -- name: PrincipalExists :one
-SELECT COUNT(*) FROM principals WHERE id = ?;
+SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: GroupExists :one
-SELECT COUNT(*) FROM principal_groups WHERE id = ?;
+SELECT COUNT(*) FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: AddGroupMember :execrows
 INSERT INTO group_members (group_id, principal_id, added_at_ms)
@@ -716,16 +738,25 @@ VALUES (?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: RemoveGroupMember :execrows
-DELETE FROM group_members WHERE group_id = ? AND principal_id = ?;
+UPDATE group_members SET removed_at_ms = ?
+WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.disabled, p.created_at_ms, p.updated_at_ms, m.added_at_ms
+SELECT p.id, p.subject, p.display_name, p.kind, p.created_at_ms, p.updated_at_ms, m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
-WHERE m.group_id = ?
-ORDER BY p.subject;
+WHERE m.group_id = sqlc.arg('group_id') AND m.removed_at_ms IS NULL
+  AND p.subject > sqlc.arg('after')
+  AND p.subject >= sqlc.arg('low')
+  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
+ORDER BY p.subject
+LIMIT sqlc.arg('row_limit');
 
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.created_at_ms, g.updated_at_ms
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
-WHERE m.principal_id = ?
-ORDER BY g.name_key, g.name;
+WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
+  AND g.name_key > sqlc.arg('after')
+  AND g.name_key >= sqlc.arg('low')
+  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'))
+ORDER BY g.name_key
+LIMIT sqlc.arg('row_limit');

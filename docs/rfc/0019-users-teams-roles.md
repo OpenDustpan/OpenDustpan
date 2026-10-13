@@ -178,4 +178,20 @@ Accepted in part as ADR 52 on 2026-10-13:
   `Never` for a principal with no sign-in and no access token use. JSON from
   the REST API, CSV in the console, and its own action.
 
-The questions in "Open questions" have no outcome yet.
+Lead decisions under owner delegation, 2026-10-13:
+
+- Action names. `server:read-principals`, `server:manage-principals` and
+  `server:manage-groups` act on the installation and replace the `group:*`
+  proposal: ADR 52 does not make a group the object of a grant.
+- History. A removal ends a membership and keeps its row. A delete ends a
+  principal or a group and keeps its row. The access-review history reads
+  these rows.
+- Fail-closed audit. Each change writes its audit entry in the transaction
+  of the change. If the entry fails, the change fails with 500. A failure
+  entry for a refused change is written after it, as well as possible.
+- No disabled flag yet. It comes back with the sign-in and token change that
+  enforces it.
+- Paging. Each list takes a cursor, a limit (default 100, maximum 1000) and
+  a prefix, and the database answers it with an index.
+
+The other questions in "Open questions" have no outcome yet.

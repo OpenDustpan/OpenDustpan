@@ -18,7 +18,6 @@ type e2ePrincipal struct {
 	Subject     string `json:"subject"`
 	DisplayName string `json:"displayName"`
 	Kind        string `json:"kind"`
-	Disabled    bool   `json:"disabled"`
 }
 
 type e2eGroup struct {
@@ -121,6 +120,7 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkPrincipalLists(ctx, t, env, fx)
 	checkPrincipalMembers(ctx, t, env, fx)
 	checkPrincipalChanges(ctx, t, env, fx)
+	checkPrincipalPaging(ctx, t, env, fx)
 
 	for _, step := range []principalStep{
 		{http.MethodDelete, members + "/" + alice.ID, "", http.StatusNoContent},
@@ -136,6 +136,51 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	if err != nil || status != http.StatusUnauthorized {
 		t.Fatalf("list without a token = %d, %v; want 401", status, err)
 	}
+}
+
+// checkPrincipalPaging reads the principals one at a time with a cursor,
+// and with a prefix and a limit that is too large.
+func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
+	t.Helper()
+
+	type page struct {
+		NextCursor string         `json:"nextCursor"`
+		Principals []e2ePrincipal `json:"principals"`
+	}
+
+	var first, second page
+	principalCall(
+		ctx,
+		t,
+		env,
+		principalStep{http.MethodGet, "/api/server/principals?limit=1", "", http.StatusOK},
+		&first,
+	)
+
+	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" {
+		t.Fatalf("first page = %+v, want alice and a cursor", first)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?limit=1&cursor=" + first.NextCursor, "", http.StatusOK,
+	}, &second)
+
+	if len(second.Principals) != 1 || second.Principals[0].ID != fx.deploy.ID || second.NextCursor != "" {
+		t.Fatalf("second page = %+v, want ci-deploy and no cursor", second)
+	}
+
+	var prefixed page
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?prefix=ci-", "", http.StatusOK,
+	}, &prefixed)
+
+	if len(prefixed.Principals) != 1 || prefixed.Principals[0].ID != fx.deploy.ID {
+		t.Fatalf("prefix ci- = %+v, want ci-deploy", prefixed)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?limit=1001", "", http.StatusBadRequest,
+	}, nil)
 }
 
 // principalStep is one installation API request of the principal steps and
@@ -238,18 +283,18 @@ func checkPrincipalMembers(ctx context.Context, t *testing.T, env *e2e.Env, fx p
 	}
 }
 
-// checkPrincipalChanges disables a principal and renames a group.
+// checkPrincipalChanges renames a principal and a group.
 func checkPrincipalChanges(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
 	t.Helper()
 
 	var changed e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPatch, "/api/server/principals/" + fx.alice.ID,
-		`{"displayName":"Alice A.","disabled":true}`, http.StatusOK,
+		`{"displayName":"Alice A."}`, http.StatusOK,
 	}, &changed)
 
-	if !changed.Disabled || changed.DisplayName != "Alice A." || changed.Subject != fx.alice.Subject {
-		t.Fatalf("changed principal = %+v, want disabled with the new display name", changed)
+	if changed.DisplayName != "Alice A." || changed.Subject != fx.alice.Subject {
+		t.Fatalf("changed principal = %+v, want the new display name", changed)
 	}
 
 	var renamed e2eGroup

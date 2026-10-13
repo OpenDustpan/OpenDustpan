@@ -55,13 +55,8 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 // appends that run at the same time, as the namespace row lock does for a
 // namespace.
 func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
-	if err := e.Validate(); err != nil {
+	if err := validServerEntry(e); err != nil {
 		return audit.Entry{}, err
-	}
-
-	if e.Namespace != audit.ServerScope {
-		return audit.Entry{}, fmt.Errorf("%w: entry names %q, want the scope %q",
-			audit.ErrInvalidEntry, e.Namespace, audit.ServerScope)
 	}
 
 	var stored audit.Entry
@@ -82,6 +77,48 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 	}
 
 	return stored, nil
+}
+
+// inAuditedTx runs fn and appends e in the scope @server in one
+// transaction: the change and its audit entry commit together, or neither
+// does (ADR 60, fail closed). An entry that fails validation changes
+// nothing. The transaction takes the advisory lock of the scope first, so
+// the appends form one sequence and no lock order can deadlock.
+func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Queries) error) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// validServerEntry returns audit.ErrInvalidEntry when e fails validation or
+// names a scope other than @server.
+func validServerEntry(e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != audit.ServerScope {
+		return fmt.Errorf("%w: entry names %q, want the scope %q",
+			audit.ErrInvalidEntry, e.Namespace, audit.ServerScope)
+	}
+
+	return nil
 }
 
 // appendAuditEntry reads the last entry of the scope of e and inserts e as

@@ -16,6 +16,7 @@ const (
 	backupColUpdateID    = "update_id"
 	backupColVersion     = "version"
 	backupColUpdatedAtMs = "updated_at_ms"
+	backupColDeletedAtMs = "deleted_at_ms"
 	backupColKind        = "kind"
 )
 
@@ -244,9 +245,9 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"subject",
 				"display_name",
 				backupColKind,
-				"disabled",
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
 			},
 		},
 		{
@@ -258,11 +259,12 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"description",
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
 			},
 		},
 		{
 			table:   "group_members",
-			columns: []string{"group_id", "principal_id", "added_at_ms"},
+			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
 		},
 		{
 			table: "backups",

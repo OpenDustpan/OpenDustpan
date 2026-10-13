@@ -7,13 +7,18 @@
 // also belongs to the whole installation. Any principal can be a member of
 // more than one group.
 //
+// Nothing is erased. A delete of a principal or a group ends its record, and
+// a removal from a group ends the membership: the rows stay, with the time
+// they ended, so the access-review history (ADR 52, decision 10) can read
+// them. Each change writes its audit entry in the same transaction as the
+// change (fail closed): both commit, or neither.
+//
 // The package keeps the records only. The Authenticator of package identity
 // still turns an access token into a caller, and the bootstrap admin token
 // keeps working with no stored principal (ADR 6).
 package principal
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,15 +32,16 @@ import (
 // Sentinel errors returned by this package and by Store implementations.
 var (
 	// ErrNotFound reports a principal, a group or a membership that does
-	// not exist.
+	// not exist, or that ended.
 	ErrNotFound = errors.New("not found")
 	// ErrAlreadyExists reports a subject, a group name or a membership that
 	// exists.
 	ErrAlreadyExists = errors.New("already exists")
-	// ErrInvalid reports a principal or a group that fails validation.
+	// ErrInvalid reports a principal, a group or a page that fails
+	// validation.
 	ErrInvalid = errors.New("invalid principal or group")
 	// ErrReservedSubject reports a subject that the bootstrap admin tokens
-	// use: admin, or admin- and a number (ADR 6).
+	// use, or that can look like one: admin, or admin- and a number (ADR 6).
 	ErrReservedSubject = errors.New("reserved subject")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
@@ -71,6 +77,7 @@ const (
 	maxDisplayNameLength = 255
 	maxGroupNameLength   = 100
 	maxDescriptionLength = 1000
+	maxIDLength          = 64
 )
 
 // ID prefixes. An ID is opaque: never parse it.
@@ -81,9 +88,9 @@ const (
 
 // Principal is the stored record of one principal. ID is stable and opaque,
 // with the prefix "prn-". Subject is the name that an Authenticator answers
-// for the principal. It is unique in the installation, compared exactly.
-// DisplayName is a name for people to read. A disabled principal keeps its
-// record, its memberships and its grants.
+// for the principal. It is unique among the principals that exist, compared
+// exactly: OIDC subjects are case-sensitive. DisplayName is a name for people
+// to read.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -91,11 +98,11 @@ type Principal struct {
 	Subject     string
 	DisplayName string
 	Kind        Kind
-	Disabled    bool
 }
 
 // Group is the stored record of one group. ID is stable and opaque, with the
-// prefix "grp-". Name is unique in the installation without regard to case.
+// prefix "grp-". Name is unique among the groups that exist, without regard
+// to case.
 type Group struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -118,39 +125,105 @@ type Membership struct {
 }
 
 // ValidateSubject reports whether s is a usable subject: 1 to 255 bytes of
-// UTF-8 with no control character, no white space at either end, and not a
-// subject that the bootstrap admin tokens use.
+// UTF-8 with no control or format character, no white space at either end,
+// and not a subject that a bootstrap admin token uses or that can look like
+// one.
 func ValidateSubject(s string) error {
 	if err := validateText("subject", s, maxSubjectLength, true); err != nil {
 		return err
 	}
 
+	for _, c := range s {
+		if unicode.Is(unicode.Cf, c) {
+			return fmt.Errorf("%w: subject holds the format character %U", ErrInvalid, c)
+		}
+	}
+
 	if reservedSubject(s) {
-		return fmt.Errorf("%w: %q belongs to a bootstrap admin token", ErrReservedSubject, s)
+		return fmt.Errorf("%w: %q can be read as the subject of a bootstrap admin token", ErrReservedSubject, s)
 	}
 
 	return nil
 }
 
-// reservedSubject reports whether s is admin, or admin- and a number: the
-// subjects of the bootstrap admin tokens (identity.NewStaticTokens).
+// reservedSubject reports whether s can be read as "admin", or "admin-" and
+// one or more digits: the subjects of the bootstrap admin tokens
+// (identity.NewStaticTokens). The check ignores case and reads a full-width
+// form as its ASCII character. Any other non-ASCII character can stand for
+// any character, so a Cyrillic lookalike or a non-ASCII digit is reserved
+// too, when at least one letter of "admin" is ASCII. The project has no
+// Unicode normalization library (golang.org/x/text is not a direct
+// dependency), so this rule refuses more than a normalized check would.
 func reservedSubject(s string) bool {
-	if s == "admin" {
-		return true
-	}
+	runes := foldFullWidth([]rune(strings.ToLower(s)))
 
-	rest, ok := strings.CutPrefix(s, "admin-")
-	if !ok || rest == "" {
+	const word = "admin"
+	if len(runes) < len(word) || !readsAs(runes[:len(word)], word) {
 		return false
 	}
 
-	for _, c := range rest {
-		if c < '0' || c > '9' {
+	rest := runes[len(word):]
+	if len(rest) == 0 {
+		return true
+	}
+
+	return len(rest) > 1 && matches(rest[0], '-') && digitsOnly(rest[1:])
+}
+
+// foldFullWidth replaces each full-width form in runes with its ASCII
+// character, in lower case.
+func foldFullWidth(runes []rune) []rune {
+	for i, c := range runes {
+		if c >= fullWidthFirst && c <= fullWidthLast {
+			runes[i] = unicode.ToLower(c - fullWidthOffset)
+		}
+	}
+
+	return runes
+}
+
+// readsAs reports whether runes can be read as word: each rune matches its
+// letter, and at least one of them is that ASCII letter.
+func readsAs(runes []rune, word string) bool {
+	ascii := 0
+
+	for i, want := range []rune(word) {
+		if !matches(runes[i], want) {
+			return false
+		}
+
+		if runes[i] == want {
+			ascii++
+		}
+	}
+
+	return ascii > 0
+}
+
+// digitsOnly reports whether each rune can be read as a digit: an ASCII
+// digit, or a character that is not ASCII.
+func digitsOnly(runes []rune) bool {
+	for _, c := range runes {
+		if c < utf8.RuneSelf && !unicode.IsDigit(c) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// The full-width forms of the ASCII characters '!' to '~' (U+FF01 to
+// U+FF5E). A full-width form minus the offset is its ASCII character.
+const (
+	fullWidthFirst  = 0xFF01
+	fullWidthLast   = 0xFF5E
+	fullWidthOffset = 0xFEE0
+)
+
+// matches reports whether c can be read as the ASCII character want: it is
+// want, or it is not ASCII.
+func matches(c, want rune) bool {
+	return c == want || c >= utf8.RuneSelf
 }
 
 // ValidateGroupName reports whether s is a usable group name: 1 to 100
@@ -213,339 +286,35 @@ func (g Group) Validate() error {
 	return validateText("description", g.Description, maxDescriptionLength, false)
 }
 
-// Store is the persistence port for principals, groups and memberships.
-// The records belong to the installation, so no write carries a namespace
-// fence.
-type Store interface {
-	RecordStore
-	GroupStore
-	MemberStore
+// Audit object names of the records that a change acts on (ADR 60,
+// decision 6). An entry names a record as text, never as a request path.
+const invalidRef = "invalid"
+
+// Ref returns the audit object of the principal id:
+// "principal:<id>". An id that is not a principal ID gives
+// "principal:invalid", so request text never reaches the audit log.
+func Ref(id string) string {
+	return "principal:" + safeID(principalIDPrefix, id)
 }
 
-// RecordStore keeps the records of the principals.
-type RecordStore interface {
-	// CreatePrincipal persists p. It returns ErrAlreadyExists when the ID or
-	// the subject is taken.
-	CreatePrincipal(ctx context.Context, p Principal) error
-	// GetPrincipal returns the principal with the ID id, or ErrNotFound.
-	GetPrincipal(ctx context.Context, id string) (Principal, error)
-	// GetPrincipalBySubject returns the principal with the subject subject,
-	// or ErrNotFound.
-	GetPrincipalBySubject(ctx context.Context, subject string) (Principal, error)
-	// ListPrincipals returns every principal, ordered by subject.
-	ListPrincipals(ctx context.Context) ([]Principal, error)
-	// UpdatePrincipal replaces the display name, the disabled flag and the
-	// update time of the principal with the ID p.ID. The subject, the kind
-	// and the creation time do not change. It returns ErrNotFound when no
-	// such principal exists.
-	UpdatePrincipal(ctx context.Context, p Principal) error
-	// DeletePrincipal deletes the principal with the ID id and every
-	// membership of it, in one transaction. It returns ErrNotFound when no
-	// such principal exists.
-	DeletePrincipal(ctx context.Context, id string) error
+// GroupRef returns the audit object of the group id: "group:<id>", or
+// "group:invalid".
+func GroupRef(id string) string {
+	return "group:" + safeID(groupIDPrefix, id)
 }
 
-// GroupStore keeps the group records.
-type GroupStore interface {
-	// CreateGroup persists g. It returns ErrAlreadyExists when the ID is
-	// taken, or when the name is taken without regard to case.
-	CreateGroup(ctx context.Context, g Group) error
-	// GetGroup returns the group with the ID id, or ErrNotFound.
-	GetGroup(ctx context.Context, id string) (Group, error)
-	// ListGroups returns every group, ordered by name without regard to
-	// case.
-	ListGroups(ctx context.Context) ([]Group, error)
-	// UpdateGroup replaces the name, the description and the update time of
-	// the group with the ID g.ID. It returns ErrNotFound when no such group
-	// exists, and ErrAlreadyExists when another group has the name without
-	// regard to case.
-	UpdateGroup(ctx context.Context, g Group) error
-	// DeleteGroup deletes the group with the ID id and every membership in
-	// it, in one transaction. It returns ErrNotFound when no such group
-	// exists.
-	DeleteGroup(ctx context.Context, id string) error
+// MemberRef returns the audit object of the membership of the principal
+// principalID in the group groupID: "group:<id>#member:<id>".
+func MemberRef(groupID, principalID string) string {
+	return GroupRef(groupID) + "#member:" + safeID(principalIDPrefix, principalID)
 }
 
-// MemberStore keeps the memberships of principals in groups.
-type MemberStore interface {
-	// AddMember persists m. It returns ErrNotFound when the group or the
-	// principal does not exist, and ErrAlreadyExists when the principal is
-	// a member of the group.
-	AddMember(ctx context.Context, m Membership) error
-	// RemoveMember deletes the membership of the principal principalID in
-	// the group groupID. It returns ErrNotFound when no such membership
-	// exists.
-	RemoveMember(ctx context.Context, groupID, principalID string) error
-	// ListMembers returns the members of the group groupID, ordered by
-	// subject. It returns ErrNotFound when the group does not exist.
-	ListMembers(ctx context.Context, groupID string) ([]Member, error)
-	// ListGroupsOf returns the groups of the principal principalID, ordered
-	// by name without regard to case. It returns ErrNotFound when the
-	// principal does not exist.
-	ListGroupsOf(ctx context.Context, principalID string) ([]Group, error)
-}
-
-// Config holds the dependencies of a Service.
-type Config struct {
-	Store Store
-	// Now returns the current time. Nil means time.Now.
-	Now func() time.Time
-	// NewID returns a new opaque ID with the prefix it takes. Nil means
-	// random IDs.
-	NewID func(prefix string) string
-}
-
-// Service implements the principal and group use cases.
-type Service struct {
-	store Store
-	now   func() time.Time
-	newID func(prefix string) string
-}
-
-// NewService returns a Service. Store is required.
-func NewService(cfg Config) (*Service, error) {
-	if cfg.Store == nil {
-		return nil, fmt.Errorf("%w: principal store", ErrMissingDependency)
+// safeID returns id when it has prefix and is 1 to 64 ID characters, and
+// "invalid" otherwise.
+func safeID(prefix, id string) string {
+	if strings.HasPrefix(id, prefix) && ident.Valid(id, maxIDLength) {
+		return id
 	}
 
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
-	}
-
-	newID := cfg.NewID
-	if newID == nil {
-		newID = ident.NewID
-	}
-
-	return &Service{store: cfg.Store, now: now, newID: newID}, nil
-}
-
-// CreatePrincipal validates and stores a new principal. An empty display
-// name takes the subject.
-func (s *Service) CreatePrincipal(ctx context.Context, subject, displayName string, kind Kind) (Principal, error) {
-	if displayName == "" {
-		displayName = subject
-	}
-
-	at := s.now().UTC().Truncate(time.Millisecond)
-	p := Principal{
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		ID:          s.newID(principalIDPrefix),
-		Subject:     subject,
-		DisplayName: displayName,
-		Kind:        kind,
-		Disabled:    false,
-	}
-
-	if err := p.Validate(); err != nil {
-		return Principal{}, err
-	}
-
-	if err := s.store.CreatePrincipal(ctx, p); err != nil {
-		return Principal{}, fmt.Errorf("create principal %q: %w", subject, err)
-	}
-
-	return p, nil
-}
-
-// GetPrincipal returns the principal with the ID id.
-func (s *Service) GetPrincipal(ctx context.Context, id string) (Principal, error) {
-	p, err := s.store.GetPrincipal(ctx, id)
-	if err != nil {
-		return Principal{}, fmt.Errorf("get principal %q: %w", id, err)
-	}
-
-	return p, nil
-}
-
-// ListPrincipals returns every principal, ordered by subject.
-func (s *Service) ListPrincipals(ctx context.Context) ([]Principal, error) {
-	out, err := s.store.ListPrincipals(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list principals: %w", err)
-	}
-
-	return out, nil
-}
-
-// Change names the fields of a principal that a change sets. A nil field
-// keeps its value.
-type Change struct {
-	DisplayName *string
-	Disabled    *bool
-}
-
-// UpdatePrincipal applies change to the principal with the ID id and returns
-// the stored principal.
-func (s *Service) UpdatePrincipal(ctx context.Context, id string, change Change) (Principal, error) {
-	p, err := s.store.GetPrincipal(ctx, id)
-	if err != nil {
-		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
-	}
-
-	if change.DisplayName != nil {
-		p.DisplayName = *change.DisplayName
-		if p.DisplayName == "" {
-			p.DisplayName = p.Subject
-		}
-	}
-
-	if change.Disabled != nil {
-		p.Disabled = *change.Disabled
-	}
-
-	p.UpdatedAt = s.now().UTC().Truncate(time.Millisecond)
-
-	if err := p.Validate(); err != nil {
-		return Principal{}, err
-	}
-
-	if err := s.store.UpdatePrincipal(ctx, p); err != nil {
-		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
-	}
-
-	return p, nil
-}
-
-// DeletePrincipal deletes the principal with the ID id and its memberships.
-func (s *Service) DeletePrincipal(ctx context.Context, id string) error {
-	if err := s.store.DeletePrincipal(ctx, id); err != nil {
-		return fmt.Errorf("delete principal %q: %w", id, err)
-	}
-
-	return nil
-}
-
-// CreateGroup validates and stores a new group.
-func (s *Service) CreateGroup(ctx context.Context, name, description string) (Group, error) {
-	at := s.now().UTC().Truncate(time.Millisecond)
-	g := Group{
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		ID:          s.newID(groupIDPrefix),
-		Name:        name,
-		Description: description,
-	}
-
-	if err := g.Validate(); err != nil {
-		return Group{}, err
-	}
-
-	if err := s.store.CreateGroup(ctx, g); err != nil {
-		return Group{}, fmt.Errorf("create group %q: %w", name, err)
-	}
-
-	return g, nil
-}
-
-// GetGroup returns the group with the ID id.
-func (s *Service) GetGroup(ctx context.Context, id string) (Group, error) {
-	g, err := s.store.GetGroup(ctx, id)
-	if err != nil {
-		return Group{}, fmt.Errorf("get group %q: %w", id, err)
-	}
-
-	return g, nil
-}
-
-// ListGroups returns every group, ordered by name.
-func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
-	out, err := s.store.ListGroups(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list groups: %w", err)
-	}
-
-	return out, nil
-}
-
-// GroupChange names the fields of a group that a change sets. A nil field
-// keeps its value.
-type GroupChange struct {
-	Name        *string
-	Description *string
-}
-
-// UpdateGroup applies change to the group with the ID id and returns the
-// stored group.
-func (s *Service) UpdateGroup(ctx context.Context, id string, change GroupChange) (Group, error) {
-	g, err := s.store.GetGroup(ctx, id)
-	if err != nil {
-		return Group{}, fmt.Errorf("update group %q: %w", id, err)
-	}
-
-	if change.Name != nil {
-		g.Name = *change.Name
-	}
-
-	if change.Description != nil {
-		g.Description = *change.Description
-	}
-
-	g.UpdatedAt = s.now().UTC().Truncate(time.Millisecond)
-
-	if err := g.Validate(); err != nil {
-		return Group{}, err
-	}
-
-	if err := s.store.UpdateGroup(ctx, g); err != nil {
-		return Group{}, fmt.Errorf("update group %q: %w", id, err)
-	}
-
-	return g, nil
-}
-
-// DeleteGroup deletes the group with the ID id and its memberships.
-func (s *Service) DeleteGroup(ctx context.Context, id string) error {
-	if err := s.store.DeleteGroup(ctx, id); err != nil {
-		return fmt.Errorf("delete group %q: %w", id, err)
-	}
-
-	return nil
-}
-
-// AddMember puts the principal principalID in the group groupID.
-func (s *Service) AddMember(ctx context.Context, groupID, principalID string) (Membership, error) {
-	m := Membership{
-		AddedAt:     s.now().UTC().Truncate(time.Millisecond),
-		GroupID:     groupID,
-		PrincipalID: principalID,
-	}
-
-	if err := s.store.AddMember(ctx, m); err != nil {
-		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
-	}
-
-	return m, nil
-}
-
-// RemoveMember takes the principal principalID out of the group groupID.
-func (s *Service) RemoveMember(ctx context.Context, groupID, principalID string) error {
-	if err := s.store.RemoveMember(ctx, groupID, principalID); err != nil {
-		return fmt.Errorf("remove principal %q from group %q: %w", principalID, groupID, err)
-	}
-
-	return nil
-}
-
-// ListMembers returns the members of the group groupID, ordered by subject.
-func (s *Service) ListMembers(ctx context.Context, groupID string) ([]Member, error) {
-	out, err := s.store.ListMembers(ctx, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("list members of group %q: %w", groupID, err)
-	}
-
-	return out, nil
-}
-
-// ListGroupsOf returns the groups of the principal principalID, ordered by
-// name.
-func (s *Service) ListGroupsOf(ctx context.Context, principalID string) ([]Group, error) {
-	out, err := s.store.ListGroupsOf(ctx, principalID)
-	if err != nil {
-		return nil, fmt.Errorf("list groups of principal %q: %w", principalID, err)
-	}
-
-	return out, nil
+	return invalidRef
 }

@@ -710,7 +710,7 @@ func principalAllowEntries() []AllowEntry {
 		{http.MethodDelete, group},
 		{http.MethodGet, members},
 		{http.MethodPost, members},
-		{http.MethodDelete, members + "/{principalId}"},
+		{http.MethodDelete, members + "/{principal}"},
 	}
 
 	out := make([]AllowEntry, 0, len(routes))
