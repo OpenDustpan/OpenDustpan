@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -177,7 +178,7 @@ func runTofuHTTPMigration(t *testing.T, env *e2e.Env, address string, backendEnv
 		Redact: false,
 	})
 
-	env.Step(ctx, t, e2e.StepSpec{
+	cloudSide := env.Step(ctx, t, e2e.StepSpec{
 		Check:  contains(`"greeting"`),
 		Name:   "state pull through cloud",
 		Args:   []string{"state", "pull"},
@@ -209,7 +210,7 @@ func runTofuHTTPMigration(t *testing.T, env *e2e.Env, address string, backendEnv
 		Redact: false,
 	})
 
-	env.Step(ctx, t, e2e.StepSpec{
+	httpSide := env.Step(ctx, t, e2e.StepSpec{
 		Check:  contains(`"greeting"`),
 		Name:   "state pull through http",
 		Args:   []string{"state", "pull"},
@@ -218,6 +219,35 @@ func runTofuHTTPMigration(t *testing.T, env *e2e.Env, address string, backendEnv
 		Fail:   false,
 		Redact: false,
 	})
+
+	assertSameStateHead(t, cloudSide.Stdout, httpSide.Stdout)
+}
+
+// tofuStateHead is the part of a state document that identifies its version.
+type tofuStateHead struct {
+	Serial  int64  `json:"serial"`
+	Lineage string `json:"lineage"`
+}
+
+// assertSameStateHead proves the state the http backend reads after the
+// reconfigure has the serial and lineage that the cloud block wrote last.
+func assertSameStateHead(t *testing.T, cloudJSON, httpJSON string) {
+	t.Helper()
+
+	var want, got tofuStateHead
+
+	if err := json.Unmarshal([]byte(cloudJSON), &want); err != nil {
+		t.Fatalf("decode the state pulled through cloud: %v", err)
+	}
+
+	if err := json.Unmarshal([]byte(httpJSON), &got); err != nil {
+		t.Fatalf("decode the state pulled through http: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("state after the reconfigure = serial %d lineage %q, want serial %d lineage %q",
+			got.Serial, got.Lineage, want.Serial, want.Lineage)
+	}
 }
 
 // tofuHTTPForceLock is the lock that principal B holds in the force-unlock
