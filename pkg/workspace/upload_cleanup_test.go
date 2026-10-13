@@ -3,6 +3,7 @@ package workspace_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ type ctxBlobs struct {
 // Delete fails when ctx is done.
 func (c ctxBlobs) Delete(ctx context.Context, key blob.Key) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
 	return c.Store.Delete(ctx, key)
