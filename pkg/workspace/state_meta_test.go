@@ -303,8 +303,10 @@ func checkAgreement(t *testing.T, doc string) {
 }
 
 // TestReadStateMetaDepthMatchesEncodingJSON proves the depth limit is the one of
-// encoding/json: a state nested to 9990 levels is read, and one nested to 10000 is
-// refused. No state that OpenTofu accepts is refused for depth.
+// encoding/json. Nesting of 9990 array levels is read: 9991 levels with the top
+// object. Nesting of 10000 array levels is refused: 10001 levels with the top
+// object, which is over the limit of 10000. No state that OpenTofu accepts is
+// refused for depth.
 func TestReadStateMetaDepthMatchesEncodingJSON(t *testing.T) {
 	t.Parallel()
 
