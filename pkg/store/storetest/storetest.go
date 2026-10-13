@@ -478,16 +478,14 @@ func testDeleteMissingStack(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	ghost := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "ghost"}
 
-	if err := s.DeleteStack(
+	err := s.DeleteStack(
 		t.Context(),
 		ghost,
 		ns.Fence(),
 		stack.EmptyGuard(),
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrNotFound,
-	) {
+	)
+	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
 	}
 }
@@ -503,16 +501,14 @@ func testDeleteStaleFence(t *testing.T, s Store) {
 	}
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
-	if err := s.DeleteStack(
+	err := s.DeleteStack(
 		t.Context(),
 		st.Ref,
 		stale,
 		stack.EmptyGuard(),
 		deletedAt(),
-	); !errors.Is(
-		err,
-		namespace.ErrFenced,
-	) {
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -847,10 +843,12 @@ func testDeletedStackLeavesLists(t *testing.T, s Store) {
 	gone := newStack(ns.Name, "web", "prod")
 	kept := newStack(ns.Name, "web", "dev")
 
-	for _, st := range []stack.Stack{gone, kept} {
-		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
-			t.Fatalf("create stack %s: %v", st.Ref, err)
-		}
+	if err := s.CreateStack(t.Context(), gone, ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", gone.Ref, err)
+	}
+
+	if err := s.CreateStack(t.Context(), kept, ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", kept.Ref, err)
 	}
 
 	if err := s.DeleteStack(t.Context(), gone.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
@@ -872,6 +870,25 @@ func testDeletedStackLeavesLists(t *testing.T, s Store) {
 
 		if !maps.Equal(list[0].Tags, kept.Tags) {
 			t.Fatalf("listed tags = %v, want %v", list[0].Tags, kept.Tags)
+		}
+
+		if strings.HasPrefix(list[0].Ref.Stack.String(), "deleted:") {
+			t.Fatalf("listed stack name = %q, want a live name", list[0].Ref.Stack)
+		}
+	}
+
+	assertNoDeletedEntry(t, s, ns.Name, gone.ID)
+}
+
+// assertNoDeletedEntry fails when the inventory of ns holds the deleted stack
+// with id, or any entry under the stored name of a deleted unit.
+func assertNoDeletedEntry(t *testing.T, s Store, ns namespace.Name, id stack.ID) {
+	t.Helper()
+
+	entries := listInventory(t, s, ns)
+	for i := range entries {
+		if entries[i].UnitID == id.String() || strings.HasPrefix(entries[i].Name, "deleted:") {
+			t.Fatalf("inventory entry %+v, want no entry of the deleted stack", entries[i])
 		}
 	}
 }

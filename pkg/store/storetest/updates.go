@@ -1622,16 +1622,14 @@ func testDeleteRefusesResources(t *testing.T, f fixture) {
 
 	finishWithDeployment(t, f, "u1", resourcedDeployment)
 
-	if err := f.s.DeleteStack(
+	err := f.s.DeleteStack(
 		t.Context(),
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
+	)
+	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a stack with resources: err = %v, want ErrHasResources", err)
 	}
 
@@ -1687,16 +1685,14 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 	finishWithDeployment(t, g, "u1", emptyDeployment)
 	finishWithDeployment(t, g, "u2", resourcedDeployment)
 
-	if err := f.s.DeleteStack(
+	err := f.s.DeleteStack(
 		t.Context(),
 		other,
 		f.fence,
 		stack.EmptyGuard(),
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
+	)
+	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete while the latest checkpoint manages resources: err = %v, want ErrHasResources", err)
 	}
 }
@@ -1752,16 +1748,14 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: false,
 	}
 
-	if err := f.s.DeleteStack(
+	err := f.s.DeleteStack(
 		t.Context(),
 		other,
 		f.fence,
 		emptyGuard,
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
+	)
+	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a stack with a stored count of 1: err = %v, want ErrHasResources", err)
 	}
 
@@ -1814,16 +1808,14 @@ func testDeleteWithUncountedCheckpoint(t *testing.T, f fixture) {
 		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
 	}
 
-	if err := f.s.DeleteStack(
+	err := f.s.DeleteStack(
 		t.Context(),
 		other,
 		f.fence,
 		stack.EmptyGuard(),
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
+	)
+	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf(
 			"delete a stack whose uncounted checkpoint manages resources: err = %v, want ErrHasResources",
 			err,
@@ -1931,16 +1923,14 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: true,
 	}
 
-	if err := f.s.DeleteStack(
+	err := f.s.DeleteStack(
 		t.Context(),
 		thirdRef,
 		f.fence,
 		fresh,
 		deletedAt(),
-	); !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
+	)
+	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete after the race with a fresh guard: err = %v, want ErrHasResources", err)
 	}
 
