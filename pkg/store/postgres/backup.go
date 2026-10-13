@@ -290,7 +290,7 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 		table,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("read columns of table %q: %w", table, err)
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
 	}
 
 	defer rows.Close()
@@ -301,14 +301,14 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 		var column string
 
 		if scanErr := rows.Scan(&column); scanErr != nil {
-			return nil, fmt.Errorf("scan column of table %q: %w", table, scanErr)
+			return nil, fmt.Errorf("scan column of table %q: %w", table, backup.ErrSchemaRead)
 		}
 
 		columns = append(columns, column)
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, fmt.Errorf("read columns of table %q: %w", table, iterErr)
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
 	}
 
 	return columns, nil
@@ -352,6 +352,10 @@ func pgCopyFrom(table string, columns []string) string {
 // for no gain on these small metadata rows. No pg_dump runs: the image is
 // distroless static (ADR 27).
 func (s *Store) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
+	if err := s.CheckCoverage(ctx); err != nil {
+		return backup.Summary{}, err
+	}
+
 	captured, err := s.capture(ctx)
 	if err != nil {
 		return backup.Summary{}, err
