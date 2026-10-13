@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -150,7 +151,7 @@ func (h *Handler) readCreateBody(w http.ResponseWriter, r *http.Request) ([]byte
 // the state version document holding the absolute upload URLs. A caller
 // without the lock gets 409.
 func (h *Handler) createStateVersion(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -166,7 +167,31 @@ func (h *Handler) createStateVersion(
 		return
 	}
 
-	pending, err := h.workspaces.BeginState(ctx, workspace.ID(r.PathValue("id")), p.Subject, in)
+	id := workspace.ID(r.PathValue("id"))
+
+	allow, err := h.allowance(ctx, p, id, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// The domain reports each override the declare uses, before it writes: the
+	// audit entry of that override is written by the record callback, and a
+	// failed entry refuses the declare (ADR 41, decision 5).
+	version := strconv.FormatInt(in.Serial, 10)
+	record := func(override workspace.Override) error {
+		action := identity.ActionUnitWriteUnlocked
+		if override == workspace.OverrideForced {
+			action = identity.ActionUnitWriteForced
+		}
+
+		return h.appendOverrideAudit(r, p, obj, action, version)
+	}
+
+	auth := workspace.Authority{Allow: allow, Record: record}
+
+	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

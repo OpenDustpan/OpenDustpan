@@ -122,6 +122,9 @@ type StateVersion struct {
 	// Force skips the lineage and serial checks, as `tofu state push -force`
 	// does. It never skips the lock.
 	Force bool
+	// UnlockedWrite marks a version declared without the lock, under the
+	// override of ADR 44 decision 5. Its finalize does not check the lock.
+	UnlockedWrite bool
 	// Sealed reports that the content blob and the outputs document are
 	// sealed with the data key of the workspace scope (ADR 41 decision 10).
 	// Rows without it are read as before.
@@ -136,6 +139,10 @@ type StateVersion struct {
 	// RestoredFrom is the state version this version was restored from. It is
 	// empty when the version is not a restore.
 	RestoredFrom StateVersionID
+	// FenceBy is the subject of the principal that forced the unlock whose
+	// fence this version is (ADR 44, decision 1). It is empty when the version
+	// is not a fence.
+	FenceBy string
 }
 
 // NewState is the metadata a client declares before uploading state.

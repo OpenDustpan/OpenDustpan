@@ -13,6 +13,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
+// titleForbidden is the JSON:API title of a 403 answer.
+const titleForbidden = "forbidden"
+
 // jsonAPIMediaType is the media type of every response, including errors.
 const jsonAPIMediaType = "application/vnd.api+json"
 
@@ -84,7 +87,7 @@ func (h *Handler) writeUnauthorized(ctx context.Context, w http.ResponseWriter, 
 
 // writeForbidden answers 403.
 func (h *Handler) writeForbidden(ctx context.Context, w http.ResponseWriter, detail string) {
-	h.writeJSONAPIError(ctx, w, http.StatusForbidden, "forbidden", detail)
+	h.writeJSONAPIError(ctx, w, http.StatusForbidden, titleForbidden, detail)
 }
 
 // writeNotFound answers 404.
@@ -132,8 +135,11 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
 	case errors.Is(err, errMissingFilter):
 		return errorClass{status: http.StatusBadRequest, title: "bad request", detail: err.Error()}
+	case errors.Is(err, workspace.ErrOverrideRefused):
+		// The detail names the switch and the action that allow the override.
+		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: err.Error()}
 	case errors.Is(err, identity.ErrDenied), errors.Is(err, workspace.ErrUploadDenied):
-		return errorClass{status: http.StatusForbidden, title: "forbidden", detail: "forbidden"}
+		return errorClass{status: http.StatusForbidden, title: titleForbidden, detail: titleForbidden}
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, namespace.ErrNotFound),
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
 		errors.Is(err, workspace.ErrResourceNotFound):

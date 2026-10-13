@@ -88,6 +88,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

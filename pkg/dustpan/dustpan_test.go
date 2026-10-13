@@ -111,6 +111,7 @@ func (f fixture) createNamespace(t *testing.T, name, home string) {
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(home),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -316,7 +317,7 @@ func uploadWorkspaceState(
 		Outputs: nil,
 		Serial:  1,
 		Force:   false,
-	})
+	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)
 	}
@@ -772,7 +773,13 @@ func seedRunCheckStore(t *testing.T) *sqlite.Store {
 
 	createErr := st.CreateNamespace(
 		t.Context(),
-		namespace.Namespace{CreatedAt: time.Now(), Name: "acme", HomeRegion: region, FailoverVersion: 1},
+		namespace.Namespace{
+			CreatedAt:       time.Now(),
+			Name:            "acme",
+			HomeRegion:      region,
+			FailoverVersion: 1,
+			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		},
 	)
 	if createErr != nil {
 		t.Fatalf("create namespace: %v", createErr)

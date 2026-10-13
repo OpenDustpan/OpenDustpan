@@ -251,6 +251,7 @@ func seedWrappedKey(t *testing.T, st keySeedStore, key []byte) {
 		Name:            "acme",
 		HomeRegion:      "local",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	})
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)

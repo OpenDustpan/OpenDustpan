@@ -42,6 +42,8 @@ func (s *Store) CreateWorkspace(ctx context.Context, w workspace.Workspace, fenc
 			LockReason:            row.LockReason,
 			LockedAtMs:            row.LockedAtMs,
 			CurrentStateVersionID: row.CurrentStateVersion,
+			AllowForcedWrites:     row.AllowForcedWrites,
+			AllowUnlockedWrites:   row.AllowUnlockedWrites,
 			CreatedAtMs:           row.CreatedAtMs,
 			UpdatedAtMs:           row.UpdatedAtMs,
 		})
@@ -112,55 +114,40 @@ func (s *Store) ListWorkspaces(ctx context.Context, ns namespace.Name) ([]worksp
 	return out, nil
 }
 
+// ReleaseUnfenced implements workspace.Store. It saves a released unit like
+// SaveWorkspace, and refuses the save with ErrOverrideRefused unless the
+// forced-write switches of the namespace and of the unit are on, in the same
+// transaction (ADR 44, decisions 4 and 6).
+func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		wrow, err := q.GetWorkspaceByID(ctx, w.ID.String())
+		if errors.Is(err, sql.ErrNoRows) {
+			return workspace.ErrNotFound
+		}
+
+		if err != nil {
+			return fmt.Errorf("read workspace: %w", err)
+		}
+
+		if switchErr := checkForcedSwitches(ctx, q, wrow); switchErr != nil {
+			return switchErr
+		}
+
+		return saveWorkspaceRow(ctx, q, w)
+	})
+}
+
 // SaveWorkspace implements workspace.Store: a compare-and-swap on the
 // revision. The inventory entry moves with the write in the same transaction.
 func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToWorkspaceRow(w)
-
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
-			Revision:         row.Revision,
-			LockID:           row.LockID,
-			LockHolder:       row.LockHolder,
-			LockReason:       row.LockReason,
-			LockedAtMs:       row.LockedAtMs,
-			UpdatedAtMs:      row.UpdatedAtMs,
-			ID:               row.ID,
-			ExpectedRevision: row.Revision - 1,
-		})
-		if err != nil {
-			return fmt.Errorf("update workspace: %w", err)
-		}
-
-		if n > 0 {
-			if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
-				return pubErr
-			}
-
-			// The lock moves with the write in the same transaction: lock,
-			// unlock and force-unlock all save here.
-			return writeInventoryLock(
-				ctx, q, inventoryLockKey{
-					namespace: w.Ref.Namespace.String(),
-					tool:      workspaceInventoryTool,
-					name:      w.Ref.Name.String(),
-				}, workspaceLock(w.Lock),
-			)
-		}
-
-		_, err = q.GetWorkspaceByID(ctx, row.ID)
-
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			return workspace.ErrNotFound
-		case err != nil:
-			return fmt.Errorf("read workspace: %w", err)
-		default:
-			return workspace.ErrConcurrentModification
-		}
+		return saveWorkspaceRow(ctx, q, w)
 	})
 }
 
@@ -228,12 +215,17 @@ func (s *Store) CreateStateVersion(
 	row := codec.ToStateVersionRow(sv)
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if _, err := q.GetWorkspaceByID(ctx, row.WorkspaceID); err != nil {
+		wrow, err := q.GetWorkspaceByID(ctx, row.WorkspaceID)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return workspace.ErrNotFound
 			}
 
 			return fmt.Errorf("read workspace: %w", err)
+		}
+
+		if switchErr := checkDeclareSwitches(ctx, q, sv, wrow); switchErr != nil {
+			return switchErr
 		}
 
 		pending, err := q.CountPendingStateVersions(ctx, row.WorkspaceID)
@@ -250,32 +242,7 @@ func (s *Store) CreateStateVersion(
 			)
 		}
 
-		err = q.CreateStateVersion(ctx, db.CreateStateVersionParams{
-			ID:                row.ID,
-			WorkspaceID:       row.WorkspaceID,
-			Status:            row.Status,
-			Serial:            row.Serial,
-			Lineage:           row.Lineage,
-			Md5:               row.MD5,
-			Size:              row.Size,
-			ContentKey:        row.ContentKey,
-			Outputs:           row.Outputs,
-			Force:             row.Force,
-			Sealed:            row.Sealed,
-			SensitiveMarks:    row.SensitiveMarks,
-			UploadDigest:      row.UploadDigest,
-			UploadExpiresAtMs: row.UploadExpiresAtMs,
-			Holder:            row.Holder,
-			LockID:            row.LockID,
-			CreatedAtMs:       row.CreatedAtMs,
-			FinalizedAtMs:     row.FinalizedAtMs,
-			RestoredFrom:      row.RestoredFrom,
-		})
-		if err != nil {
-			return fmt.Errorf("insert state version: %w", err)
-		}
-
-		return nil
+		return insertStateVersion(ctx, q, row)
 	})
 }
 
@@ -571,6 +538,88 @@ func (s *Store) FinalizeStateVersion(
 	})
 }
 
+// FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
+// inserts sv as the finalized current version and moves the workspace pointer
+// to it, in one fenced transaction. The inventory entry moves with the release.
+func (s *Store) FenceAndUnlock(
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		return fenceAndUnlockInTx(ctx, q, w, codec.ToStateVersionRow(sv), expect)
+	})
+}
+
+// fenceAndUnlockInTx writes the release of w's lock and the fence version row
+// in the caller's transaction. The workspace must be locked, and its stored
+// revision must be w.Revision-1; a write that fails either check changes
+// nothing.
+func fenceAndUnlockInTx(
+	ctx context.Context, q *db.Queries, w workspace.Workspace, row codec.StateVersionRow,
+	expect workspace.StateVersionID,
+) error {
+	wrow, err := workspaceForFinalize(ctx, q, w.ID.String())
+	if err != nil {
+		return err
+	}
+
+	if wrow.LockHolder == "" {
+		return workspace.ErrNotLocked
+	}
+
+	if fenceErr := checkFenceCurrent(ctx, q, wrow.ID, expect, row.Serial); fenceErr != nil {
+		return fenceErr
+	}
+
+	released := codec.ToWorkspaceRow(w)
+
+	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
+		Revision:            released.Revision,
+		LockID:              released.LockID,
+		LockHolder:          released.LockHolder,
+		LockReason:          released.LockReason,
+		LockedAtMs:          released.LockedAtMs,
+		UpdatedAtMs:         released.UpdatedAtMs,
+		ID:                  released.ID,
+		ExpectedRevision:    released.Revision - 1,
+		AllowForcedWrites:   released.AllowForcedWrites,
+		AllowUnlockedWrites: released.AllowUnlockedWrites,
+	})
+	if err != nil {
+		return fmt.Errorf("release workspace lock: %w", err)
+	}
+
+	if n == 0 {
+		return workspace.ErrConcurrentModification
+	}
+
+	if insertErr := insertStateVersion(ctx, q, row); insertErr != nil {
+		return insertErr
+	}
+
+	setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
+		CurrentStateVersionID: row.ID,
+		UpdatedAtMs:           row.FinalizedAtMs,
+		ID:                    row.WorkspaceID,
+	})
+	if setErr != nil {
+		return fmt.Errorf("set current state: %w", setErr)
+	}
+
+	if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, released.ID, released.UpdatedAtMs); pubErr != nil {
+		return pubErr
+	}
+
+	return writeInventoryLock(ctx, q, inventoryLockKey{
+		namespace: w.Ref.Namespace.String(),
+		tool:      workspaceInventoryTool,
+		name:      w.Ref.Name.String(),
+	}, workspaceLock(w.Lock))
+}
+
 // ListUnsealedStateVersions implements workspace.StateStore: the finalized
 // versions that still hold plain content, ordered by version ID.
 func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
@@ -663,8 +712,12 @@ func checkFinalizeGuards(
 		return db.Workspace{}, err
 	}
 
-	if lockErr := checkFinalizeLock(wrow, row.LockID); lockErr != nil {
+	if lockErr := checkFinalizeHolder(ctx, q, row, wrow); lockErr != nil {
 		return db.Workspace{}, lockErr
+	}
+
+	if forcedErr := checkFinalizeForced(ctx, q, sv, wrow); forcedErr != nil {
+		return db.Workspace{}, forcedErr
 	}
 
 	if !sv.Force {
@@ -674,6 +727,38 @@ func checkFinalizeGuards(
 	}
 
 	return wrow, nil
+}
+
+// checkFinalizeHolder checks the lock of a finalize. A version declared under
+// the lock keeps it. A version declared without the lock (ADR 44, decision 5)
+// has no lock to keep, and a lock that another principal took after the
+// declare stops it.
+func checkFinalizeHolder(
+	ctx context.Context, q *db.Queries, row codec.StateVersionRow, wrow db.Workspace,
+) error {
+	if !row.UnlockedWrite {
+		return checkFinalizeLock(wrow, row.LockID)
+	}
+
+	if wrow.LockHolder != "" && wrow.LockHolder != row.Holder {
+		return workspace.ErrLockedByOther
+	}
+
+	return checkUnlockedSwitches(ctx, q, wrow)
+}
+
+// checkFinalizeForced checks the forced-write switches of a forced finalize. A
+// forced version finalizes only while the switches are on (ADR 44, decisions 4
+// and 6). A restore sets Force itself, so it is not a client's forced write, and
+// a unit with no current state needs no override.
+func checkFinalizeForced(
+	ctx context.Context, q *db.Queries, sv workspace.StateVersion, wrow db.Workspace,
+) error {
+	if !sv.Force || sv.RestoredFrom != "" || wrow.CurrentStateVersionID == "" {
+		return nil
+	}
+
+	return checkForcedSwitches(ctx, q, wrow)
 }
 
 // writeFinalize marks the version finalized, moves the workspace pointer and
@@ -745,6 +830,73 @@ func workspaceForFinalize(ctx context.Context, q *db.Queries, workspaceID string
 	return wrow, nil
 }
 
+// checkForcedSwitches refuses the release of a client-encrypted state unless the forced-write switches of the namespace
+// and of the unit are
+// on. It reads both switches in the caller's transaction (ADR 44, decisions 4
+// and 6).
+func checkForcedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) error {
+	ns, err := q.GetNamespace(ctx, wrow.Namespace)
+	if errors.Is(err, sql.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read namespace: %w", err)
+	}
+
+	if !ns.AllowForcedWrites || !wrow.AllowForcedWrites {
+		return fmt.Errorf(
+			"%w: the forced-write switch of the namespace or the unit is off",
+			workspace.ErrOverrideRefused,
+		)
+	}
+
+	return nil
+}
+
+// checkDeclareSwitches checks the switches of an unlocked or a forced declare in
+// the caller's transaction (ADR 44, decisions 5, 4 and 6). A restore sets Force
+// itself, so it is not checked as a client's forced write.
+func checkDeclareSwitches(ctx context.Context, q *db.Queries, sv workspace.StateVersion, wrow db.Workspace) error {
+	if sv.UnlockedWrite {
+		if err := checkUnlockedSwitches(ctx, q, wrow); err != nil {
+			return err
+		}
+	}
+
+	// A forced write needs the override only into a unit that has state (ADR 44,
+	// decision 4).
+	if sv.Force && sv.RestoredFrom == "" && wrow.CurrentStateVersionID != "" {
+		return checkForcedSwitches(ctx, q, wrow)
+	}
+
+	return nil
+}
+
+// checkUnlockedSwitches refuses an unlocked write when the namespace or the
+// unit does not allow it. It reads both switches in the caller's transaction,
+// so a switch that is turned off before the write commits stops the write
+// (ADR 44, decisions 5 and 6).
+func checkUnlockedSwitches(ctx context.Context, q *db.Queries, wrow db.Workspace) error {
+	ns, err := q.GetNamespace(ctx, wrow.Namespace)
+	if errors.Is(err, sql.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read namespace: %w", err)
+	}
+
+	if !ns.AllowUnlockedWrites || !wrow.AllowUnlockedWrites {
+		return fmt.Errorf(
+			"%w: the unlocked-write switch of the namespace or the unit is off",
+			workspace.ErrOverrideRefused,
+		)
+	}
+
+	return nil
+}
+
 // checkFinalizeLock checks that the workspace is still held by the lock the
 // version was declared under.
 func checkFinalizeLock(wrow db.Workspace, lockID string) error {
@@ -793,6 +945,8 @@ func workspaceFromRow(row db.Workspace) workspace.Workspace {
 		LockHolder:          row.LockHolder,
 		LockReason:          row.LockReason,
 		CurrentStateVersion: row.CurrentStateVersionID,
+		AllowForcedWrites:   row.AllowForcedWrites,
+		AllowUnlockedWrites: row.AllowUnlockedWrites,
 		Revision:            row.Revision,
 		LockedAtMs:          row.LockedAtMs,
 		CreatedAtMs:         row.CreatedAtMs,
@@ -818,6 +972,8 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		Force:             row.Force,
 		Sealed:            row.Sealed,
 		RestoredFrom:      row.RestoredFrom,
+		FencedBy:          row.FencedBy,
+		UnlockedWrite:     row.UnlockedWrite,
 		SensitiveMarks:    row.SensitiveMarks,
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
@@ -885,4 +1041,118 @@ func lockOperation(reason string) string {
 	}
 
 	return reason
+}
+
+// insertStateVersion writes one state version row in the caller's transaction.
+func insertStateVersion(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+	err := q.CreateStateVersion(ctx, db.CreateStateVersionParams{
+		ID:                row.ID,
+		WorkspaceID:       row.WorkspaceID,
+		Status:            row.Status,
+		Serial:            row.Serial,
+		Lineage:           row.Lineage,
+		Md5:               row.MD5,
+		Size:              row.Size,
+		ContentKey:        row.ContentKey,
+		Outputs:           row.Outputs,
+		Force:             row.Force,
+		Sealed:            row.Sealed,
+		SensitiveMarks:    row.SensitiveMarks,
+		UploadDigest:      row.UploadDigest,
+		UploadExpiresAtMs: row.UploadExpiresAtMs,
+		Holder:            row.Holder,
+		LockID:            row.LockID,
+		CreatedAtMs:       row.CreatedAtMs,
+		FinalizedAtMs:     row.FinalizedAtMs,
+		RestoredFrom:      row.RestoredFrom,
+		FencedBy:          row.FencedBy,
+		UnlockedWrite:     row.UnlockedWrite,
+	})
+	if err != nil {
+		return fmt.Errorf("insert state version: %w", err)
+	}
+
+	return nil
+}
+
+// checkFenceCurrent checks that a fence was made from the current version the
+// caller read: the current version is expect, and the fence serial is one more
+// than its serial. The read runs in the same transaction as the write, so a
+// finalize that landed after the caller read the current version fails here.
+// A workspace with no current state matches the empty expect, and accepts any
+// serial.
+func checkFenceCurrent(
+	ctx context.Context, q *db.Queries, workspaceID string, expect workspace.StateVersionID, serial int64,
+) error {
+	current, err := q.GetCurrentStateVersion(ctx, workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if expect != "" {
+			return workspace.ErrConcurrentModification
+		}
+
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read current state: %w", err)
+	}
+
+	if current.ID != expect.String() {
+		return workspace.ErrConcurrentModification
+	}
+
+	if serial != current.Serial+1 {
+		return fmt.Errorf("%w: fence serial %d, current %d", workspace.ErrStaleSerial, serial, current.Serial)
+	}
+
+	return nil
+}
+
+// saveWorkspaceRow writes the workspace row in the caller's transaction, with
+// its inventory entry and lock. It is the compare-and-swap of SaveWorkspace.
+func saveWorkspaceRow(ctx context.Context, q *db.Queries, w workspace.Workspace) error {
+	row := codec.ToWorkspaceRow(w)
+
+	n, err := q.SaveWorkspace(ctx, db.SaveWorkspaceParams{
+		Revision:            row.Revision,
+		LockID:              row.LockID,
+		LockHolder:          row.LockHolder,
+		LockReason:          row.LockReason,
+		LockedAtMs:          row.LockedAtMs,
+		UpdatedAtMs:         row.UpdatedAtMs,
+		ID:                  row.ID,
+		AllowForcedWrites:   row.AllowForcedWrites,
+		AllowUnlockedWrites: row.AllowUnlockedWrites,
+		ExpectedRevision:    row.Revision - 1,
+	})
+	if err != nil {
+		return fmt.Errorf("update workspace: %w", err)
+	}
+
+	if n > 0 {
+		if pubErr := publishWorkspaceInventory(ctx, q, w.Ref, row.ID, row.UpdatedAtMs); pubErr != nil {
+			return pubErr
+		}
+
+		// The lock moves with the write in the same transaction: lock,
+		// unlock and force-unlock all save here.
+		return writeInventoryLock(
+			ctx, q, inventoryLockKey{
+				namespace: w.Ref.Namespace.String(),
+				tool:      workspaceInventoryTool,
+				name:      w.Ref.Name.String(),
+			}, workspaceLock(w.Lock),
+		)
+	}
+
+	_, err = q.GetWorkspaceByID(ctx, row.ID)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return workspace.ErrNotFound
+	case err != nil:
+		return fmt.Errorf("read workspace: %w", err)
+	default:
+		return workspace.ErrConcurrentModification
+	}
 }

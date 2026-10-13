@@ -82,6 +82,7 @@ func (homedNamespaceStore) ListNamespaces(_ context.Context) ([]namespace.Namesp
 		Name:            "acme",
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return []namespace.Namespace{ns}, nil
@@ -629,6 +630,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 			continue
 		}
 
+		if slices.Contains(journalPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteEnforcement(t, route)
@@ -715,6 +720,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 		}
 
 		if slices.Contains(revealPatterns(), route.Method+" "+route.Path) {
+			continue
+		}
+
+		if slices.Contains(journalPatterns(), route.Method+" "+route.Path) {
 			continue
 		}
 
@@ -1439,6 +1448,7 @@ func newDeleteHandler(
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1736,6 +1746,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1805,10 +1816,16 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
 	}
 
 	return updates
+}
+
+// SetOverrides is not used by this fake.
+func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

@@ -68,7 +68,13 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 
 	clk := newClock()
 
-	ns := namespace.Namespace{CreatedAt: clk.now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       clk.now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: &memNamespaces{ns: ns}, Now: clk.Now, Region: "local"},
@@ -90,6 +96,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 		Now:                clk.Now,
 		Logger:             nil,
 		MaxCheckpointBytes: 32 << 20,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)

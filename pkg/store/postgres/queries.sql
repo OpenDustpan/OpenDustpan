@@ -4,14 +4,28 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING;
 
 -- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 WHERE name = $1;
 
 -- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
 ORDER BY name;
+
+-- name: SetNamespaceOverrides :execrows
+-- Replaces the override switches of one namespace (ADR 44, decision 6).
+UPDATE namespaces
+SET allow_forced_writes = $1, allow_unlocked_writes = $2
+WHERE name = $3;
+
+-- name: GetNamespaceForShare :one
+-- Reads the namespace row with a shared lock. A switch change waits for the
+-- transaction that reads it, so the switch it reads is the one that commits.
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name = $1
+FOR SHARE;
 
 -- name: GetFailoverVersionForShare :one
 -- Locks the namespace row so a concurrent promotion waits for this write.
@@ -327,19 +341,20 @@ ORDER BY tool, name;
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
     id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms,
+    allow_forced_writes, allow_unlocked_writes
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = $1 AND name = $2;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1;
 
@@ -347,14 +362,14 @@ WHERE id = $1;
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1
 FOR UPDATE;
 
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE namespace = $1
 ORDER BY name;
@@ -364,7 +379,8 @@ ORDER BY name;
 -- one the caller read. The current state pointer stays: only FinalizeStateVersion moves it.
 UPDATE workspaces
 SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
-    lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms
+    lock_reason = @lock_reason, locked_at_ms = @locked_at_ms, updated_at_ms = @updated_at_ms,
+    allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes
 WHERE id = @id AND revision = @expected_revision;
 
 -- name: WorkspaceExists :one
@@ -387,15 +403,15 @@ WHERE workspace_id = $1;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE id = $1;
 
@@ -404,7 +420,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -424,7 +440,7 @@ WHERE workspace_id = $1 AND status = 'pending';
 -- Locks the workspace row so concurrent declares cannot both pass the
 -- pending cap.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM workspaces
 WHERE id = $1
 FOR UPDATE;
@@ -440,7 +456,7 @@ WHERE workspace_id = $1 AND content_key <> '';
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -464,7 +480,7 @@ WHERE id = $2 AND status = 'pending';
 -- out: a pending row names no content yet.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
 FROM state_versions
 WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
 ORDER BY id ASC;
@@ -491,7 +507,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks
+       sv.sensitive_marks, sv.fenced_by, unlocked_write
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -616,6 +632,9 @@ UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
+UNION ALL
+SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
+FROM update_journal
 ORDER BY content_key;
 
 -- name: LastAuditEntry :one
@@ -660,3 +679,56 @@ FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
 LIMIT $3;
+
+-- name: JournalSequenceSHA :one
+SELECT sha256 FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2 AND sequence = $3;
+
+-- name: NextJournalArrival :one
+SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
+FROM update_journal
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: InsertJournal :exec
+INSERT INTO update_journal (
+    stack_id, update_id, arrival, blob_key, sha256, md5, size,
+    lowest_sequence, sequence_ids, operation_ids
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+
+-- name: InsertJournalSequence :exec
+INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
+VALUES ($1, $2, $3, $4, $5);
+
+-- name: LockUpdateForJournal :one
+-- Locks the update FOR UPDATE so two batches of one update cannot read the same
+-- last arrival or both store the same batch: the second waits for the first.
+SELECT id
+FROM updates
+WHERE stack_id = $1 AND id = $2
+FOR UPDATE;
+
+-- name: ListJournalOperations :many
+SELECT operation_ids FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: JournalBlobKeys :many
+SELECT blob_key FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: DeleteJournalSequences :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: DeleteJournal :exec
+DELETE FROM update_journal
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: JournalState :one
+SELECT journal_closed, status FROM updates
+WHERE stack_id = $1 AND id = $2;
+
+-- name: CloseJournal :exec
+UPDATE updates SET journal_closed = TRUE
+WHERE stack_id = $1 AND id = $2;

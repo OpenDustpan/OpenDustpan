@@ -128,13 +128,29 @@ func (lockedActionWorkspaces) GetByID(_ context.Context, id workspace.ID) (works
 			Holder:   "alice",
 			Reason:   "apply",
 		},
-		ID:       id,
-		Ref:      workspace.Ref{Namespace: ns, Name: name},
-		Revision: 2,
+		ID:        id,
+		Ref:       workspace.Ref{Namespace: ns, Name: name},
+		Revision:  2,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
-func (lockedActionWorkspaces) ForceUnlock(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+func (rlockedActionWorkspaces lockedActionWorkspaces) ForceUnlock(
+	ctx context.Context,
+	id workspace.ID,
+	by string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	w, err := rlockedActionWorkspaces.forceUnlockUnfenced(ctx, id, by)
+
+	return w, false, err
+}
+
+func (lockedActionWorkspaces) forceUnlockUnfenced(
+	_ context.Context,
+	id workspace.ID,
+	_ string,
+) (workspace.Workspace, error) {
 	if id.String() != "ws-test123" {
 		return workspace.Workspace{}, workspace.ErrNotFound
 	}

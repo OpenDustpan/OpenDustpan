@@ -122,6 +122,7 @@ func (coverageNamespaceStore) GetNamespace(_ context.Context, name namespace.Nam
 		Name:            name,
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -178,6 +179,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		tb.Fatalf("updates service: %v", err)
@@ -372,10 +374,15 @@ func (coverageWorkspaces) Unlock(
 	return none, workspace.ErrNotFound
 }
 
-func (coverageWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
-	var none workspace.Workspace
+func (rcoverageWorkspaces coverageWorkspaces) ForceUnlock(
+	ctx context.Context,
+	id workspace.ID,
+	by string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	w, err := rcoverageWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
-	return none, workspace.ErrNotFound
+	return w, false, err
 }
 
 func (coverageWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
@@ -429,7 +436,7 @@ func (coverageWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.
 }
 
 func (coverageWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState,
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	var none workspace.PendingState
 
@@ -662,7 +669,23 @@ func CoverageAllowlist() []AllowEntry {
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		restoreAllowEntries(),
+		journalAllowEntries(),
 	)
+}
+
+// journalAllowEntries returns the allowlist row for the journal entry route.
+// The release build answers journal version 0, so no CLI reaches the route
+// there. The recording build (journalrecording tag) reaches it through
+// make e2e-journal.
+func journalAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodPatch, Path: "/api/stacks/{namespace}/{project}/{stack}/update/{update}/journalentries",
+			CoveringTest: "TestPulumiJournalingOn (make e2e-journal, journalrecording build)",
+			Reason: "The release build answers journal version 0, so no CLI sends journal batches. " +
+				"The recording build answers version 1, and its test proves the route.",
+		},
+	}
 }
 
 // consoleAllowEntries returns the allowlist rows for console-only routes and
@@ -1025,4 +1048,31 @@ func matchPattern(pattern, path string) bool {
 	}
 
 	return true
+}
+
+// SetOverrides is not used by this fake.
+func (coverageWorkspaces) SetOverrides(
+	context.Context, workspace.ID, namespace.Overrides,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageWorkspaces) forceUnlockUnfenced(
+	_ context.Context,
+	_ workspace.ID,
+	_ string,
+) (workspace.Workspace, error) {
+	var none workspace.Workspace
+
+	return none, workspace.ErrNotFound
+}
+
+// SetOverrides is not used by this fake.
+func (coverageNamespaceStore) SetOverrides(
+	context.Context,
+	namespace.Name,
+	namespace.Overrides,
+	namespace.Fence,
+) error {
+	return nil
 }

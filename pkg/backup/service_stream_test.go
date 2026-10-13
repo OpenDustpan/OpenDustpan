@@ -90,7 +90,7 @@ type streamFixture struct {
 // newStreamFixture wires a Service with an in-memory source and target and
 // the given state opener.
 func newStreamFixture(
-	t *testing.T, exporter backup.Exporter, opener backup.StateOpener,
+	t *testing.T, exporter backup.PortableExporter, opener backup.StateOpener,
 ) streamFixture {
 	t.Helper()
 

@@ -169,7 +169,20 @@ func (h *Handler) forceUnlockWorkspace(
 
 	holder := h.lockHolder(ctx, id)
 
-	unlocked, err := h.workspaces.ForceUnlock(ctx, id)
+	allow, err := h.allowance(ctx, p, id, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	// An unfenced release is an override. Its audit entry is written before the
+	// release, and a failed entry stops it (ADR 41, decision 5).
+	record := func() error {
+		return h.appendOverrideAudit(r, p, obj, identity.ActionUnitWriteForced, "")
+	}
+
+	unlocked, _, err := h.workspaces.ForceUnlock(ctx, id, p.Subject, allow, record)
 	if err != nil {
 		h.writeError(ctx, w, err)
 

@@ -77,10 +77,12 @@ type Inventory struct {
 }
 
 type Namespace struct {
-	Name            string
-	HomeRegion      string
-	FailoverVersion int64
-	CreatedAtMs     int64
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
 }
 
 type Restore struct {
@@ -138,6 +140,8 @@ type StateVersion struct {
 	RestoredFrom      string
 	Sealed            bool
 	SensitiveMarks    []byte
+	FencedBy          string
+	UnlockedWrite     bool
 }
 
 type Update struct {
@@ -156,6 +160,7 @@ type Update struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	JournalClosed    bool
 }
 
 type UpdateEvent struct {
@@ -164,6 +169,27 @@ type UpdateEvent struct {
 	TimestampMs int64
 	Payload     []byte
 	StackID     string
+}
+
+type UpdateJournal struct {
+	StackID        string
+	UpdateID       string
+	Arrival        int64
+	BlobKey        string
+	Sha256         []byte
+	Size           int64
+	LowestSequence int64
+	SequenceIds    string
+	OperationIds   string
+	Md5            []byte
+}
+
+type UpdateJournalSequence struct {
+	StackID  string
+	UpdateID string
+	Sequence int64
+	Arrival  int64
+	Sha256   []byte
 }
 
 type Workspace struct {
@@ -178,4 +204,6 @@ type Workspace struct {
 	CurrentStateVersionID string
 	CreatedAtMs           int64
 	UpdatedAtMs           int64
+	AllowForcedWrites     bool
+	AllowUnlockedWrites   bool
 }

@@ -95,6 +95,8 @@ type Inner interface {
 	stack.UpdateStore
 	stack.CheckpointStore
 	stack.EventStore
+	stack.JournalStore
+	stack.BuiltCheckpointStore
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -161,6 +163,18 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	}
 
 	return s.inner.GetNamespace(ctx, name)
+}
+
+// SetOverrides replaces the override switches of a namespace, unless a fault
+// fires first.
+func (s *Store) SetOverrides(
+	ctx context.Context, name namespace.Name, ov namespace.Overrides, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "SetOverrides"); err != nil {
+		return err
+	}
+
+	return s.inner.SetOverrides(ctx, name, ov, fence)
 }
 
 // ListNamespaces returns every namespace, unless a fault fires first.
@@ -369,6 +383,47 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 	return s.inner.AppendEvents(ctx, batch, fence)
 }
 
+// JournalKeys returns the blob keys of the update's batches, unless a fault fires first.
+func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.UpdateID) ([]blob.Key, error) {
+	if err := s.before(ctx, "JournalKeys"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalKeys(ctx, stackID, update)
+}
+
+// JournalSweepable reports whether the journal may be swept, unless a fault fires first.
+func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
+	if err := s.before(ctx, "JournalSweepable"); err != nil {
+		return false, err
+	}
+
+	return s.inner.JournalSweepable(ctx, stackID, update)
+}
+
+// PutBuiltCheckpoint writes the built checkpoint and removes the journal, unless a
+// fault fires first.
+func (s *Store) PutBuiltCheckpoint(
+	ctx context.Context,
+	cp stack.Checkpoint,
+	fence namespace.Fence,
+) ([]blob.Key, error) {
+	if err := s.before(ctx, "PutBuiltCheckpoint"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.PutBuiltCheckpoint(ctx, cp, fence)
+}
+
+// PutJournalRow stores the row of one batch, unless a fault fires first.
+func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence namespace.Fence) (bool, error) {
+	if err := s.before(ctx, "PutJournalRow"); err != nil {
+		return false, err
+	}
+
+	return s.inner.PutJournalRow(ctx, row, fence)
+}
+
 // ListEvents returns the events of the update, unless a fault fires first.
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
@@ -425,6 +480,15 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	return s.inner.SaveWorkspace(ctx, w, fence)
 }
 
+// ReleaseUnfenced saves a released unit under the forced-write override, unless a fault fires first.
+func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	if err := s.before(ctx, "ReleaseUnfenced"); err != nil {
+		return err
+	}
+
+	return s.inner.ReleaseUnfenced(ctx, w, fence)
+}
+
 // DeleteWorkspace removes the workspace called ref with its state versions
 // and its data key, unless a fault fires first.
 func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
@@ -467,6 +531,19 @@ func (s *Store) FinalizeStateVersion(
 	}
 
 	return s.inner.FinalizeStateVersion(ctx, sv, fence)
+}
+
+// FenceAndUnlock releases the lock and makes the fence version current,
+// unless a fault fires first.
+func (s *Store) FenceAndUnlock(
+	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
+	expect workspace.StateVersionID, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "FenceAndUnlock"); err != nil {
+		return err
+	}
+
+	return s.inner.FenceAndUnlock(ctx, w, sv, expect, fence)
 }
 
 // CurrentStateVersion returns the workspace's current state, unless a fault

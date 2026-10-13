@@ -40,7 +40,13 @@ func newSealFixture(t *testing.T) sealFixture {
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	store := newMemStore()
-	acme := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "local", FailoverVersion: 1}
+	acme := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "local",
+		FailoverVersion: 1,
+		Overrides:       noOverrides(),
+	}
 
 	if err := store.CreateNamespace(t.Context(), acme); err != nil {
 		t.Fatalf("create namespace: %v", err)
@@ -131,7 +137,7 @@ func (f sealFixture) pushPlain(
 		Outputs: outputs,
 		Serial:  serial,
 		Force:   false,
-	})
+	}, authority(noOverrides(), nil))
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -456,6 +462,7 @@ func seedRemoteVersion(t *testing.T, f sealFixture) (workspace.StateVersionID, b
 		Name:            "remote",
 		HomeRegion:      "far-away",
 		FailoverVersion: 1,
+		Overrides:       noOverrides(),
 	}
 
 	if err := f.store.CreateNamespace(ctx, remote); err != nil {
@@ -477,6 +484,7 @@ func seedRemoteVersion(t *testing.T, f sealFixture) (workspace.StateVersionID, b
 		ID:        id,
 		Ref:       ref,
 		Revision:  1,
+		Overrides: noOverrides(),
 	}
 
 	if err = f.store.CreateWorkspace(ctx, unlocked, remote.Fence()); err != nil {
@@ -515,6 +523,8 @@ func seedRemoteVersion(t *testing.T, f sealFixture) (workspace.StateVersionID, b
 		Sealed:          false,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
+		FenceBy:         "",
+		UnlockedWrite:   false,
 	}
 
 	if err = f.store.CreateStateVersion(ctx, pending, remote.Fence(), 10); err != nil {

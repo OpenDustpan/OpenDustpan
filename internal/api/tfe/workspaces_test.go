@@ -668,6 +668,7 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 			ID:        workspace.ID(tc.id),
 			Ref:       workspace.Ref{Namespace: ns, Name: name},
 			Revision:  1,
+			Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 		})
 	}
 
@@ -706,8 +707,10 @@ func (p pagingWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrNotFound
 }
 
-func (p pagingWorkspaces) ForceUnlock(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
-	return workspace.Workspace{}, workspace.ErrNotFound
+func (p pagingWorkspaces) ForceUnlock(
+	_ context.Context, _ workspace.ID, _ string, _ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	return workspace.Workspace{}, false, workspace.ErrNotFound
 }
 
 func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
@@ -715,7 +718,7 @@ func (p pagingWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.
 }
 
 func (p pagingWorkspaces) BeginState(
-	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState,
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
 ) (workspace.PendingState, error) {
 	return workspace.PendingState{}, workspace.ErrNotLocked
 }

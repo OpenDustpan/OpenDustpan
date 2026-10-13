@@ -424,6 +424,7 @@ func createLoadNamespace(ctx context.Context, stores namespace.Store, ns string)
 		Name:            name,
 		HomeRegion:      harnessRegion,
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := stores.CreateNamespace(ctx, found); err != nil {

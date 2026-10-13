@@ -6,7 +6,6 @@ package sqlite_test
 // busy, and the single warning a long busy period writes.
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -29,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -63,7 +63,13 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 		}
 	})
 
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -210,6 +216,7 @@ func createWALWorkspace(
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	return s.CreateWorkspace(ctx, w, ns.Fence())
@@ -306,13 +313,13 @@ func TestBackupWithLargeWAL(t *testing.T) {
 		)
 	}
 
-	sum, data := exportWALBackup(ctx, t, src.store, sizes.wal)
+	bk := exportWALBackup(t, src.store, sizes.wal)
 
 	if rbErr := src.tx.Rollback(); rbErr != nil {
 		t.Fatalf("roll back read transaction: %v", rbErr)
 	}
 
-	dst := importWALBackup(ctx, t, dir, data, sum)
+	dst := importWALBackup(ctx, t, dir, bk)
 
 	checkRestoredRows(ctx, t, src, dst, refs)
 }
@@ -365,7 +372,13 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 		}
 	})
 
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 
 	if nsErr := src.CreateNamespace(ctx, ns); nsErr != nil {
 		t.Fatalf("create namespace: %v", nsErr)
@@ -396,28 +409,31 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 	return walBackupSource{store: src, ns: ns, tx: tx, path: path}
 }
 
-// exportWALBackup exports src into memory and returns the manifest with the
-// bytes. It logs how long the backup takes with a large log behind it.
-func exportWALBackup(ctx context.Context, t *testing.T, src *sqlite.Store, walSize int64) (backup.Summary, []byte) {
-	t.Helper()
+// walBackup holds a portable backup taken with a large write-ahead log: the
+// table files by path, the summary and the descriptors.
+type walBackup struct {
+	files map[string][]byte
+	sum   backup.Summary
+	descs []backup.PortableFile
+}
 
-	var buf bytes.Buffer
+// exportWALBackup exports src in the portable format into memory. It logs how
+// long the backup takes with a large log behind it.
+func exportWALBackup(t *testing.T, src *sqlite.Store, walSize int64) walBackup {
+	t.Helper()
 
 	start := time.Now()
 
-	sum, err := src.Export(ctx, &buf)
-	if err != nil {
-		t.Fatalf("export with a large write-ahead log: %v", err)
-	}
+	files, sum, descs := storetest.PortableFiles(t, src)
 
 	t.Logf("backup with a %d byte write-ahead log took %s", walSize, time.Since(start))
 
-	return sum, buf.Bytes()
+	return walBackup{files: files, sum: sum, descs: descs}
 }
 
-// importWALBackup opens a fresh store and loads the export into it, then
-// returns the restored store.
-func importWALBackup(ctx context.Context, t *testing.T, dir string, data []byte, sum backup.Summary) *sqlite.Store {
+// importWALBackup opens a fresh store, stages the portable files of bk into it
+// and applies the staged data, then returns the restored store.
+func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup) *sqlite.Store {
 	t.Helper()
 
 	dst, err := sqlite.Open(ctx, filepath.Join(dir, "restored.db"))
@@ -431,8 +447,12 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, data []byte,
 		}
 	})
 
-	if _, err := dst.Import(ctx, bytes.NewReader(data), sum); err != nil {
-		t.Fatalf("import backup: %v", err)
+	if _, err := dst.StagePortable(ctx, storetest.PortableOpener(bk.files), bk.sum, bk.descs); err != nil {
+		t.Fatalf("stage backup: %v", err)
+	}
+
+	if err := dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staged backup: %v", err)
 	}
 
 	return dst
@@ -1204,7 +1224,13 @@ func openWALBusyStore(
 		}
 	})
 
-	ns := namespace.Namespace{CreatedAt: time.Now(), Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)

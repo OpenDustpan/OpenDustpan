@@ -315,7 +315,7 @@ func WithCheckpointDeltaCutoff(n int) Option {
 }
 
 // WithBackupTarget sets the backup target that holds blobs/<key>,
-// backups/<id>/db and backups/<id>/manifest.json (ADR 30 decision 5).
+// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
 // "dir:/path". name is the target setting for operators, for example
 // "dir:/var/backups": the backups table keeps it. Empty name with a target
@@ -668,6 +668,11 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("namespace service: %w", err)
 	}
 
+	journal, err := journalWriter(cfg)
+	if err != nil {
+		return services{}, fmt.Errorf("journal writer: %w", err)
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -678,6 +683,7 @@ func newServices(cfg settings) (services, error) {
 		Now:                cfg.now,
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("update service: %w", err)
@@ -1179,7 +1185,7 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 		return nil, nil
 	}
 
-	exporter, ok := cfg.namespaceStore.(backup.Exporter)
+	exporter, ok := cfg.namespaceStore.(backup.PortableExporter)
 	if !ok {
 		return nil, errBackupNeedsExporter
 	}

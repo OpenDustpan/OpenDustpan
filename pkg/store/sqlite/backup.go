@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,12 +20,9 @@ import (
 )
 
 var (
-	_ backup.Exporter  = (*Store)(nil)
-	_ backup.Importer  = (*Store)(nil)
 	_ backup.Registry  = (*Store)(nil)
 	_ backup.Inspector = (*Store)(nil)
 	_ backup.KeyPeeker = (*Store)(nil)
-	_ backup.Stager    = (*Store)(nil)
 )
 
 // CreateBackup implements backup.Registry: it stores r as a running backup.
@@ -168,6 +164,95 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 	})
 }
 
+// CheckCoverage implements backup.Coverage: it compares the column list of each
+// table of backup.Tables with the columns that the schema holds for the table
+// (ADR 42, decision 5). A table without a list, or a column that differs, fails
+// with backup.ErrCoverage.
+func (s *Store) CheckCoverage(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	lists := make(map[string][]string, len(backup.Tables))
+
+	for _, spec := range sqliteBackupTables() {
+		lists[spec.table] = spec.columns
+	}
+
+	for _, table := range backup.Tables {
+		listed, ok := lists[table]
+		if !ok {
+			return fmt.Errorf("backup table %q has no column list: %w", table, backup.ErrCoverage)
+		}
+
+		live, err := s.liveColumns(ctx, table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := backup.CheckColumns(table, listed, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return s.checkPortableColumns(ctx)
+}
+
+// checkPortableColumns compares the portable spec with the live columns of each
+// table, under the SQLite names of the portable columns. The export writes the
+// spec, so the spec must match the schema (ADR 42, decisions 3 and 5).
+func (s *Store) checkPortableColumns(ctx context.Context) error {
+	for _, spec := range backup.PortableTables() {
+		listed := make([]string, 0, len(spec.Columns))
+		for _, column := range spec.Columns {
+			listed = append(listed, sqliteColumnName(spec.Table, column.Name))
+		}
+
+		live, err := s.liveColumns(ctx, spec.Table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := backup.CheckColumns(spec.Table, listed, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
+	return nil
+}
+
+// liveColumns returns the column names of table in schema order, read with
+// pragma_table_info.
+func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
+	rows, err := s.conn.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
+	if err != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
+
+	var columns []string
+
+	for rows.Next() {
+		var name string
+
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			return nil, fmt.Errorf("scan column of table %q: %w", table, backup.ErrSchemaRead)
+		}
+
+		columns = append(columns, name)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, backup.ErrSchemaRead)
+	}
+
+	return columns, nil
+}
+
 // SchemaTables implements backup.Inspector: the data tables the schema holds,
 // read from the catalog, never from backup.Tables, so the conformance suite
 // fails while the two differ. It excludes bookkeeping (schema_migrations)
@@ -210,162 +295,24 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Export implements backup.Exporter. It copies the database into a new file
-// with VACUUM INTO, reads the summary from that snapshot (never from the live
-// database), and streams the file to w. VACUUM INTO reads one consistent
-// view, so the capture runs while the server writes. It adds no dependency.
-func (s *Store) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	snap, err := s.capture(ctx)
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	defer removeSnapshot(snap)
-
-	sum, err := summarizeFile(ctx, snap)
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	if err := writeSnapshotTo(snap, w); err != nil {
-		return backup.Summary{}, err
-	}
-
-	return sum, nil
-}
-
-// Import implements backup.Importer. It stages the stream in a temporary file
-// in the destination directory, checks it (schema version, row counts,
-// PRAGMA integrity_check), then renames it into place and reopens the store.
-// A failed import removes the temporary file and leaves the destination
-// empty. Restore runs offline: the destination has no server writing to it,
-// so Import takes no lock; the online path stages and applies under lock
-// instead.
-func (s *Store) Import(ctx context.Context, r io.Reader, want backup.Summary) (backup.Summary, error) {
-	if want.Dialect != backup.DialectSQLite {
-		return backup.Summary{}, fmt.Errorf(
-			"import backup of dialect %q into %q: %w",
-			want.Dialect,
-			backup.DialectSQLite,
-			backup.ErrDialectMismatch,
-		)
-	}
-
-	version, err := schemaVersion(ctx, s.conn)
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	if want.SchemaVersion != int(version) {
-		return backup.Summary{}, fmt.Errorf(
-			"import backup of schema version %d into version %d: %w",
-			want.SchemaVersion,
-			version,
-			backup.ErrSchemaMismatch,
-		)
-	}
-
-	if emptyErr := s.requireEmpty(ctx); emptyErr != nil {
-		return backup.Summary{}, emptyErr
-	}
-
-	temp, stageErr := stageRestore(r, filepath.Dir(s.path))
-	if stageErr != nil {
-		return backup.Summary{}, stageErr
-	}
-
-	defer removeSnapshot(temp)
-
-	sum, checkErr := checkRestoreFile(ctx, temp, want)
-	if checkErr != nil {
-		return backup.Summary{}, checkErr
-	}
-
-	if err := s.swapDatabase(ctx, temp); err != nil {
-		return backup.Summary{}, err
-	}
-
-	return sum, nil
-}
-
-// StageRestore implements backup.Stager: it stages the export stream in a
-// temporary file next to the live database and checks it (integrity, schema
-// version, row counts, foreign keys, blob references), without touching the
-// live database. The file stays as the staging area until DiscardStaging
-// removes it; a later change applies it. A failed stage removes the file. Only
-// one staging exists at a time: a new stage discards the previous one.
-func (s *Store) StageRestore(
-	ctx context.Context, r io.Reader, want backup.Summary,
-) (backup.Summary, error) {
-	if want.Dialect != backup.DialectSQLite {
-		return backup.Summary{}, fmt.Errorf(
-			"stage backup of dialect %q into %q: %w",
-			want.Dialect,
-			backup.DialectSQLite,
-			backup.ErrDialectMismatch,
-		)
-	}
-
-	version, err := func() (int64, error) {
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-
-		return schemaVersion(ctx, s.conn)
-	}()
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	if want.SchemaVersion != int(version) {
-		return backup.Summary{}, fmt.Errorf(
-			"stage backup of schema version %d into version %d: %w",
-			want.SchemaVersion,
-			version,
-			backup.ErrSchemaMismatch,
-		)
-	}
-
-	temp, err := stageRestore(r, filepath.Dir(s.path))
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	kept := false
-
-	defer func() {
-		if !kept {
-			removeSnapshot(temp)
-		}
-	}()
-
-	sum, err := checkRestoreFile(ctx, temp, want)
-	if err != nil {
-		return backup.Summary{}, err
-	}
-
-	if err := checkStagedBlobs(sum.Blobs, want.Blobs); err != nil {
-		return backup.Summary{}, err
-	}
-
+// keepStaged makes temp the staging area, discarding the previous one. A failed
+// discard returns the error and keeps the new file out of the staging area.
+func (s *Store) keepStaged(temp string) error {
 	s.stagingMu.Lock()
 	defer s.stagingMu.Unlock()
 
 	if s.stagingPath != "" {
 		if err := removeSnapshotErr(s.stagingPath); err != nil {
-			return backup.Summary{}, fmt.Errorf("discard previous staging area: %w", err)
+			return fmt.Errorf("discard previous staging area: %w", err)
 		}
 	}
 
 	s.stagingPath = temp
-	kept = true
 
-	return sum, nil
+	return nil
 }
 
-// DiscardStaging implements backup.Stager: it removes the staged restore file,
+// DiscardStaging implements backup.CheckStore: it removes the staged restore file,
 // if any. It leaves the live database unchanged. A failed remove returns the
 // error and retains the staging area for retry, matching the PostgreSQL
 // adapter.
@@ -390,76 +337,12 @@ func (s *Store) DiscardStaging(ctx context.Context) error {
 	return nil
 }
 
-// PeekKey implements backup.KeyPeeker: it stages the export stream in a
-// temporary file and reads one wrapped data key of wrapperID from its
-// secret_keys table, without loading the destination. The caller streams the
-// SQL part, so the bytes never sit in memory whole.
-func (s *Store) PeekKey(ctx context.Context, r io.Reader, wrapperID string) (secret.WrappedKey, error) {
-	temp, err := stagePeekFile(r)
-	if err != nil {
-		return secret.WrappedKey{}, err
-	}
-
-	defer removeSnapshot(temp)
-
-	conn, err := openSnapshot(ctx, temp)
-	if err != nil {
-		return secret.WrappedKey{}, fmt.Errorf("check staged backup: %w", corrupt(err))
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	const query = `SELECT namespace, stack_id, wrapper_id, ciphertext, created_at_ms
-		FROM secret_keys WHERE wrapper_id = ? ORDER BY namespace, stack_id LIMIT 1`
-
-	var row codec.SecretKeyRow
-
-	scanErr := conn.QueryRowContext(ctx, query, wrapperID).Scan(
-		&row.Namespace, &row.StackID, &row.WrapperID, &row.Ciphertext, &row.CreatedAtMs,
-	)
-	if errors.Is(scanErr, sql.ErrNoRows) {
-		return secret.WrappedKey{}, fmt.Errorf(
-			"backup holds no data key of wrapper %q: %w", wrapperID, backup.ErrCorrupt,
-		)
-	}
-
-	if scanErr != nil {
-		return secret.WrappedKey{}, fmt.Errorf("read backup data key: %w", corrupt(scanErr))
-	}
-
-	return codec.FromSecretKeyRow(row), nil
-}
-
-// stagePeekFile writes the export stream to a temporary file and returns its
-// path. The caller removes it.
-func stagePeekFile(r io.Reader) (string, error) {
-	f, err := os.CreateTemp("", ".dustpan-peek-*.db")
-	if err != nil {
-		return "", fmt.Errorf("stage peek file: %w", err)
-	}
-
-	temp := f.Name()
-
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-
-	if copyErr != nil {
-		removeErr := os.Remove(temp)
-
-		return "", fmt.Errorf("stage peek file: %w", errors.Join(copyErr, closeErr, removeErr))
-	}
-
-	if closeErr != nil {
-		removeErr := os.Remove(temp)
-
-		return "", fmt.Errorf("stage peek file: %w", errors.Join(closeErr, removeErr))
-	}
-
-	return temp, nil
+// PeekPortableKey implements backup.KeyPeeker: it reads one data key of
+// wrapperID from the secret_keys file of a portable backup (ADR 42).
+func (s *Store) PeekPortableKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
 }
 
 // capture copies the database into a new file with VACUUM INTO and returns
@@ -480,29 +363,6 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 	}
 
 	return snap, nil
-}
-
-// requireEmpty reports ErrNotEmpty when the destination holds any row. The
-// port loads into an empty store only, so a failed load can leave it empty.
-// The seeded installation row is bookkeeping, not data, so a fresh database
-// still counts as empty.
-func (s *Store) requireEmpty(ctx context.Context) error {
-	for _, table := range backup.Tables {
-		if table == "installation" {
-			continue
-		}
-
-		n, err := countRows(ctx, s.conn, table)
-		if err != nil {
-			return err
-		}
-
-		if n > 0 {
-			return fmt.Errorf("restore destination holds %d rows of %s: %w", n, table, backup.ErrNotEmpty)
-		}
-	}
-
-	return nil
 }
 
 // swapDatabase replaces the destination file with the staged file and reopens
@@ -905,7 +765,7 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
 // MD5 of every state version that names content, with the blob key, size and
-// MD5 of every checkpoint kept in blobs, ordered by key. Size and MD5 stay
+// MD5 of every checkpoint kept in blobs and every journal batch, ordered by key. Size and MD5 stay
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
 // the sealed bytes. A pending version names no content, so only finalized
@@ -915,6 +775,8 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
 		WHERE blob_key IS NOT NULL AND blob_key <> ''
+		UNION ALL
+		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		ORDER BY content_key`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -984,53 +846,6 @@ func snapshotPath(dir string) (string, error) {
 	}
 
 	return name, nil
-}
-
-// stageRestore writes the export stream to a temporary file in dir and
-// returns its path. The caller checks the file and renames it into place, or
-// removes it on failure.
-func stageRestore(r io.Reader, dir string) (string, error) {
-	f, err := os.CreateTemp(dir, ".dustpan-restore-*.db")
-	if err != nil {
-		return "", fmt.Errorf("stage restore file: %w", err)
-	}
-
-	temp := f.Name()
-
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-
-	if copyErr != nil {
-		removeErr := os.Remove(temp)
-		return "", fmt.Errorf("stage restore file: %w", errors.Join(copyErr, closeErr, removeErr))
-	}
-
-	if closeErr != nil {
-		removeErr := os.Remove(temp)
-		return "", fmt.Errorf("stage restore file: %w", errors.Join(closeErr, removeErr))
-	}
-
-	return temp, nil
-}
-
-// writeSnapshotTo streams the snapshot file at path to w.
-func writeSnapshotTo(path string, w io.Writer) error {
-	f, err := os.Open(path) //nolint:gosec // The path is a snapshot file this code created.
-	if err != nil {
-		return fmt.Errorf("read backup snapshot: %w", err)
-	}
-
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	if _, err := io.Copy(w, f); err != nil {
-		return fmt.Errorf("write backup: %w", err)
-	}
-
-	return nil
 }
 
 // removeSnapshot removes a snapshot file with its WAL sidecars, if present.

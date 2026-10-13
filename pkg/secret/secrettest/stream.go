@@ -117,6 +117,7 @@ func streamNamespace(t *testing.T, s Store) {
 		Name:            "acme",
 		HomeRegion:      "local",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {

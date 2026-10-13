@@ -76,17 +76,17 @@ func TestNegotiateJournalVersion(t *testing.T) {
 		want      int
 	}{
 		{
-			name:      "production server answers 0",
+			name:      "server without journaling answers 0",
 			userAgent: inRange,
 			offered:   1,
-			supported: maxSupportedJournalVersion,
+			supported: 0,
 			want:      0,
 		},
 		{
-			name:      "offer 2 to production server",
+			name:      "offer 2 to a server without journaling",
 			userAgent: inRange,
 			offered:   2,
-			supported: maxSupportedJournalVersion,
+			supported: 0,
 			want:      0,
 		},
 		{name: "in range answers the offer", userAgent: inRange, offered: 1, supported: 2, want: 1},

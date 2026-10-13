@@ -97,6 +97,7 @@ func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (name
 		Name:            name,
 		HomeRegion:      testRegion,
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
 }
 
@@ -319,6 +320,12 @@ func (fakeStates) FinalizeStateVersion(context.Context, workspace.StateVersion, 
 	return nil
 }
 
+func (fakeStates) FenceAndUnlock(
+	context.Context, workspace.Workspace, workspace.StateVersion, workspace.StateVersionID, namespace.Fence,
+) error {
+	return nil
+}
+
 func (fakeStates) CurrentStateVersion(context.Context, workspace.ID) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrNoState
 }
@@ -411,6 +418,16 @@ func newFixture(t *testing.T) *fixture {
 func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fixture {
 	t.Helper()
 
+	return newFixtureWith(t, namespacesStore, fakeStates{}, fakeBlobs{})
+}
+
+// newFixtureWith builds the fixture with the state and blob stores the test
+// needs, so a test can hold a state version whose content it controls.
+func newFixtureWith(
+	t *testing.T, namespacesStore namespace.Store, states workspace.StateStore, blobs blob.Store,
+) *fixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: namespacesStore, Now: nil, Region: testRegion},
 	)
@@ -447,6 +464,7 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -454,8 +472,8 @@ func newFixtureWithNamespaces(t *testing.T, namespacesStore namespace.Store) *fi
 
 	workspaces, err := workspace.NewService(workspace.Config{
 		Workspaces:         f.workspaces,
-		States:             fakeStates{},
-		Blobs:              fakeBlobs{},
+		States:             states,
+		Blobs:              blobs,
 		Namespaces:         namespaces,
 		Sealer:             nil,
 		Logger:             nil,
@@ -554,9 +572,10 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 			Holder:   "admin",
 			Reason:   "apply",
 		},
-		ID:       "ws-1",
-		Ref:      workspace.Ref{Namespace: testNamespace, Name: parsed},
-		Revision: 2,
+		ID:        "ws-1",
+		Ref:       workspace.Ref{Namespace: testNamespace, Name: parsed},
+		Revision:  2,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }
@@ -588,6 +607,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -740,6 +760,83 @@ func TestEnterRefusesLockedWorkspace(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "opentofu:acme/network") {
 		t.Fatalf("enter with a locked workspace: err = %v, want it to name opentofu:acme/network", err)
+	}
+}
+
+// encryptedStates holds one finalized version, as the state store of a workspace
+// whose state the client encrypted.
+type encryptedStates struct {
+	fakeStates
+
+	version workspace.StateVersion
+}
+
+func (s encryptedStates) CurrentStateVersion(context.Context, workspace.ID) (workspace.StateVersion, error) {
+	return s.version, nil
+}
+
+func (s encryptedStates) GetStateVersion(context.Context, workspace.StateVersionID) (workspace.StateVersion, error) {
+	return s.version, nil
+}
+
+// encryptedBlobs returns a client-encrypted state document for any key.
+type encryptedBlobs struct {
+	fakeBlobs
+}
+
+func (encryptedBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(`{"encrypted_data":"c2VjcmV0"}`)), nil
+}
+
+// TestEnterForceLeavesClientEncryptedWorkspaceLocked checks that a force enter
+// skips a workspace whose state the client encrypted. The server cannot fence
+// that state, so the lock stays, the unit is not reported as released, and the
+// enter still succeeds.
+func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
+	t.Parallel()
+
+	states := encryptedStates{
+		fakeStates: fakeStates{},
+		version: workspace.StateVersion{
+			CreatedAt:       time.Time{},
+			FinalizedAt:     time.Time{},
+			UploadExpiresAt: time.Time{},
+			Upload:          token.Digest{},
+			ID:              "sv-1",
+			Workspace:       "ws-1",
+			Holder:          "",
+			LockID:          "",
+			Lineage:         "l1",
+			Status:          workspace.StatusFinalized,
+			Content:         "tofu/ws-1/sv-1/a1",
+			Outputs:         nil,
+			MD5:             [16]byte{},
+			Serial:          1,
+			Size:            0,
+			Force:           false,
+			Sealed:          false,
+			RestoredFrom:    "",
+			SensitiveMarks:  nil,
+			FenceBy:         "",
+			UnlockedWrite:   false,
+		},
+	}
+
+	f := newFixtureWith(t, fakeNamespaces{}, states, encryptedBlobs{fakeBlobs: fakeBlobs{}})
+	ctx := t.Context()
+	seedLockedWorkspace(t, f, "network")
+
+	res, err := f.service.Enter(ctx, true)
+	if err != nil {
+		t.Fatalf("force enter: %v", err)
+	}
+
+	if len(res.Canceled) != 0 {
+		t.Fatalf("force enter canceled = %v, want nothing: the encrypted workspace stays locked", res.Canceled)
+	}
+
+	if w := f.workspaces.workspaces["ws-1"]; w.Lock.Holder != "admin" {
+		t.Fatalf("lock holder = %q, want admin: the lock stays", w.Lock.Holder)
 	}
 }
 
@@ -1186,4 +1283,14 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 	if u := f.updates.updates["u2"]; u.Status != stack.StatusRunning {
 		t.Fatalf("second raced update status = %q, want running: no rollback canceled it", u.Status)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (fakeNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
+}
+
+// ReleaseUnfenced is not used by this fake: it saves like SaveWorkspace.
+func (f *fakeWorkspaces) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error {
+	return f.SaveWorkspace(ctx, w, fence)
 }

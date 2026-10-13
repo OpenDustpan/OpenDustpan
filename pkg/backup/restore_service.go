@@ -66,7 +66,7 @@ type RestoreConfig struct {
 	// Blobs is the live content store the restore copies into.
 	Blobs blob.Store
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/db and backups/<id>/manifest.json.
+	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
 	Target blob.Store
 	// Key is the key-encryption key the checks prove against the backup.
 	Key secret.Wrapper
@@ -466,12 +466,10 @@ func sanitizeRestoreError(err error) string {
 		return ErrRestoreRunning.Error()
 	case errors.Is(err, ErrCorrupt):
 		return ErrCorrupt.Error()
-	case errors.Is(err, ErrDialectMismatch):
-		return ErrDialectMismatch.Error()
+	case errors.Is(err, ErrNativeFormat):
+		return ErrNativeFormat.Error()
 	case errors.Is(err, ErrSchemaMismatch):
 		return ErrSchemaMismatch.Error()
-	case errors.Is(err, ErrNotEmpty):
-		return ErrNotEmpty.Error()
 	case errors.Is(err, maintenance.ErrActiveWork):
 		return activeWorkMessage(err)
 	case errors.Is(err, ErrNotFound):
@@ -560,7 +558,7 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
-// "backups/bkp-1/db" or "blobs/pulumi/stk-1/upd-1/0": storage layout, not
+// "backups/bkp-1/manifest.json" or "blobs/pulumi/stk-1/upd-1/0": storage layout, not
 // data. Blob content keys without the target prefix stay, so the log still
 // names the blob that failed.
 var logObjectPath = regexp.MustCompile(`"[^"]*(?:backups|blobs)/[^"]*"`)
@@ -684,9 +682,8 @@ func redactLogFrame(text string) string {
 func isLogSentinel(err error) bool {
 	switch {
 	case errors.Is(err, ErrCorrupt),
-		errors.Is(err, ErrDialectMismatch),
+		errors.Is(err, ErrNativeFormat),
 		errors.Is(err, ErrSchemaMismatch),
-		errors.Is(err, ErrNotEmpty),
 		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrAlreadyExists),
 		errors.Is(err, ErrNotRunning),
@@ -957,12 +954,11 @@ func (s *RestoreService) stage(ctx context.Context, id ID) error {
 		return err
 	}
 
-	wantSHA, shaErr := parseSQLSHA(manifest, id)
-	if shaErr != nil {
+	if _, shaErr := parseSQLSHA(manifest, id); shaErr != nil {
 		return shaErr
 	}
 
-	if verifyErr := verifySQLPart(ctx, s.target, id, manifest.SQLSize, wantSHA); verifyErr != nil {
+	if verifyErr := verifySQLPart(ctx, s.target, id, manifest.SQLFiles); verifyErr != nil {
 		return verifyErr
 	}
 
@@ -971,7 +967,9 @@ func (s *RestoreService) stage(ctx context.Context, id ID) error {
 		return blobsErr
 	}
 
-	if _, stageErr := stageBackup(ctx, s.target, s.live, id, restoreWant(manifest, wantBlobs)); stageErr != nil {
+	plan := stagePlan{want: restoreWant(manifest, wantBlobs), files: manifest.SQLFiles}
+
+	if _, stageErr := stageBackup(ctx, s.target, s.live, id, plan); stageErr != nil {
 		return stageErr
 	}
 

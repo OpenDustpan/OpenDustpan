@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"slices"
 	"strings"
@@ -19,9 +18,21 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
-// FormatVersion is the manifest format number. Check and restore refuse a
-// manifest with another number. It changes only with a new ADR.
-const FormatVersion = 1
+// nativeFormatVersion is the manifest format number of the native format of ADR
+// 30. Restore refuses it before it changes anything (ADR 42, decision 4).
+const nativeFormatVersion = 1
+
+// ErrNativeFormat reports a backup in the native format of ADR 30, which this
+// server does not restore. A new backup is necessary.
+var ErrNativeFormat = errors.New(
+	"backup uses the native format, which this server does not restore; take a new backup",
+)
+
+// FormatVersion is the manifest format number of the portable format (ADR 42,
+// decision 4). Check and restore refuse a manifest with another number,
+// including the native format 1 of ADR 30, which a backup can no longer hold.
+// It changes only with a new ADR.
+const FormatVersion = PortableManifestFormat
 
 // S3ObjectLimit is the largest object an S3-compatible target holds (ADR 31):
 // 5 GiB. A Config whose target is S3-compatible sets MaxSQLBytes to it, so a
@@ -41,7 +52,10 @@ var (
 
 // Manifest is the last object a backup writes: backups/<id>/manifest.json. It
 // names every object the backup holds, so Check and restore can verify the
-// target before they use it. Blobs holds one entry per blob the SQL data
+// target before they use it. SQLFiles holds one descriptor for each table file
+// of the SQL part, in the order of Tables (ADR 42, decision 4). SQLSize is the
+// sum of their sizes, and SQLSHA256 is the SHA-256 of their JSON, both as the
+// pins of a restore compare them. Blobs holds one entry per blob the SQL data
 // names, ordered by key. SQLSHA256 and each blob MD5 are lowercase hex. The
 // JSON keys are stable: Check and restore parse them, so a new field needs a
 // new optional key, never a rename.
@@ -60,6 +74,11 @@ type Manifest struct {
 	// RowCounts holds the row count of each table in Tables. Restore compares
 	// the loaded counts with it after the SQL load.
 	RowCounts map[string]int64 `json:"rowCounts"`
+	// SQLFormat names the format of the SQL part: PortableFormat (ADR 42,
+	// decision 4).
+	SQLFormat string `json:"sqlFormat"`
+	// SQLFiles holds one descriptor for each table file of the SQL part.
+	SQLFiles []PortableFile `json:"sqlFiles"`
 }
 
 // ManifestBlob names one copied blob with its size and MD5.
@@ -76,7 +95,7 @@ type ManifestBlob struct {
 
 // Config holds the dependencies of a Service.
 type Config struct {
-	Exporter Exporter
+	Exporter PortableExporter
 	Registry Registry
 	// Blobs is the live content store the backup copies from.
 	Blobs blob.Store
@@ -86,7 +105,7 @@ type Config struct {
 	// without sealed state.
 	StateOpener StateOpener
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/db and backups/<id>/manifest.json.
+	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
 	Target blob.Store
 	// TargetName names the target for operators, for example
 	// "dir:/var/backups". The registry row keeps it.
@@ -101,7 +120,7 @@ type Config struct {
 
 // Service runs backups of a whole installation into a blob.Store target.
 type Service struct {
-	exporter   Exporter
+	exporter   PortableExporter
 	registry   Registry
 	source     blob.Store
 	opener     StateOpener
@@ -165,7 +184,7 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // Run captures the SQL data in one read transaction, writes it to
-// backups/<id>/db, copies each blob the SQL data names to blobs/<blob key>,
+// backups/<id>/sql/<table>.jsonl.gz, copies each blob the SQL data names to blobs/<blob key>,
 // and writes backups/<id>/manifest.json last. A blob the target already holds
 // is not copied again. It returns ErrAlreadyRunning while another backup
 // runs. A failed backup marks its registry row failed with the error text and
@@ -179,7 +198,7 @@ func (s *Service) Run(ctx context.Context, id ID) (Record, error) {
 
 	defer s.release()
 
-	if backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey); backupErr != nil {
+	if backupErr := s.backup(ctx, id, started.startedAt, started.manifestKey); backupErr != nil {
 		return Record{}, s.markFailed(ctx, id, backupErr)
 	}
 
@@ -286,7 +305,6 @@ func (s *Service) PreserveAfterRestore(ctx context.Context, rec Record) error {
 // startedBackup holds the keys and start time of a claimed backup row. Run
 // uses them at once; Start hands them to its background work.
 type startedBackup struct {
-	dbKey       blob.Key
 	manifestKey blob.Key
 	startedAt   time.Time
 }
@@ -301,13 +319,6 @@ func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
 	}
 
 	if err := s.claim(); err != nil {
-		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
-	}
-
-	dbKey, err := blob.ParseKey("backups/" + id.String() + "/db")
-	if err != nil {
-		s.release()
-
 		return startedBackup{}, fmt.Errorf("begin backup %s: %w", id, err)
 	}
 
@@ -335,7 +346,7 @@ func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
 		return startedBackup{}, fmt.Errorf("create backup %s: %w", id, createErr)
 	}
 
-	return startedBackup{dbKey: dbKey, manifestKey: manifestKey, startedAt: startedAt}, nil
+	return startedBackup{manifestKey: manifestKey, startedAt: startedAt}, nil
 }
 
 // finish completes a backup that Start began: it exports the SQL part, copies
@@ -343,7 +354,7 @@ func (s *Service) begin(ctx context.Context, id ID) (startedBackup, error) {
 // registry row. It releases the slot when the work ends. Errors land in the
 // row, where Get shows them to the operator.
 func (s *Service) finish(ctx context.Context, id ID, started startedBackup) {
-	backupErr := s.backup(ctx, id, started.startedAt, started.dbKey, started.manifestKey)
+	backupErr := s.backup(ctx, id, started.startedAt, started.manifestKey)
 
 	// The slot goes free before the row records the result, so a client
 	// that reads the final state can start the next backup at once. The
@@ -401,9 +412,9 @@ func (s *Service) release() {
 // backup exports the SQL part, copies the named blobs, and writes the
 // manifest last, so a backup without a manifest never counts as complete.
 func (s *Service) backup(
-	ctx context.Context, id ID, startedAt time.Time, dbKey, manifestKey blob.Key,
+	ctx context.Context, id ID, startedAt time.Time, manifestKey blob.Key,
 ) error {
-	exported, err := s.exportSQL(ctx, dbKey)
+	exported, err := s.exportPortable(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -426,6 +437,7 @@ func (s *Service) backup(
 		id:        id,
 		sum:       exported.sum,
 		ordered:   stored,
+		files:     exported.files,
 		size:      exported.size,
 		sha:       exported.sha,
 		key:       manifestKey,
@@ -441,86 +453,125 @@ func orderBlobs(refs []BlobRef) []BlobRef {
 	return ordered
 }
 
-// sqlExport holds the summary of an export with the size and SHA-256 of the
-// stored SQL part.
+// sqlExport holds the summary of a portable export with the descriptors of its
+// table files, and the size and SHA-256 that the manifest keeps for the SQL part.
 type sqlExport struct {
-	sum  Summary
-	size int64
-	sha  [sha256.Size]byte
+	sum   Summary
+	files []PortableFile
+	size  int64
+	sha   [sha256.Size]byte
 }
 
-// exportSQL runs the export in one read transaction while the target reads
-// the bytes, so the SQL part never sits in memory whole. It returns the
-// summary with the size and SHA-256 of the stored bytes.
-func (s *Service) exportSQL(ctx context.Context, key blob.Key) (sqlExport, error) {
-	reader, writer := io.Pipe()
+// exportPortable writes one object for each table file of the SQL part, under
+// backups/<id>/sql, and returns the summary with the descriptors. Each file
+// streams into the target while the export writes it, so the SQL part never sits
+// in memory whole. A file that fails before it completes is aborted in the
+// target, so no partial table file stays there as a good one.
+func (s *Service) exportPortable(ctx context.Context, id ID) (sqlExport, error) {
+	sink := func(path string) (io.WriteCloser, error) {
+		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
+		if err != nil {
+			return nil, fmt.Errorf("name table file %q: %w", path, err)
+		}
 
-	type outcome struct {
-		sum  Summary
-		size int64
-		sha  [sha256.Size]byte
-		err  error
+		return newTargetWriter(ctx, s.target, key, s.maxSQL), nil
 	}
 
-	finished := make(chan outcome, 1)
+	sum, files, err := s.exporter.ExportPortable(ctx, sink)
+	if err != nil {
+		return sqlExport{}, fmt.Errorf("export SQL data: %w", err)
+	}
+
+	size, sha, err := sqlAggregate(files)
+	if err != nil {
+		return sqlExport{}, err
+	}
+
+	return sqlExport{sum: sum, files: files, size: size, sha: sha}, nil
+}
+
+// sqlAggregate returns the total size of the table files and the SHA-256 of
+// their descriptors, as JSON. The manifest keeps both, so a restore pins the SQL
+// part as it pinned the one object of format 1.
+func sqlAggregate(files []PortableFile) (int64, [sha256.Size]byte, error) {
+	var sha [sha256.Size]byte
+
+	var size int64
+
+	for _, file := range files {
+		size += file.Size
+	}
+
+	raw, err := json.Marshal(files)
+	if err != nil {
+		return 0, sha, fmt.Errorf("encode SQL part descriptors: %w", err)
+	}
+
+	sha = sha256.Sum256(raw)
+
+	return size, sha, nil
+}
+
+// targetWriter streams one table file into the target. Close finishes the
+// object and reports the target's error. Abort ends the object with err, so the
+// target stores nothing for the file.
+type targetWriter struct {
+	pipe  *io.PipeWriter
+	done  chan error
+	size  int64
+	limit int64
+}
+
+// newTargetWriter starts a Put of key on target that reads from a pipe. A limit
+// above zero bounds the bytes of the object, as an S3-compatible target bounds
+// one object (ADR 31).
+func newTargetWriter(ctx context.Context, target blob.Store, key blob.Key, limit int64) *targetWriter {
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
 
 	go func() {
-		counter := &sizeHashWriter{hash: sha256.New(), limit: s.maxSQL, size: 0}
-		sum, exportErr := s.exporter.Export(ctx, io.MultiWriter(writer, counter))
+		err := target.Put(ctx, key, reader)
+		if err != nil {
+			_ = reader.CloseWithError(err) // PipeReader.CloseWithError always returns nil.
+		}
 
-		var sha [sha256.Size]byte
-
-		copy(sha[:], counter.hash.Sum(nil))
-		closeErr := writer.CloseWithError(exportErr)
-		finished <- outcome{sum: sum, size: counter.size, sha: sha, err: errors.Join(exportErr, closeErr)}
+		done <- err
 	}()
 
-	putErr := s.target.Put(ctx, key, reader)
-	if putErr != nil {
-		// The target failed without draining the reader. Close it so the
-		// blocked export stops on its next Write instead of hanging the run.
-		reader.CloseWithError(putErr) //nolint:gosec // PipeReader.CloseWithError always returns nil.
-	}
-
-	res := <-finished
-
-	if res.err != nil {
-		return sqlExport{}, errors.Join(fmt.Errorf("export SQL data: %w", res.err), putErr)
-	}
-
-	if putErr != nil {
-		return sqlExport{}, fmt.Errorf("write backup database: %w", putErr)
-	}
-
-	return sqlExport{sum: res.sum, size: res.size, sha: res.sha}, nil
+	return &targetWriter{pipe: writer, done: done, size: 0, limit: limit}
 }
 
-// sizeHashWriter counts and hashes the SQL bytes while they stream to the
-// target. It fails above limit, so an oversized SQL part stops the export
-// with ErrTooLarge instead of filling the target.
-type sizeHashWriter struct {
-	hash  hash.Hash
-	limit int64
-	size  int64
-}
-
-func (w *sizeHashWriter) Write(p []byte) (int, error) {
+// Write streams p into the object. It fails above the limit, so an oversized
+// object stops the export with ErrTooLarge instead of filling the target.
+func (w *targetWriter) Write(p []byte) (int, error) {
 	if w.limit > 0 && w.size+int64(len(p)) > w.limit {
-		return 0, fmt.Errorf(
-			"%w: SQL part of %d bytes is over the target limit of %d bytes",
-			ErrTooLarge,
-			w.size+int64(len(p)),
-			w.limit,
-		)
+		return 0, fmt.Errorf("%w: table file of %d bytes is over the target limit of %d bytes",
+			ErrTooLarge, w.size+int64(len(p)), w.limit)
 	}
 
-	if _, err := w.hash.Write(p); err != nil {
-		return 0, fmt.Errorf("hash SQL part: %w", err)
+	n, err := w.pipe.Write(p)
+	w.size += int64(n)
+
+	return n, err //nolint:wrapcheck // The pipe reports the target's error unchanged.
+}
+
+// Close finishes the object and returns the target's error.
+func (w *targetWriter) Close() error {
+	if err := w.pipe.Close(); err != nil {
+		return fmt.Errorf("finish table file: %w", err)
 	}
 
-	w.size += int64(len(p))
+	if err := <-w.done; err != nil {
+		return fmt.Errorf("write table file: %w", err)
+	}
 
-	return len(p), nil
+	return nil
+}
+
+// Abort ends the object with err, so the target stores nothing for it.
+func (w *targetWriter) Abort(err error) {
+	_ = w.pipe.CloseWithError(err) // PipeWriter.CloseWithError always returns nil.
+	<-w.done
 }
 
 // copyBufferSize sizes the counting pass buffer, so the passes that hash
@@ -818,6 +869,7 @@ type manifestInput struct {
 	startedAt time.Time
 	id        ID
 	sum       Summary
+	files     []PortableFile
 	ordered   []ManifestBlob
 	size      int64
 	sha       [sha256.Size]byte
@@ -840,6 +892,8 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		SchemaVersion: in.sum.SchemaVersion,
 		SQLSize:       in.size,
 		RowCounts:     in.sum.RowCounts,
+		SQLFormat:     PortableFormat,
+		SQLFiles:      in.files,
 	}
 
 	manifest.Blobs = append(manifest.Blobs, in.ordered...)
@@ -871,13 +925,15 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 		return err
 	}
 
-	dbKey, err := blob.ParseKey("backups/" + id.String() + "/db")
-	if err != nil {
-		return fmt.Errorf("check backup %s: %w", id, err)
-	}
+	for _, file := range manifest.SQLFiles {
+		key, err := blob.ParseKey("backups/" + id.String() + "/" + file.Path)
+		if err != nil {
+			return fmt.Errorf("check backup %s: %w", id, err)
+		}
 
-	if err := checkObject(ctx, target, dbKey, manifest.SQLSize); err != nil {
-		return err
+		if err := checkObject(ctx, target, key, file.Size); err != nil {
+			return err
+		}
 	}
 
 	for _, ref := range manifest.Blobs {
@@ -929,19 +985,35 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 	}
 
 	switch {
-	case manifest.Format != FormatVersion:
+	case manifest.Format == nativeFormatVersion:
 		return Manifest{}, fmt.Errorf(
-			"backup %s uses manifest format %d, this server reads %d: %w",
+			"backup %s uses the native format of ADR 30, which this server does not restore; "+
+				"a new backup is necessary: %w",
+			id,
+			ErrNativeFormat,
+		)
+	case manifest.Format != FormatVersion || manifest.SQLFormat != PortableFormat:
+		return Manifest{}, fmt.Errorf(
+			"backup %s uses manifest format %d with SQL format %q, this server reads format %d with %q: %w",
 			id,
 			manifest.Format,
+			manifest.SQLFormat,
 			FormatVersion,
+			PortableFormat,
 			ErrCorrupt,
 		)
 	case manifest.ID != id:
 		return Manifest{}, fmt.Errorf("backup %s holds a manifest of %s: %w", id, manifest.ID, ErrCorrupt)
-	default:
-		return manifest, nil
 	}
+
+	// The descriptors name the objects that Check, restore and the key peek
+	// read. Check their names here, before any object is opened. The row counts
+	// are checked when the data is staged, in both dialects.
+	if _, err := indexPortableDescriptors(manifest.SQLFiles); err != nil {
+		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, err)
+	}
+
+	return manifest, nil
 }
 
 // checkObject checks that the target holds key with wantSize bytes. It Gets

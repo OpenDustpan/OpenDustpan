@@ -2,6 +2,7 @@ package pulumi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -57,6 +58,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -217,4 +219,9 @@ func TestPulumiActionLogHidesQuery(t *testing.T) {
 	if strings.Contains(buf.String(), queryCanary) {
 		t.Fatalf("log holds canary value %q", queryCanary)
 	}
+}
+
+// SetOverrides is not used by this fake.
+func (homedNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
 }

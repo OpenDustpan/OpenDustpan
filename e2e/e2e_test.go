@@ -3862,6 +3862,11 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	// The list route serves the two versions with the go-tfe query shape.
 	tofuStateVersionListScenario(t, env)
 
+	// The stale job's declare after a force-unlock. It runs after the list, which
+	// counts the versions this scenario has written so far.
+	tofuForceUnlockFenceScenario(t, env)
+	tofuOverrideSwitchesScenario(t, env)
+
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
 	tofuSealedStateScenario(t, env)
@@ -5023,11 +5028,12 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 
 			return nil
 		},
-		Name:   "import encrypted current state",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "import encrypted current state",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if versionID == "" {
@@ -5045,11 +5051,12 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 
 			return nil
 		},
-		Name:   "import encrypted stored state",
-		Method: http.MethodGet,
-		Path:   "/api/v2/state-versions/" + versionID + "/download",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "import encrypted stored state",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/state-versions/" + versionID + "/download",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -5240,12 +5247,13 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 
 	// Principal A locks through the API. The step records 200.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by A",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by A",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// The inventory entry of the workspace holds the lock: holder A, no
@@ -5259,23 +5267,25 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	// An unlock by A releases it, and the inventory entry holds no lock
 	// after. A relocks for the steps below.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by A",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock by A",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by A again",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by A again",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A plan as B fails at once. go-tfe discards the 409 detail for lock, so
@@ -5294,22 +5304,24 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 
 	// A second lock by B answers 409.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B conflicts",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "lock by B conflicts",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// An unlock by B answers 409: only the holder unlocks.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by B conflicts",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "unlock by B conflicts",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// A force-unlock as B succeeds. The CLI sends no lock ID that the
@@ -5346,46 +5358,51 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 	const lockReason = "e2e lock reason"
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B with reason",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by B with reason",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
-		Name:   "workspace shows lock holder",
-		Method: http.MethodGet,
-		Path:   wsPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
+		Name:      "workspace shows lock holder",
+		Method:    http.MethodGet,
+		Path:      wsPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock by B",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock by B",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceHidesLock,
-		Name:   "workspace hides lock holder",
-		Method: http.MethodGet,
-		Path:   wsPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceHidesLock,
+		Name:      "workspace hides lock holder",
+		Method:    http.MethodGet,
+		Path:      wsPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A force-unlock of an unlocked workspace answers 409.
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "force-unlock unlocked conflicts",
-		Method: http.MethodPost,
-		Path:   forcePath,
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     nil,
+		Name:      "force-unlock unlocked conflicts",
+		Method:    http.MethodPost,
+		Path:      forcePath,
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	// Two principals contend for one lock: both plans run at once with a
@@ -5645,9 +5662,9 @@ func stateVersionListBase() string {
 		"&filter[workspace][name]=" + e2e.Workspace
 }
 
-// checkStateVersionListTwo proves the list holds two versions, newest first,
-// with the holder, force and restored-from attributes on every entry.
-func checkStateVersionListTwo(body string) error {
+// checkStateVersionListThree checks the list after two applies and the fence
+// that the maintenance force enter wrote between them (ADR 44, decision 1).
+func checkStateVersionListThree(body string) error {
 	var raw struct {
 		Data []map[string]any `json:"data"`
 	}
@@ -5656,8 +5673,8 @@ func checkStateVersionListTwo(body string) error {
 		return fmt.Errorf("%w: decode state version list: %w", errUnexpected, err)
 	}
 
-	if len(raw.Data) != 2 {
-		return fmt.Errorf("%w: list holds %d versions, want 2: %s", errUnexpected, len(raw.Data), body)
+	if len(raw.Data) != 3 {
+		return fmt.Errorf("%w: list holds %d versions, want 3: %s", errUnexpected, len(raw.Data), body)
 	}
 
 	for _, item := range raw.Data {
@@ -5691,8 +5708,8 @@ func checkStateVersionListTwo(body string) error {
 		)
 	}
 
-	if doc.Meta.Pagination.TotalCount != 2 {
-		return fmt.Errorf("%w: total count is %d, want 2: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
+	if doc.Meta.Pagination.TotalCount != 3 {
+		return fmt.Errorf("%w: total count is %d, want 3: %s", errUnexpected, doc.Meta.Pagination.TotalCount, body)
 	}
 
 	return nil
@@ -5712,9 +5729,9 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 		}
 
 		page := doc.Meta.Pagination
-		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 2 || page.TotalPages != 2 {
+		if page.CurrentPage != number || page.PageSize != size || page.TotalCount != 3 || page.TotalPages != 3 {
 			return fmt.Errorf(
-				"%w: pagination %+v, want page %d of size %d with 2 entries in 2 pages",
+				"%w: pagination %+v, want page %d of size %d with 3 entries in 3 pages",
 				errUnexpected,
 				page,
 				number,
@@ -5726,8 +5743,8 @@ func checkStateVersionListPage(wantID string, number, size int) func(string) err
 	}
 }
 
-// tofuStateVersionListScenario proves the list route after two applies: both
-// versions listed newest first with the added attributes, and page[size] and
+// tofuStateVersionListScenario proves the list route after two applies and the
+// fence between them: every version listed newest first with the added attributes, and page[size] and
 // page[number] respected. Every request uses the go-tfe query shape.
 func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -5739,7 +5756,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(body string) error {
-			if err := checkStateVersionListTwo(body); err != nil {
+			if err := checkStateVersionListThree(body); err != nil {
 				return err
 			}
 
@@ -5752,29 +5769,36 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
-		Name:   "list state versions",
-		Method: http.MethodGet,
-		Path:   base,
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "list state versions",
+		Method:    http.MethodGet,
+		Path:      base,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(newest, 1, 1),
-		Name:   "list state versions first page",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1&page[number]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check: func(body string) error {
+			return checkStateVersionListPage(newest, 1, 1)(body)
+		},
+		Name:      "list state versions first page",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1&page[number]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkStateVersionListPage(oldest, 2, 1),
-		Name:   "list state versions second page",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1&page[number]=2",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check: func(body string) error {
+			return checkStateVersionListPage(oldest, 2, 1)(body)
+		},
+		Name:      "list state versions second page",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1&page[number]=2",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6009,8 +6033,12 @@ func checkRestoreKeepsHistory(ctx context.Context, t *testing.T, env *e2e.Env, n
 		t.Fatalf("decode state versions after restore: %v", err)
 	}
 
-	if len(doc.Data) != 4 {
-		t.Fatalf("list holds %d versions after the restore and the apply, want 4", len(doc.Data))
+	// The restore adds one version, and the apply after it adds one more: the
+	// restored version has the first greeting, so the apply changes the output.
+	// The override scenario before it wrote one version, so the list holds
+	// seven here.
+	if len(doc.Data) != 7 {
+		t.Fatalf("list holds %d versions after the restore and the apply, want 7", len(doc.Data))
 	}
 
 	for _, version := range doc.Data {
@@ -6048,11 +6076,15 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("decode state versions for restore: %v", err)
 	}
 
-	if len(doc.Data) != 2 {
-		t.Fatalf("list holds %d versions, want 2 before the restore", len(doc.Data))
+	// The override scenario wrote one version before the restore, so the list
+	// holds five here.
+	if len(doc.Data) != 5 {
+		t.Fatalf("list holds %d versions, want 5 before the restore", len(doc.Data))
 	}
 
-	newest, oldest := doc.Data[0].ID, doc.Data[1].ID
+	// The first version is the oldest. The fence of the maintenance enter and
+	// the stale-job step sit between it and the newest, so it is not Data[1].
+	newest, oldest := doc.Data[0].ID, doc.Data[len(doc.Data)-1].ID
 	firstDownload := downloadStateVersion(ctx, t, env, oldest)
 	firstMD5 := md5Hex(firstDownload)
 
@@ -6063,12 +6095,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	}
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreResponse(oldest),
-		Name:   "restore first state version",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + oldest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkRestoreResponse(oldest),
+		Name:      "restore first state version",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + oldest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// The new current version copies the first version: its MD5 attribute
@@ -6107,21 +6140,23 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock by B for restore",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock by B for restore",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreConflict,
-		Name:   "restore locked by another",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusConflict,
+		Check:     checkRestoreConflict,
+		Name:      "restore locked by another",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + newest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusConflict,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -6135,12 +6170,13 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkRestoreResponse(newest),
-		Name:   "restore after force-unlock",
-		Method: http.MethodPost,
-		Path:   "/api/v2/state-versions/" + newest + "/actions/restore",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkRestoreResponse(newest),
+		Name:      "restore after force-unlock",
+		Method:    http.MethodPost,
+		Path:      "/api/v2/state-versions/" + newest + "/actions/restore",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6195,12 +6231,13 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 
 	// The killed apply never unlocked: the workspace is still locked.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceLocked,
-		Name:   "workspace still locked",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceLocked,
+		Name:      "workspace still locked",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	// A plan now fails on the held lock: the CLI prints the lock failure and
@@ -6232,12 +6269,13 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 
 	// No pending version is current: the current state version is finalized.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkCurrentFinalized,
-		Name:   "current state is finalized",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkCurrentFinalized,
+		Name:      "current state is finalized",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -6257,12 +6295,13 @@ func tofuDestroyScenario(t *testing.T, env *e2e.Env) {
 	)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkWorkspaceUnlocked,
-		Name:   "workspace unlocked after destroy",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkWorkspaceUnlocked,
+		Name:      "workspace unlocked after destroy",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, step("state pull after destroy", checkStateDestroyed, "state", "pull"))
@@ -6802,11 +6841,12 @@ func maskedCurrentVersion(ctx context.Context, t *testing.T, env *e2e.Env, works
 
 			return nil
 		},
-		Name:   "masked current state version",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked current state version",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if versionID == "" {
@@ -6918,23 +6958,25 @@ func maskedResourceChecks(ctx context.Context, t *testing.T, env *e2e.Env, _, ve
 
 			return checkMaskedResourceList(body)
 		},
-		Name:   "masked resource list",
-		Method: http.MethodGet,
-		Path:   base + "/resources",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked resource list",
+		Method:    http.MethodGet,
+		Path:      base + "/resources",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	addresses := maskedResourceAddresses(t, listBody)
 
 	for _, address := range addresses {
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			Check:  checkMaskedResourceDetail(address),
-			Name:   "masked resource " + address,
-			Method: http.MethodGet,
-			Path:   base + "/resources/" + url.PathEscape(address),
-			Body:   "",
-			Want:   http.StatusOK,
+			Check:     checkMaskedResourceDetail(address),
+			Name:      "masked resource " + address,
+			Method:    http.MethodGet,
+			Path:      base + "/resources/" + url.PathEscape(address),
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
 		})
 	}
 }
@@ -7022,21 +7064,23 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 	base := "/api/v2/state-versions/" + versionID + "/resources"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedResourceFilterByType,
-		Name:   "masked resource filter by type",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("terraform_data"),
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedResourceFilterByType,
+		Name:      "masked resource filter by type",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("terraform_data"),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedResourceFilterByAddress,
-		Name:   "masked resource filter by address",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedResourceFilterByAddress,
+		Name:      "masked resource filter by address",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("random_password.pw"),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	for _, q := range []string{maskedSecretV2, "hello"} {
@@ -7045,12 +7089,13 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		query := url.QueryEscape(q)
 
 		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			Check:  checkMaskedResourceFilterEmpty,
-			Name:   "masked resource filter no match " + q,
-			Method: http.MethodGet,
-			Path:   base + "?filter[q]=" + query,
-			Body:   "",
-			Want:   http.StatusOK,
+			Check:     checkMaskedResourceFilterEmpty,
+			Name:      "masked resource filter no match " + q,
+			Method:    http.MethodGet,
+			Path:      base + "?filter[q]=" + query,
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
 		})
 	}
 
@@ -7067,11 +7112,12 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 
 			return nil
 		},
-		Name:   "masked resource filter first page",
-		Method: http.MethodGet,
-		Path:   base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "masked resource filter first page",
+		Method:    http.MethodGet,
+		Path:      base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	if firstPage.cursor == "" {
@@ -7084,8 +7130,9 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Method: http.MethodGet,
 		Path: base + "?filter[q]=" + url.QueryEscape("_") + "&page[size]=1&page[cursor]=" +
 			url.QueryEscape(firstPage.cursor),
-		Body: "",
-		Want: http.StatusOK,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -7397,12 +7444,13 @@ func maskedOutputsCheck(ctx context.Context, t *testing.T, env *e2e.Env, workspa
 	wsID := env.WorkspaceIDByName(ctx, t, workspace)
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  checkMaskedOutputs,
-		Name:   "masked outputs list",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     checkMaskedOutputs,
+		Name:      "masked outputs list",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -7685,20 +7733,22 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 
 	for _, spec := range []e2e.APIStepSpec{
 		{
-			Check:  checkEncryptedByClient,
-			Name:   "masked encrypted resource list",
-			Method: http.MethodGet,
-			Path:   base + "/resources",
-			Body:   "",
-			Want:   http.StatusConflict,
+			Check:     checkEncryptedByClient,
+			Name:      "masked encrypted resource list",
+			Method:    http.MethodGet,
+			Path:      base + "/resources",
+			Body:      "",
+			Want:      http.StatusConflict,
+			UserAgent: "",
 		},
 		{
-			Check:  checkEncryptedByClient,
-			Name:   "masked encrypted resource",
-			Method: http.MethodGet,
-			Path:   base + "/resources/" + url.PathEscape("terraform_data.smoke"),
-			Body:   "",
-			Want:   http.StatusConflict,
+			Check:     checkEncryptedByClient,
+			Name:      "masked encrypted resource",
+			Method:    http.MethodGet,
+			Path:      base + "/resources/" + url.PathEscape("terraform_data.smoke"),
+			Body:      "",
+			Want:      http.StatusConflict,
+			UserAgent: "",
 		},
 	} {
 		env.APIStepA(ctx, t, spec)
@@ -7707,12 +7757,13 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "masked encrypted outputs list",
-		Method: http.MethodGet,
-		Path:   "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "masked encrypted outputs list",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/workspaces/" + wsID + "/current-state-version-outputs",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 }
 
@@ -8064,32 +8115,35 @@ func tofuDiffScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
-		Name:   "tofu state diff",
-		Method: http.MethodGet,
-		Path:   base,
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "tofu state diff",
+		Method:    http.MethodGet,
+		Path:      base,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check: func(string) error {
 			return assertTofuDiffPaged(ctx, env, base, full)
 		},
-		Name:   "tofu state diff paged",
-		Method: http.MethodGet,
-		Path:   base + "&page[size]=1",
-		Body:   "",
-		Want:   http.StatusOK,
+		Name:      "tofu state diff paged",
+		Method:    http.MethodGet,
+		Path:      base + "&page[size]=1",
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	other := maskedCurrentVersion(ctx, t, env, "masked")
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "tofu state diff of another workspace",
-		Method: http.MethodGet,
-		Path:   "/api/v2/state-versions/" + second + "/diff?from=" + other,
-		Body:   "",
-		Want:   http.StatusNotFound,
+		Check:     nil,
+		Name:      "tofu state diff of another workspace",
+		Method:    http.MethodGet,
+		Path:      "/api/v2/state-versions/" + second + "/diff?from=" + other,
+		Body:      "",
+		Want:      http.StatusNotFound,
+		UserAgent: "",
 	})
 }
 
@@ -8140,12 +8194,13 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 	unlockPath := "/api/v2/workspaces/" + wsID + "/actions/unlock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for stale check",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for stale check",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(staleSerialDetail),
@@ -8158,7 +8213,8 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 			current.Lineage,
 			"d41d8cd98f00b204e9800998ecf8427e",
 		),
-		Want: http.StatusUnprocessableEntity,
+		Want:      http.StatusUnprocessableEntity,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(lineageMismatchDetail),
@@ -8171,15 +8227,17 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 			"00000000-0000-0000-0000-000000000000",
 			"d41d8cd98f00b204e9800998ecf8427e",
 		),
-		Want: http.StatusUnprocessableEntity,
+		Want:      http.StatusUnprocessableEntity,
+		UserAgent: "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "unlock after stale check",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "unlock after stale check",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	env.Step(ctx, t, step("state push force", nil, "state", "push", "-force", stalePath))
@@ -11475,7 +11533,7 @@ func corruptServerBackupTarget(ctx context.Context, t *testing.T, env *e2e.Env, 
 		t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
 	}
 
-	key := "backups/" + id + "/db"
+	key := "backups/" + id + "/" + backup.PortablePath("namespaces")
 	if len(doc.Manifest.Blobs) > 0 {
 		key = "blobs/" + doc.Manifest.Blobs[0].Key
 	}
@@ -11566,6 +11624,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	id := startBackupAndConflict(ctx, t, env)
 	doc := pollBackupState(ctx, t, env, id, "succeeded")
 	checkBackupManifest(t, store, doc)
+	checkPortableObjects(t, env, id, doc.Manifest.SQLFiles)
 	checkBackupList(ctx, t, env, id)
 	checkBackupUnauthorized(ctx, t, env, id)
 
@@ -11657,7 +11716,19 @@ type backupManifestDoc struct {
 	Blobs         []backupManifestBlob `json:"blobs"`
 	SQLSize       int64                `json:"sqlSize"`
 	SQLSHA256     string               `json:"sqlSha256"`
+	SQLFormat     string               `json:"sqlFormat"`
+	SQLFiles      []backupSQLFileDoc   `json:"sqlFiles"`
 	SchemaVersion int                  `json:"schemaVersion"`
+}
+
+// backupSQLFileDoc holds one table file descriptor of the manifest.
+type backupSQLFileDoc struct {
+	Table   string   `json:"table"`
+	Path    string   `json:"path"`
+	SHA256  string   `json:"sha256"`
+	Columns []string `json:"columns"`
+	Rows    int64    `json:"rows"`
+	Size    int64    `json:"size"`
 }
 
 // backupManifestBlob holds one copied blob of the manifest.
@@ -11776,9 +11847,15 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 		t.Fatalf("manifest id = %q, want backup %q", manifest.ID, doc.ID)
 	}
 
-	if manifest.Format != 1 {
-		t.Fatalf("manifest format = %d, want 1", manifest.Format)
+	if manifest.Format != 2 {
+		t.Fatalf("manifest format = %d, want 2", manifest.Format)
 	}
+
+	if manifest.SQLFormat != "portable" {
+		t.Fatalf("manifest SQL format = %q, want %q", manifest.SQLFormat, "portable")
+	}
+
+	checkPortableFiles(t, manifest.SQLFiles)
 
 	if manifest.Dialect != string(store) {
 		t.Fatalf("manifest dialect = %q, want %q", manifest.Dialect, store)
@@ -11806,6 +11883,61 @@ func checkBackupManifest(t *testing.T, store e2e.Store, doc backupDoc) {
 
 	if len(manifest.HomeRegions) == 0 {
 		t.Fatal("manifest holds no home region")
+	}
+}
+
+// checkPortableFiles proves the SQL part of a format 2 manifest holds exactly
+// one descriptor for each table of the portable spec, at the path of its table.
+func checkPortableFiles(t *testing.T, files []backupSQLFileDoc) {
+	t.Helper()
+
+	tables := backup.PortableTables()
+	if len(files) != len(tables) {
+		t.Fatalf("manifest holds %d table files, want %d", len(files), len(tables))
+	}
+
+	seen := make(map[string]bool, len(files))
+
+	for _, file := range files {
+		if seen[file.Table] {
+			t.Fatalf("manifest holds two files of table %q", file.Table)
+		}
+
+		seen[file.Table] = true
+
+		if file.Path != backup.PortablePath(file.Table) {
+			t.Fatalf("file of table %q at %q, want %q", file.Table, file.Path, backup.PortablePath(file.Table))
+		}
+	}
+
+	for _, table := range tables {
+		if !seen[table.Table] {
+			t.Fatalf("manifest holds no file of table %q", table.Table)
+		}
+	}
+}
+
+// checkPortableObjects proves each table file of a backup is in the target with
+// the size its descriptor names, and that the native db object of format 1 is
+// gone.
+func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupSQLFileDoc) {
+	t.Helper()
+
+	dir := env.BackupTargetDir(t)
+
+	for _, file := range files {
+		info, err := os.Stat(filepath.Join(dir, "backups", id, filepath.FromSlash(file.Path)))
+		if err != nil {
+			t.Fatalf("stat table file %q of backup %s: %v", file.Path, id, err)
+		}
+
+		if info.Size() != file.Size {
+			t.Fatalf("table file %q holds %d bytes, the descriptor says %d", file.Path, info.Size(), file.Size)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "backups", id, "db")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("backup %s still holds the native db object: stat err = %v", id, err)
 	}
 }
 
@@ -13466,12 +13598,13 @@ func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
 	lockPath := "/api/v2/workspaces/" + wsID + "/actions/lock"
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Check:  nil,
-		Name:   "lock for maintenance",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
+		Check:     nil,
+		Name:      "lock for maintenance",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		UserAgent: "",
 	})
 
 	status, _, body := enterMaintenance(ctx, t, env, "")
