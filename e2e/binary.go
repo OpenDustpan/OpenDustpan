@@ -585,14 +585,18 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 	tb.Logf("migration server output:\n%s", handle.logs.String())
 }
 
-// BackupTargetDir returns the backup target directory of the binary
-// environment, so a test can corrupt the target after a backup. It needs
-// E2E_SERVER=binary.
+// BackupTargetDir returns the backup target directory of the server, in-process
+// or binary, so a test can read or corrupt the target after a backup. A binary
+// environment with no dir: target fails the test.
 func (e *Env) BackupTargetDir(tb testing.TB) string {
 	tb.Helper()
 
 	if e.binPath == "" {
-		tb.Fatalf("BackupTargetDir needs E2E_SERVER=binary")
+		if e.backupDir == "" {
+			tb.Fatalf("BackupTargetDir: the in-process server has no backup target")
+		}
+
+		return e.backupDir
 	}
 
 	dir, ok := strings.CutPrefix(e.backendCfg.backupTarget, "dir:")
@@ -948,6 +952,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		steps:         nil,
 		tls:           true,
 		binPath:       bin,
+		backupDir:     "",
 		backendCfg:    cfg,
 		backendPort:   handle.port,
 		backendCmd:    handle.cmd,

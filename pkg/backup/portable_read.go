@@ -259,6 +259,37 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // return ErrCorrupt, and the error names the table (ADR 42, decision 4). Both
 // dialects check the list here, before they load a row.
 func IndexPortableFiles(files []PortableFile, rows map[string]int64) (map[string]PortableFile, error) {
+	index, err := indexPortableDescriptors(files)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, table := range PortableTables() {
+		want, counted := rows[table.Table]
+		if !counted {
+			return nil, fmt.Errorf(
+				"portable backup summary holds no row count of table %q: %w",
+				table.Table,
+				ErrCorrupt,
+			)
+		}
+
+		file := index[table.Table]
+		if file.Rows != want {
+			return nil, fmt.Errorf("table %q file holds %d rows, the summary says %d: %w",
+				table.Table, file.Rows, want, ErrCorrupt)
+		}
+	}
+
+	return index, nil
+}
+
+// indexPortableDescriptors checks the names of the descriptors of a portable
+// backup: each table of PortableTables has exactly one, at the path of its
+// table, and no other table is named. readManifest runs this check before any
+// object is opened, so a descriptor cannot point at another object of the
+// backup. It returns ErrCorrupt and names the table on a failure.
+func indexPortableDescriptors(files []PortableFile) (map[string]PortableFile, error) {
 	known := make(map[string]bool)
 
 	for _, table := range PortableTables() {
@@ -272,6 +303,11 @@ func IndexPortableFiles(files []PortableFile, rows map[string]int64) (map[string
 			return nil, fmt.Errorf("portable backup names unknown table %q: %w", file.Table, ErrCorrupt)
 		}
 
+		if file.Path != PortablePath(file.Table) {
+			return nil, fmt.Errorf("portable backup names path %q for table %q, want %q: %w",
+				file.Path, file.Table, PortablePath(file.Table), ErrCorrupt)
+		}
+
 		if _, dup := index[file.Table]; dup {
 			return nil, fmt.Errorf("portable backup holds two files of table %q: %w", file.Table, ErrCorrupt)
 		}
@@ -280,25 +316,23 @@ func IndexPortableFiles(files []PortableFile, rows map[string]int64) (map[string
 	}
 
 	for _, table := range PortableTables() {
-		file, ok := index[table.Table]
-		if !ok {
+		if _, ok := index[table.Table]; !ok {
 			return nil, fmt.Errorf("portable backup misses the file of table %q: %w", table.Table, ErrCorrupt)
-		}
-
-		want, counted := rows[table.Table]
-		if !counted {
-			return nil, fmt.Errorf(
-				"portable backup summary holds no row count of table %q: %w",
-				table.Table,
-				ErrCorrupt,
-			)
-		}
-
-		if file.Rows != want {
-			return nil, fmt.Errorf("table %q file holds %d rows, the summary says %d: %w",
-				table.Table, file.Rows, want, ErrCorrupt)
 		}
 	}
 
 	return index, nil
+}
+
+// portableFileOf returns the descriptor of table in files.
+func portableFileOf(files []PortableFile, table string) (PortableFile, bool) {
+	for _, file := range files {
+		if file.Table == table {
+			return file, true
+		}
+	}
+
+	var none PortableFile
+
+	return none, false
 }

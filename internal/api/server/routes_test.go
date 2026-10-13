@@ -780,15 +780,12 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 // stubBackupExporter answers an empty export, for the handler backup test.
 type stubBackupExporter struct{}
 
-func (stubBackupExporter) Export(_ context.Context, _ io.Writer) (backup.Summary, error) {
-	return backup.Summary{
-		Dialect:       "",
-		HomeRegions:   nil,
-		WrapperIDs:    nil,
-		RowCounts:     nil,
-		Blobs:         nil,
-		SchemaVersion: 0,
-	}, nil
+func (stubBackupExporter) ExportPortable(
+	_ context.Context, _ backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
+	var none backup.Summary
+
+	return none, nil, nil
 }
 
 // stubBackupRegistry answers no rows, for the handler backup test.

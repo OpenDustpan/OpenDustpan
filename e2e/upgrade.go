@@ -230,7 +230,6 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
-
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
@@ -250,6 +249,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		steps:         nil,
 		tls:           true,
 		binPath:       binPath,
+		backupDir:     "",
 		backendCfg:    cfg,
 		backendPort:   handle.port,
 		backendCmd:    handle.cmd,

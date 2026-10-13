@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -30,27 +29,29 @@ const pollTimeout = 10 * time.Second
 // pollInterval sets how often a backup poll reads the row.
 const pollInterval = 10 * time.Millisecond
 
-// gateExporter blocks inside Export until the test releases it, so the test
-// holds one backup running while it starts another.
+// gateExporter blocks inside ExportPortable until the test releases it, so the
+// test holds one backup running while it starts another.
 type gateExporter struct {
-	inner   backup.Exporter
+	inner   backup.PortableExporter
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
 }
 
-func newGateExporter(inner backup.Exporter) *gateExporter {
+func newGateExporter(inner backup.PortableExporter) *gateExporter {
 	return &gateExporter{inner: inner, entered: make(chan struct{}), release: make(chan struct{}), once: sync.Once{}}
 }
 
-func (g *gateExporter) Export(ctx context.Context, w io.Writer) (backup.Summary, error) {
+func (g *gateExporter) ExportPortable(
+	ctx context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
 	g.once.Do(func() { close(g.entered) })
 
 	select {
 	case <-g.release:
-		return g.inner.Export(ctx, w)
+		return g.inner.ExportPortable(ctx, sink)
 	case <-ctx.Done():
-		return backup.Summary{}, fmt.Errorf("wait for test release: %w", ctx.Err())
+		return backup.Summary{}, nil, fmt.Errorf("wait for test release: %w", ctx.Err())
 	}
 }
 
@@ -114,7 +115,7 @@ func openBackupDeps(t *testing.T) backupStores {
 // registry store tracks the rows, exporter captures the SQL data, and now
 // overrides the service clock when not nil.
 func newBackupFixture(
-	t *testing.T, stores backupStores, exporter backup.Exporter, now func() time.Time,
+	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
 ) backupFixture {
 	t.Helper()
 
