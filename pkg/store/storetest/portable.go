@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -44,6 +45,9 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a table file that differs from its descriptor is refused", test: testPortableStageRefusesCorrupt},
 		{name: "a portable stage refuses another schema version", test: testPortableStageRefusesVersion},
 		{name: "an empty byte value is the empty string, not null", test: testPortableEmptyBytes},
+		{name: "a files list with a duplicate table is refused", test: testPortableStageRefusesDuplicate},
+		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
+		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
 	}
 
 	for _, tc := range cases {
@@ -418,5 +422,84 @@ func testPortableEmptyBytes(t *testing.T, newStore PortableFactory) {
 
 	if !found {
 		t.Fatal("no updates row holds an empty lease_digest, so the case proves nothing")
+	}
+}
+
+// testPortableStageRefusesDuplicate checks that a files list that holds two
+// descriptors of one table fails the stage with ErrCorrupt before any load, and
+// names the table (ADR 42, decision 4).
+func testPortableStageRefusesDuplicate(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	files = append(files, files[0])
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "namespaces")
+}
+
+// testPortableStageRefusesUnknown checks that a files list that names a table the
+// spec does not hold fails the stage with ErrCorrupt, and names the table.
+func testPortableStageRefusesUnknown(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	files = append(files, backup.PortableFile{
+		Table:   "no_such_table",
+		Path:    "sql/no_such_table.jsonl.gz",
+		SHA256:  "00",
+		Columns: nil,
+		Rows:    0,
+		Size:    0,
+	})
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "no_such_table")
+}
+
+// testPortableStageRefusesMissing checks that a files list that omits a table of
+// the spec fails the stage with ErrCorrupt, and names the table.
+func testPortableStageRefusesMissing(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	var kept []backup.PortableFile
+
+	for _, file := range files {
+		if file.Table != "installation" {
+			kept = append(kept, file)
+		}
+	}
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: kept}, "installation")
+}
+
+// portableExport holds a summary and its files, as an export returns them.
+type portableExport struct {
+	sum   backup.Summary
+	files []backup.PortableFile
+}
+
+// assertStageRefused stages files and checks that the stage fails with
+// ErrCorrupt, naming table.
+func assertStageRefused(
+	t *testing.T, s PortableStore, sink *portableSink, export portableExport, table string,
+) {
+	t.Helper()
+
+	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage a bad files list: err = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), `"`+table+`"`) {
+		t.Fatalf("error = %v, want it to name the table %q", err, table)
 	}
 }

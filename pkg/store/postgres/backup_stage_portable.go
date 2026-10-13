@@ -35,6 +35,11 @@ func (s *Store) StagePortable(
 		)
 	}
 
+	index, err := backup.IndexPortableFiles(files)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
 	staging, err := newStagingSchema()
 	if err != nil {
 		return backup.Summary{}, err
@@ -43,7 +48,7 @@ func (s *Store) StagePortable(
 	return s.buildStaging(ctx, stagingInput{
 		staging: staging,
 		load: func(ctx context.Context, schema string) error {
-			return s.loadPortableStaging(ctx, schema, open, files)
+			return s.loadPortableStaging(ctx, schema, open, index)
 		},
 		want: want,
 	})
@@ -53,7 +58,7 @@ func (s *Store) StagePortable(
 // order of the portable spec. Each batch is one transaction. The migration seeds
 // the installation row, so the seeded row goes first, as the native load does.
 func (s *Store) loadPortableStaging(
-	ctx context.Context, schema string, open backup.PortableOpener, files []backup.PortableFile,
+	ctx context.Context, schema string, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) error {
 	clearErr := inBackupTx(ctx, s.pool, readWriteTx(), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(schema)); err != nil {
@@ -71,12 +76,7 @@ func (s *Store) loadPortableStaging(
 	}
 
 	for _, table := range backup.PortableTables() {
-		file, ok := portableFileOf(files, table.Table)
-		if !ok {
-			return fmt.Errorf("portable backup misses the file of table %q: %w", table.Table, backup.ErrCorrupt)
-		}
-
-		if loadErr := s.loadPortableTable(ctx, schema, open, file, table); loadErr != nil {
+		if loadErr := s.loadPortableTable(ctx, schema, open, index[table.Table], table); loadErr != nil {
 			return loadErr
 		}
 	}
@@ -89,19 +89,6 @@ func (s *Store) loadPortableStaging(
 func readWriteTx() pgx.TxOptions {
 	//nolint:exhaustruct_v5 // The load needs only isolation and access mode; deferrable stays off.
 	return pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}
-}
-
-// portableFileOf returns the descriptor of table.
-func portableFileOf(files []backup.PortableFile, table string) (backup.PortableFile, bool) {
-	for _, file := range files {
-		if file.Table == table {
-			return file, true
-		}
-	}
-
-	var none backup.PortableFile
-
-	return none, false
 }
 
 // loadPortableTable reads one table file and inserts its rows in batches.

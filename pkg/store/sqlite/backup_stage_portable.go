@@ -41,7 +41,12 @@ func (s *Store) StagePortable(
 		)
 	}
 
-	temp, err := s.buildPortableStaging(ctx, open, files)
+	index, err := backup.IndexPortableFiles(files)
+	if err != nil {
+		return backup.Summary{}, err
+	}
+
+	temp, err := s.buildPortableStaging(ctx, open, index)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -76,7 +81,7 @@ func (s *Store) StagePortable(
 // migrated to this schema, and loads the table files into it. It returns the
 // path of the file. A failed load removes it.
 func (s *Store) buildPortableStaging(
-	ctx context.Context, open backup.PortableOpener, files []backup.PortableFile,
+	ctx context.Context, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) (string, error) {
 	temp, err := snapshotPath(filepath.Dir(s.path))
 	if err != nil {
@@ -90,7 +95,7 @@ func (s *Store) buildPortableStaging(
 		return "", fmt.Errorf("create staging file: %w", err)
 	}
 
-	loadErr := loadPortableTables(ctx, staged.conn, open, files)
+	loadErr := loadPortableTables(ctx, staged.conn, open, index)
 
 	if closeErr := staged.Close(); closeErr != nil && loadErr == nil {
 		loadErr = fmt.Errorf("close staging file: %w", closeErr)
@@ -108,7 +113,7 @@ func (s *Store) buildPortableStaging(
 // loadPortableTables loads each table file into the staging database, in the
 // order of the portable spec, which is the foreign-key order of Tables.
 func loadPortableTables(
-	ctx context.Context, conn *sql.DB, open backup.PortableOpener, files []backup.PortableFile,
+	ctx context.Context, conn *sql.DB, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) error {
 	// The migration seeds the installation row. The backup holds its own row, so
 	// the seeded one goes first (as the native import does).
@@ -117,30 +122,12 @@ func loadPortableTables(
 	}
 
 	for _, table := range backup.PortableTables() {
-		file, ok := portableFileOf(files, table.Table)
-		if !ok {
-			return fmt.Errorf("portable backup misses the file of table %q: %w", table.Table, backup.ErrCorrupt)
-		}
-
-		if loadErr := loadPortableTable(ctx, conn, open, file, table); loadErr != nil {
+		if loadErr := loadPortableTable(ctx, conn, open, index[table.Table], table); loadErr != nil {
 			return loadErr
 		}
 	}
 
 	return nil
-}
-
-// portableFileOf returns the descriptor of table.
-func portableFileOf(files []backup.PortableFile, table string) (backup.PortableFile, bool) {
-	for _, file := range files {
-		if file.Table == table {
-			return file, true
-		}
-	}
-
-	var none backup.PortableFile
-
-	return none, false
 }
 
 // loadPortableTable reads one table file and inserts its rows in batches, one

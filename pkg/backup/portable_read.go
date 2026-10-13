@@ -250,3 +250,38 @@ func (c *countingReader) Read(p []byte) (int, error) {
 
 	return n, err //nolint:wrapcheck // io.EOF is the end of the file, not a failure.
 }
+
+// IndexPortableFiles checks the descriptors of a portable backup as a whole and
+// returns them by table. Each table of PortableTables must have exactly one
+// descriptor. A table the spec does not name, a table that holds two descriptors,
+// and a table with none return ErrCorrupt, and the error names the table (ADR 42,
+// decision 4). Both dialects check the list here, before they load a row.
+func IndexPortableFiles(files []PortableFile) (map[string]PortableFile, error) {
+	known := make(map[string]bool)
+
+	for _, table := range PortableTables() {
+		known[table.Table] = true
+	}
+
+	index := make(map[string]PortableFile, len(files))
+
+	for _, file := range files {
+		if !known[file.Table] {
+			return nil, fmt.Errorf("portable backup names unknown table %q: %w", file.Table, ErrCorrupt)
+		}
+
+		if _, dup := index[file.Table]; dup {
+			return nil, fmt.Errorf("portable backup holds two files of table %q: %w", file.Table, ErrCorrupt)
+		}
+
+		index[file.Table] = file
+	}
+
+	for _, table := range PortableTables() {
+		if _, ok := index[table.Table]; !ok {
+			return nil, fmt.Errorf("portable backup misses the file of table %q: %w", table.Table, ErrCorrupt)
+		}
+	}
+
+	return index, nil
+}
