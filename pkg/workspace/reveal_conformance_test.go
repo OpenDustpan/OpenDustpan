@@ -622,11 +622,42 @@ func missingConformanceState() string {
 		`"sensitive_attributes":[]}]}]}`
 }
 
+// orderConformanceCases lists the masked-pointer order states: a chain of
+// marker field names below a masked pointer with a duplicate of the masked
+// value, and a descendant pointer before its ancestor.
+func orderConformanceCases() []conformanceCase {
+	return []conformanceCase{
+		{
+			name: "chain of marker fields below a masked pointer",
+			state: conformanceState(
+				`{"p":{"a":"v"},"dup":{"a":"v"}}`,
+				`[[{"type":"get_attr","value":"p"}],`+
+					`[{"type":"get_attr","value":"p"},{"type":"get_attr","value":"secret"}],`+
+					`[{"type":"get_attr","value":"p"},{"type":"get_attr","value":"secret"},`+
+					`{"type":"get_attr","value":"path"}],`+
+					`[{"type":"get_attr","value":"p"},{"type":"get_attr","value":"path"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+		{
+			name: "descendant first then ancestor",
+			state: conformanceState(
+				`{"p":{"k":"v"}}`,
+				`[[{"type":"get_attr","value":"p"},{"type":"get_attr","value":"k"}],`+
+					`[{"type":"get_attr","value":"p"}]]`,
+			),
+			marks:      conformanceOtherMarks(),
+			mustReveal: true,
+		},
+	}
+}
+
 // conformanceCases lists the fixed states.
 func conformanceCases() []conformanceCase {
 	wrapperAttrs := `{"input":{"value":{"k":"s"},"type":"dynamic"},` +
 		`"output":{"value":{"k":"s"},"type":"dynamic"}}`
-	return []conformanceCase{
+	return append([]conformanceCase{
 		{
 			name: "no marks nested arrays",
 			state: conformanceState(
@@ -939,7 +970,7 @@ func conformanceCases() []conformanceCase {
 			marks:      conformanceOtherMarks(),
 			mustReveal: true,
 		},
-	}
+	}, orderConformanceCases()...)
 }
 
 // TestRevealConformanceAgreement checks the fixed states.
