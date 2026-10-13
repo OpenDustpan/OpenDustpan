@@ -5,6 +5,7 @@ import (
 	"crypto/md5" //nolint:gosec // The test checks the MD5 the service records, which the protocol names.
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -487,7 +488,7 @@ func (c ctxStates) CreateStateVersion(
 	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
 ) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("store write: %w", err)
 	}
 
 	return c.StateStore.CreateStateVersion(
@@ -495,20 +496,20 @@ func (c ctxStates) CreateStateVersion(
 		sv,
 		fence,
 		maxPending,
-	) //nolint:wrapcheck // The port error passes through unchanged.
+	)
 }
 
 // DiscardStateVersion fails when ctx is done.
 func (c ctxStates) DiscardStateVersion(ctx context.Context, id workspace.StateVersionID, fence namespace.Fence) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("store write: %w", err)
 	}
 
 	return c.StateStore.DiscardStateVersion(
 		ctx,
 		id,
 		fence,
-	) //nolint:wrapcheck // The port error passes through unchanged.
+	)
 }
 
 // cancelingBody sends the start of a state, then cancels the request and fails,
@@ -558,8 +559,9 @@ func TestCancelledBodyLeavesNoPendingRow(t *testing.T) {
 
 	assertNoOrphanBlobs(t, f)
 
-	if _, err := f.svc.WriteState(t.Context(), f.ws.ID, in, streamAuthority(noOverrides(), nil),
-		strings.NewReader(streamDoc("lin-c", 1))); err != nil {
+	_, err := f.svc.WriteState(t.Context(), f.ws.ID, in, streamAuthority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-c", 1)))
+	if err != nil {
 		t.Fatalf("valid write after ten cut-off bodies: %v", err)
 	}
 }
@@ -617,22 +619,30 @@ func TestForceUnlockRefusesAnotherHolderOfTheSameLockID(t *testing.T) {
 		t.Fatalf("lock as bob: %v", err)
 	}
 
-	if _, _, err := f.svc.ForceUnlockLock(
+	_, _, err := f.svc.ForceUnlockLock(
 		ctx,
 		f.ws.ID,
-		workspace.Lock{ID: "lock-x", Holder: "bob"},
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
 		"admin",
 		admin,
 		nil,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("force-unlock of bob's lock as seen: %v", err)
 	}
 
-	if _, err := f.svc.LockWithID(ctx, f.ws.ID, "carol", "apply", "lock-x"); err != nil {
-		t.Fatalf("lock as carol with the same ID: %v", err)
+	if _, lockErr := f.svc.LockWithID(ctx, f.ws.ID, "carol", "apply", "lock-x"); lockErr != nil {
+		t.Fatalf("lock as carol with the same ID: %v", lockErr)
 	}
 
-	_, _, err := f.svc.ForceUnlockLock(ctx, f.ws.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin", admin, nil)
+	_, _, err = f.svc.ForceUnlockLock(
+		ctx,
+		f.ws.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
+		"admin",
+		admin,
+		nil,
+	)
 	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
 	}

@@ -226,7 +226,7 @@ type v1State struct {
 	Serial    int64           `json:"serial"`
 	Lineage   string          `json:"lineage"`
 	Outputs   json.RawMessage `json:"outputs"`
-	Encrypted json.RawMessage `json:"encrypted_data"`
+	Encrypted json.RawMessage `json:"encrypted_data"` //nolint:tagliatelle // encoding/json reads the state\'s own member names.
 }
 
 // TestReadStateMetaAgreesWithEncodingJSON runs documents through encoding/json
@@ -257,33 +257,48 @@ func TestReadStateMetaAgreesWithEncodingJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			meta, readErr := readStateMeta(strings.NewReader(tc.doc))
 			if tc.refuse {
-				if readErr == nil {
-					t.Fatalf("the reader accepted %s, want a refusal", tc.doc)
-				}
+				checkRefused(t, tc.doc)
 
 				return
 			}
 
-			if readErr != nil {
-				t.Fatalf("the reader refused %s: %v", tc.doc, readErr)
-			}
-
-			var want v1State
-			if err := json.Unmarshal([]byte(tc.doc), &want); err != nil {
-				t.Fatalf("encoding/json refused a document the reader accepted: %v", err)
-			}
-
-			if meta.Serial != want.Serial || meta.Lineage != want.Lineage {
-				t.Fatalf("reader reads serial %d lineage %q, encoding/json reads %d %q",
-					meta.Serial, meta.Lineage, want.Serial, want.Lineage)
-			}
-
-			if meta.ClientEncrypted != (want.Encrypted != nil) {
-				t.Fatalf("client-encryption marker differs from encoding/json")
-			}
+			checkAgreement(t, tc.doc)
 		})
+	}
+}
+
+// checkRefused proves the reader refuses doc.
+func checkRefused(t *testing.T, doc string) {
+	t.Helper()
+
+	if _, readErr := readStateMeta(strings.NewReader(doc)); readErr == nil {
+		t.Fatalf("the reader accepted %s, want a refusal", doc)
+	}
+}
+
+// checkAgreement proves the reader reads doc to the serial, lineage and
+// encryption marker that encoding/json reads.
+func checkAgreement(t *testing.T, doc string) {
+	t.Helper()
+
+	meta, readErr := readStateMeta(strings.NewReader(doc))
+	if readErr != nil {
+		t.Fatalf("the reader refused %s: %v", doc, readErr)
+	}
+
+	var want v1State
+	if err := json.Unmarshal([]byte(doc), &want); err != nil {
+		t.Fatalf("encoding/json refused a document the reader accepted: %v", err)
+	}
+
+	if meta.Serial != want.Serial || meta.Lineage != want.Lineage {
+		t.Fatalf("reader reads serial %d lineage %q, encoding/json reads %d %q",
+			meta.Serial, meta.Lineage, want.Serial, want.Lineage)
+	}
+
+	if meta.ClientEncrypted != (want.Encrypted != nil) {
+		t.Fatal("client-encryption marker differs from encoding/json")
 	}
 }
 

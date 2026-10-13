@@ -3790,7 +3790,7 @@ func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
 		Namespaces:         nsSvc,
 		Sealer:             nil,
 		Logger:             nil,
-		Now:                func() time.Time { return now() },
+		Now:                now,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 	})
@@ -3821,8 +3821,15 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("unlock with another lock ID: err = %v, want ErrLockMismatch", err)
 	}
 
-	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "alice"}, "admin",
-		namespace.Overrides{Forced: true, Unlocked: false}, nil); !errors.Is(err, workspace.ErrLockMismatch) {
+	_, _, err := svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "alice", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("force-unlock naming another holder: err = %v, want ErrLockMismatch", err)
 	}
 
@@ -3831,19 +3838,33 @@ func testConditionalUnlock(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("after refused releases: holder %q, err %v; want bob still holding", held.Lock.Holder, err)
 	}
 
-	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin",
-		namespace.Overrides{Forced: true, Unlocked: false}, nil); err != nil {
+	_, _, err = svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if err != nil {
 		t.Fatalf("force-unlock of the lock as seen: %v", err)
 	}
 
-	if _, err := svc.LockWithID(ctx, w.ID, "carol", "apply", "lock-x"); err != nil {
-		t.Fatalf("lock as carol with the same ID: %v", err)
+	if _, lockErr := svc.LockWithID(ctx, w.ID, "carol", "apply", "lock-x"); lockErr != nil {
+		t.Fatalf("lock as carol with the same ID: %v", lockErr)
 	}
 
 	// A caller that read bob's lock before the force-unlock must not release
 	// carol's lock, though the lock ID repeats.
-	if _, _, err := svc.ForceUnlockLock(ctx, w.ID, workspace.Lock{ID: "lock-x", Holder: "bob"}, "admin",
-		namespace.Overrides{Forced: true, Unlocked: false}, nil); !errors.Is(err, workspace.ErrLockMismatch) {
+	_, _, err = svc.ForceUnlockLock(
+		ctx,
+		w.ID,
+		workspace.Lock{LockedAt: time.Time{}, ID: "lock-x", Holder: "bob", Reason: ""},
+		"admin",
+		namespace.Overrides{Forced: true, Unlocked: false},
+		nil,
+	)
+	if !errors.Is(err, workspace.ErrLockMismatch) {
 		t.Fatalf("stale force-unlock of bob's lock: err = %v, want ErrLockMismatch", err)
 	}
 

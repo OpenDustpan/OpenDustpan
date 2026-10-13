@@ -91,7 +91,7 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 		return err
 	}
 
-	seen := make(map[string]bool, len(topLevelKeys))
+	seen := make(map[string]bool, topLevelKeyCount)
 
 	for {
 		name, err := s.memberName()
@@ -117,13 +117,18 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 // topLevelKeys are the top-level members the domain reads. encoding/json (v1)
 // matches the struct fields of a state case-insensitively, so OpenTofu reads a
 // key that folds to one of these as that member (ADR 49, decision 8).
-var topLevelKeys = [...]string{"serial", "lineage", "outputs", encryptedStateKey}
+// topLevelKeyCount is the number of keys in topLevelKeys.
+const topLevelKeyCount = 4
+
+func topLevelKeys() [topLevelKeyCount]string {
+	return [topLevelKeyCount]string{"serial", "lineage", "outputs", encryptedStateKey}
+}
 
 // checkTopLevelKey refuses a key that folds to one of topLevelKeys without being
 // it, and a second key that is one of them. Either would make this reader and
 // OpenTofu disagree about the metadata of the state.
 func checkTopLevelKey(name string, seen map[string]bool) error {
-	for _, key := range topLevelKeys {
+	for _, key := range topLevelKeys() {
 		if name == key {
 			if seen[key] {
 				return syntaxError("duplicate member " + key)

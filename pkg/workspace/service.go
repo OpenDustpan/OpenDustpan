@@ -405,7 +405,7 @@ func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, 
 // decision 6).
 func (s *Service) UnlockLock(ctx context.Context, id ID, lockID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
-		if lockErr := checkLockID(w, Lock{ID: lockID}); lockErr != nil {
+		if lockErr := checkLockID(w, Lock{LockedAt: time.Time{}, ID: lockID, Holder: "", Reason: ""}); lockErr != nil {
 			return Workspace{}, lockErr
 		}
 
@@ -444,7 +444,7 @@ func checkLockID(w Workspace, expect Lock) error {
 func (s *Service) ForceUnlock(
 	ctx context.Context, id ID, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {
-	return s.ForceUnlockLock(ctx, id, Lock{}, by, allow, record)
+	return s.ForceUnlockLock(ctx, id, Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}, by, allow, record)
 }
 
 // ForceUnlockLock is ForceUnlock for the lock expect names. An empty expect.ID
