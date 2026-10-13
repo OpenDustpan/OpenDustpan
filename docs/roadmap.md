@@ -143,7 +143,7 @@ install, each with only the access they need, and every change is on record.
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all                                      | draft |
 | server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | draft |
 | server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | discussing; built-in MFA accepted (ADR 46) |
-| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | draft |
+| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | discussing; port, entries, export and sinks accepted (ADR 51); tamper evidence and retention open |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, teams, role grants              | draft |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
 

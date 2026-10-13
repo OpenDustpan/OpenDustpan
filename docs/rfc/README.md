@@ -70,7 +70,7 @@ both together.
 | [19](0019-users-teams-roles.md) | Users, teams and roles | discussing |
 | [20](0020-access-tokens.md) | Access tokens and machine identity | discussing |
 | [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing |
-| [22](0022-audit-log.md) | Audit log | draft |
+| [22](0022-audit-log.md) | Audit log | discussing; port, entries and sinks accepted (ADR 51) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | draft |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
 | [25](0025-drift-detection.md) | Drift detection and remediation | draft |

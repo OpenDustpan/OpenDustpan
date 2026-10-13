@@ -222,7 +222,9 @@ logging with `--log-level` and `--log-format`. Check readiness at
   administrator. Single sign-on and scoped tokens do not exist yet.
 - **You need remote runs.** OpenDustpan stores state. It does not run
   `pulumi up` or `tofu apply` for you.
-- **You need an audit log, policy checks or drift detection.** These do not
+- **You need a full audit log, policy checks or drift detection.** The
+  audit log records secret reads and overrides only. ADR 51 plans the rest:
+  every change, export and sinks. Policy checks and drift detection do not
   exist yet.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
@@ -263,6 +265,8 @@ How-to guides:
   content.
 - [Observe the server](docs/guides/observe.md): probes, metrics and request
   logs.
+- [Read the audit log](docs/guides/audit-log.md): the entries of a
+  namespace and the check of their chain.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 
