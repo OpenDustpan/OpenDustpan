@@ -52,7 +52,7 @@ both together.
 | [1](0001-opentofu-via-the-tfe-compatible-api.md) | OpenTofu support through the TFE-compatible remote API | accepted |
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
-| [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | draft |
+| [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections accepted (ADR 51) |
 | [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft |
@@ -67,9 +67,9 @@ both together.
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
 | [17](0017-unit-lifecycle.md) | Stack and workspace lifecycle: delete, rename, move, tags | draft |
 | [18](0018-state-operations.md) | State operations: history, restore, locks and leases | accepted |
-| [19](0019-users-teams-roles.md) | Users, teams and roles | discussing |
-| [20](0020-access-tokens.md) | Access tokens and machine identity | discussing |
-| [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing |
+| [19](0019-users-teams-roles.md) | Users, teams and roles | discussing; groups, grants and export accepted (ADR 52) |
+| [20](0020-access-tokens.md) | Access tokens and machine identity | discussing; token life cycle and workload identity accepted (ADR 53, ADR 54) |
+| [21](0021-directory-sync-and-sign-in.md) | Directory sync and sign-in hardening | discussing; MFA, sign-in methods, MFA freshness and break-glass accepted (ADR 46, ADR 55, ADR 56, ADR 57) |
 | [22](0022-audit-log.md) | Audit log | discussing; port, entries, sinks and opt-in tamper evidence accepted (ADR 60) |
 | [23](0023-events-and-notifications.md) | Events, notifications and webhooks | draft |
 | [24](0024-run-triggers-and-orchestration.md) | Run triggers and orchestration between units | draft |
