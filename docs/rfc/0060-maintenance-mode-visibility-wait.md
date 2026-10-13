@@ -1,13 +1,14 @@
 ---
 rfc: 60
 title: Wait until every instance sees maintenance mode before a restore applies
-status: draft
+status: accepted
 created: 2026-10-11
+adr: 48
 ---
 
 # RFC 60. Wait until every instance sees maintenance mode before a restore applies
 
-Status: draft.
+Status: accepted (ADR 48).
 
 ## Problem
 
@@ -52,6 +53,28 @@ leaves maintenance mode.
   The restore record (ADR 38 decision 9) could hold the enter time, so a
   restarted apply step waits the remainder instead of the full bound.
 
+## Owner direction (2026-10-12 and 2026-10-13)
+
+The project owner answered this RFC on 2026-10-12 and 2026-10-13. Words in
+quotation marks are the words of the owner. This section decides nothing. An
+ADR records a decision (ADR 15).
+
+- On the options: "I think I want instances to answer over the network."
+  That is option 2.
+- On discovery: a registry in the database with an advertised address.
+- On the calls between instances: the public API with an administrator
+  action.
+- On an instance that does not answer: the owner asked how SWIM gossip
+  handles it. The project lead proposed a lease rule. The owner said: "All
+  RFCs are reviewed and I agree with the recommendations."
+- On an instance that died permanently: the owner asked how it is removed,
+  and approved the proposed rules: "Approved."
+- On an instance that comes back: the project lead explained that an
+  instance keeps no data of its own and that the fence refuses late writes.
+  The owner answered: "So it's more of an issue when we set up async geo
+  replication. Got it."
+
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted with option 2. [ADR 48](../adr/0048-instances-answer-over-the-network.md)
+records the decision.
