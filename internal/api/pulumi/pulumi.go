@@ -896,8 +896,11 @@ func classifyUpdate(err error) (int, string) {
 	switch {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
-		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint):
+		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
+		errors.Is(err, stack.ErrJournalConflict):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, stack.ErrJournalBatch):
+		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
 		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, stack.ErrTooLarge):

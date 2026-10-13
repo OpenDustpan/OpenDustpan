@@ -668,6 +668,11 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("namespace service: %w", err)
 	}
 
+	journal, err := journalWriter(cfg)
+	if err != nil {
+		return services{}, fmt.Errorf("journal writer: %w", err)
+	}
+
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            cfg.updateStore,
 		Checkpoints:        cfg.checkpointStore,
@@ -678,6 +683,7 @@ func newServices(cfg settings) (services, error) {
 		Now:                cfg.now,
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("update service: %w", err)

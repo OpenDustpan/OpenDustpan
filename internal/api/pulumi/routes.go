@@ -78,8 +78,24 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.updateImportExportRoutes()...)
 	routes = append(routes, h.stateRoutes()...)
 	routes = append(routes, h.updateCancelRoute(), h.updateRestoreRoute())
+	routes = append(routes, h.updateJournalRoutes()...)
 
 	return routes
+}
+
+// updateJournalRoutes returns the journal entry route of an update (ADR 43,
+// decision 6). The write needs the lease and unit:write.
+func (h *Handler) updateJournalRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodPatch,
+			Path:    "/api/stacks/{namespace}/{project}/{stack}/update/{update}/journalentries",
+			Scope:   ScopeUpdateLease,
+			Actions: []identity.Action{identity.ActionUnitWrite},
+			Resolve: resolveGetStack,
+			Serve:   h.journalEntries,
+		},
+	}
 }
 
 // baseRoutes returns the login and listing routes that predate updates.
