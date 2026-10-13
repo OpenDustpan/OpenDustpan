@@ -464,6 +464,7 @@ func newFixtureWith(
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -606,6 +607,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
+		Journal:            nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)

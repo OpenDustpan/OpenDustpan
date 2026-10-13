@@ -27,11 +27,6 @@ func newestVerifiedJournalCLI() cliVersion {
 // and patch.
 const cliVersionParts = 3
 
-// maxSupportedJournalVersion is the highest journal version that the server
-// answers. The server has no journal route until work item 9, and no version 2
-// until work item 12, so it answers 0 for every update.
-const maxSupportedJournalVersion = 0
-
 // journalCLIPrefix starts the User-Agent that the Pulumi CLI sends, for
 // example "pulumi-cli/1 (v3.268.0; linux)".
 const journalCLIPrefix = "pulumi-cli/1 ("
