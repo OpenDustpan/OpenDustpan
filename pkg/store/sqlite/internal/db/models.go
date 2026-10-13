@@ -30,6 +30,13 @@ type AuditEntry struct {
 	ValueCount sql.NullInt64
 }
 
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string

@@ -52,6 +52,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0027_update_journal_md5.sql":        "98aa8b9630806bb23a41f0c0d159f088e704876bf144f4b88588ceac62858327",
 		"0028_principals_and_groups.sql":     "c9eaa057e820a0e119743f103b8ece304730f7e26c1b92541f1ef77a7f653af7",
 		"0029_audit_server_scope.sql":        "4849a1d99647a8047e3bcdec9c5f2658a520613a68fd59173dc5f17e89d73a61",
+		"0030_audit_sink_cursors.sql":        "65cee05080eec18e931ff91a7847e98b6f3f7cf4ed42e4afa4b66d956d077418",
 		"0031_soft_delete_stacks.sql":        "7b721532e4f8aba05309f36981994a5b50d4ad7fba6cd6f2d7ef8e0d2b62edb3",
 		"0032_soft_delete_workspaces.sql":    "cd937bcc20655f7fcb92b56451187b6d81d220c5789ff89634c85afb55bdf5f6",
 	}

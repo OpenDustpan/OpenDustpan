@@ -142,6 +142,30 @@ func TestUpdatesConformance(t *testing.T) {
 	})
 }
 
+// TestAuditFeedConformance runs the audit feed cases: entries above a
+// sequence and the cursors of the log sinks.
+func TestAuditFeedConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
+		t.Helper()
+
+		s, err := postgres.Open(t.Context(), isolatedURL(t, base))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		return s
+	})
+}
+
 // TestAuditConformance runs the audit store suite: append, list order,
 // paging, fencing, isolation, concurrent appends and the chain check. The
 // tamper hooks change or remove a row through SQL: the port has no update

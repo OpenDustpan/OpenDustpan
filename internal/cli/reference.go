@@ -50,6 +50,8 @@ var secretSettings = []*Setting{
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY_FILE"),
 	mustEnv("DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY"),
+	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET"),
+	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE"),
 }
 
 // mustEnv answers the declaration of the environment variable. It panics

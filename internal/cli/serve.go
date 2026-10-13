@@ -14,6 +14,7 @@ func ServeFlags() []*Setting {
 		"key-encryption-key-file", "generate-key-encryption-key",
 		"max-checkpoint-bytes", "checkpoint-delta-cutoff", "disable-pulumi-journaling",
 		"max-secret-batch-bytes", "max-state-bytes", "max-body-bytes-in-flight",
+		"audit-sink",
 	)
 }
 

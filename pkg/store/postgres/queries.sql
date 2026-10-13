@@ -914,3 +914,18 @@ WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+-- name: GetAuditSinkCursor :one
+-- The highest sequence of a namespace that a log sink holds (ADR 60
+-- decision 13). A sink with no row holds no entry of the namespace.
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = $1 AND namespace = $2;
+
+-- name: AdvanceAuditSinkCursor :exec
+-- Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+-- is already at the sequence or higher stays, so two instances that ship
+-- the same batch never move it back.
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = EXCLUDED.sequence, updated_at_ms = EXCLUDED.updated_at_ms
+WHERE EXCLUDED.sequence > audit_sink_cursors.sequence;

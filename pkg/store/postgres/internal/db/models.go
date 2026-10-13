@@ -30,6 +30,13 @@ type AuditEntry struct {
 	ValueCount pgtype.Int8
 }
 
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string

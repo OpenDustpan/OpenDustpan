@@ -145,6 +145,8 @@ type settings struct {
 	disablePulumiJournaling bool
 	backupTarget            blob.Store
 	backupTargetName        string
+	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
+	auditSinks []audit.ShipSink
 }
 
 // Option configures a Server.
@@ -348,6 +350,7 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	shipper         *audit.Shipper
 }
 
 // services holds the domain services that NewServer wires together.
@@ -394,6 +397,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		backupTarget:            nil,
 		backupTargetName:        "",
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		auditSinks:              nil,
 	}
 
 	for _, opt := range opts {
@@ -447,6 +451,11 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		restoreRegistry = reg
 	}
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -465,6 +474,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		shipper:         shipper,
 	}, nil
 }
 
@@ -837,6 +847,16 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
+
+	// The shipper stops when Run returns, also after a serve error, and Run
+	// returns only after it stopped.
+	shipCtx, stopShipper := context.WithCancel(ctx)
+	waitShipper := s.startAuditShipper(shipCtx)
+
+	defer func() {
+		stopShipper()
+		waitShipper()
+	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
 }

@@ -55,6 +55,27 @@ func TestPrincipalConformance(t *testing.T) {
 // paging, fencing, isolation, concurrent appends and the chain check. The
 // tamper hooks change or remove a row through SQL: the port has no update
 // or delete path, so only SQL plants a changed field or a deleted entry.
+func TestAuditFeedConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
+		t.Helper()
+
+		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return s
+	})
+}
+
 func TestAuditConformance(t *testing.T) {
 	t.Parallel()
 

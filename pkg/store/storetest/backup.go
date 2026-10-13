@@ -349,7 +349,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 // seedBackupAudit appends a reveal entry and a decrypt entry with a value
 // count to acme, so the round trip compares the audit table row by row,
 // carries the nullable value count both ways, and proves the chain survives
-// it.
+// it. A store that implements audit.Feed also gets one sink cursor row.
 func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
 	t.Helper()
 
@@ -388,6 +388,14 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		out = append(out, stored)
+	}
+
+	// A store that ships entries to log sinks also keeps a cursor row, so
+	// the round trip carries the cursor table too (ADR 60 decision 13).
+	if feed, ok := s.(audit.Feed); ok {
+		if err := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), "siem", out[len(out)-1].Sequence); err != nil {
+			t.Fatalf("advance audit sink cursor: %v", err)
+		}
 	}
 
 	return out

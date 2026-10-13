@@ -252,6 +252,7 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
+	auditSinks              string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -278,6 +279,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-sink").String(fs, &f.auditSinks)
 }
 
 // registerNet registers the network and console flags.
@@ -781,8 +783,23 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := sinks.close(); closeErr != nil {
+			logger.WarnContext(ctx, "close audit sinks", slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	stopHangup := sinks.reopenOnHangup(ctx, logger)
+	defer stopHangup()
+
 	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
 	opts = append(opts, f.backupOptions(backupTarget)...)
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {

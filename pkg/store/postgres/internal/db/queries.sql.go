@@ -85,6 +85,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected(), nil
 }
 
+const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = EXCLUDED.sequence, updated_at_ms = EXCLUDED.updated_at_ms
+WHERE EXCLUDED.sequence > audit_sink_cursors.sequence
+`
+
+type AdvanceAuditSinkCursorParams struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
+// Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+// is already at the sequence or higher stays, so two instances that ship
+// the same batch never move it back.
+func (q *Queries) AdvanceAuditSinkCursor(ctx context.Context, arg AdvanceAuditSinkCursorParams) error {
+	_, err := q.db.Exec(ctx, advanceAuditSinkCursor,
+		arg.Sink,
+		arg.Namespace,
+		arg.Sequence,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
 const appendEvent = `-- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -1068,6 +1096,25 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getAuditSinkCursor = `-- name: GetAuditSinkCursor :one
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = $1 AND namespace = $2
+`
+
+type GetAuditSinkCursorParams struct {
+	Sink      string
+	Namespace string
+}
+
+// The highest sequence of a namespace that a log sink holds (ADR 60
+// decision 13). A sink with no row holds no entry of the namespace.
+func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursorParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getAuditSinkCursor, arg.Sink, arg.Namespace)
+	var sequence int64
+	err := row.Scan(&sequence)
+	return sequence, err
 }
 
 const getBackup = `-- name: GetBackup :one

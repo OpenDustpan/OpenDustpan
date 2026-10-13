@@ -828,3 +828,18 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
+-- name: GetAuditSinkCursor :one
+-- The highest sequence of a namespace that a log sink holds (ADR 60
+-- decision 13). A sink with no row holds no entry of the namespace.
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = ? AND namespace = ?;
+
+-- name: AdvanceAuditSinkCursor :exec
+-- Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+-- is already at the sequence or higher stays, so two instances that ship
+-- the same batch never move it back.
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
+WHERE excluded.sequence > audit_sink_cursors.sequence;

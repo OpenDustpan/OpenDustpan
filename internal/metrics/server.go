@@ -28,6 +28,9 @@ const (
 	maxRequestSeries = 1024
 	maxInFlightCount = 16
 	maxBuildCount    = 4
+	// maxSinkSeries caps the series of the audit sink families: one per
+	// configured sink.
+	maxSinkSeries = 16
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -38,12 +41,16 @@ const (
 	labelMethod  = "method"
 	labelCode    = "code"
 	labelVersion = "version"
+	// labelSink names a configured audit sink, for example "siem". The
+	// operator sets the name; it never holds an address or a secret.
+	labelSink = "sink"
 )
 
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5). All
+// audit append failure counter (ADR 41 decision 5), and the audit sink
+// counters (ADR 60 decision 13). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -57,6 +64,8 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	shipped  *Counter
+	sinkFail *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -103,6 +112,18 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			"Audit entries lost because the append failed.",
 			nil,
 			1,
+		),
+		shipped: reg.NewCounter(
+			"dustpan_audit_sink_entries_total",
+			"Audit entries that a sink accepted, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
+		sinkFail: reg.NewCounter(
+			"dustpan_audit_sink_failures_total",
+			"Failed delivery rounds of an audit sink, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
 		),
 	}
 
@@ -177,6 +198,21 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// AddAuditShipped adds entries to the count of audit entries that the sink
+// named sink accepted.
+func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
+	if entries > 0 {
+		m.shipped.Add(uint64(entries), sink)
+	}
+}
+
+// IncAuditSinkFailure adds one to the failed delivery rounds of the sink
+// named sink. The shipper retries, so a failure loses no entry, but a count
+// that keeps growing means the sink falls behind. Operators alert on it.
+func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
+	m.sinkFail.Inc(sink)
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

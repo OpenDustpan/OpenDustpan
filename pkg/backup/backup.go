@@ -72,6 +72,7 @@ var Tables = []string{
 	"principals",
 	"principal_groups",
 	"group_members",
+	"audit_sink_cursors",
 	"backups",
 	"restores",
 	"installation",

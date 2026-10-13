@@ -1,0 +1,413 @@
+package audit_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/logsink"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+var errSinkDown = errors.New("sink down")
+
+// memFeed is an in-memory audit.Feed and audit.NamespaceLister.
+type memFeed struct {
+	entries map[namespace.Name][]audit.Entry
+	cursors map[string]int64
+	nss     []namespace.Namespace
+	mu      sync.Mutex
+}
+
+func newMemFeed(counts map[namespace.Name]int) *memFeed {
+	f := &memFeed{entries: map[namespace.Name][]audit.Entry{}, cursors: map[string]int64{}, nss: nil, mu: sync.Mutex{}}
+
+	for _, name := range []namespace.Name{"acme", "globex"} {
+		n, ok := counts[name]
+		if !ok {
+			continue
+		}
+
+		f.nss = append(f.nss, namespace.Namespace{
+			CreatedAt:       time.Unix(0, 0),
+			Name:            name,
+			HomeRegion:      "eu-west",
+			FailoverVersion: 1,
+			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+		})
+
+		for i := range n {
+			f.entries[name] = append(f.entries[name], entryAt(name, int64(i+1)))
+		}
+	}
+
+	return f
+}
+
+func (f *memFeed) ListNamespaces(context.Context) ([]namespace.Namespace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]namespace.Namespace(nil), f.nss...), nil
+}
+
+func (f *memFeed) After(_ context.Context, ns namespace.Name, after int64, limit int) ([]audit.Entry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var out []audit.Entry
+
+	all := f.entries[ns]
+	for i := range all {
+		if all[i].Sequence > after && len(out) < limit {
+			out = append(out, all[i])
+		}
+	}
+
+	return out, nil
+}
+
+func (f *memFeed) SinkCursor(_ context.Context, sink string, ns namespace.Name) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.cursors[sink+"/"+ns.String()], nil
+}
+
+func (f *memFeed) AdvanceSinkCursor(_ context.Context, fence namespace.Fence, sink string, seq int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	key := sink + "/" + fence.Namespace.String()
+	if seq > f.cursors[key] {
+		f.cursors[key] = seq
+	}
+
+	return nil
+}
+
+// acmeCursor answers the cursor of sink in the namespace acme.
+func (f *memFeed) acmeCursor(sink string) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.cursors[sink+"/acme"]
+}
+
+// memSink keeps each batch it accepts. While down, it refuses every batch.
+type memSink struct {
+	batches [][]logsink.Record
+	mu      sync.Mutex
+	down    bool
+}
+
+func (s *memSink) Write(_ context.Context, records []logsink.Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.down {
+		return errSinkDown
+	}
+
+	s.batches = append(s.batches, append([]logsink.Record(nil), records...))
+
+	return nil
+}
+
+func (s *memSink) Close() error { return nil }
+
+func (s *memSink) setDown(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.down = down
+}
+
+// sequences answers the scope and sequence of every accepted record.
+func (s *memSink) sequences() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out []string
+
+	for _, b := range s.batches {
+		for _, r := range b {
+			out = append(out, fmt.Sprint(r.Attrs[0].Value)+"/"+fmt.Sprint(r.Attrs[1].Value))
+		}
+	}
+
+	return out
+}
+
+func (s *memSink) batchSizes() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]int, 0, len(s.batches))
+	for _, b := range s.batches {
+		out = append(out, len(b))
+	}
+
+	return out
+}
+
+// entryAt returns a stored entry of ns with sequence seq and a hash.
+func entryAt(ns namespace.Name, seq int64) audit.Entry {
+	return audit.Entry{
+		At:         time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
+		Namespace:  ns,
+		Subject:    "alice",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:read-secrets",
+		Object:     "opentofu:" + ns.String() + "/prod",
+		Version:    "sv-1",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "OpenTofu/1.11",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindToolOperation,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "req-" + strconv.FormatInt(seq, 10),
+		PrevHash:   "prev",
+		Hash:       "hash-" + strconv.FormatInt(seq, 10),
+		Sequence:   seq,
+	}
+}
+
+func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shipper {
+	t.Helper()
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:       feed,
+		Namespaces: feed,
+		Logger:     nil,
+		OnShipped:  nil,
+		OnFailure:  nil,
+		Sinks:      sinks,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	return s
+}
+
+func shipSink(name string, s logsink.Sink) audit.ShipSink {
+	return audit.ShipSink{Sink: s, Name: name, Interval: 0}
+}
+
+func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 3, "globex": 2})
+	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	shipper := newShipper(t, feed, shipSink("siem", sink))
+
+	if err := shipper.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("ship once: %v", err)
+	}
+
+	want := []string{"acme/1", "acme/2", "acme/3", "globex/1", "globex/2"}
+	if got := sink.sequences(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("shipped %v, want %v", got, want)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 3 {
+		t.Fatalf("acme cursor: got %d, want 3", got)
+	}
+
+	if err := shipper.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("second ship once: %v", err)
+	}
+
+	if got := len(sink.sequences()); got != len(want) {
+		t.Fatalf("second round shipped again: %d records, want %d", got, len(want))
+	}
+}
+
+func TestAFailedWriteKeepsTheCursorAndTheNextRoundSendsTheBatchAgain(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 2})
+	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: true}
+	shipper := newShipper(t, feed, shipSink("siem", sink))
+
+	if err := shipper.ShipOnce(t.Context()); !errors.Is(err, errSinkDown) {
+		t.Fatalf("ship to a down sink: got %v, want errSinkDown", err)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 0 {
+		t.Fatalf("cursor after a failed write: got %d, want 0", got)
+	}
+
+	sink.setDown(false)
+
+	if err := shipper.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("ship once: %v", err)
+	}
+
+	if got := sink.sequences(); fmt.Sprint(got) != "[acme/1 acme/2]" {
+		t.Fatalf("shipped %v, want [acme/1 acme/2]", got)
+	}
+}
+
+func TestEachSinkKeepsItsOwnCursor(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 2})
+	up := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	down := &memSink{batches: nil, mu: sync.Mutex{}, down: true}
+	shipper := newShipper(t, feed, shipSink("archive", down), shipSink("siem", up))
+
+	if err := shipper.ShipOnce(t.Context()); !errors.Is(err, errSinkDown) {
+		t.Fatalf("ship once: got %v, want errSinkDown for the down sink", err)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 2 {
+		t.Fatalf("siem cursor: got %d, want 2", got)
+	}
+
+	if got := feed.acmeCursor("archive"); got != 0 {
+		t.Fatalf("archive cursor: got %d, want 0", got)
+	}
+}
+
+func TestALargeBacklogShipsInBatches(t *testing.T) {
+	t.Parallel()
+
+	total := 2*audit.ShipBatchSize + 7
+	feed := newMemFeed(map[namespace.Name]int{"acme": total})
+	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	shipper := newShipper(t, feed, shipSink("siem", sink))
+
+	if err := shipper.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("ship once: %v", err)
+	}
+
+	want := fmt.Sprint([]int{audit.ShipBatchSize, audit.ShipBatchSize, 7})
+	if got := fmt.Sprint(sink.batchSizes()); got != want {
+		t.Fatalf("batch sizes: got %s, want %s", got, want)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(total) {
+		t.Fatalf("cursor: got %d, want %d", got, total)
+	}
+}
+
+func TestRunShipsOnItsIntervalAndStopsWithTheContext(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
+	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Interval: time.Millisecond})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+
+	go func() {
+		shipper.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+
+	for feed.acmeCursor("siem") != 1 {
+		select {
+		case <-deadline.C:
+			t.Fatal("run did not ship within 5 seconds")
+		case <-tick.C:
+		}
+	}
+
+	cancel()
+	<-done
+}
+
+func TestNewShipperRejectsBadSinks(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(nil)
+	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+
+	cases := []struct {
+		name  string
+		sinks []audit.ShipSink
+	}{
+		{name: "empty name", sinks: []audit.ShipSink{shipSink("", sink)}},
+		{name: "upper case name", sinks: []audit.ShipSink{shipSink("SIEM", sink)}},
+		{name: "duplicate name", sinks: []audit.ShipSink{shipSink("siem", sink), shipSink("siem", sink)}},
+		{name: "nil sink", sinks: []audit.ShipSink{shipSink("siem", nil)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := audit.NewShipper(audit.ShipperConfig{
+				Feed: feed, Namespaces: feed, Logger: nil, OnShipped: nil, OnFailure: nil, Sinks: tc.sinks,
+			})
+			if !errors.Is(err, audit.ErrInvalidShipper) {
+				t.Fatalf("new shipper: got %v, want ErrInvalidShipper", err)
+			}
+		})
+	}
+}
+
+func TestToRecordCarriesTheChainOnlyWhenTheEntryHasIt(t *testing.T) {
+	t.Parallel()
+
+	chained := audit.ToRecord(entryAt("acme", 4))
+	if !hasAttr(chained, "hash", "hash-4") || !hasAttr(chained, "prevHash", "prev") {
+		t.Fatalf("chained entry: record lacks the chain: %+v", chained.Attrs)
+	}
+
+	plain := entryAt("acme", 5)
+	plain.PrevHash, plain.Hash = "", ""
+
+	if rec := audit.ToRecord(plain); hasKey(rec, "hash") || hasKey(rec, "prevHash") {
+		t.Fatalf("entry without a chain: record holds chain fields: %+v", rec.Attrs)
+	}
+
+	count := int64(3)
+	withCount := entryAt("acme", 6)
+	withCount.ValueCount = &count
+
+	if rec := audit.ToRecord(withCount); !hasAttr(rec, "valueCount", int64(3)) {
+		t.Fatalf("entry with a value count: record lacks it: %+v", rec.Attrs)
+	}
+
+	if rec := audit.ToRecord(plain); hasKey(rec, "valueCount") {
+		t.Fatalf("entry without a value count: record holds one: %+v", rec.Attrs)
+	}
+}
+
+func hasKey(r logsink.Record, key string) bool {
+	for _, a := range r.Attrs {
+		if a.Key == key {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasAttr(r logsink.Record, key string, value any) bool {
+	for _, a := range r.Attrs {
+		if a.Key == key && a.Value == value {
+			return true
+		}
+	}
+
+	return false
+}
