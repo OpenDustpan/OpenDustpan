@@ -34,55 +34,66 @@ The project owner answered on 2026-10-11, 2026-10-12 and 2026-10-13:
 
 ## Decision
 
-1. **Groups, not teams.** A group is a named set of principals. A group
+1. **Principals belong to the installation.** A person, the owner of a
+   service token and a workload are principals of the whole installation,
+   not of one namespace. A grant on each object decides what a principal can
+   do there. This follows from the installation-wide groups of decision 2.
+   An MFA reset (ADR 46) also acts on the principal in the whole
+   installation.
+2. **Groups, not teams.** A group is a named set of principals. A group
    belongs to the whole installation, not to one namespace. A principal can
    be a member of more than one group. A membership can start and end at any
    time. Where a tool protocol has its
    own word, such as a team in the TFE-compatible API, that API keeps its
    word.
-2. **Any principal, any role, any object.** A grant names one holder, one
+3. **Any principal, any role, any object.** A grant names one holder, one
    role and one object. The holder can be any principal or a group: a
    person, the owner of a service token (ADR 53), a workload (ADR 54) or a
    group. The object can be the installation, a namespace, a collection
    (ADR 51) or a unit. A label never grants access (ADR 51).
-3. **Any principal can be a member of a group.** A person, a service token
+4. **Any principal can be a member of a group.** A person, a service token
    owner and a workload can each be a member.
-4. **A role is a set of tool-neutral actions** (ADR 13, ADR 17). A
+5. **A role is a set of tool-neutral actions** (ADR 13, ADR 17). A
    principal can do an action on an object when a grant on that object, or
    on an object that holds it, gives a role with that action. The grant can
    name the principal or a group of the principal. The installation holds
    its namespaces. A namespace holds its collections and units. A collection
    holds its units.
-5. **A broad built-in role set.** The built-in roles follow the role sets of
+6. **A broad built-in role set.** The built-in roles follow the role sets of
    other products. When a choice is close, the set includes the extra role.
-6. **Custom roles.** An administrator can make a role as a set of actions.
+7. **Custom roles.** An administrator can make a role as a set of actions.
    A custom role works like a built-in role in a grant.
-7. **A view for site administrators.** A principal with the right grant on
+8. **A view for site administrators.** A principal with the right grant on
    the installation sees and manages every namespace in one view.
-8. **The model can grow.** The project owner wrote "RBAC/ABAC". The
+9. **The model can grow.** The project owner wrote "RBAC/ABAC". The
    authorization model should let a later change add conditions on attributes
-   to a grant, without a change to the shape of decision 2.
-9. **The access-review export.** The server answers an export of grants:
-   - a snapshot of the grants at the time of the request.
-   - a history of the grants between two timestamps that the caller gives.
+   to a grant, without a change to the shape of decision 3.
+10. **The access-review export.** The server answers an export of grants:
+    - a snapshot of the grants at the time of the request.
+    - a history of the grants between two timestamps that the caller gives.
 
-   A caller asks for one of the two. The export covers every grant. The
-   caller can limit it when it makes the export, for example to one
-   namespace, collection, unit, principal or group.
-10. **What a row holds.** Each row names the principal or the group, the
+    A caller asks for one of the two. The export covers every grant. The
+    caller can limit it when it makes the export, for example to one
+    namespace, collection, unit, principal or group.
+11. **What a row holds.** Each row names the principal or the group, the
     role, the object and the time of the grant. It also holds the last
     sign-in or the last access token use of the principal. When the principal
     never signed in and never used an access token, the field shows `Never`.
     A history row also holds the time that the grant ended, if it ended.
-11. **Formats.** The REST API answers the export in JSON. The console also
+12. **Formats.** The REST API answers the export in JSON. The console also
     offers it as CSV, made from the same API response (ADR 17).
-12. **Its own action.** The export needs its own action, for example
+13. **Its own action.** The export needs its own action, for example
     `namespace:read-access`. Each export can write an audit entry (ADR 41,
     RFC 22). The export helps with periodic access reviews (ISO/IEC
     27002:2022 control 5.18, SOC 2 CC6.2 and CC6.3).
-13. **API.** Each operation on groups, memberships, roles and grants has a
-    REST API and an action (ADR 17). Each change passes the policy check and
-    writes an audit entry.
+14. **An endpoint answers the access of a caller.** One endpoint answers
+    what a principal can do on one object, and which grants give it. The
+    console uses this endpoint to show what a person can do. The console
+    does not compute access in the browser (ADR 17).
+15. **API.** Each operation on groups, memberships, roles and grants has a
+    REST API and its own action (ADR 17), named in the style of ADR 13 and
+    the actions that exist, such as `unit:read` and `namespace:read-audit`.
+    Each change passes the policy check and writes an audit entry.
 
 ## Not decided here
 
@@ -95,6 +106,9 @@ The project owner answered on 2026-10-11, 2026-10-12 and 2026-10-13:
   can belong to one namespace.
 - Whether a group can be a member of another group.
 - Which conditions on attributes a grant can hold, and when they come.
+- The names of the actions of decision 15, and the action that the access
+  endpoint of decision 14 needs. RFC 19 lists lead proposals.
+- How the export shows a grant to a group. A group has no last access.
 
 ## Consequences
 

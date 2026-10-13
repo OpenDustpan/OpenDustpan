@@ -62,6 +62,42 @@ The project owner chose this export. It helps a reviewer check access.
 - Can a group be a member of another group?
 - Which conditions on attributes can a grant hold, and when do they come?
 
+These come from the console UI spike (OpenDustpan/console PR #29). Each
+"lead proposal" is a proposed default from the project lead for the owner to
+decide. It is not a decision.
+
+- How does the access-review export show a grant to a group? A group has no
+  last access. Lead proposal: one row for each effective grant of each
+  principal. A grant to a group gives one row for each member, with a
+  column "via group <name>".
+- Which actions does ADR 52 need? Lead proposal, in the style of ADR 13 and
+  of the actions that exist (`unit:read`, `namespace:read-audit`,
+  `server:backup`):
+
+  | Action | Object | Operation |
+  | --- | --- | --- |
+  | `server:manage-principals` | installation | create, disable and remove principals |
+  | `group:read` | group | read a group and its members |
+  | `group:manage` | group | create, rename and delete a group |
+  | `group:manage-members` | group | add and remove members |
+  | `role:read` | role | read a role and its actions |
+  | `role:manage` | role | create, change and delete a custom role |
+  | `server:manage-access` | installation | grant and revoke roles on the installation |
+  | `namespace:manage-access` | namespace | grant and revoke roles on a namespace |
+  | `collection:manage-access` | collection | grant and revoke roles on a collection |
+  | `unit:manage-access` | unit | grant and revoke roles on a unit |
+  | `server:read-access` | installation | export the grants of the whole installation |
+  | `namespace:read-access` | namespace | export the grants of a namespace |
+
+  The spike also proposed `unit:plan` (a preview or a plan) and
+  `namespace:manage-tokens`. Lead proposal: `unit:plan` goes in the list of
+  built-in roles (the "planner" question above), and the token actions go
+  in RFC 20.
+- Which action does the access endpoint of ADR 52 need? Lead proposal: a
+  caller can ask about its own access with the read action of the object.
+  To ask about another principal, it needs the `read-access` action of the
+  object.
+
 ## Owner direction (2026-10-11)
 
 The project owner chose an access-review export as the next step of this RFC.

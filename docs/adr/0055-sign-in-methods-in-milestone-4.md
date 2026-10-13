@@ -23,9 +23,9 @@ On 2026-10-13 the owner also answered three questions on this list:
   auto-revoke." The project lead read this answer as follows. A removal
   disables the sessions and the access tokens of the user, and the server
   keeps them for review. A setting turns on revocation at once instead.
-- Where IP allowlists apply: per installation, per namespace and per access
-  token. They apply to access tokens and to console sign-in. The project
-  lead gave this answer in summary.
+- Where IP allowlists apply: "IP allowlists need to be enabled by the admin
+  first, with opt-in per namespace/access token/etc". This corrects an
+  earlier summary that the project lead gave.
 
 ## Decision
 
@@ -64,9 +64,11 @@ On 2026-10-13 the owner also answered three questions on this list:
    provider, and the mapping names the claim that identifies the person.
    For an OIDC provider, the ID token identifies the person. ADR 6 stays
    true: the provider only proves who the person is.
-8. **IP allowlists at three levels.** An administrator can set an IP
-   allowlist for the installation, for a namespace and for one access
-   token. Each list applies to console sign-in and to requests with an
+8. **IP allowlists are off by default, and each scope opts in.** An
+   administrator of the installation turns the feature on first. Then each
+   scope opts in on its own: the installation, each namespace and each
+   access token. A scope that did not opt in has no list. When the feature
+   is on, each list applies to console sign-in and to requests with an
    access token.
 9. **A removal disables, and revocation is opt-in.** When SCIM or LDAP
    removes a user, the server disables the sessions and the access tokens
@@ -83,7 +85,7 @@ On 2026-10-13 the owner also answered three questions on this list:
 
 [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) keeps these open:
 
-- How lists at more than one level combine. For example, must a request
+- How lists at more than one scope combine. For example, must a request
   pass both the list of its namespace and the list of its token?
 - How the server finds that LDAP removed a user: at the next sign-in, with
   a sync, or both.

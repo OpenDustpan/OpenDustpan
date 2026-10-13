@@ -89,6 +89,11 @@ owner to decide. It is not a decision.
   proposal: 1 hour by default, and an administrator can change it.
 - Can an administrator turn off static service tokens for a namespace?
   Lead proposal: yes. Service tokens stay on by default.
+- Which actions do the token operations of ADR 53 need? Each kind of token
+  has its own action. Lead proposal, from the console UI spike: a person
+  creates a personal token with the action `token:create-personal` on the
+  installation. `namespace:manage-tokens` covers the service tokens of a
+  namespace and the tokens of other principals in it.
 
 ## Owner direction (2026-10-11)
 

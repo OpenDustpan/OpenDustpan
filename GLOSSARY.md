@@ -128,6 +128,10 @@ _Avoid_: Permission set, policy
 A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52).
 _Avoid_: Binding, assignment, permission
 
+**No access**:
+The state of an object or a console section that the principal has no grant to use.
+_Avoid_: Locked (that is a unit lock), forbidden, disabled
+
 **Action**:
 A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on the installation, namespaces, collections and units. A policy check can deny an action (ADR 17).
 _Avoid_: Permission, verb, scope

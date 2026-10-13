@@ -65,9 +65,9 @@ default from the project lead for the owner to decide. It is not a decision.
 - Does "require MFA" apply to the bootstrap admin token? Lead proposal: no.
   The server reads the token from the environment, the operator must retire
   it (ADR 53), and each use writes an audit entry.
-- How do IP allowlists at more than one level combine? Lead proposal: a
-  request must pass each list that applies to it: the installation list,
-  the namespace list and the token list.
+- How do IP allowlists at more than one scope combine? Lead proposal: a
+  request must pass each list that applies to it, out of the scopes that
+  opted in: the installation list, the namespace list and the token list.
 - How does the server find that LDAP removed a user? Lead proposal: at the
   next sign-in, and with a sync at a configurable interval.
 - Does trusted-header sign-in give groups as well as a user? Lead proposal:
@@ -169,9 +169,14 @@ Second round, through the project lead, on 2026-10-13:
   lead reads this as follows. A removal disables the sessions and the access
   tokens of the user, and the server keeps them for review. An administrator
   setting turns on revocation at once instead.
-- Question "Where do IP allowlists apply?": per installation, per namespace
-  and per access token. They apply to access tokens as well as to console
-  sign-in. The project lead gave this answer in summary, with no quote.
+- Question "Where do IP allowlists apply?": the project lead first gave a
+  summary: per installation, per namespace and per access token, for access
+  tokens and console sign-in. The owner then corrected it: "IP allowlists
+  need to be enabled by the admin first, with opt-in per namespace/access
+  token/etc". So IP allowlists are off by default. An administrator of the
+  installation turns the feature on. Then each scope opts in on its own:
+  the installation, each namespace and each access token. When the feature
+  is on, the lists apply to console sign-in and to access-token requests.
 
 ## Outcome
 
@@ -182,7 +187,8 @@ Accepted on 2026-10-13:
 - ADR 55: LDAP, SAML, CAS, OAuth, SCIM 2.0, passkeys for local users,
   trusted-header sign-in and IP allowlists are in the binary in milestone 4.
   Each is an adapter behind a port. OAuth covers any OAuth 2.0 provider. IP
-  allowlists apply per installation, per namespace and per token. A SCIM or
+  allowlists are off by default. An administrator turns them on, and then
+  the installation, each namespace and each token opt in. A SCIM or
   LDAP removal disables the sessions and tokens of the user, and revocation
   at once is opt-in.
 - ADR 56: an MFA step stays valid for 15 minutes by default for token
