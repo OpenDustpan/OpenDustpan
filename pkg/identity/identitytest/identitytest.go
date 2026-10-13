@@ -203,6 +203,8 @@ func testActions() []identity.Action {
 		identity.ActionNamespaceReadAudit,
 		identity.ActionUnitRead,
 		identity.ActionUnitWrite,
+		identity.ActionUnitWriteForced,
+		identity.ActionUnitWriteUnlocked,
 		identity.ActionUnitManage,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,

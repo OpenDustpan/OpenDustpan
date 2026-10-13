@@ -77,6 +77,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 		Name:            "acme",
 		HomeRegion:      "eu-west",
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateNamespace(t.Context(), ns); err != nil {
@@ -381,6 +382,7 @@ func testDeleteWorkspaceDeletesKey(t *testing.T, s Store) {
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

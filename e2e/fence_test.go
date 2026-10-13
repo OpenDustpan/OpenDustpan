@@ -61,16 +61,18 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
+		UserAgent: "",
 	})
 
 	// The stale job locks, then stops before its upload.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Name:   "lock by the stale job",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
-		Check:  nil,
+		Name:      "lock by the stale job",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		Check:     nil,
+		UserAgent: "",
 	})
 
 	// Job B force-unlocks with the real CLI. The release writes the fence.
@@ -106,6 +108,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 
 			return nil
 		},
+		UserAgent: "",
 	})
 
 	// Job B writes with the real CLI after the fence: it reads the fenced
@@ -123,12 +126,13 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 	// Job B takes the lock next. The stale job's declare names the old
 	// lineage, so the server refuses it with the lineage error (422).
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Name:   "lock by job B after the fence",
-		Method: http.MethodPost,
-		Path:   lockPath,
-		Body:   `{"data":{}}`,
-		Want:   http.StatusOK,
-		Check:  nil,
+		Name:      "lock by job B after the fence",
+		Method:    http.MethodPost,
+		Path:      lockPath,
+		Body:      `{"data":{}}`,
+		Want:      http.StatusOK,
+		Check:     nil,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -138,16 +142,18 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Body: `{"data":{"type":"state-versions","attributes":{"serial":` +
 			strconv.FormatInt(before.Data.Attributes.Serial+1, 10) +
 			`,"lineage":"` + before.Data.Attributes.Lineage + `","md5":"` + emptyMD5 + `"}}}`,
-		Want:  http.StatusUnprocessableEntity,
-		Check: nil,
+		Want:      http.StatusUnprocessableEntity,
+		Check:     nil,
+		UserAgent: "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		Name:   "unlock by job B",
-		Method: http.MethodPost,
-		Path:   unlockPath,
-		Body:   "",
-		Want:   http.StatusOK,
-		Check:  nil,
+		Name:      "unlock by job B",
+		Method:    http.MethodPost,
+		Path:      unlockPath,
+		Body:      "",
+		Want:      http.StatusOK,
+		Check:     nil,
+		UserAgent: "",
 	})
 }

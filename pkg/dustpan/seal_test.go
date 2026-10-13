@@ -73,6 +73,7 @@ func sealNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
 		Name:            "acme",
 		HomeRegion:      region,
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	err = st.CreateNamespace(t.Context(), ns)
@@ -132,7 +133,7 @@ func seedUnsealedState(
 		Outputs: []byte(sealOutputs),
 		Serial:  1,
 		Force:   false,
-	})
+	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
 	if err != nil {
 		t.Fatalf("begin state: %v", err)
 	}

@@ -404,3 +404,8 @@ func TestNewServerRequiresMaintenanceStore(t *testing.T) {
 		t.Fatalf("NewServer without the maintenance port: err = %v, want it to name the installation state", err)
 	}
 }
+
+// SetOverrides is not used by this fake.
+func (namespaceOnlyStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
+	return nil
+}

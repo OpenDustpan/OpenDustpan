@@ -475,7 +475,13 @@ func ensureWorkspaceNamespace(t *testing.T, s *sqlite.Store, nsName string) name
 	ctx := t.Context()
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: namespace.Name(nsName), HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            namespace.Name(nsName),
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if createErr := s.CreateNamespace(ctx, ns); createErr != nil &&
 		!errors.Is(createErr, namespace.ErrAlreadyExists) {
 		t.Fatalf("create namespace: %v", createErr)
@@ -509,6 +515,7 @@ func createUsableWorkspace(
 		ID:        workspace.ID(ident.NewID("ws-")),
 		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
 		Revision:  1,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if createErr := s.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
@@ -644,7 +651,13 @@ func TestRenameKeepsTags(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := s.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -2095,6 +2108,7 @@ func TestPeekKeyReadsOneWrappedKey(t *testing.T) {
 		Name:            namespace.Name("acme"),
 		HomeRegion:      namespace.Region("eu-west"),
 		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
 	if err = s.CreateNamespace(ctx, ns); err != nil {
@@ -2151,7 +2165,13 @@ func TestStageRestoreRefusesForeignKeyViolation(t *testing.T) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	src := openBackup(t)
 
-	ns := namespace.Namespace{CreatedAt: now, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1}
+	ns := namespace.Namespace{
+		CreatedAt:       now,
+		Name:            "acme",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 	if err := src.CreateNamespace(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}

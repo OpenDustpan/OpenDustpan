@@ -44,12 +44,15 @@ func (conflictWorkspaces) Unlock(
 	return workspace.Workspace{}, workspace.ErrLockedByOther
 }
 
-func (conflictWorkspaces) ForceUnlock(_ context.Context, id workspace.ID, _ string) (workspace.Workspace, error) {
-	if id.String() != "ws-test123" {
-		return workspace.Workspace{}, workspace.ErrNotFound
-	}
+func (rconflictWorkspaces conflictWorkspaces) ForceUnlock(
+	ctx context.Context,
+	id workspace.ID,
+	by string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	err := rconflictWorkspaces.forceUnlockUnfenced(ctx, id, by)
 
-	return workspace.Workspace{}, workspace.ErrNotLocked
+	return workspace.Workspace{}, false, err
 }
 
 func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
@@ -76,10 +79,19 @@ func (conflictWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace
 			Holder:   "alice",
 			Reason:   "apply",
 		},
-		ID:       id,
-		Ref:      workspace.Ref{Namespace: ns, Name: name},
-		Revision: 2,
+		ID:        id,
+		Ref:       workspace.Ref{Namespace: ns, Name: name},
+		Revision:  2,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}, nil
+}
+
+func (conflictWorkspaces) forceUnlockUnfenced(_ context.Context, id workspace.ID, _ string) error {
+	if id.String() != "ws-test123" {
+		return workspace.ErrNotFound
+	}
+
+	return workspace.ErrNotLocked
 }
 
 // newConflictHandler returns a production Handler over the held workspace.
@@ -249,9 +261,10 @@ func (r *raceWorkspaces) lockedWorkspace(holder string) workspace.Workspace {
 			Holder:   holder,
 			Reason:   "",
 		},
-		ID:       workspace.ID("ws-test123"),
-		Ref:      workspace.Ref{Namespace: ns, Name: name},
-		Revision: 2,
+		ID:        workspace.ID("ws-test123"),
+		Ref:       workspace.Ref{Namespace: ns, Name: name},
+		Revision:  2,
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
 }
 

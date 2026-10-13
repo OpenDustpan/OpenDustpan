@@ -550,7 +550,10 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit) (string, bool, er
 		return u.reference, true, nil
 	}
 
-	if _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject); err != nil {
+	// Maintenance holds no override: a client-encrypted state keeps its lock.
+	none := namespace.Overrides{Forced: false, Unlocked: false}
+
+	if _, _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject, none, nil); err != nil {
 		// A client-encrypted state cannot be fenced, so its lock stays. The
 		// enter goes on and does not report the unit as released.
 		if errors.Is(err, workspace.ErrNotFound) || errors.Is(err, workspace.ErrNotLocked) ||
