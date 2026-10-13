@@ -235,7 +235,13 @@ func sealedTestWorkspace(t *testing.T, workspaces *workspace.Service) workspace.
 // sealedStateContent is the state the sealed adapter tests upload: a small
 // document with a known sensitive value.
 func sealedStateContent() string {
-	return `{"version":4,"serial":4,"lineage":"seed-lineage","outputs":{},"resources":[]}`
+	return stateWithOutputs(stateCreateOutputs())
+}
+
+// stateWithOutputs returns a state of serial 4 whose top-level outputs are doc.
+// The outputs of a version come from its body (ADR 49, decision 8).
+func stateWithOutputs(doc string) string {
+	return `{"version":4,"serial":4,"lineage":"seed-lineage","outputs":` + doc + `,"resources":[]}`
 }
 
 // sealedCreateBody returns a state version create body for content with the
@@ -542,9 +548,9 @@ func TestSealedLargeOutputsRoundTrip(t *testing.T) {
 	const marker = "large-output-marker-"
 
 	env := sealedTestHandler(t)
-	content := sealedStateContent()
 
 	doc := largeSealedOutputs(limit-1024, marker)
+	content := stateWithOutputs(doc.doc)
 	createdDoc := createLargeVersion(t, env, content, doc.doc)
 
 	assertLargeStoredSealed(t, env, createdDoc.Data.ID, marker)
