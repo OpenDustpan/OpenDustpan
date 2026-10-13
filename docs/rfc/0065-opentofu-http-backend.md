@@ -1,13 +1,14 @@
 ---
 rfc: 65
 title: OpenTofu through the http backend too
-status: draft
+status: accepted
 created: 2026-10-12
+adr: 49
 ---
 
 # RFC 65. OpenTofu through the http backend too
 
-Status: draft.
+Status: accepted (ADR 49).
 
 ## Problem
 
@@ -119,6 +120,25 @@ Option 2.
   the TFE-compatible adapter changed to use it too? Then the server would no
   longer trust the `json-state-outputs` that the client sends.
 
+## Owner direction (2026-10-13)
+
+The project owner answered the open questions on 2026-10-13. Words in
+quotation marks are the words of the owner. This section decides nothing. An
+ADR records a decision (ADR 15).
+
+The project lead recommended an answer to each question. The owner said: "All
+RFCs are reviewed and I agree with the recommendations."
+
+- Question "The adapter name and the route prefix": the lead recommended
+  `tofuhttp` and `/tofu/state/`.
+- Question "Does the server need the `headers`-only path": the lead
+  recommended that the server accept both basic auth and an
+  `Authorization: Bearer` header.
+- Question "Does the outputs read of decision 8 belong in the workspace
+  domain": the lead recommended yes, with the TFE-compatible adapter changed
+  to use it too.
+
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted. [ADR 49](../adr/0049-opentofu-http-backend.md) records the
+decision.
