@@ -36,6 +36,8 @@ var (
 	ErrLockedByOther = errors.New("workspace is locked by someone else")
 	// ErrConcurrentModification reports that the workspace changed between read and write.
 	ErrConcurrentModification = errors.New("workspace changed concurrently")
+	// ErrInvalidLockID reports a lock ID that the caller chose and that fails validation.
+	ErrInvalidLockID = errors.New("invalid lock ID")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -122,8 +124,15 @@ type Workspace struct {
 	Revision int64
 }
 
-// lock takes the lock for holder.
+// lock takes the lock for holder under a new lock ID.
 func (w Workspace) lock(now time.Time, holder, reason string) (Workspace, error) {
+	return w.lockAs(now, holder, reason, ident.NewID("lock-"))
+}
+
+// lockAs takes the lock for holder under lockID. The HTTP backend names its
+// lock in its LOCK request, and it sends that ID back with each write (ADR 49,
+// decision 6), so the lock keeps the ID the client chose.
+func (w Workspace) lockAs(now time.Time, holder, reason, lockID string) (Workspace, error) {
 	if w.Lock.Locked() {
 		return Workspace{}, fmt.Errorf(
 			"%w by %s since %s",
@@ -133,7 +142,7 @@ func (w Workspace) lock(now time.Time, holder, reason string) (Workspace, error)
 		)
 	}
 
-	return w.withLock(now, Lock{LockedAt: now, ID: ident.NewID("lock-"), Holder: holder, Reason: reason}), nil
+	return w.withLock(now, Lock{LockedAt: now, ID: lockID, Holder: holder, Reason: reason}), nil
 }
 
 // unlock releases holder's lock.

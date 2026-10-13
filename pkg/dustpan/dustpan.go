@@ -46,6 +46,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
+	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -471,6 +472,7 @@ type adapters struct {
 	inventory   http.Handler
 	audit       http.Handler
 	tfe         http.Handler
+	tofuHTTP    http.Handler
 	server      http.Handler
 	ready       http.Handler
 	maintenance *maintenance.Watcher
@@ -507,6 +509,11 @@ func newAdapters(
 		return adapters{}, err
 	}
 
+	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc)
+	if err != nil {
+		return adapters{}, err
+	}
+
 	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
 	if err != nil {
 		return adapters{}, err
@@ -535,11 +542,29 @@ func newAdapters(
 		inventory:   units,
 		audit:       entries,
 		tfe:         tfeAPI,
+		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
 		ready:       ready,
 		maintenance: watcher,
 		restores:    restores,
 	}, nil
+}
+
+// newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
+// shares the workspace service with the TFE-compatible adapter; it does not
+// call that adapter.
+func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
+	handler, err := tofuhttp.NewHandler(tofuhttp.Config{
+		Authenticator: cfg.authenticator,
+		Authorizer:    cfg.authorizer,
+		Logger:        cfg.logger,
+		Workspaces:    svc.workspaces,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tofu http backend: %w", err)
+	}
+
+	return handler, nil
 }
 
 // newMaintenance builds the maintenance service and the watcher that reads
@@ -1508,6 +1533,9 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		"/api/v2/",
 		withCORS(withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger), cfg.allowedOrigins),
 	)
+	// The OpenTofu http backend (ADR 49) answers tool calls under its own
+	// prefix. It is refused in maintenance mode like the other tool adapters.
+	mux.Handle("/tofu/state/", withMaintenance(a.tofuHTTP, a.maintenance, shapeHTTPBackend, cfg.logger))
 	mux.Handle("/api/server/", withCORS(a.server, cfg.allowedOrigins))
 	mux.Handle("/api/", withCORS(withMaintenance(a.pulumi, a.maintenance, shapePulumi, cfg.logger), cfg.allowedOrigins))
 	// Service discovery lives outside /api/v2/, so the root mux serves it

@@ -346,6 +346,46 @@ func (s *Service) Lock(ctx context.Context, id ID, holder, reason string) (Works
 	})
 }
 
+// LockWithID locks the workspace for holder under lockID, an ID that the
+// caller chose. The HTTP backend sends its lock ID in the LOCK request and
+// names it again in each write (ADR 49, decision 6). An ID that is empty, too
+// long or has characters outside the lock ID set fails with ErrInvalidLockID.
+func (s *Service) LockWithID(ctx context.Context, id ID, holder, reason, lockID string) (Workspace, error) {
+	if holder == "" {
+		return Workspace{}, fmt.Errorf("%w: lock without a holder", ErrNotLocked)
+	}
+
+	if !validLockID(lockID) {
+		return Workspace{}, fmt.Errorf("%w: %d characters", ErrInvalidLockID, len(lockID))
+	}
+
+	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
+		return w.lockAs(now, holder, reason, lockID)
+	})
+}
+
+// maxLockIDLength bounds a lock ID the caller chooses.
+const maxLockIDLength = 128
+
+// validLockID reports whether id is a lock ID the domain accepts: 1 to 128
+// characters of letters, digits, '-', '_' and '.'.
+func validLockID(id string) bool {
+	if id == "" || len(id) > maxLockIDLength {
+		return false
+	}
+
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
 // Unlock releases holder's lock.
 func (s *Service) Unlock(ctx context.Context, id ID, holder string) (Workspace, error) {
 	return s.change(ctx, id, func(w Workspace, now time.Time) (Workspace, error) {
