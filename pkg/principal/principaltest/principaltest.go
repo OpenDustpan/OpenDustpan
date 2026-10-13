@@ -595,6 +595,10 @@ func testMemberRoundTrip(t *testing.T, s principal.Store) {
 
 	equalStrings(t, "members", memberSubjects(members), []string{"alice", "bob"})
 
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want 2", len(members))
+	}
+
 	if !members[1].AddedAt.Equal(at(1)) {
 		t.Fatalf("added at = %v, want %v", members[1].AddedAt, at(1))
 	}
@@ -1109,7 +1113,7 @@ func testDirectoryGroup(t *testing.T, s principal.Store) {
 	err = s.AddMember(ctx, principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1"}, entry())
 	wantErr(t, "add to a directory group", err, principal.ErrManagedByDirectory)
 
-	if !strings.Contains(err.Error(), "ldap") {
+	if err == nil || !strings.Contains(err.Error(), "ldap") {
 		t.Fatalf("error %q does not name the directory", err)
 	}
 
