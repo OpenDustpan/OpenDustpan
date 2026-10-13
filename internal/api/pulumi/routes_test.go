@@ -11,11 +11,13 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -105,11 +107,17 @@ func (stubStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack, err
 	return zero, stack.ErrNotFound
 }
 
-func (stubStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
+func (stubStackStore) DeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ stack.DeleteGuard,
+	_ time.Time,
+) error {
 	return stack.ErrNotFound
 }
 
-func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
 	return stack.ErrNotFound
 }
 
@@ -186,7 +194,7 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 }
 
 func (s *recordingStackStore) DeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard, _ time.Time,
 ) error {
 	s.deleted = append(s.deleted, ref)
 
@@ -194,7 +202,7 @@ func (s *recordingStackStore) DeleteStack(
 }
 
 func (s *recordingStackStore) ForceDeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, _ time.Time,
 ) error {
 	s.forced = append(s.forced, ref)
 
@@ -1413,6 +1421,16 @@ func newDeleteHandler(
 ) (*pulumi.Handler, *recordingStackStore, *memBlob) {
 	t.Helper()
 
+	return newDeleteHandlerWithAudit(t, deleteErr, nil)
+}
+
+// newDeleteHandlerWithAudit builds the delete handler of newDeleteHandler
+// with an audit store.
+func newDeleteHandlerWithAudit(
+	t *testing.T, deleteErr error, auditStore audit.Store,
+) (*pulumi.Handler, *recordingStackStore, *memBlob) {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -1465,7 +1483,7 @@ func newDeleteHandler(
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
-		Audit:                   nil,
+		Audit:                   auditStore,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 	})
@@ -1628,9 +1646,10 @@ func TestDeleteStackWithResourcesMessage(t *testing.T) {
 	}
 }
 
-// TestDeleteStackRemovesCheckpointBlobs proves a stack delete removes the
-// checkpoint blobs of the stack, so a deleted stack leaves no orphan blob.
-func TestDeleteStackRemovesCheckpointBlobs(t *testing.T) {
+// TestDeleteStackKeepsCheckpointBlobs proves a stack delete keeps the
+// checkpoint blobs of the stack: a soft delete keeps the state for a restore
+// until the final delete (ADR 47).
+func TestDeleteStackKeepsCheckpointBlobs(t *testing.T) {
 	t.Parallel()
 
 	handler, _, blobs := newDeleteHandler(t, nil)
@@ -1651,8 +1670,54 @@ func TestDeleteStackRemovesCheckpointBlobs(t *testing.T) {
 		t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
 
-	if _, err := blobs.Get(t.Context(), key); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("checkpoint blob after delete: %v, want it removed", err)
+	if _, err := blobs.Get(t.Context(), key); err != nil {
+		t.Fatalf("checkpoint blob after delete: %v, want it kept", err)
+	}
+}
+
+// TestDeleteStackWritesChangeEntry proves a stack delete writes one audit
+// entry of the kind change for the unit, and a refused delete writes none.
+func TestDeleteStackWritesChangeEntry(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		deleteErr error
+		wantCode  int
+		wantCount int
+	}{
+		{name: "delete", deleteErr: nil, wantCode: http.StatusNoContent, wantCount: 1},
+		{name: "refused delete", deleteErr: stack.ErrUpdateConflict, wantCode: http.StatusConflict, wantCount: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			auditStore := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+			handler, _, _ := newDeleteHandlerWithAudit(t, tc.deleteErr, auditStore)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))
+
+			if rec.Code != tc.wantCode {
+				t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, tc.wantCode, rec.Body.String())
+			}
+
+			if len(auditStore.entries) != tc.wantCount {
+				t.Fatalf("audit entries = %d, want %d", len(auditStore.entries), tc.wantCount)
+			}
+
+			if tc.wantCount == 0 {
+				return
+			}
+
+			got := auditStore.entries[0]
+			if got.Kind != audit.KindChange || got.Action != string(identity.ActionUnitManage) ||
+				got.Object != "pulumi:acme/web/prod" || got.Outcome != audit.OutcomeSuccess {
+				t.Fatalf("audit entry = %+v, want a change by unit:manage on pulumi:acme/web/prod", got)
+			}
+		})
 	}
 }
 

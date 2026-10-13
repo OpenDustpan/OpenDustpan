@@ -335,7 +335,7 @@ func (s *fakeBackupStore) DeleteStack(
 	_ context.Context,
 	ref stack.Ref,
 	fence namespace.Fence,
-	_ stack.DeleteGuard,
+	_ stack.DeleteGuard, _ time.Time,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -370,7 +370,7 @@ func (s *fakeBackupStore) DeleteStack(
 
 // ForceDeleteStack implements stack.Store with its children, key and entry,
 // even when the latest checkpoint manages resources.
-func (s *fakeBackupStore) ForceDeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *fakeBackupStore) ForceDeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence, _ time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

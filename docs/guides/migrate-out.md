@@ -167,6 +167,10 @@ Each unit in OpenDustpan keeps its state and its history after the move.
 Keep it until the target works. Then delete a stack with `pulumi stack rm`
 while you are logged in to OpenDustpan.
 
+A delete is a soft delete (ADR 47). The stack leaves every list and its name
+is free at once, but OpenDustpan keeps its state, its history and its secrets
+until the retention period ends.
+
 ## Guides from other vendors
 
 Other backends publish their own import guides. Read the guide of your

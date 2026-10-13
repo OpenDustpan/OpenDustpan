@@ -112,6 +112,8 @@ type Stack struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	ID          string
+	DeletedAtMs sql.NullInt64
+	DeletedName sql.NullString
 }
 
 type StackTag struct {

@@ -89,11 +89,17 @@ func (m *memStackStore) RenameStack(_ context.Context, _ stack.Ref, _ stack.Name
 	return errNotUsed
 }
 
-func (m *memStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
+func (m *memStackStore) DeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ stack.DeleteGuard,
+	_ time.Time,
+) error {
 	return errNotUsed
 }
 
-func (m *memStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *memStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
 	return errNotUsed
 }
 

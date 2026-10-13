@@ -55,6 +55,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				"updated_at_ms",
 				"id",
+				"deleted_at_ms",
+				"deleted_name",
 			},
 		},
 		{

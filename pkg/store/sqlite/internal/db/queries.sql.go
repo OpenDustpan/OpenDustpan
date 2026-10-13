@@ -2084,7 +2084,7 @@ const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
-WHERE s.namespace = ?
+WHERE s.namespace = ? AND s.deleted_at_ms IS NULL
 ORDER BY t.stack_id, t.name
 `
 
@@ -2114,7 +2114,7 @@ func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ?
+WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY project, name
 `
 
@@ -2162,7 +2162,7 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 const listStacksInProject = `-- name: ListStacksInProject :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ?
+WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name
 `
 
@@ -2860,6 +2860,27 @@ type SetWorkspaceCurrentParams struct {
 func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurrentParams) error {
 	_, err := q.db.ExecContext(ctx, setWorkspaceCurrent, arg.CurrentStateVersionID, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const softDeleteStack = `-- name: SoftDeleteStack :execrows
+UPDATE stacks
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+type SoftDeleteStackParams struct {
+	DeletedAtMs sql.NullInt64
+	ID          string
+}
+
+// Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
+// hold ":", so "deleted:" and the ID never match a lookup by name.
+func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, softDeleteStack, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const touchStack = `-- name: TouchStack :exec

@@ -37,13 +37,13 @@ WHERE namespace = ? AND project = ? AND name = ?;
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ?
+WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY project, name;
 
 -- name: ListStacksInProject :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ?
+WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name;
 
 -- name: CreateStackTag :exec
@@ -60,7 +60,7 @@ ORDER BY name;
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
-WHERE s.namespace = ?
+WHERE s.namespace = ? AND s.deleted_at_ms IS NULL
 ORDER BY t.stack_id, t.name;
 
 -- name: DeleteStackTags :exec
@@ -243,6 +243,13 @@ JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE c.stack_id = ?
 ORDER BY u.version DESC
 LIMIT 1;
+
+-- name: SoftDeleteStack :execrows
+-- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
+-- hold ":", so "deleted:" and the ID never match a lookup by name.
+UPDATE stacks
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: DeleteStack :execrows
 DELETE FROM stacks

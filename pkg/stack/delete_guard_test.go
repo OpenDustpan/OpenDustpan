@@ -99,7 +99,7 @@ type deleteStacks struct {
 }
 
 func (m *deleteStacks) DeleteStack(
-	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard,
+	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard, _ time.Time,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -132,7 +132,7 @@ func (m *deleteStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.St
 	return nil, nil
 }
 
-func (m *deleteStacks) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *deleteStacks) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
 	return nil
 }
 

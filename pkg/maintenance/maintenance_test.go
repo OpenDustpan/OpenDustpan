@@ -129,11 +129,11 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard) error {
+func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard, time.Time) error {
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, time.Time) error {
 	return stack.ErrNotFound
 }
 

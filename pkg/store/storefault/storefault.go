@@ -225,23 +225,23 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 // DeleteStack removes the stack identified by ref when guard allows it,
 // unless a fault fires first.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, at time.Time,
 ) error {
 	if err := s.before(ctx, "DeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.DeleteStack(ctx, ref, fence, guard)
+	return s.inner.DeleteStack(ctx, ref, fence, guard, at)
 }
 
 // ForceDeleteStack removes the stack identified by ref even when it manages
 // resources, unless a fault fires first.
-func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence, at time.Time) error {
 	if err := s.before(ctx, "ForceDeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.ForceDeleteStack(ctx, ref, fence)
+	return s.inner.ForceDeleteStack(ctx, ref, fence, at)
 }
 
 // UpdateStackTags replaces the tags of the stack identified by ref, unless a

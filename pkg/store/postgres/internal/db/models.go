@@ -112,6 +112,8 @@ type Stack struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	ID          string
+	DeletedAtMs pgtype.Int8
+	DeletedName pgtype.Text
 }
 
 type StackTag struct {

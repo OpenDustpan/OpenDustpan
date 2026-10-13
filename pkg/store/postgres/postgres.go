@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -400,23 +401,23 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 	return nil
 }
 
-// DeleteStack implements stack.Store. It removes the stack with its updates,
-// checkpoints, events and wrapped data key in one fenced transaction: child
-// rows go through foreign keys, the data key through an explicit delete. It
-// removes the inventory entry in the same transaction. When the latest
-// checkpoint manages resources, it returns ErrHasResources and removes
-// nothing: rows with a stored count use it, rows with SQL deployment content
-// count it, and rows with a NULL count and blob content use guard, which the
-// service counted outside the transaction. A guard naming another checkpoint
-// returns ErrConcurrentModification so the service recounts once. It returns
-// ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
+// DeleteStack implements stack.Store. It soft-deletes the stack in one fenced
+// transaction (ADR 47): it frees the name, keeps the updates, checkpoints,
+// events, tags and wrapped data key, and removes the inventory entry. When
+// the latest checkpoint manages resources, it returns ErrHasResources and
+// changes nothing: rows with a stored count use it, rows with SQL deployment
+// content count it, and rows with a NULL count and blob content use guard,
+// which the service counted outside the transaction. A guard naming another
+// checkpoint returns ErrConcurrentModification so the service recounts once. It returns
+// ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 // The stack row is locked before the running check, so a concurrent start
 // or save either wins the lock and the delete conflicts, or waits and then
-// finds no stack. A concurrent create takes no stack lock; its insert then
-// fails the stack foreign key and answers ErrNotFound.
+// finds no stack. A concurrent create of an update takes no stack lock. When
+// it read the stack before the delete committed, its row stays with the
+// deleted stack and never starts, because a start finds the stack by name.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, at time.Time,
 ) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, ref)
@@ -436,16 +437,17 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
-		return removeStack(ctx, q, ref, locked.ID)
+		return softDeleteStack(ctx, q, ref, locked.ID, at)
 	})
 }
 
-// ForceDeleteStack implements stack.Store. It removes the stack with its
-// updates, checkpoints, events and wrapped data key in one fenced
-// transaction, even when the latest checkpoint manages resources. It returns
-// ErrNotFound if the stack does not exist, and ErrUpdateConflict while a
+// ForceDeleteStack implements stack.Store. It soft-deletes the stack as
+// DeleteStack does, even when the latest checkpoint manages resources. It
+// returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
-func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *Store) ForceDeleteStack(
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, at time.Time,
+) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, ref)
 		if errors.Is(err, stack.ErrUpdateNotFound) {
@@ -460,7 +462,7 @@ func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence names
 			return err
 		}
 
-		return removeStack(ctx, q, ref, locked.ID)
+		return softDeleteStack(ctx, q, ref, locked.ID, at)
 	})
 }
 
@@ -567,19 +569,15 @@ func equalDigest(digest [32]byte, column []byte) bool {
 	return true
 }
 
-// removeStack deletes the stack with stackID with its wrapped data key and
-// inventory entry: child rows go through foreign keys. It returns
-// ErrNotFound when the delete removes no row. The caller holds the stack
-// lock.
-func removeStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID string) error {
-	if err := q.DeleteSecretKeysOfStack(ctx, stackID); err != nil {
-		return fmt.Errorf("delete secret key: %w", err)
-	}
-
-	n, err := q.DeleteStack(ctx, db.DeleteStackParams{
-		Namespace: ref.Namespace.String(),
-		Project:   ref.Project.String(),
-		Name:      ref.Stack.String(),
+// softDeleteStack marks the stack with stackID deleted at the time at (ADR
+// 47). It moves the name to deleted_name, so the name is free at once, and
+// keeps the updates, checkpoints, events, tags and wrapped data key until the
+// final delete. It removes the inventory entry, so the stack leaves the
+// inventory views. It returns ErrNotFound when no live stack has stackID.
+func softDeleteStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time) error {
+	n, err := q.SoftDeleteStack(ctx, db.SoftDeleteStackParams{
+		DeletedAtMs: pgtype.Int8{Int64: at.UnixMilli(), Valid: true},
+		ID:          stackID,
 	})
 	if err != nil {
 		return fmt.Errorf("delete stack: %w", err)

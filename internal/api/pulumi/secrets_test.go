@@ -178,11 +178,17 @@ func (m *mapStackStore) ListStacks(_ context.Context, filter stack.Filter) ([]st
 	return out, nil
 }
 
-func (m *mapStackStore) DeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
+func (m *mapStackStore) DeleteStack(
+	_ context.Context,
+	ref stack.Ref,
+	_ namespace.Fence,
+	_ stack.DeleteGuard,
+	_ time.Time,
+) error {
 	return m.deleteRef(ref)
 }
 
-func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence) error {
+func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ time.Time) error {
 	return m.deleteRef(ref)
 }
 
@@ -1138,11 +1144,17 @@ func (m *failingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]sta
 	panic("failingStackStore.ListStacks is not used")
 }
 
-func (m *failingStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
+func (m *failingStackStore) DeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ stack.DeleteGuard,
+	_ time.Time,
+) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
-func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
 	panic("failingStackStore.ForceDeleteStack is not used")
 }
 

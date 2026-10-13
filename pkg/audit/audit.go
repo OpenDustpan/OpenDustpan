@@ -46,6 +46,9 @@ const (
 	// KindOverride records that a person used an override of ADR 44: a forced
 	// write, a write without the lock, or an unfenced force-unlock.
 	KindOverride Kind = "override"
+	// KindChange records an action that changes something, for example a
+	// delete of a unit (ADR 60, decision 4).
+	KindChange Kind = "change"
 )
 
 // Channel names where the request came from, as the client declares it.
@@ -186,7 +189,7 @@ func (e Entry) validateHow() error {
 	switch {
 	case e.Channel != ChannelAPI && e.Channel != ChannelConsole:
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
-	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride:
+	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)

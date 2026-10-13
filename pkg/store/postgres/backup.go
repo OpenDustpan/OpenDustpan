@@ -90,6 +90,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "stacks",
 			columns: []string{
 				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
+				"deleted_at_ms", "deleted_name",
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
