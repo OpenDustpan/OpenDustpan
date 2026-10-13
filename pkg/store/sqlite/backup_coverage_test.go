@@ -1,7 +1,6 @@
 package sqlite_test
 
 import (
-	"database/sql"
 	"errors"
 	"io"
 	"path/filepath"
@@ -31,7 +30,7 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 		}
 	})
 
-	conn, err := sql.Open("sqlite", path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 		}
 	})
 
-	conn, err := sql.Open("sqlite", path)
+	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}

@@ -8,8 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -20,6 +24,7 @@ import (
 type PortableStore interface {
 	BackupStore
 	backup.PortableExporter
+	backup.PortableStager
 }
 
 // PortableFactory returns a fresh portable store for one test.
@@ -37,6 +42,14 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "every table has one file that matches its descriptor", test: testPortableFiles},
 		{name: "an export of the same rows gives the same bytes", test: testPortableByteIdentical},
 		{name: "values take their portable forms", test: testPortableValueForms},
+		{name: "a portable export stages with the same rows", test: testPortableStages},
+		{name: "a table file that differs from its descriptor is refused", test: testPortableStageRefusesCorrupt},
+		{name: "a portable stage refuses another schema version", test: testPortableStageRefusesVersion},
+		{name: "an empty byte value is the empty string, not null", test: testPortableEmptyBytes},
+		{name: "a files list with a duplicate table is refused", test: testPortableStageRefusesDuplicate},
+		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
+		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
+		{name: "a summary with a wrong row count is refused", test: testPortableStageRefusesRowCount},
 	}
 
 	for _, tc := range cases {
@@ -178,6 +191,80 @@ func checkPortableFile(t *testing.T, sink *portableSink, file backup.PortableFil
 	}
 }
 
+// read returns the bytes of one file of the sink, as a reader.
+func (s *portableSink) read(path string) (io.ReadCloser, error) {
+	data := s.files[path]
+	if data == nil {
+		return nil, fmt.Errorf("no file %q: %w", path, backup.ErrCorrupt)
+	}
+
+	return io.NopCloser(bytes.NewReader(data.Bytes())), nil
+}
+
+// testPortableStages checks that a portable export stages back into the store
+// with the row counts of its summary, and that the staging area can be
+// discarded (ADR 42, decision 8).
+func testPortableStages(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+
+	staged, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	if err != nil {
+		t.Fatalf("stage portable backup: %v", err)
+	}
+
+	for _, table := range backup.Tables {
+		if staged.RowCounts[table] != sum.RowCounts[table] {
+			t.Fatalf("staged rows of %q = %d, want %d", table, staged.RowCounts[table], sum.RowCounts[table])
+		}
+	}
+
+	if err := s.DiscardStaging(t.Context()); err != nil {
+		t.Fatalf("discard staging: %v", err)
+	}
+}
+
+// testPortableStageRefusesCorrupt checks that one table file that differs from
+// its descriptor fails the stage with ErrCorrupt (ADR 42, decision 4).
+func testPortableStageRefusesCorrupt(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+
+	data := sink.files[backup.PortablePath("namespaces")]
+	raw := data.Bytes()
+	raw[len(raw)/2] ^= 0xff
+
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage a corrupt table file: err = %v, want ErrCorrupt", err)
+	}
+}
+
+// testPortableStageRefusesVersion checks that a portable backup of another
+// schema version is refused with ErrSchemaMismatch.
+func testPortableStageRefusesVersion(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	sum.SchemaVersion++
+
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	if !errors.Is(err, backup.ErrSchemaMismatch) {
+		t.Fatalf("stage another schema version: err = %v, want ErrSchemaMismatch", err)
+	}
+}
+
 // portableColumnNames returns the portable column names of table, in order.
 func portableColumnNames(table string) []string {
 	for _, spec := range backup.PortableTables() {
@@ -304,4 +391,136 @@ func findPortableRow(t *testing.T, rows []map[string]any, name, value string) ma
 	t.Fatalf("no row with %s = %q", name, value)
 
 	return nil
+}
+
+// testPortableEmptyBytes checks that an empty byte value is written as the empty
+// string and not as null: a NOT NULL bytes column would refuse the null on the
+// way back (ADR 42, decision 3). The seeded updates hold empty lease digests.
+func testPortableEmptyBytes(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, _, _ := exportPortable(t, s)
+	path := backup.PortablePath("updates")
+
+	found := false
+
+	for _, row := range readPortableLines(t, path, sink.files[path].Bytes()) {
+		value, present := row["lease_digest"]
+		if !present {
+			t.Fatalf("row of %q misses lease_digest", path)
+		}
+
+		if value == nil {
+			t.Fatal("lease_digest = null, want the empty string for an empty value")
+		}
+
+		if value == "" {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatal("no updates row holds an empty lease_digest, so the case proves nothing")
+	}
+}
+
+// testPortableStageRefusesDuplicate checks that a files list that holds two
+// descriptors of one table fails the stage with ErrCorrupt before any load, and
+// names the table (ADR 42, decision 4).
+func testPortableStageRefusesDuplicate(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	files = append(files, files[0])
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "namespaces")
+}
+
+// testPortableStageRefusesUnknown checks that a files list that names a table the
+// spec does not hold fails the stage with ErrCorrupt, and names the table.
+func testPortableStageRefusesUnknown(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	files = append(files, backup.PortableFile{
+		Table:   "no_such_table",
+		Path:    "sql/no_such_table.jsonl.gz",
+		SHA256:  "00",
+		Columns: nil,
+		Rows:    0,
+		Size:    0,
+	})
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "no_such_table")
+}
+
+// testPortableStageRefusesMissing checks that a files list that omits a table of
+// the spec fails the stage with ErrCorrupt, and names the table.
+func testPortableStageRefusesMissing(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	var kept []backup.PortableFile
+
+	for _, file := range files {
+		if file.Table != "installation" {
+			kept = append(kept, file)
+		}
+	}
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: kept}, "installation")
+}
+
+// portableExport holds a summary and its files, as an export returns them.
+type portableExport struct {
+	sum   backup.Summary
+	files []backup.PortableFile
+}
+
+// assertStageRefused stages files and checks that the stage fails with
+// ErrCorrupt, naming table.
+func assertStageRefused(
+	t *testing.T, s PortableStore, sink *portableSink, export portableExport, table string,
+) {
+	t.Helper()
+
+	_, err := s.StagePortable(t.Context(), sink.read, export.sum, export.files)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage a bad files list: err = %v, want ErrCorrupt", err)
+	}
+
+	if !strings.Contains(err.Error(), `"`+table+`"`) {
+		t.Fatalf("error = %v, want it to name the table %q", err, table)
+	}
+}
+
+// testPortableStageRefusesRowCount checks that the files are correct but the
+// summary names another row count for one table: the stage fails with ErrCorrupt
+// and names the table, on both dialects (ADR 42, decision 4).
+func testPortableStageRefusesRowCount(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+
+	counts := maps.Clone(sum.RowCounts)
+
+	counts["updates"]++
+	sum.RowCounts = counts
+
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "updates")
 }

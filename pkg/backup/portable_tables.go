@@ -81,6 +81,7 @@ func portableSpec() []PortableTable {
 				{Name: "created_by", Kind: KindText},
 				{Name: "restored_from", Kind: KindInteger},
 				{Name: "journal_version", Kind: KindInteger},
+				{Name: "journal_closed", Kind: KindBool},
 			},
 		},
 		{
@@ -124,6 +125,7 @@ func portableSpec() []PortableTable {
 				{Name: portColArrival, Kind: KindInteger},
 				{Name: "blob_key", Kind: KindText},
 				{Name: "sha256", Kind: KindBytes},
+				{Name: "md5", Kind: KindBytes},
 				{Name: portColSize, Kind: KindInteger},
 				{Name: "lowest_sequence", Kind: KindInteger},
 				{Name: "sequence_ids", Kind: KindText},

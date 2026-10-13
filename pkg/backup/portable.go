@@ -215,6 +215,12 @@ func portableValue(column Column, value any) (any, error) {
 			return nil, fmt.Errorf("value %T is not bytes: %w", value, ErrCoverage)
 		}
 
+		// A zero-length value can arrive as a nil slice, which encodes as null.
+		// Only a SQL null is null, so an empty value is the empty string.
+		if b == nil {
+			b = []byte{}
+		}
+
 		return b, nil
 	case KindJSON:
 		return jsonValue(value)

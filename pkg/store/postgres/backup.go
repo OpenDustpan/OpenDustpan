@@ -278,6 +278,30 @@ func (s *Store) CheckCoverage(ctx context.Context) error {
 		}
 	}
 
+	return s.checkPortableColumns(ctx)
+}
+
+// checkPortableColumns compares the portable spec with the live columns of each
+// table. The PostgreSQL names of the portable columns are the portable names
+// (ADR 42, decision 3), and the export writes the spec, so the spec must match the
+// schema.
+func (s *Store) checkPortableColumns(ctx context.Context) error {
+	for _, spec := range backup.PortableTables() {
+		listed := make([]string, 0, len(spec.Columns))
+		for _, column := range spec.Columns {
+			listed = append(listed, column.Name)
+		}
+
+		live, err := s.liveColumns(ctx, spec.Table)
+		if err != nil {
+			return err
+		}
+
+		if checkErr := backup.CheckColumns(spec.Table, listed, live); checkErr != nil {
+			return checkErr
+		}
+	}
+
 	return nil
 }
 
@@ -690,15 +714,17 @@ func (s *Store) StageRestore(
 
 	return s.buildStaging(ctx, stagingInput{
 		staging: staging,
-		frames:  frames,
-		want:    want,
+		load: func(ctx context.Context, schema string) error {
+			return s.loadStagingDump(ctx, schema, frames, want)
+		},
+		want: want,
 	})
 }
 
-// stagingInput groups what buildStaging needs: the staging schema, the decoded
-// tables, and the manifest summary.
+// stagingInput groups what buildStaging needs: the staging schema, the step that
+// loads its tables, and the manifest summary.
 type stagingInput struct {
-	frames  map[string]pgTableDump
+	load    func(ctx context.Context, schema string) error
 	want    backup.Summary
 	staging string
 }
@@ -720,7 +746,7 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, createErr
 	}
 
-	if loadErr := s.loadStagingDump(ctx, in.staging, in.frames, in.want); loadErr != nil {
+	if loadErr := in.load(ctx, in.staging); loadErr != nil {
 		return backup.Summary{}, loadErr
 	}
 
