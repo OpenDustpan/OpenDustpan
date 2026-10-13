@@ -80,7 +80,7 @@ func CopyColumnsForTest() map[string][]string {
 // live columns of the table. It names the table and the column of a
 // mismatch, so the coverage test fails loudly.
 func CheckCopyColumnsForTest(table string, listed, live []string) error {
-	return checkCopyColumns(table, listed, live)
+	return backup.CheckColumns(table, listed, live)
 }
 
 // NewStagingSchemaForTest returns a fresh staging schema name.
