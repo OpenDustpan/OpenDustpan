@@ -108,7 +108,7 @@ both together.
 | [57](0057-documentation.md) | Documentation, examples and agent skills as a product | draft |
 | [58](0058-large-request-limits.md) | Bound memory of large request bodies | accepted |
 | [59](0059-installation-api.md) | Shape of the installation API served by api/server | draft |
-| [60](0060-maintenance-mode-visibility-wait.md) | Wait until every instance sees maintenance mode before a restore applies | draft |
+| [60](0060-maintenance-mode-visibility-wait.md) | Wait until every instance sees maintenance mode before a restore applies | accepted |
 | [61](0061-docs-site-and-landing-page.md) | A docs site and a landing page | discussing |
 | [62](0062-pulumi-journaling.md) | Pulumi journaling | accepted |
 | [63](0063-workspace-lock-holder.md) | A workspace lock belongs to a principal, not to a client | accepted |
