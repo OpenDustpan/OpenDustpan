@@ -282,7 +282,15 @@ _Avoid_: Audit type, `log-decryption` as a kind
 The count of secret values that one Pulumi `decrypt` or `batch-decrypt` call gave the tool. Only the `tool-operation` entries of these two routes hold it.
 _Avoid_: Secret count
 
+### Hosted service
+
+**Hosted distribution**:
+The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points. It adds only shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
+_Avoid_: Fork, enterprise edition, cloud edition
+
 ## Flagged ambiguities
+
+- **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
 
 - **Group** is a set of principals (ADR 52). RFC 4 used "group" for a set of units before the owner chose "collection". A set of units is a collection.
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".

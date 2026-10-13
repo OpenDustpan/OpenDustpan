@@ -27,6 +27,21 @@ vulnerability.
    GitHub for a CVE ID through the advisory for each fixed vulnerability.
    The advisory credits you, unless you ask it not to.
 
+## Embargoed fixes
+
+The fix for a vulnerability is private until the advisory is published.
+This process is public. Only the fix is private.
+
+1. The project owner makes a private fork from the advisory. The fix is
+   written and reviewed in that fork.
+2. During the embargo, a hosted OpenDustpan service that the project runs
+   can run the fix before it is public (ADR 59, decision 14). No other
+   unmerged code runs there.
+3. The fix merges to the `main` branch and goes into a release no more
+   than 14 days after the hosted service starts to run it.
+4. At disclosure, the fix merges, the release is published and the
+   advisory is published together.
+
 ## Supported versions
 
 OpenDustpan is pre-alpha. Before 1.0, only the latest release gets security
