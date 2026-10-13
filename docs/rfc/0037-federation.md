@@ -79,6 +79,14 @@ this RFC.
    (RPO).
 3. Do not block RFC 68. The placement settings are inputs to it.
 
+The owner added a correction on 2026-10-13, relayed the same way:
+replication does not replace backups. For compliance they are two different
+controls. Every setup keeps backups and tested restores: with or without
+replication, hosted or self-hosted. Read point 2 with this correction:
+without replication, a restore from a backup is the only way to fail over.
+With replication, the backups stay. See "Two controls: replication and
+backup".
+
 ## Terms in this RFC
 
 - **Placement**: where a namespace lives: its home installation and its
@@ -216,10 +224,33 @@ The home must accept the token of the caller.
   Recommendation: host names first. They need no change to the IDs. Keep
   the placement hint as an open question for a shared front door.
 
-### 5. Regions and replication
+### 5. Regions, replication and backups
+
+#### Two controls: replication and backup
+
+Replication and backup are two different controls. Neither one replaces the
+other.
+
+- **Replication** copies every change to the standby region, also a bad
+  state write, a delete or a corruption. It reduces downtime when a region
+  fails. It does not recover data that a bad change destroyed, because the
+  standby holds the same bad change.
+- **A backup** is a separate copy of one point in time, which a later bad
+  change cannot reach. It recovers data. ADR 30 and ADR 42 test the
+  restores.
+- Standards treat backup as a control of its own, for example ISO/IEC 27001
+  Annex A 8.13 (information backup) and the DORA regulatory technical
+  standards (Commission Delegated Regulation (EU) 2024/1774) on backup
+  policies and restore tests.
+
+So every setup keeps backups and tested restores: one region or many, with
+or without replication, hosted or self-hosted. The reference architectures
+of RFC 68 each show both controls where they apply.
+
+#### With replication
 
 ADR 4 plans asynchronous replication to standby regions and an explicit
-promotion. With replication:
+promotion.
 
 - A promotion moves the home region and increments the failover version of
   the namespace. The router reads the new home from the namespace row and
@@ -230,21 +261,35 @@ promotion. With replication:
   checkpoint and then the stack. Recommendation: forward every request of a
   tool API. Allow replica reads only for the console inventory, with the
   lag shown.
+- Backups continue on their schedule. A bad change that replication copied
+  to the standby is recovered from a backup, not from the standby.
 
-Without replication:
+#### Without replication
 
-- Failover is a restore from a backup into another installation or region
-  (ADR 30, ADR 38, ADR 42). The placement changes after the restore.
-- **RPO** is the time since the last backup that succeeded. A backup
-  schedule is deferred (ADR 30). Until it exists, the RPO is whatever the
-  operator schedules outside the server.
-- **RTO** is the time to start a server, restore the backup, and change the
-  placement or DNS. It grows with the size of the backup.
-- The docs must state both for each reference architecture of RFC 68
-  (owner decision 5 there). This RFC gives no numbers. Proposal: the
-  reference architecture tests in CI measure a restore and publish the
-  time, so the docs quote a measured RTO and the backup interval as the
-  RPO.
+- When a region or an installation fails, a restore from a backup into
+  another installation or region (ADR 30, ADR 38, ADR 42) is the only way
+  to fail over. The placement changes after the restore.
+
+#### Recovery objectives
+
+The docs must state the recovery time objective (RTO) and the recovery point
+objective (RPO) for each reference architecture of RFC 68 (owner decision 5
+there). This RFC gives no numbers.
+
+- **Failover by promotion (with replication).** The RPO is the replication
+  lag at the time of the failure. The RTO is the time to detect the failure,
+  promote the standby and route to it.
+- **Recovery by restore (every setup).** The RPO is the time since the last
+  backup that succeeded. A backup schedule is deferred (ADR 30). Until it
+  exists, the RPO is whatever the operator schedules outside the server.
+  The RTO is the time to start a server, restore the backup, and change the
+  placement or DNS. It grows with the size of the backup. A setup with
+  replication still needs this path, for a bad change that replication
+  copied.
+- Proposal: the reference architecture tests in CI measure a restore and
+  publish the time, so the docs quote a measured RTO and the backup
+  interval as the RPO. A setup with replication also publishes the measured
+  replication lag and promotion time.
 
 ### 6. Moving a namespace
 
@@ -346,8 +391,8 @@ a license, an edition or a hosted flag, and each exists in every build.
    local one?
 6. Can the API change the placement map, with an allowlist, or only the
    static layer?
-7. What are the measured RTO and RPO of each reference architecture without
-   replication?
+7. What are the measured RTO and RPO of each reference architecture, for
+   a restore from a backup and, where replication exists, for a promotion?
 8. How does a backup of one namespace work, for a move (ADR 30 keeps it out
    of scope)?
 9. Do replica reads serve the console inventory, and how does the console
