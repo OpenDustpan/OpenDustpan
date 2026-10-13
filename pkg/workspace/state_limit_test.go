@@ -90,6 +90,10 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 func checkLimitError(t *testing.T, err error, wants ...string) {
 	t.Helper()
 
+	if err == nil {
+		t.Fatal("err = nil, want ErrTooLarge")
+	}
+
 	if !errors.Is(err, workspace.ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
