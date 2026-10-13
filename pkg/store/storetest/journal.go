@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -411,41 +410,6 @@ func testJournalBuildRace(t *testing.T, f fixture) {
 	default:
 		t.Fatalf("batch err = %v with removed keys %v: want the batch in the build or ErrWrongUpdateState",
 			putErr, removed)
-	}
-}
-
-// testBackupJournalBlob shows that the backup names the blob of each journal batch,
-// with its MD5 and size, as it names a checkpoint blob (ADR 43, decision 6.8).
-func testBackupJournalBlob(t *testing.T, newStore BackupFactory) {
-	t.Helper()
-
-	src := newStore(t)
-	f := newFixture(t, src)
-	u := f.run(t, f.ref, "u1", mutating())
-
-	row := journalRow(t, src, u, 7, 1)
-	row.Size = 33
-
-	if _, err := src.PutJournalRow(t.Context(), row, f.fence); errors.Is(err, errors.ErrUnsupported) {
-		t.Skip("the store keeps no journal rows")
-	} else if err != nil {
-		t.Fatalf("journal batch: %v", err)
-	}
-
-	sum, data := exportBackup(t, src)
-
-	want := []backup.BlobRef{{MD5: row.MD5, Key: string(row.BlobKey), Size: row.Size, Sealed: false}}
-	if !slices.EqualFunc(sum.Blobs, want, sameBlobRef) {
-		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, want)
-	}
-
-	// The restored store holds the same journal rows, under the same stack ID.
-	dst := newStore(t)
-	importBackup(t, dst, data, sum)
-
-	keys, err := dst.JournalKeys(t.Context(), mustStackID(t, src, f.ref), u.ID)
-	if err != nil || !slices.Equal(keys, []blob.Key{row.BlobKey}) {
-		t.Fatalf("journal after the restore = %v, %v; want %s", keys, err, row.BlobKey)
 	}
 }
 

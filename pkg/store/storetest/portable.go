@@ -50,6 +50,10 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
 		{name: "a files list with a missing table is refused", test: testPortableStageRefusesMissing},
 		{name: "a summary with a wrong row count is refused", test: testPortableStageRefusesRowCount},
+		{name: "export names journal blobs with their MD5 and size", test: testPortableJournalBlob},
+		{name: "staging refuses stacks without their namespace", test: testPortableStageRefusesForeignKeys},
+		{name: "staging refuses a corrupt stream", test: testPortableStageRefusesBrokenStream},
+		{name: "staging refuses blob references that differ from the manifest", test: testPortableStageRefusesBlobs},
 		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
@@ -381,6 +385,34 @@ func testPortableValueForms(t *testing.T, newStore PortableFactory) {
 	}
 }
 
+// testPortableJournalBlob shows that the portable summary names the blob of
+// each journal batch, with its MD5 and size, as it names a checkpoint blob
+// (ADR 43, decision 6.8, ADR 42 decision 3). The restore of the rows is
+// covered by the restore suite.
+func testPortableJournalBlob(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	src := newStore(t)
+	f := newFixture(t, src)
+	u := f.run(t, f.ref, "u1", mutating())
+
+	row := journalRow(t, src, u, 7, 1)
+	row.Size = 33
+
+	if _, err := src.PutJournalRow(t.Context(), row, f.fence); errors.Is(err, errors.ErrUnsupported) {
+		t.Skip("the store keeps no journal rows")
+	} else if err != nil {
+		t.Fatalf("journal batch: %v", err)
+	}
+
+	_, sum, _ := exportPortable(t, src)
+
+	want := []backup.BlobRef{{MD5: row.MD5, Key: string(row.BlobKey), Size: row.Size, Sealed: false}}
+	if !slices.EqualFunc(sum.Blobs, want, sameBlobRef) {
+		t.Fatalf("export blobs = %+v, want %+v", sum.Blobs, want)
+	}
+}
+
 // findPortableRow returns the first row whose member name equals value.
 func findPortableRow(t *testing.T, rows []map[string]any, name, value string) map[string]any {
 	t.Helper()
@@ -619,4 +651,122 @@ func testPortableStageRefusesRowCount(t *testing.T, newStore PortableFactory) {
 	sum.RowCounts = counts
 
 	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "updates")
+}
+
+// sinkFiles returns the bytes of each file of the sink, by path.
+func sinkFiles(sink *portableSink) map[string][]byte {
+	out := make(map[string][]byte, len(sink.files))
+	for path, buf := range sink.files {
+		out[path] = buf.Bytes()
+	}
+
+	return out
+}
+
+// gzipOf returns the gzip of payload, for a table file that holds the payload.
+func gzipOf(t *testing.T, payload string) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(payload)); err != nil {
+		t.Fatalf("write gzip: %v", err)
+	}
+
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+// testPortableStageRefusesForeignKeys checks that a stage refuses stacks without
+// their namespace with ErrCorrupt, and leaves the live data empty. The export
+// is edited by hand, because no port writes an orphan.
+func testPortableStageRefusesForeignKeys(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	tampered, tamperedFiles, want := EmptyPortableNamespaces(t, sinkFiles(sink), files, sum)
+
+	dst := newStore(t)
+
+	_, err := dst.StagePortable(t.Context(), PortableOpener(tampered), want, tamperedFiles)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage stacks without their namespace: err = %v, want ErrCorrupt", err)
+	}
+
+	if left := mustListNamespaces(t, dst); len(left) != 0 {
+		t.Fatalf("namespaces after a refused stage = %+v, want none", left)
+	}
+}
+
+// testPortableStageRefusesBrokenStream checks that a table file whose bytes
+// match its descriptor, but whose content is not a gzip of JSON rows, fails the
+// stage with ErrCorrupt. The descriptor is updated, so only the decode can fail.
+func testPortableStageRefusesBrokenStream(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	raw := sinkFiles(sink)
+
+	broken := gzipOf(t, "not a row\n")
+	raw[backup.PortablePath("namespaces")] = broken
+
+	digest := sha256.Sum256(broken)
+
+	for i := range files {
+		if files[i].Table == "namespaces" {
+			files[i].SHA256 = hex.EncodeToString(digest[:])
+			files[i].Size = int64(len(broken))
+			files[i].Rows = 1
+		}
+	}
+
+	dst := newStore(t)
+
+	_, err := dst.StagePortable(t.Context(), PortableOpener(raw), sum, files)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage a corrupt stream: err = %v, want ErrCorrupt", err)
+	}
+
+	if left := mustListNamespaces(t, dst); len(left) != 0 {
+		t.Fatalf("namespaces after a refused stage = %+v, want none", left)
+	}
+}
+
+// testPortableStageRefusesBlobs checks that a summary whose blob references
+// differ from the staged data fails the stage with ErrCorrupt, and leaves the
+// live data empty.
+func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+
+	if len(sum.Blobs) == 0 {
+		t.Fatal("export names no blob, want the blob of the finalized state version")
+	}
+
+	sum.Blobs[0].Size++
+
+	dst := newStore(t)
+
+	_, err := dst.StagePortable(t.Context(), sink.read, sum, files)
+	if !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("stage wrong blob references: err = %v, want ErrCorrupt", err)
+	}
+
+	if left := mustListNamespaces(t, dst); len(left) != 0 {
+		t.Fatalf("namespaces after a refused stage = %+v, want none", left)
+	}
 }

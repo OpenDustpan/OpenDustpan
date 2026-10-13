@@ -17,7 +17,7 @@ const portableBatchRows = 200
 // StagePortable implements backup.PortableStager. It builds the staging schema
 // with the migrations of this schema version, loads the table files into it in
 // foreign-key order, one transaction for each batch, and checks it as
-// StageRestore does. The live tables are never written.
+// the checks of a restore require. The live tables are never written.
 func (s *Store) StagePortable(
 	ctx context.Context, open backup.PortableOpener, want backup.Summary, files []backup.PortableFile,
 ) (backup.Summary, error) {
@@ -56,7 +56,7 @@ func (s *Store) StagePortable(
 
 // loadPortableStaging loads each table file into the staging schema, in the
 // order of the portable spec. Each batch is one transaction. The migration seeds
-// the installation row, so the seeded row goes first, as the native load does.
+// the installation row, so the seeded row goes first.
 func (s *Store) loadPortableStaging(
 	ctx context.Context, schema string, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) error {
