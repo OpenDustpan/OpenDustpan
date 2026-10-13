@@ -254,39 +254,64 @@ func pgCopySpec(table string) (pgCopyTable, error) {
 		}
 	}
 
-	return pgCopyTable{}, fmt.Errorf("backup table %q: %w", table, backup.ErrCorrupt)
+	return pgCopyTable{}, fmt.Errorf("backup table %q has no COPY column list: %w", table, backup.ErrCoverage)
 }
 
-// checkCopyColumns compares the COPY column list of table with the live
-// columns of the table. It reports the first column the list omits or names
-// without a live column, naming the table and the column, so a migration
-// that adds a column fails the coverage test until its author extends
-// pgCopyTables. Column order does not matter: the dump and the load name
-// every column on both COPY statements.
-func checkCopyColumns(table string, listed, live []string) error {
-	for _, column := range listed {
-		if !slices.Contains(live, column) {
-			return fmt.Errorf(
-				"backup COPY columns of table %q name unknown column %q: %w",
-				table,
-				column,
-				backup.ErrCorrupt,
-			)
+// CheckCoverage implements backup.Coverage: it compares the COPY column list of
+// each table of backup.Tables with the columns that the current schema holds for
+// the table (ADR 42, decision 5). A table without a list, or a column that
+// differs, fails with backup.ErrCoverage.
+func (s *Store) CheckCoverage(ctx context.Context) error {
+	for _, table := range backup.Tables {
+		spec, err := pgCopySpec(table)
+		if err != nil {
+			return err
 		}
-	}
 
-	for _, column := range live {
-		if !slices.Contains(listed, column) {
-			return fmt.Errorf(
-				"backup COPY columns of table %q miss column %q: %w",
-				table,
-				column,
-				backup.ErrCorrupt,
-			)
+		live, liveErr := s.liveColumns(ctx, table)
+		if liveErr != nil {
+			return liveErr
+		}
+
+		if checkErr := backup.CheckColumns(table, spec.columns, live); checkErr != nil {
+			return checkErr
 		}
 	}
 
 	return nil
+}
+
+// liveColumns returns the column names of table in the current schema, in
+// ordinal order.
+func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT column_name FROM information_schema.columns`+
+			` WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position`,
+		table,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, err)
+	}
+
+	defer rows.Close()
+
+	var columns []string
+
+	for rows.Next() {
+		var column string
+
+		if scanErr := rows.Scan(&column); scanErr != nil {
+			return nil, fmt.Errorf("scan column of table %q: %w", table, scanErr)
+		}
+
+		columns = append(columns, column)
+	}
+
+	if iterErr := rows.Err(); iterErr != nil {
+		return nil, fmt.Errorf("read columns of table %q: %w", table, iterErr)
+	}
+
+	return columns, nil
 }
 
 // pgIdent quotes one identifier. Table and column names come from the
