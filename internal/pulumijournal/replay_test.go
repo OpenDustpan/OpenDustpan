@@ -150,35 +150,77 @@ func TestReplayRefusesMissingReference(t *testing.T) {
 	}
 }
 
-// TestReplayRefusesKindsNotReplayedYet checks that kinds 5, 7 and 10 answer ErrUnsupportedKind (issue #430).
-func TestReplayRefusesKindsNotReplayedYet(t *testing.T) {
+// TestReplayRefusesStateMigration checks that kind 10 answers ErrUnsupportedKind
+// until item 12 replays it.
+func TestReplayRefusesStateMigration(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name  string
-		entry string
-	}{
-		{
-			name:  "write",
-			entry: `{"version":1,"kind":5,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
-		},
-		{
-			name:  "rebuilt base state",
-			entry: `{"version":1,"kind":7,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
-		},
-		{
-			name:  "state migration",
-			entry: `{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
-		},
+	entry := `{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`
+	_, err := replay(baseJSON(), batch(entry))
+	if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
+		t.Fatalf("error is %v, want ErrUnsupportedKind", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := replay(baseJSON(), batch(tt.entry))
-			if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
-				t.Fatalf("error is %v, want ErrUnsupportedKind", err)
-			}
-		})
+}
+
+// TestReplayWriteDropsSecretsSetBeforeIt checks that a secrets manager entry
+// before a write (kind 5) does not survive it: the snapshot replaces the base,
+// and the base holds the secrets provider of the snapshot. Upstream loses such an
+// entry the same way (backend/journal.go, lines 295 to 298).
+func TestReplayWriteDropsSecretsSetBeforeIt(t *testing.T) {
+	t.Parallel()
+	base := baseJSON()
+	snapshot := `{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},` +
+		`"secrets_providers":{"type":"service","state":{"stack":"snapshot"}},"resources":[` +
+		resourceJSON("urn:z") + `]}`
+	entries := batch(
+		`{"version":1,"kind":6,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"secretsProvider":{"type":"service","state":{"stack":"entry"}}}`,
+		`{"version":1,"kind":5,"sequenceID":2,"operationID":2,"removeOld":null,"removeNew":null,`+
+			`"newSnapshot":`+snapshot+`}`,
+	)
+	got, err := replay(base, entries)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if strings.Contains(got, `"stack":"entry"`) {
+		t.Fatalf("the secrets entry before the write survived it:\n%s", got)
+	}
+	if !strings.Contains(got, `"stack":"snapshot"`) {
+		t.Fatalf("the snapshot's secrets provider is missing:\n%s", got)
+	}
+}
+
+// TestReplayWriteWithoutSnapshotIsRefused checks that a write entry without a
+// snapshot is refused with ErrNoSnapshot.
+func TestReplayWriteWithoutSnapshotIsRefused(t *testing.T) {
+	t.Parallel()
+	entry := `{"version":1,"kind":5,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`
+	_, err := replay(baseJSON(), batch(entry))
+	if !errors.Is(err, pulumijournal.ErrNoSnapshot) {
+		t.Fatalf("error is %v, want ErrNoSnapshot", err)
+	}
+}
+
+// TestReplayRebuildsBaseAtRebuiltEntry checks that a rebuilt base state entry
+// (kind 7) makes the deployment of the replay so far the base. The entries after
+// it apply to that base, and the entries before it do not.
+func TestReplayRebuildsBaseAtRebuiltEntry(t *testing.T) {
+	t.Parallel()
+	base := baseJSON(resourceJSON("urn:a"), resourceJSON("urn:b"))
+	entries := batch(
+		`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null,`+
+			`"state":`+resourceJSON("urn:c")+`,"deleteOld":1}`,
+		`{"version":1,"kind":7,"sequenceID":3,"operationID":3,"removeOld":null,"removeNew":null}`,
+		`{"version":1,"kind":0,"sequenceID":4,"operationID":2,"removeOld":null,"removeNew":null}`,
+		`{"version":1,"kind":1,"sequenceID":5,"operationID":2,"removeOld":null,"removeNew":null,`+
+			`"state":`+resourceJSON("urn:d")+`}`,
+	)
+	got, err := replay(base, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectDeployment(t, got, resourceJSON("urn:d")+","+resourceJSON("urn:c")+","+resourceJSON("urn:a")+
+		`,{"urn":"urn:b","custom":true,"type":"t:mod:T","id":"x","delete":true}`)
 }
 
 // TestReplayReplacesAndSetsFeatures checks a replaced base state in its place, and the feature that it sets.
