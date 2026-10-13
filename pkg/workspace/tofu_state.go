@@ -646,6 +646,82 @@ func maskPointer(attributes any, relative, full string) bool {
 	return maskTokens(attributes, splitPointer(relative), full)
 }
 
+// routeTokens returns the physical route of tokens under node, or false
+// when the node does not hold the path. It resolves exactly like
+// lookupTokens: a key read direct first, one transparent dynamic wrapper
+// level, and list indexes parsed with Atoi. The route holds the keys read
+// from objects, the decimal index of each list step, and the extra "value"
+// step when the wrapper rule applies. No tokens left is an empty route and
+// true. It never changes the tree.
+func routeTokens(node any, tokens []string) ([]string, bool) {
+	if len(tokens) == 0 {
+		return nil, true
+	}
+
+	switch typed := node.(type) {
+	case map[string]any:
+		return routeMapAt(typed, tokens)
+	case []any:
+		return routeListAt(typed, tokens)
+	default:
+		return nil, false
+	}
+}
+
+// routeMapAt returns the physical route of tokens under doc.
+func routeMapAt(doc map[string]any, tokens []string) ([]string, bool) {
+	next, present := doc[tokens[0]]
+	if !present {
+		return nil, false
+	}
+
+	if len(tokens) == 1 {
+		return []string{tokens[0]}, true
+	}
+
+	if sub, ok := routeTokens(next, tokens[1:]); ok {
+		return append([]string{tokens[0]}, sub...), true
+	}
+
+	if wrapped, ok := next.(map[string]any); ok && isDynamicWrapper(wrapped) {
+		if sub, ok := routeTokens(wrapped["value"], tokens[1:]); ok {
+			return append([]string{tokens[0], "value"}, sub...), true
+		}
+	}
+
+	return nil, false
+}
+
+// routeListAt returns the physical route of tokens under list.
+func routeListAt(list []any, tokens []string) ([]string, bool) {
+	index, err := strconv.Atoi(tokens[0])
+	if err != nil || index < 0 || index >= len(list) {
+		return nil, false
+	}
+
+	if len(tokens) == 1 {
+		return []string{strconv.Itoa(index)}, true
+	}
+
+	if sub, ok := routeTokens(list[index], tokens[1:]); ok {
+		return append([]string{strconv.Itoa(index)}, sub...), true
+	}
+
+	return nil, false
+}
+
+// belowAppliedRoute reports whether route sits strictly below an applied
+// route: an applied route is a proper prefix of route.
+func belowAppliedRoute(applied [][]string, route []string) bool {
+	for _, done := range applied {
+		if isTokenPrefix(done, route) && len(done) < len(route) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // lookupTokens returns the value at tokens under node, or false when the
 // node does not hold the path. It follows the same transparent dynamic
 // wrapper as the masking, so the caller snapshots what a mark masks.
@@ -818,13 +894,54 @@ func maskAllLeaves(v any, base string, masked *[]string) any {
 	}
 }
 
+// maskCollectors carries the collectors of maskTofuInstance across one
+// pointer: the full paths already masked, each marker path, each masked
+// secret for the duplicate pass, and the physical route of each pointer
+// that masked something.
+type maskCollectors struct {
+	seen    map[string]bool
+	masked  *[]string
+	secrets *[]any
+	applied *[][]string
+}
+
+// maskOnePointer masks the relative pointer under attributes with a marker
+// for full: it records full in the collectors, the masked secret for the
+// duplicate pass, and the physical route. A pointer below an already
+// applied route masks nothing. A pointer at the same node is masked again.
+func maskOnePointer(attributes any, relative, full string, out *maskCollectors) {
+	route, resolved := routeTokens(attributes, splitPointer(relative))
+	if resolved && belowAppliedRoute(*out.applied, route) {
+		return
+	}
+
+	original, found := lookupPointer(attributes, relative)
+
+	if !maskPointer(attributes, relative, full) {
+		return
+	}
+
+	out.seen[full] = true
+	*out.masked = append(*out.masked, full)
+
+	if resolved {
+		*out.applied = append(*out.applied, route)
+	}
+
+	if found && propagableSecret(original) {
+		*out.secrets = append(*out.secrets, original)
+	}
+}
+
 // maskTofuInstance returns the masked attributes of one instance at position
 // of the resource at resource index in the state: each path that
 // sensitive_attributes or the kept marks name answers as a marker with its
 // value path. A value that duplicates a masked secret answers masked too,
 // so a derived copy no mark names still reads as a marker. With no kept
 // marks for the version, every attribute value answers as a marker. The
-// second result holds each marker path, without duplicates.
+// second result holds each marker path, without duplicates. A pointer below
+// an already masked pointer masks nothing. A pointer at the same node is
+// masked again.
 func maskTofuInstance(
 	instance map[string]any, resource, position int, address string, marks SensitiveMarks,
 ) (any, []string) {
@@ -852,22 +969,17 @@ func maskTofuInstance(
 
 	var secrets []any
 
+	var applied [][]string
+
+	out := maskCollectors{seen: seen, masked: &masked, secrets: &secrets, applied: &applied}
+
 	for _, relative := range tofuSensitivePointers(instance, address, tofuInstanceBase(address), marks) {
 		full := base + relative
 		if seen[full] {
 			continue
 		}
 
-		original, found := lookupPointer(attributes, relative)
-
-		if maskPointer(attributes, relative, full) {
-			seen[full] = true
-			masked = append(masked, full)
-
-			if found && propagableSecret(original) {
-				secrets = append(secrets, original)
-			}
-		}
+		maskOnePointer(attributes, relative, full, &out)
 	}
 
 	if len(secrets) > 0 {
