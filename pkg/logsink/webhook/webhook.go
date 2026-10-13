@@ -204,8 +204,7 @@ func (s *Sink) post(ctx context.Context, body []byte) error {
 		// A url.Error repeats the URL, which can hold a token. The log line
 		// of the shipper must never hold it (ADR 32 decision 7), so keep
 		// only the cause.
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
 			err = urlErr.Err
 		}
 
