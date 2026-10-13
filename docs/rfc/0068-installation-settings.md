@@ -73,6 +73,29 @@ The project designs with a hosted service in mind, on the model of Temporal:
 See "No setting gates a feature" and "Multi-tenancy" for what this RFC does
 with points 3 to 5.
 
+### The hosted service (2026-10-13)
+
+The owner decided more about the hosted service on 2026-10-13. The product
+manager relayed it. These are the owner's decisions for the hosted service.
+In this RFC they decide nothing (ADR 15).
+
+1. One hosted tier: a flat price for each organization, with no limit on
+   users and resources. The price is not decided.
+2. No free tier and no trial. To try OpenDustpan, a person runs the binary.
+3. No dedicated tier.
+4. Fair-use limits on the stored bytes, the history kept and the API
+   request rate. These are installation settings in this RFC. See
+   "Fair-use limits".
+5. Free reference architectures, tested in CI: the single binary with
+   SQLite, one virtual machine with PostgreSQL and S3-compatible storage,
+   and AWS (ECS, Aurora, S3). This is not a setting. It is context only.
+
+"Organization" is the owner's word for a customer of the hosted service. In
+`GLOSSARY.md` an organization is a namespace in a tool protocol. With the
+lead recommendation of one installation for each customer (see
+"Multi-tenancy"), one customer is one installation that can hold many
+namespaces.
+
 ## Terms in this RFC
 
 - **Setting**: one named value that changes how the server works, for
@@ -220,6 +243,9 @@ others), ADR 48 (`--advertise-address`), RFC 7 (`--role`) and ADR 33
 | State version history retention | ADR 28 decision 8, RFC 18 | deferred | no | installation | API, live | "A later ADR decides them". |
 | Backup schedule and retention | ADR 30, RFC 8 | deferred | no | installation | API, live | |
 | Instance row retention | ADR 48 decision 10 | accepted | no | installation | API, live | "The retention time is a setting, and the default is 24 hours." |
+| Fair-use storage quota | owner, 2026-10-13 | proposal | no | installation, and each namespace | API, live | See "Fair-use limits". |
+| Fair-use history retention | owner, 2026-10-13 | proposal | no | installation, and each namespace | API, live | See "Fair-use limits". It is a value for the state version history retention row above. |
+| Fair-use API request rate | owner, 2026-10-13 | proposal | no | installation, for each token and each namespace | API, live | See "Fair-use limits". It is a value for the rate limit row below. |
 
 ### Network and security
 
@@ -597,6 +623,112 @@ whether the database should hold a value for each instance.
   (simple, and the static layer can fix it), or skip a fixed list of keys
   that name the place of the installation.
 
+## Fair-use limits
+
+Owner decision 4 of "The hosted service": fair-use limits on the stored
+bytes, the history kept and the API request rate. They are installation
+settings like every other row of this RFC. The open-source server has them
+too, so an operator of any installation can set them (owner direction point
+3). The proposed default for each one is "no limit", so an installation
+that sets nothing works as it does today.
+
+One rule applies to all three. **A limit never stops work that is in
+progress.** A Pulumi update or an OpenTofu run that started must be able to
+save its state. When the server refuses a checkpoint or a state write after
+the tool changed real infrastructure, the state no longer matches the
+infrastructure. So a limit refuses the start of new work, never its end.
+
+### Storage quota
+
+- **Settings.** `quota.storageBytes` for the installation, and the same key
+  for each namespace. A namespace value can only be lower than the
+  installation value, as a unit switch narrows the namespace switch (ADR 44
+  decision 6). `0` means no limit.
+- **What the server counts.** The stored bytes of the blobs that the rows of
+  a namespace name: state versions, checkpoints, journal entries and their
+  history. The rows already keep a size for each blob (the `size` and
+  `blob_size` columns). A soft-deleted unit counts until its final delete
+  (ADR 47). Backups do not count, because they are in the backup target,
+  not in the blob store. Open: does the server keep a running total in a
+  row, or sum the sizes when it checks?
+- **At 80 percent.** The server warns: a log line, a metric
+  `dustpan_quota_used_ratio` with no namespace label (ADR 32 decision 5),
+  and a field in the namespace answer. Open: an event (RFC 23) or an email
+  (a gap: SMTP).
+- **At the limit.** The server refuses the start of new work in that
+  namespace: the start of a Pulumi update, an OpenTofu lock, and a state
+  upload with no lock. A request that belongs to work that is running (a
+  checkpoint, a journal entry, the final state write) always passes. A read
+  always passes. A delete always passes, because it frees space after the
+  retention period.
+- **Status.** Open. Options:
+  - 403 with a message that names the quota and the command that helps.
+  - 409, as a conflict with the namespace state.
+  - 507 Insufficient Storage. It names the cause, but some clients may not
+    show its message.
+
+  Recommendation: decide after `make e2e` shows what the Pulumi CLI and
+  OpenTofu print for each status. The CLAUDE.md rule applies: any endpoint
+  change is checked against the real CLI.
+
+### History retention
+
+- **Settings.** `retention.stateVersions.keep` (the number of versions to
+  keep for each unit) and `retention.stateVersions.maxAgeDays`, for the
+  installation and for each namespace. `0` means keep every version, as ADR
+  28 decision 8 does today. The same rule covers Pulumi checkpoints and
+  update history. Open: one pair of keys for both tools, or one pair for
+  each tool.
+- **What the server counts.** The versions of each unit, oldest first.
+- **At the limit.** The server prunes. A scheduled job deletes the versions
+  over the count and older than the age. It never deletes:
+  - the current version of a unit,
+  - a version that a lock, a running update or a running restore names,
+  - a blob that a running backup can still copy (ADR 28 decision 8, ADR
+    30).
+
+  The rows go first. The blobs become orphans for the orphan sweep. Each
+  prune writes one audit entry for each unit in the scope `@server` or the
+  namespace (ADR 60). The job runs on one instance at a time. Open: how it
+  chooses that instance (RFC 36).
+- **No refusal.** History retention never refuses a write.
+- **Open.** A version that a person pinned or tagged. ADR 28 decision 8 asks
+  a later ADR to decide the prune "with measured sizes". This RFC gives the
+  setting, not that ADR.
+
+### API request rate
+
+- **Settings.** `rateLimit.requestsPerSecond` and `rateLimit.burst`, for
+  each token and for each namespace, with installation values. `0` means no
+  limit. ADR 32 decision 1 sends rate limits to a new RFC, which does not
+  exist yet. This RFC gives only the settings and the answer at the limit.
+- **What the server counts.** Requests in a token bucket, one bucket for
+  each token and one for each namespace. Each instance keeps its own
+  buckets in memory. So with N instances, the real rate can be up to N
+  times the setting. Open options: divide the setting by the count of live
+  instances in the registry (ADR 48), or share a counter in the database
+  (one write for each request, which costs too much on the hot path).
+  Recommendation: divide by the count of live instances.
+- **At the limit.** 429 with `Retry-After`. The Pulumi CLI and OpenTofu
+  may retry a 429 on their own. `make e2e` must show what each one does
+  before this ships.
+- **Exempt.** The calls of an update or a run that is in progress (lease
+  renewal, checkpoints, events, the final state write) use a separate
+  bucket that the namespace limit does not empty, by the rule above. The
+  probes and the metrics route are exempt.
+- **Open.** A limit for each IP address before sign-in, for sign-in
+  attempts (research for RFC 21 lists an account lockout).
+
+### The no-gate check for these limits
+
+Each of the three passes "No setting gates a feature":
+
+- None of them reads a license, an edition, a plan or a "hosted" flag.
+- Each one exists in every build, with the default "no limit".
+- Each one bounds an amount (bytes, versions, days, requests). None of them
+  turns a feature off. At the limit, every feature still works for work in
+  progress, reads and deletes.
+
 ## No setting gates a feature
 
 Owner direction point 3 and point 4: settings set limits and defaults only.
@@ -745,6 +877,12 @@ the owner's approval.
     tenant? The lead recommends one installation for each customer first.
 11. Does the server enforce that a lock in the static layer never turns a
     feature off (see "No setting gates a feature")?
+12. Which status does a namespace over its storage quota answer: 403, 409
+    or 507? This waits on `make e2e` with both CLIs.
+13. Does history retention use one pair of keys for both tools, or one
+    pair for each tool?
+14. How does a rate limit hold across instances: divided by the count of
+    live instances, or a shared counter?
 
 ## Outcome
 
