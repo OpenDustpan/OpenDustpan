@@ -80,6 +80,8 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 		Subject:     in.Subject,
 		DisplayName: displayName,
 		Kind:        in.Kind,
+		Source:      SourceLocal,
+		GroupCount:  0,
 	}
 
 	if err := p.Validate(); err != nil {
@@ -111,12 +113,12 @@ func (s *Service) ListPrincipals(ctx context.Context, req PageRequest) (Page[Pri
 		return Page[Principal]{}, err
 	}
 
-	rows, err := s.store.ListPrincipals(ctx, q)
+	rows, total, err := s.store.ListPrincipals(ctx, q)
 	if err != nil {
 		return Page[Principal]{}, fmt.Errorf("list principals: %w", err)
 	}
 
-	return pageOf(rows, limit, func(p Principal) string { return p.Subject }), nil
+	return pageOf(rows, total, limit, func(p Principal) string { return p.Subject }), nil
 }
 
 // Change names the fields of a principal that a change sets. A nil field
@@ -178,6 +180,8 @@ func (s *Service) CreateGroup(ctx context.Context, e audit.Entry, in GroupInput)
 		ID:          s.newID(groupIDPrefix),
 		Name:        in.Name,
 		Description: in.Description,
+		Source:      SourceLocal,
+		MemberCount: 0,
 	}
 
 	if err := g.Validate(); err != nil {
@@ -209,12 +213,12 @@ func (s *Service) ListGroups(ctx context.Context, req PageRequest) (Page[Group],
 		return Page[Group]{}, err
 	}
 
-	rows, err := s.store.ListGroups(ctx, q)
+	rows, total, err := s.store.ListGroups(ctx, q)
 	if err != nil {
 		return Page[Group]{}, fmt.Errorf("list groups: %w", err)
 	}
 
-	return pageOf(rows, limit, groupKey), nil
+	return pageOf(rows, total, limit, groupKey), nil
 }
 
 // GroupChange names the fields of a group that a change sets. A nil field
@@ -295,12 +299,12 @@ func (s *Service) ListMembers(ctx context.Context, groupID string, req PageReque
 		return Page[Member]{}, err
 	}
 
-	rows, err := s.store.ListMembers(ctx, groupID, q)
+	rows, total, err := s.store.ListMembers(ctx, groupID, q)
 	if err != nil {
 		return Page[Member]{}, fmt.Errorf("list members of group %q: %w", groupID, err)
 	}
 
-	return pageOf(rows, limit, func(m Member) string { return m.Principal.Subject }), nil
+	return pageOf(rows, total, limit, func(m Member) string { return m.Principal.Subject }), nil
 }
 
 // ListGroupsOf returns one page of the groups of the principal principalID,
@@ -312,12 +316,12 @@ func (s *Service) ListGroupsOf(ctx context.Context, principalID string, req Page
 		return Page[Group]{}, err
 	}
 
-	rows, err := s.store.ListGroupsOf(ctx, principalID, q)
+	rows, total, err := s.store.ListGroupsOf(ctx, principalID, q)
 	if err != nil {
 		return Page[Group]{}, fmt.Errorf("list groups of principal %q: %w", principalID, err)
 	}
 
-	return pageOf(rows, limit, groupKey), nil
+	return pageOf(rows, total, limit, groupKey), nil
 }
 
 // change completes the entry of the caller for one change of the record

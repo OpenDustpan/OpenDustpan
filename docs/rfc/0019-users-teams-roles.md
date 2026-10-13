@@ -192,6 +192,11 @@ Lead decisions under owner delegation, 2026-10-13:
 - No disabled flag yet. It comes back with the sign-in and token change that
   enforces it.
 - Paging. Each list takes a cursor, a limit (default 100, maximum 1000) and
-  a prefix, and the database answers it with an index.
+  a prefix, and the database answers it with an index. Each list answers
+  `total` and `nextCursor`. A principal answers `groupCount`, and a group
+  answers `memberCount`.
+- Source. Each principal and group has a `source`: `local` today, `ldap` or
+  `scim` with directory sync (ADR 55). A group whose source is not `local`
+  refuses a membership change through the API with 409.
 
 The other questions in "Open questions" have no outcome yet.

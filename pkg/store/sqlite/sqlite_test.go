@@ -2092,3 +2092,20 @@ func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
 		t.Fatalf("seed checkpoint: %v", err)
 	}
 }
+
+// BenchmarkPrincipalLists measures each principal and group list with its
+// total, at the scale of principaltest.Bench.
+func BenchmarkPrincipalLists(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	principaltest.Bench(b, s)
+}

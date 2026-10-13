@@ -420,15 +420,15 @@ func (s *backupStore) StagingAlive(id string) bool {
 }
 
 // open returns a store in a fresh schema of the database at base.
-func open(t *testing.T, base string) *postgres.Store {
-	t.Helper()
+func open(tb testing.TB, base string) *postgres.Store {
+	tb.Helper()
 
-	s, err := postgres.Open(t.Context(), isolatedURL(t, base))
+	s, err := postgres.Open(tb.Context(), isolatedURL(tb, base))
 	if err != nil {
-		t.Fatalf("open store: %v", err)
+		tb.Fatalf("open store: %v", err)
 	}
 
-	t.Cleanup(s.Close)
+	tb.Cleanup(s.Close)
 
 	return s
 }
@@ -1657,34 +1657,34 @@ func seedBaseStacks(t *testing.T, conn *pgx.Conn) {
 }
 
 // isolatedURL creates a fresh schema and returns base with search_path set to it.
-func isolatedURL(t *testing.T, base string) string {
-	t.Helper()
+func isolatedURL(tb testing.TB, base string) string {
+	tb.Helper()
 
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
-		t.Fatalf("random schema name: %v", err)
+		tb.Fatalf("random schema name: %v", err)
 	}
 
 	name := "test_" + hex.EncodeToString(suffix)
 
-	conn, err := pgx.Connect(t.Context(), base)
+	conn, err := pgx.Connect(tb.Context(), base)
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		tb.Fatalf("connect: %v", err)
 	}
 
 	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
+		if closeErr := conn.Close(tb.Context()); closeErr != nil {
+			tb.Errorf("close: %v", closeErr)
 		}
 	}()
 
-	if _, execErr := conn.Exec(t.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
-		t.Fatalf("create schema: %v", execErr)
+	if _, execErr := conn.Exec(tb.Context(), "CREATE SCHEMA "+pgx.Identifier{name}.Sanitize()); execErr != nil {
+		tb.Fatalf("create schema: %v", execErr)
 	}
 
 	u, parseErr := url.Parse(base)
 	if parseErr != nil {
-		t.Fatalf("parse %s: %v", envURL, parseErr)
+		tb.Fatalf("parse %s: %v", envURL, parseErr)
 	}
 
 	q := u.Query()
@@ -2092,4 +2092,15 @@ func TestBackupCopyColumnMismatchNamesTableAndColumn(t *testing.T) {
 		!strings.Contains(unknown.Error(), `"nope"`) {
 		t.Fatalf("unknown column error = %v, want the table %q and the column %q", unknown, "checkpoints", "nope")
 	}
+}
+
+// BenchmarkPrincipalLists measures each principal and group list with its
+// total, at the scale of principaltest.Bench. It needs the PostgreSQL URL.
+func BenchmarkPrincipalLists(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	principaltest.Bench(b, open(b, base))
 }

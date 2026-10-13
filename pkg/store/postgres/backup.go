@@ -47,6 +47,7 @@ const (
 	pgColVersion     = "version"
 	pgColUpdatedAtMs = "updated_at_ms"
 	pgColDeletedAtMs = "deleted_at_ms"
+	pgColSource      = "source"
 	pgColKind        = "kind"
 )
 
@@ -225,7 +226,14 @@ func pgCopyIdentityTables() []pgCopyTable {
 		{
 			table: "principals",
 			columns: []string{
-				"id", "subject", "display_name", pgColKind, pgColCreatedAtMs, pgColUpdatedAtMs, pgColDeletedAtMs,
+				"id",
+				"subject",
+				"display_name",
+				pgColKind,
+				pgColSource,
+				pgColCreatedAtMs,
+				pgColUpdatedAtMs,
+				pgColDeletedAtMs,
 			},
 			orderBy: []string{"id"},
 		},
@@ -236,6 +244,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColName,
 				"name_key",
 				"description",
+				pgColSource,
 				pgColCreatedAtMs,
 				pgColUpdatedAtMs,
 				pgColDeletedAtMs,

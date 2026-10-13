@@ -29,6 +29,7 @@ func (s *Store) CreatePrincipal(ctx context.Context, p principal.Principal, e au
 			Subject:     p.Subject,
 			DisplayName: p.DisplayName,
 			Kind:        string(p.Kind),
+			Source:      string(p.Source),
 			CreatedAtMs: codec.Millis(p.CreatedAt),
 			UpdatedAtMs: codec.Millis(p.UpdatedAt),
 		})
@@ -78,19 +79,67 @@ func (s *Store) GetPrincipalBySubject(ctx context.Context, subject string) (prin
 	return principalOf(principalRow(row)), nil
 }
 
-// ListPrincipals implements principal.Store.
-func (s *Store) ListPrincipals(ctx context.Context, pq principal.Query) ([]principal.Principal, error) {
+// ListPrincipals implements principal.Store. It reads the page and the
+// total in one transaction.
+func (s *Store) ListPrincipals(ctx context.Context, pq principal.Query) ([]principal.Principal, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.ListPrincipals(ctx, db.ListPrincipalsParams{
-		After: pq.After, Low: pq.Low, High: pq.High, RowLimit: int64(pq.Limit),
+	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
+		list: listPrincipalRows, count: countPrincipalRows, conv: principalFromList,
+	})
+}
+
+func listPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
+	return q.ListPrincipals(
+		ctx,
+		db.ListPrincipalsParams{After: pq.After, Low: pq.Low, High: pq.High, RowLimit: int64(pq.Limit)},
+	)
+}
+
+func countPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
+	return q.CountPrincipals(ctx, db.CountPrincipalsParams{Low: pq.Low, High: pq.High})
+}
+
+func principalFromList(r db.ListPrincipalsRow) principal.Principal {
+	return principalOf(principalRow(r))
+}
+
+// pageReads are the reads of one paged list: its rows, its total, and the
+// map from a row to a domain value.
+type pageReads[R, T any] struct {
+	list  func(context.Context, *db.Queries, principal.Query) ([]R, error)
+	count func(context.Context, *db.Queries, principal.Query) (int64, error)
+	conv  func(R) T
+}
+
+// listPage reads one page and its total with r in one transaction.
+func listPage[R, T any](ctx context.Context, s *Store, pq principal.Query, r pageReads[R, T]) ([]T, int64, error) {
+	var (
+		out   []T
+		total int64
+	)
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		rows, err := r.list(ctx, q, pq)
+		if err != nil {
+			return fmt.Errorf("select page: %w", err)
+		}
+
+		out = mapRows(rows, r.conv)
+
+		total, err = r.count(ctx, q, pq)
+		if err != nil {
+			return fmt.Errorf("count rows: %w", err)
+		}
+
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select principals: %w", err)
+		return nil, 0, err
 	}
 
-	return mapRows(rows, func(r db.ListPrincipalsRow) principal.Principal { return principalOf(principalRow(r)) }), nil
+	return out, total, nil
 }
 
 // UpdatePrincipal implements principal.Store.
@@ -171,6 +220,7 @@ func (s *Store) CreateGroup(ctx context.Context, g principal.Group, e audit.Entr
 			Name:        g.Name,
 			NameKey:     groupNameKey(g.Name),
 			Description: g.Description,
+			Source:      string(g.Source),
 			CreatedAtMs: codec.Millis(g.CreatedAt),
 			UpdatedAtMs: codec.Millis(g.UpdatedAt),
 		})
@@ -203,20 +253,29 @@ func (s *Store) GetGroup(ctx context.Context, id string) (principal.Group, error
 	return groupOf(groupRow(row)), nil
 }
 
-// ListGroups implements principal.Store.
-func (s *Store) ListGroups(ctx context.Context, pq principal.Query) ([]principal.Group, error) {
+// ListGroups implements principal.Store. It reads the page and the total
+// in one transaction.
+func (s *Store) ListGroups(ctx context.Context, pq principal.Query) ([]principal.Group, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.ListGroups(ctx, db.ListGroupsParams{
-		After: pq.After, Low: pq.Low, High: pq.High, RowLimit: int64(pq.Limit),
+	return listPage(ctx, s, pq, pageReads[db.ListGroupsRow, principal.Group]{
+		list: listGroupRows, count: countGroupRows, conv: groupFromList,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("select groups: %w", err)
-	}
-
-	return mapRows(rows, func(r db.ListGroupsRow) principal.Group { return groupOf(groupRow(r)) }), nil
 }
+
+func listGroupRows(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListGroupsRow, error) {
+	return q.ListGroups(
+		ctx,
+		db.ListGroupsParams{After: pq.After, Low: pq.Low, High: pq.High, RowLimit: int64(pq.Limit)},
+	)
+}
+
+func countGroupRows(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
+	return q.CountGroups(ctx, db.CountGroupsParams{Low: pq.Low, High: pq.High})
+}
+
+func groupFromList(r db.ListGroupsRow) principal.Group { return groupOf(groupRow(r)) }
 
 // UpdateGroup implements principal.Store. It refuses a name that another
 // group holds without regard to case, in the same transaction as the write.
@@ -308,15 +367,11 @@ func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.E
 }
 
 // groupAndPrincipalExist returns ErrNotFound when the group or the principal
-// does not exist.
+// does not exist, and ErrManagedByDirectory when a directory keeps the
+// group.
 func groupAndPrincipalExist(ctx context.Context, q *db.Queries, groupID, principalID string) error {
-	groups, err := q.GroupExists(ctx, groupID)
-	if err != nil {
-		return fmt.Errorf("count groups: %w", err)
-	}
-
-	if groups == 0 {
-		return fmt.Errorf("group: %w", principal.ErrNotFound)
+	if err := localGroup(ctx, q, groupID); err != nil {
+		return err
 	}
 
 	principals, err := q.PrincipalExists(ctx, principalID)
@@ -331,6 +386,27 @@ func groupAndPrincipalExist(ctx context.Context, q *db.Queries, groupID, princip
 	return nil
 }
 
+// localGroup returns ErrNotFound when the group groupID does not exist, and
+// ErrManagedByDirectory, with the name of the directory, when its source is
+// not local.
+func localGroup(ctx context.Context, q *db.Queries, groupID string) error {
+	source, err := q.GroupSource(ctx, groupID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("group: %w", principal.ErrNotFound)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select group source: %w", err)
+	}
+
+	if principal.Source(source) != principal.SourceLocal {
+		return fmt.Errorf("%w: the %s directory keeps the members of group %s. Change them in %s",
+			principal.ErrManagedByDirectory, source, groupID, source)
+	}
+
+	return nil
+}
+
 // RemoveMember implements principal.Store. It ends the membership in the
 // transaction of the entry.
 func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e audit.Entry) error {
@@ -338,6 +414,10 @@ func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := localGroup(ctx, q, groupID); err != nil {
+			return err
+		}
+
 		n, err := q.RemoveGroupMember(ctx, db.RemoveGroupMemberParams{
 			RemovedAtMs: nullMillis(codec.Millis(e.At)),
 			GroupID:     groupID,
@@ -355,22 +435,29 @@ func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e
 	})
 }
 
-// ListMembers implements principal.Store. It reads the group and its
-// members in one transaction.
-func (s *Store) ListMembers(ctx context.Context, groupID string, pq principal.Query) ([]principal.Member, error) {
+// ListMembers implements principal.Store. It reads the group, the page and
+// the total in one transaction.
+func (s *Store) ListMembers(
+	ctx context.Context,
+	groupID string,
+	pq principal.Query,
+) ([]principal.Member, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []principal.Member
+	var (
+		out   []principal.Member
+		total int64
+	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		groups, err := q.GroupExists(ctx, groupID)
-		if err != nil {
-			return fmt.Errorf("count groups: %w", err)
+		_, err := q.GroupSource(ctx, groupID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return principal.ErrNotFound
 		}
 
-		if groups == 0 {
-			return principal.ErrNotFound
+		if err != nil {
+			return fmt.Errorf("select group: %w", err)
 		}
 
 		rows, err := q.ListGroupMembers(ctx, db.ListGroupMembersParams{
@@ -380,34 +467,44 @@ func (s *Store) ListMembers(ctx context.Context, groupID string, pq principal.Qu
 			return fmt.Errorf("select group members: %w", err)
 		}
 
-		out = make([]principal.Member, 0, len(rows))
-		for i := range rows {
-			row := &rows[i]
-			out = append(out, principal.Member{
-				AddedAt: codec.FromMillis(row.AddedAtMs),
+		out = mapRows(rows, func(r db.ListGroupMembersRow) principal.Member {
+			return principal.Member{
+				AddedAt: codec.FromMillis(r.AddedAtMs),
 				Principal: principalOf(principalFields{
-					id: row.ID, subject: row.Subject, displayName: row.DisplayName, kind: row.Kind,
-					createdAtMs: row.CreatedAtMs, updatedAtMs: row.UpdatedAtMs,
+					id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
+					createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
 				}),
-			})
+			}
+		})
+
+		total, err = q.CountGroupMembers(ctx, db.CountGroupMembersParams{GroupID: groupID, Low: pq.Low, High: pq.High})
+		if err != nil {
+			return fmt.Errorf("count group members: %w", err)
 		}
 
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return out, nil
+	return out, total, nil
 }
 
-// ListGroupsOf implements principal.Store. It reads the principal and its
-// groups in one transaction.
-func (s *Store) ListGroupsOf(ctx context.Context, principalID string, pq principal.Query) ([]principal.Group, error) {
+// ListGroupsOf implements principal.Store. It reads the principal, the
+// page and the total in one transaction.
+func (s *Store) ListGroupsOf(
+	ctx context.Context,
+	principalID string,
+	pq principal.Query,
+) ([]principal.Group, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []principal.Group
+	var (
+		out   []principal.Group
+		total int64
+	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		principals, err := q.PrincipalExists(ctx, principalID)
@@ -428,19 +525,26 @@ func (s *Store) ListGroupsOf(ctx context.Context, principalID string, pq princip
 
 		out = mapRows(rows, func(r db.ListGroupsOfPrincipalRow) principal.Group { return groupOf(groupRow(r)) })
 
+		total, err = q.CountGroupsOfPrincipal(ctx, db.CountGroupsOfPrincipalParams{
+			PrincipalID: principalID, Low: pq.Low, High: pq.High,
+		})
+		if err != nil {
+			return fmt.Errorf("count groups of principal: %w", err)
+		}
+
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return out, nil
+	return out, total, nil
 }
 
 // principalFields are the columns of a principal that every read selects.
 type principalFields struct {
-	id, subject, displayName, kind string
-	createdAtMs, updatedAtMs       int64
+	id, subject, displayName, kind, source string
+	createdAtMs, updatedAtMs, groupCount   int64
 }
 
 // principalRow maps any generated principal row to its fields. The reads
@@ -449,8 +553,8 @@ func principalRow[T db.GetPrincipalRow | db.GetPrincipalBySubjectRow | db.ListPr
 	r := db.GetPrincipalRow(row)
 
 	return principalFields{
-		id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind,
-		createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs,
+		id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
+		createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
 	}
 }
 
@@ -463,6 +567,8 @@ func principalOf(f principalFields) principal.Principal {
 		Subject:     f.subject,
 		DisplayName: f.displayName,
 		Kind:        principal.Kind(f.kind),
+		Source:      principal.Source(f.source),
+		GroupCount:  f.groupCount,
 	}
 }
 
@@ -479,6 +585,8 @@ func groupOf(row db.GetGroupRow) principal.Group {
 		ID:          row.ID,
 		Name:        row.Name,
 		Description: row.Description,
+		Source:      principal.Source(row.Source),
+		MemberCount: row.MemberCount,
 	}
 }
 

@@ -55,7 +55,9 @@ var (
 var errNoPrincipalStore = errors.New("the store of this server keeps no principals")
 
 // principalResponse is one principal on the wire. Times are UTC in RFC 3339
-// with nanoseconds, the wire form of the other installation routes.
+// with nanoseconds, the wire form of the other installation routes. Source
+// is local, ldap or scim (ADR 55). GroupCount is the count of its current
+// memberships: its groups come from their own paged route.
 //
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
@@ -64,19 +66,25 @@ type principalResponse struct {
 	Subject     string `json:"subject"`
 	DisplayName string `json:"displayName"`
 	Kind        string `json:"kind"`
+	Source      string `json:"source"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	GroupCount  int64  `json:"groupCount"`
 }
 
-// groupResponse is one group on the wire.
+// groupResponse is one group on the wire. A group whose source is not local
+// refuses membership changes through the API with 409. MemberCount is the
+// count of its current members.
 //
 // Contract: never remove or rename these fields.
 type groupResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Source      string `json:"source"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	MemberCount int64  `json:"memberCount"`
 }
 
 // memberResponse is one member of a group on the wire.
@@ -88,20 +96,24 @@ type memberResponse struct {
 }
 
 // principalListResponse, groupListResponse and memberListResponse wrap one
-// page of a list. NextCursor is empty on the last page.
+// page of a list. Total is the count of every row that matches the prefix,
+// on every page. NextCursor is empty on the last page.
 type principalListResponse struct {
 	Principals []principalResponse `json:"principals"`
 	NextCursor string              `json:"nextCursor"`
+	Total      int64               `json:"total"`
 }
 
 type groupListResponse struct {
 	Groups     []groupResponse `json:"groups"`
 	NextCursor string          `json:"nextCursor"`
+	Total      int64           `json:"total"`
 }
 
 type memberListResponse struct {
 	Members    []memberResponse `json:"members"`
 	NextCursor string           `json:"nextCursor"`
+	Total      int64            `json:"total"`
 }
 
 // createPrincipalRequest is the body of a principal create.
@@ -146,8 +158,10 @@ func principalOf(p principal.Principal) principalResponse {
 		Subject:     p.Subject,
 		DisplayName: p.DisplayName,
 		Kind:        string(p.Kind),
+		Source:      string(p.Source),
 		CreatedAt:   wireTime(p.CreatedAt),
 		UpdatedAt:   wireTime(p.UpdatedAt),
+		GroupCount:  p.GroupCount,
 	}
 }
 
@@ -156,13 +170,17 @@ func groupOf(g principal.Group) groupResponse {
 		ID:          g.ID,
 		Name:        g.Name,
 		Description: g.Description,
+		Source:      string(g.Source),
 		CreatedAt:   wireTime(g.CreatedAt),
 		UpdatedAt:   wireTime(g.UpdatedAt),
+		MemberCount: g.MemberCount,
 	}
 }
 
 func groupsOf(page principal.Page[principal.Group]) groupListResponse {
-	out := groupListResponse{Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor}
+	out := groupListResponse{
+		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
+	}
 	for _, g := range page.Items {
 		out.Groups = append(out.Groups, groupOf(g))
 	}
@@ -483,7 +501,7 @@ func listPrincipals(
 	}
 
 	out := principalListResponse{
-		Principals: make([]principalResponse, 0, len(page.Items)), NextCursor: page.NextCursor,
+		Principals: make([]principalResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 	for i := range page.Items {
 		out.Principals = append(out.Principals, principalOf(page.Items[i]))
@@ -672,7 +690,9 @@ func listMembers(
 		return failed(""), err
 	}
 
-	out := memberListResponse{Members: make([]memberResponse, 0, len(page.Items)), NextCursor: page.NextCursor}
+	out := memberListResponse{
+		Members: make([]memberResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
+	}
 	for i := range page.Items {
 		out.Members = append(out.Members, memberResponse{
 			AddedAt:   wireTime(page.Items[i].AddedAt),
@@ -732,7 +752,8 @@ func removeMember(
 // classifyPrincipal maps the principal and group errors to their status and
 // message: a bad body, subject, name or kind answers 400, a taken subject,
 // name or membership 409, an unknown principal, group or membership 404, and
-// a store with no principal port 501. The domain wraps each sentinel with
+// a store with no principal port 501. A membership change of a group that a
+// directory keeps answers 409, and the message names the directory. The domain wraps each sentinel with
 // the ID or the name it acted on, never with driver text.
 func classifyPrincipal(err error) (int, string, bool) {
 	switch {
@@ -744,7 +765,7 @@ func classifyPrincipal(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error(), true
-	case errors.Is(err, principal.ErrAlreadyExists):
+	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, principal.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true

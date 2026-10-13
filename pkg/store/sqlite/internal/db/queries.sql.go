@@ -152,6 +152,67 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countGroupMembers = `-- name: CountGroupMembers :one
+SELECT COUNT(*)
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = ?1 AND m.removed_at_ms IS NULL
+  AND p.subject >= ?2
+  AND (CAST(?3 AS TEXT) = '' OR p.subject < ?3)
+`
+
+type CountGroupMembersParams struct {
+	GroupID string
+	Low     string
+	High    string
+}
+
+func (q *Queries) CountGroupMembers(ctx context.Context, arg CountGroupMembersParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGroupMembers, arg.GroupID, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGroups = `-- name: CountGroups :one
+SELECT COUNT(*) FROM principal_groups
+WHERE deleted_at_ms IS NULL
+  AND name_key >= ?1
+  AND (CAST(?2 AS TEXT) = '' OR name_key < ?2)
+`
+
+type CountGroupsParams struct {
+	Low  string
+	High string
+}
+
+func (q *Queries) CountGroups(ctx context.Context, arg CountGroupsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGroups, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGroupsOfPrincipal = `-- name: CountGroupsOfPrincipal :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = ?1 AND m.removed_at_ms IS NULL
+  AND g.name_key >= ?2
+  AND (CAST(?3 AS TEXT) = '' OR g.name_key < ?3)
+`
+
+type CountGroupsOfPrincipalParams struct {
+	PrincipalID string
+	Low         string
+	High        string
+}
+
+func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfPrincipalParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGroupsOfPrincipal, arg.PrincipalID, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -160,6 +221,25 @@ WHERE workspace_id = ? AND status = 'pending'
 
 func (q *Queries) CountPendingStateVersions(ctx context.Context, workspaceID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPendingStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPrincipals = `-- name: CountPrincipals :one
+SELECT COUNT(*) FROM principals
+WHERE deleted_at_ms IS NULL
+  AND subject >= ?1
+  AND (CAST(?2 AS TEXT) = '' OR subject < ?2)
+`
+
+type CountPrincipalsParams struct {
+	Low  string
+	High string
+}
+
+func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPrincipals, arg.Low, arg.High)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -209,8 +289,8 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 }
 
 const createGroup = `-- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -219,6 +299,7 @@ type CreateGroupParams struct {
 	Name        string
 	NameKey     string
 	Description string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
 }
@@ -229,6 +310,7 @@ func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64
 		arg.Name,
 		arg.NameKey,
 		arg.Description,
+		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 	)
@@ -265,8 +347,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createPrincipal = `-- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -275,6 +357,7 @@ type CreatePrincipalParams struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
 }
@@ -285,6 +368,7 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 		arg.Subject,
 		arg.DisplayName,
 		arg.Kind,
+		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 	)
@@ -1035,16 +1119,19 @@ func (q *Queries) GetFailoverVersion(ctx context.Context, name string) (int64, e
 }
 
 const getGroup = `-- name: GetGroup :one
-SELECT id, name, description, created_at_ms, updated_at_ms
-FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL
 `
 
 type GetGroupRow struct {
 	ID          string
 	Name        string
 	Description string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	MemberCount int64
 }
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
@@ -1054,8 +1141,10 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.MemberCount,
 	)
 	return i, err
 }
@@ -1130,8 +1219,9 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
-SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
-FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL
 `
 
 type GetPrincipalRow struct {
@@ -1139,8 +1229,10 @@ type GetPrincipalRow struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	GroupCount  int64
 }
 
 func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow, error) {
@@ -1151,15 +1243,18 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.Subject,
 		&i.DisplayName,
 		&i.Kind,
+		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.GroupCount,
 	)
 	return i, err
 }
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
-SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
-FROM principals WHERE subject = ?1 AND deleted_at_ms IS NULL
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p WHERE p.subject = ?1 AND p.deleted_at_ms IS NULL
 `
 
 type GetPrincipalBySubjectRow struct {
@@ -1167,8 +1262,10 @@ type GetPrincipalBySubjectRow struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	GroupCount  int64
 }
 
 func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (GetPrincipalBySubjectRow, error) {
@@ -1179,8 +1276,10 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.Subject,
 		&i.DisplayName,
 		&i.Kind,
+		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.GroupCount,
 	)
 	return i, err
 }
@@ -1547,17 +1646,6 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 	return i, err
 }
 
-const groupExists = `-- name: GroupExists :one
-SELECT COUNT(*) FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL
-`
-
-func (q *Queries) GroupExists(ctx context.Context, id string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, groupExists, id)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const groupIDByNameKey = `-- name: GroupIDByNameKey :one
 SELECT id FROM principal_groups WHERE name_key = ?1 AND deleted_at_ms IS NULL
 `
@@ -1567,6 +1655,17 @@ func (q *Queries) GroupIDByNameKey(ctx context.Context, nameKey string) (string,
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const groupSource = `-- name: GroupSource :one
+SELECT source FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) GroupSource(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, groupSource, id)
+	var source string
+	err := row.Scan(&source)
+	return source, err
 }
 
 const highestUpdateVersion = `-- name: HighestUpdateVersion :one
@@ -2151,7 +2250,9 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 }
 
 const listGroupMembers = `-- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.created_at_ms, p.updated_at_ms, m.added_at_ms
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
+  m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = ?1 AND m.removed_at_ms IS NULL
   AND p.subject > ?2
@@ -2174,8 +2275,10 @@ type ListGroupMembersRow struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	GroupCount  int64
 	AddedAtMs   int64
 }
 
@@ -2199,8 +2302,10 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.Subject,
 			&i.DisplayName,
 			&i.Kind,
+			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.GroupCount,
 			&i.AddedAtMs,
 		); err != nil {
 			return nil, err
@@ -2217,13 +2322,14 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT id, name, description, created_at_ms, updated_at_ms
-FROM principal_groups
-WHERE deleted_at_ms IS NULL
-  AND name_key > ?1
-  AND name_key >= ?2
-  AND (CAST(?3 AS TEXT) = '' OR name_key < ?3)
-ORDER BY name_key
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+FROM principal_groups g
+WHERE g.deleted_at_ms IS NULL
+  AND g.name_key > ?1
+  AND g.name_key >= ?2
+  AND (CAST(?3 AS TEXT) = '' OR g.name_key < ?3)
+ORDER BY g.name_key
 LIMIT ?4
 `
 
@@ -2238,8 +2344,10 @@ type ListGroupsRow struct {
 	ID          string
 	Name        string
 	Description string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	MemberCount int64
 }
 
 func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListGroupsRow, error) {
@@ -2260,8 +2368,10 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.MemberCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2277,7 +2387,8 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 }
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.created_at_ms, g.updated_at_ms
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = ?1 AND m.removed_at_ms IS NULL
   AND g.name_key > ?2
@@ -2299,8 +2410,10 @@ type ListGroupsOfPrincipalRow struct {
 	ID          string
 	Name        string
 	Description string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	MemberCount int64
 }
 
 func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPrincipalParams) ([]ListGroupsOfPrincipalRow, error) {
@@ -2322,8 +2435,10 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.MemberCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2452,13 +2567,14 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 }
 
 const listPrincipals = `-- name: ListPrincipals :many
-SELECT id, subject, display_name, kind, created_at_ms, updated_at_ms
-FROM principals
-WHERE deleted_at_ms IS NULL
-  AND subject > ?1
-  AND subject >= ?2
-  AND (CAST(?3 AS TEXT) = '' OR subject < ?3)
-ORDER BY subject
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p
+WHERE p.deleted_at_ms IS NULL
+  AND p.subject > ?1
+  AND p.subject >= ?2
+  AND (CAST(?3 AS TEXT) = '' OR p.subject < ?3)
+ORDER BY p.subject
 LIMIT ?4
 `
 
@@ -2474,8 +2590,10 @@ type ListPrincipalsRow struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	GroupCount  int64
 }
 
 func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) ([]ListPrincipalsRow, error) {
@@ -2497,8 +2615,10 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.Subject,
 			&i.DisplayName,
 			&i.Kind,
+			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.GroupCount,
 		); err != nil {
 			return nil, err
 		}

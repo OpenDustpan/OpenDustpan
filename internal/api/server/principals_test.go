@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -18,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // principalDoc, groupDoc and memberDoc decode the wire forms in tests.
@@ -26,14 +28,18 @@ type principalDoc struct {
 	Subject     string `json:"subject"`
 	DisplayName string `json:"displayName"`
 	Kind        string `json:"kind"`
+	Source      string `json:"source"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	GroupCount  int64  `json:"groupCount"`
 }
 
 type groupDoc struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Source      string `json:"source"`
+	MemberCount int64  `json:"memberCount"`
 }
 
 type memberDoc struct {
@@ -789,4 +795,73 @@ func TestPrincipalPaging(t *testing.T) {
 	for _, bad := range []string{"limit=x", "limit=0x10", "limit=1001", "limit=-1", "cursor=%21%21"} {
 		mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?" + bad, "", http.StatusBadRequest}, nil)
 	}
+}
+
+// TestPrincipalCountsAndSource proves that each list answers its total,
+// that each record answers its count and source, and that a group of a
+// directory refuses a membership change with 409 naming the directory.
+func TestPrincipalCountsAndSource(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	h := newPrincipalHandler(t, svc)
+
+	var alice principalDoc
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"alice","kind":"person"}`, http.StatusCreated,
+	}, &alice)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/principals", `{"subject":"bob","kind":"person"}`, http.StatusCreated,
+	}, nil)
+
+	var ops groupDoc
+	mustCall(t, h, apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &ops)
+	mustCall(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/" + ops.ID + "/members", `{"principalID":"` + alice.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	var list struct {
+		Principals []principalDoc `json:"principals"`
+		NextCursor string         `json:"nextCursor"`
+		Total      int64          `json:"total"`
+	}
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?limit=1", "", http.StatusOK}, &list)
+
+	if list.Total != 2 || len(list.Principals) != 1 || list.Principals[0].GroupCount != 1 ||
+		list.Principals[0].Source != "local" || list.NextCursor == "" {
+		t.Fatalf("principal page = %+v, want alice in 1 group, local, of 2 with a cursor", list)
+	}
+
+	var groups struct {
+		Groups []groupDoc `json:"groups"`
+		Total  int64      `json:"total"`
+	}
+	mustCall(t, h, apiCall{http.MethodGet, "/api/server/groups", "", http.StatusOK}, &groups)
+
+	if groups.Total != 1 || groups.Groups[0].MemberCount != 1 || groups.Groups[0].Source != "local" {
+		t.Fatalf("group page = %+v, want ops with 1 member, local", groups)
+	}
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	directory := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: "grp-ldap", Name: "engineering", Description: "",
+		Source: principal.SourceLDAP, MemberCount: 0,
+	}
+
+	if err := st.CreateGroup(t.Context(), directory, storetest.ServerChange(at, "group:grp-ldap")); err != nil {
+		t.Fatalf("seed directory group: %v", err)
+	}
+
+	status, body := call(t, h, apiCall{
+		http.MethodPost, "/api/server/groups/grp-ldap/members", `{"principalID":"` + alice.ID + `"}`,
+		http.StatusConflict,
+	})
+	if status != http.StatusConflict || !strings.Contains(body, "ldap") {
+		t.Fatalf("add to a directory group = %d %s, want 409 naming ldap", status, body)
+	}
+
+	mustCall(t, h, apiCall{
+		http.MethodDelete, "/api/server/groups/grp-ldap/members/" + alice.ID, "", http.StatusConflict,
+	}, nil)
 }

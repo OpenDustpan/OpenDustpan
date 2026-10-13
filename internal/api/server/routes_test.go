@@ -225,11 +225,11 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 	seeds := []principal.Principal{
 		{
 			CreatedAt: at, UpdatedAt: at, ID: testPrincipalID, Subject: "alice",
-			DisplayName: "Alice", Kind: principal.KindPerson,
+			DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
 			CreatedAt: at, UpdatedAt: at, ID: testOtherPrincipalID, Subject: "ci-deploy",
-			DisplayName: "CI deploy", Kind: principal.KindService,
+			DisplayName: "CI deploy", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
 		},
 	}
 	for i := range seeds {
@@ -238,7 +238,10 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		}
 	}
 
-	group := principal.Group{CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: ""}
+	group := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: testGroupID, Name: "ops", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
 	if err := st.CreateGroup(ctx, group, storetest.ServerChange(at, "group:"+testGroupID)); err != nil {
 		t.Fatalf("seed group: %v", err)
 	}

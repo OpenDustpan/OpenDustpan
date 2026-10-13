@@ -18,6 +18,8 @@ type e2ePrincipal struct {
 	Subject     string `json:"subject"`
 	DisplayName string `json:"displayName"`
 	Kind        string `json:"kind"`
+	Source      string `json:"source"`
+	GroupCount  int64  `json:"groupCount"`
 }
 
 type e2eGroup struct {
@@ -146,6 +148,7 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 	type page struct {
 		NextCursor string         `json:"nextCursor"`
 		Principals []e2ePrincipal `json:"principals"`
+		Total      int64          `json:"total"`
 	}
 
 	var first, second page
@@ -157,8 +160,9 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 		&first,
 	)
 
-	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" {
-		t.Fatalf("first page = %+v, want alice and a cursor", first)
+	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
+		first.Total != 2 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 2", first)
 	}
 
 	principalCall(ctx, t, env, principalStep{

@@ -43,6 +43,10 @@ var (
 	// ErrReservedSubject reports a subject that the bootstrap admin tokens
 	// use, or that can look like one: admin, or admin- and a number (ADR 6).
 	ErrReservedSubject = errors.New("reserved subject")
+	// ErrManagedByDirectory reports a membership change through the API of
+	// a group that a directory sync keeps (ADR 55). The error names the
+	// directory.
+	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -71,6 +75,20 @@ func ParseKind(s string) (Kind, error) {
 	}
 }
 
+// Source names where a principal or a group comes from.
+type Source string
+
+// Sources of records (ADR 55). Only SourceLocal exists today: the directory
+// sync sets the others.
+const (
+	// SourceLocal is a record made through the API.
+	SourceLocal Source = "local"
+	// SourceLDAP is a record that an LDAP sync keeps.
+	SourceLDAP Source = "ldap"
+	// SourceSCIM is a record that a SCIM sync keeps.
+	SourceSCIM Source = "scim"
+)
+
 // Limits of the text fields, in bytes.
 const (
 	maxSubjectLength     = 255
@@ -90,7 +108,8 @@ const (
 // with the prefix "prn-". Subject is the name that an Authenticator answers
 // for the principal. It is unique among the principals that exist, compared
 // exactly: OIDC subjects are case-sensitive. DisplayName is a name for people
-// to read.
+// to read. Source names where the record comes from. GroupCount is the
+// count of its current memberships: a read sets it, and a write ignores it.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -98,17 +117,22 @@ type Principal struct {
 	Subject     string
 	DisplayName string
 	Kind        Kind
+	Source      Source
+	GroupCount  int64
 }
 
 // Group is the stored record of one group. ID is stable and opaque, with the
 // prefix "grp-". Name is unique among the groups that exist, without regard
-// to case.
+// to case. Source names where the record comes from. MemberCount is the
+// count of its current members: a read sets it, and a write ignores it.
 type Group struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	ID          string
 	Name        string
 	Description string
+	Source      Source
+	MemberCount int64
 }
 
 // Member is one principal in a group, with the time it joined.
@@ -273,13 +297,28 @@ func (p Principal) Validate() error {
 		return err
 	}
 
-	return nil
+	return validateSource(p.Source)
+}
+
+// validateSource returns ErrInvalid for a source that is not local, ldap or
+// scim.
+func validateSource(s Source) error {
+	switch s {
+	case SourceLocal, SourceLDAP, SourceSCIM:
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	}
 }
 
 // Validate reports whether g holds usable values. It does not check ID or
 // the times: the Service sets them.
 func (g Group) Validate() error {
 	if err := ValidateGroupName(g.Name); err != nil {
+		return err
+	}
+
+	if err := validateSource(g.Source); err != nil {
 		return err
 	}
 

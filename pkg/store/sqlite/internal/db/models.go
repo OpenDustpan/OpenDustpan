@@ -97,6 +97,7 @@ type Principal struct {
 	Subject     string
 	DisplayName string
 	Kind        string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs sql.NullInt64
@@ -107,6 +108,7 @@ type PrincipalGroup struct {
 	Name        string
 	NameKey     string
 	Description string
+	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs sql.NullInt64

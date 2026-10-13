@@ -18,6 +18,7 @@ const (
 	portColState       = "state"
 	portColUpdatedAtMs = "updated_at_ms"
 	portColDeletedAtMs = "deleted_at_ms"
+	portColSource      = "source"
 	portColKind        = "kind"
 )
 
@@ -253,6 +254,7 @@ func portableSpec() []PortableTable {
 				{Name: "subject", Kind: KindText},
 				{Name: "display_name", Kind: KindText},
 				{Name: portColKind, Kind: KindText},
+				{Name: portColSource, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: portColDeletedAtMs, Kind: KindTime},
@@ -266,6 +268,7 @@ func portableSpec() []PortableTable {
 				{Name: portColName, Kind: KindText},
 				{Name: "name_key", Kind: KindText},
 				{Name: "description", Kind: KindText},
+				{Name: portColSource, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: portColDeletedAtMs, Kind: KindTime},

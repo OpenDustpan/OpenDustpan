@@ -26,16 +26,19 @@ type PageRequest struct {
 	Limit  int
 }
 
-// Page is one page of a list. NextCursor is empty on the last page.
+// Page is one page of a list. Total is the count of every record that
+// matches the prefix, on every page. NextCursor is empty on the last page.
 type Page[T any] struct {
 	Items      []T
 	NextCursor string
+	Total      int64
 }
 
 // Query is a PageRequest as a store reads it: the records whose key is after
 // After, at or after Low and, when High is not empty, before High, in key
 // order, at most Limit of them. Low and High bound the keys that start with
-// the prefix. Every bound is valid UTF-8.
+// the prefix. Every bound is valid UTF-8. A list also answers its total: the
+// count of the records between Low and High, with no regard to After.
 type Query struct {
 	After string
 	Low   string
@@ -73,14 +76,14 @@ func (req PageRequest) query(key func(string) string) (Query, int, error) {
 
 // pageOf trims rows to limit and sets the cursor of the next page from the
 // key of the last row it keeps.
-func pageOf[T any](rows []T, limit int, key func(T) string) Page[T] {
+func pageOf[T any](rows []T, total int64, limit int, key func(T) string) Page[T] {
 	if len(rows) <= limit {
-		return Page[T]{Items: rows, NextCursor: ""}
+		return Page[T]{Items: rows, NextCursor: "", Total: total}
 	}
 
 	rows = rows[:limit]
 
-	return Page[T]{Items: rows, NextCursor: encodeCursor(key(rows[len(rows)-1]))}
+	return Page[T]{Items: rows, NextCursor: encodeCursor(key(rows[len(rows)-1])), Total: total}
 }
 
 // prefixEnd returns the first string after every string that starts with
