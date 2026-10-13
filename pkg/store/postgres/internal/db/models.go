@@ -160,6 +160,7 @@ type Update struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	JournalClosed    bool
 }
 
 type UpdateEvent struct {
@@ -180,6 +181,7 @@ type UpdateJournal struct {
 	LowestSequence int64
 	SequenceIds    string
 	OperationIds   string
+	Md5            []byte
 }
 
 type UpdateJournalSequence struct {

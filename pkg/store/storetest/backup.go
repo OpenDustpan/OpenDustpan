@@ -35,6 +35,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	stack.CheckpointStore
 	stack.EventStore
 	stack.JournalStore
+	stack.BuiltCheckpointStore
 	secret.KeyStore
 	inventory.Reader
 	workspace.Store
@@ -101,6 +102,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 	}{
 		{name: "round trip over every table keeps every row", test: testBackupRoundTrip},
 		{name: "export names checkpoint blobs", test: testBackupCheckpointBlob},
+		{name: "export names journal blobs with their MD5 and size", test: testBackupJournalBlob},
 		{name: "table list covers every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "export does not tear a concurrent stack write", test: testBackupExportDoesNotTear},

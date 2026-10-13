@@ -83,6 +83,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"created_by",
 				"restored_from",
 				"journal_version",
+				"journal_closed",
 			},
 		},
 		{
@@ -123,6 +124,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"arrival",
 				"blob_key",
 				"sha256",
+				"md5",
 				backupColSize,
 				"lowest_sequence",
 				"sequence_ids",

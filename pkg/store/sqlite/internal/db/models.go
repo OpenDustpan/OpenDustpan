@@ -160,6 +160,7 @@ type Update struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	JournalClosed    int64
 }
 
 type UpdateEvent struct {
@@ -176,6 +177,7 @@ type UpdateJournal struct {
 	Arrival        int64
 	BlobKey        string
 	Sha256         []byte
+	Md5            []byte
 	Size           int64
 	LowestSequence int64
 	SequenceIds    string

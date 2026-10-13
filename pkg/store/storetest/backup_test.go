@@ -893,6 +893,23 @@ func (s *fakeBackupStore) ReferencedCheckpointKeys(
 	return out, nil
 }
 
+// JournalKeys implements stack.JournalStore. The backup fake keeps no journal rows.
+func (s *fakeBackupStore) JournalKeys(context.Context, stack.ID, stack.UpdateID) ([]blob.Key, error) {
+	return nil, nil
+}
+
+// JournalSweepable implements stack.JournalStore. The backup fake keeps no journal rows,
+// so nothing is sweepable.
+func (s *fakeBackupStore) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (bool, error) {
+	return false, nil
+}
+
+// PutBuiltCheckpoint implements stack.BuiltCheckpointStore. The backup fake keeps no
+// journal rows, so a build through it is an error, not a silent drop.
+func (s *fakeBackupStore) PutBuiltCheckpoint(context.Context, stack.Checkpoint, namespace.Fence) ([]blob.Key, error) {
+	return nil, errors.ErrUnsupported
+}
+
 // PutJournalRow implements stack.JournalStore. The backup fake keeps no journal
 // rows, so a write through it is an error, not a silent drop.
 func (s *fakeBackupStore) PutJournalRow(context.Context, stack.JournalRow, namespace.Fence) (bool, error) {
