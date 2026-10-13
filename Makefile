@@ -120,7 +120,7 @@ SOAK_TOFU ?= 4
 SOAK_REPORT_DIR ?= soak-reports
 
 CONSOLE_REPO ?= https://github.com/OpenDustpan/console
-CONSOLE_REF ?= ff5da1cb541f2d7966ded86a2199f72561e92491
+CONSOLE_REF ?= a1ec65fd2c203b0ebcfe6e5c90c2e12682f568a5
 DEMO_PORT ?= 8080
 
 soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.

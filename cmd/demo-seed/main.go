@@ -34,6 +34,9 @@ const (
 	// errorBodyLimit caps an error body the seed reads: answers are small,
 	// and the limit keeps a long body out of the error text.
 	errorBodyLimit = 4 << 10
+	// successBodyLimit caps a successful body the seed reads: the backup
+	// manifest is larger than the error limit.
+	successBodyLimit = 1 << 20
 	// contentTypeJSON marks request bodies the seed sends.
 	contentTypeJSON = "application/json"
 	// projectDemo is the project every seed stack lives in.
@@ -52,7 +55,7 @@ const (
 	statusSucceeded = "succeeded"
 	statusFailed    = "failed"
 	// hintServerLog names the one thing to do when a seed call fails.
-	hintServerLog = "check the server log and run make demo again"
+	hintServerLog = "see the server log above, then run make demo again"
 )
 
 // Sentinel errors of the seed run. Each error text names what failed.
@@ -186,12 +189,15 @@ func runMain(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		"admin token (default the DUSTPAN_ADMIN_TOKEN environment variable)",
 	)
 	fs.Usage = func() {
-		fmt.Fprintln(
-			os.Stderr,
+		_, err := fmt.Fprintln(
+			stderr,
 			"Usage: demo-seed -url <server> [-token <token>]\n"+
 				"Seed a local demo installation with namespaces, stacks, updates and one backup.\n"+
 				"The token comes from -token or from the DUSTPAN_ADMIN_TOKEN environment variable.",
 		)
+		if err != nil {
+			return
+		}
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -522,7 +528,7 @@ func (s *seeder) pollBackup(ctx context.Context, id string) error {
 func (s *seeder) call(ctx context.Context, call apiCall, result any) error {
 	body, err := requestReader(call.body)
 	if err != nil {
-		return fmt.Errorf("%w: %s: encode request: %w", call.fail, call.name, err)
+		return fmt.Errorf("%w: %s: encode request: %w: %s", call.fail, call.name, err, hintServerLog)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -547,7 +553,12 @@ func (s *seeder) call(ctx context.Context, call apiCall, result any) error {
 		_ = resp.Body.Close() //nolint:errcheck // A close error after the answer was read changes nothing the seed reports.
 	}()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
+	limit := int64(successBodyLimit)
+	if resp.StatusCode != call.want {
+		limit = errorBodyLimit
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return fmt.Errorf("%w: %s: read answer: %w: %s", call.fail, call.name, err, hintServerLog)
 	}
@@ -593,7 +604,7 @@ func requestReader(body any) (io.Reader, error) {
 func (s *seeder) newRequest(ctx context.Context, call apiCall, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, call.method, s.base+call.path, body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: build request: %w", call.fail, call.name, err)
+		return nil, fmt.Errorf("%w: %s: build request: %w: %s", call.fail, call.name, err, hintServerLog)
 	}
 
 	req.Header.Set("Authorization", call.auth)

@@ -9,28 +9,31 @@
 #
 # Environment:
 #   CONSOLE_REPO  console repository to fetch (default https://github.com/OpenDustpan/console)
-#   CONSOLE_REF   console commit to build (default ff5da1cb541f2d7966ded86a2199f72561e92491)
+#   CONSOLE_REF   console commit to build (set by make demo; default in the Makefile)
 #   DEMO_PORT     port to listen on (default 8080)
 #
-# It needs Go, Node and npm. It needs no Pulumi or OpenTofu CLI.
+# It needs Git, Go, Node and npm. It needs no Pulumi or OpenTofu CLI.
 set -eu
 
 : "${CONSOLE_REPO:=https://github.com/OpenDustpan/console}"
-: "${CONSOLE_REF:=ff5da1cb541f2d7966ded86a2199f72561e92491}"
+: "${CONSOLE_REF:?demo: CONSOLE_REF is not set; run make demo}"
 : "${DEMO_PORT:=8080}"
 
 for tool in git go node npm; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "demo: missing required tool: $tool" >&2
+    echo "demo: missing required tool: $tool: install it and run make demo again" >&2
     exit 1
   fi
 done
 
 DEMO_TMP="$(mktemp -d)"
 server_pid=""
+SERVER_LOG="$DEMO_TMP/server.log"
 
 cleaned=0
+interrupted=0
 cleanup() {
+  status=$?
   if [ "$cleaned" -eq 1 ]; then
     return 0
   fi
@@ -39,13 +42,18 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
+  if [ "$interrupted" -eq 0 ] && [ "$status" -ne 0 ] && [ -f "$SERVER_LOG" ]; then
+    echo "demo: server log (last 60 lines):" >&2
+    tail -n 60 "$SERVER_LOG" >&2 || true
+  fi
   rm -rf "$DEMO_TMP" 2>/dev/null || true
 }
-trap 'cleanup' EXIT INT TERM
+trap 'cleanup' EXIT
+trap 'interrupted=1; exit 130' INT TERM
 
 ADMIN_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 if [ "${#ADMIN_TOKEN}" -lt 32 ]; then
-  echo "demo: generated admin token is too short" >&2
+  echo "demo: generated admin token is too short: run make demo again" >&2
   exit 1
 fi
 
@@ -58,14 +66,13 @@ git -C "$DEMO_TMP/console" checkout --detach FETCH_HEAD
 echo "demo: building the console"
 (cd "$DEMO_TMP/console" && npm ci && npm run build)
 if [ ! -f "$DEMO_TMP/console/dist/index.html" ]; then
-  echo "demo: console build did not write dist/index.html" >&2
+  echo "demo: console build did not write dist/index.html: run make demo again" >&2
   exit 1
 fi
 
 mkdir -p "$DEMO_TMP/data/blobs" "$DEMO_TMP/backups"
 
 DEMO_URL="http://127.0.0.1:$DEMO_PORT"
-SERVER_LOG="$DEMO_TMP/server.log"
 
 echo "demo: starting the server on $DEMO_URL"
 DUSTPAN_ADMIN_TOKEN="$ADMIN_TOKEN" ./bin/opendustpan serve \
@@ -82,17 +89,17 @@ server_pid=$!
 i=0
 while [ "$i" -lt 60 ]; do
   if ! kill -0 "$server_pid" 2>/dev/null; then
-    echo "demo: server exited before it was ready: read $SERVER_LOG" >&2
+    echo "demo: server exited before it was ready: the server log is printed above" >&2
     exit 1
   fi
-  if node -e 'fetch(process.argv[1]).then(async (r) => { const b = await r.text(); if (r.status !== 200) { process.exit(1); } const d = JSON.parse(b); if (!d || d.status !== "ok") { process.exit(1); } }).catch(() => process.exit(1));' "$DEMO_URL/health/ready" 2>/dev/null; then
+  if ./bin/opendustpan health --listen "127.0.0.1:$DEMO_PORT" >/dev/null 2>&1; then
     break
   fi
   sleep 1
   i=$((i + 1))
 done
-if ! node -e 'fetch(process.argv[1]).then(async (r) => { const b = await r.text(); if (r.status !== 200) { process.exit(1); } const d = JSON.parse(b); if (!d || d.status !== "ok") { process.exit(1); } }).catch(() => process.exit(1));' "$DEMO_URL/health/ready" 2>/dev/null; then
-  echo "demo: server did not answer $DEMO_URL/health/ready in time: read $SERVER_LOG" >&2
+if ! ./bin/opendustpan health --listen "127.0.0.1:$DEMO_PORT" >/dev/null 2>&1; then
+  echo "demo: server did not answer $DEMO_URL/health/ready in time: the server log is printed above" >&2
   exit 1
 fi
 
