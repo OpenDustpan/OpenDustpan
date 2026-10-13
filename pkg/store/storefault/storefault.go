@@ -96,6 +96,7 @@ type Inner interface {
 	stack.CheckpointStore
 	stack.EventStore
 	stack.JournalStore
+	stack.BuiltCheckpointStore
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
@@ -368,6 +369,29 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 	}
 
 	return s.inner.AppendEvents(ctx, batch, fence)
+}
+
+// JournalKeys returns the blob keys of the update's batches, unless a fault fires first.
+func (s *Store) JournalKeys(ctx context.Context, ref stack.Ref, update stack.UpdateID) ([]blob.Key, error) {
+	if err := s.before(ctx, "JournalKeys"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalKeys(ctx, ref, update)
+}
+
+// PutBuiltCheckpoint writes the built checkpoint and removes the journal, unless a
+// fault fires first.
+func (s *Store) PutBuiltCheckpoint(
+	ctx context.Context,
+	cp stack.Checkpoint,
+	fence namespace.Fence,
+) ([]blob.Key, error) {
+	if err := s.before(ctx, "PutBuiltCheckpoint"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.PutBuiltCheckpoint(ctx, cp, fence)
 }
 
 // PutJournalRow stores the row of one batch, unless a fault fires first.

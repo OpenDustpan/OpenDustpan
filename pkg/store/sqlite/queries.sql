@@ -612,9 +612,9 @@ WHERE stack_id = ? AND update_id = ?;
 
 -- name: InsertJournal :exec
 INSERT INTO update_journal (
-    stack_id, update_id, arrival, blob_key, sha256, size,
+    stack_id, update_id, arrival, blob_key, sha256, md5, size,
     lowest_sequence, sequence_ids, operation_ids
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: InsertJournalSequence :exec
 INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
@@ -624,3 +624,16 @@ VALUES (?, ?, ?, ?, ?);
 SELECT operation_ids FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
+
+-- name: JournalBlobKeys :many
+SELECT blob_key FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
+-- name: DeleteJournalSequences :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: DeleteJournal :exec
+DELETE FROM update_journal
+WHERE stack_id = ? AND update_id = ?;

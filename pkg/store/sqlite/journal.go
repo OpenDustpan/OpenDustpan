@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -159,6 +160,7 @@ func insertJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 		Arrival:        arrival,
 		BlobKey:        string(row.BlobKey),
 		Sha256:         row.SHA256[:],
+		Md5:            row.MD5[:],
 		Size:           row.Size,
 		LowestSequence: lowestOf(row.SequenceIDs),
 		SequenceIds:    string(seqs),
@@ -221,4 +223,103 @@ func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 	}
 
 	return nil
+}
+
+// JournalKeys implements stack.JournalStore. A missing stack or update yields no keys.
+func (s *Store) JournalKeys(ctx context.Context, ref stack.Ref, update stack.UpdateID) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stackID, err := s.stackID(ctx, ref)
+	if errors.Is(err, stack.ErrUpdateNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.queries.JournalBlobKeys(ctx, db.JournalBlobKeysParams{StackID: stackID, UpdateID: update.String()})
+	if err != nil {
+		return nil, fmt.Errorf("select journal blob keys: %w", err)
+	}
+
+	return journalBlobKeys(rows), nil
+}
+
+// PutBuiltCheckpoint implements stack.BuiltCheckpointStore. The checkpoint write is the
+// one of PutCheckpoint, and the journal rows of the update are deleted in the same
+// transaction after it. A failed check deletes nothing.
+func (s *Store) PutBuiltCheckpoint(
+	ctx context.Context,
+	cp stack.Checkpoint,
+	fence namespace.Fence,
+) ([]blob.Key, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var keys []blob.Key
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		stackID, err := stackIDFor(ctx, q, cp.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return stack.ErrWrongUpdateState
+		}
+
+		if err != nil {
+			return err
+		}
+
+		row, rowErr := codec.ToCheckpointRow(cp, stack.ID(stackID))
+		if rowErr != nil {
+			return rowErr
+		}
+
+		if writeErr := writeCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
+			return writeErr
+		}
+
+		keys, err = removeJournal(ctx, q, stackID, cp.Update)
+
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return keys, nil
+}
+
+// removeJournal deletes the sequence rows and the batch rows of an update, and returns
+// the blob keys of the batches it deleted. It runs in the caller's transaction.
+func removeJournal(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) ([]blob.Key, error) {
+	found, err := q.JournalBlobKeys(ctx, db.JournalBlobKeysParams{StackID: stackID, UpdateID: update.String()})
+	if err != nil {
+		return nil, fmt.Errorf("select journal blob keys: %w", err)
+	}
+
+	seqErr := q.DeleteJournalSequences(
+		ctx,
+		db.DeleteJournalSequencesParams{StackID: stackID, UpdateID: update.String()},
+	)
+	if seqErr != nil {
+		return nil, fmt.Errorf("delete journal sequences: %w", seqErr)
+	}
+
+	rowsErr := q.DeleteJournal(ctx, db.DeleteJournalParams{StackID: stackID, UpdateID: update.String()})
+	if rowsErr != nil {
+		return nil, fmt.Errorf("delete journal rows: %w", rowsErr)
+	}
+
+	return journalBlobKeys(found), nil
+}
+
+// journalBlobKeys converts stored blob keys to keys of the blob store.
+func journalBlobKeys(rows []string) []blob.Key {
+	keys := make([]blob.Key, 0, len(rows))
+	for _, row := range rows {
+		keys = append(keys, blob.Key(row))
+	}
+
+	return keys
 }

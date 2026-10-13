@@ -469,6 +469,36 @@ func (q *Queries) DeleteInventory(ctx context.Context, arg DeleteInventoryParams
 	return err
 }
 
+const deleteJournal = `-- name: DeleteJournal :exec
+DELETE FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournal(ctx context.Context, arg DeleteJournalParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournal, arg.StackID, arg.UpdateID)
+	return err
+}
+
+const deleteJournalSequences = `-- name: DeleteJournalSequences :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalSequencesParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournalSequences(ctx context.Context, arg DeleteJournalSequencesParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalSequences, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const deleteSecretKeysOfStack = `-- name: DeleteSecretKeysOfStack :exec
 DELETE FROM secret_keys
 WHERE stack_id = ?
@@ -1318,9 +1348,9 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
-    stack_id, update_id, arrival, blob_key, sha256, size,
+    stack_id, update_id, arrival, blob_key, sha256, md5, size,
     lowest_sequence, sequence_ids, operation_ids
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertJournalParams struct {
@@ -1329,6 +1359,7 @@ type InsertJournalParams struct {
 	Arrival        int64
 	BlobKey        string
 	Sha256         []byte
+	Md5            []byte
 	Size           int64
 	LowestSequence int64
 	SequenceIds    string
@@ -1342,6 +1373,7 @@ func (q *Queries) InsertJournal(ctx context.Context, arg InsertJournalParams) er
 		arg.Arrival,
 		arg.BlobKey,
 		arg.Sha256,
+		arg.Md5,
 		arg.Size,
 		arg.LowestSequence,
 		arg.SequenceIds,
@@ -1372,6 +1404,40 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 		arg.Sha256,
 	)
 	return err
+}
+
+const journalBlobKeys = `-- name: JournalBlobKeys :many
+SELECT blob_key FROM update_journal
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival
+`
+
+type JournalBlobKeysParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) JournalBlobKeys(ctx context.Context, arg JournalBlobKeysParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, journalBlobKeys, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var blob_key string
+		if err := rows.Scan(&blob_key); err != nil {
+			return nil, err
+		}
+		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const journalSequenceSHA = `-- name: JournalSequenceSHA :one

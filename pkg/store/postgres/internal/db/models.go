@@ -177,6 +177,7 @@ type UpdateJournal struct {
 	LowestSequence int64
 	SequenceIds    string
 	OperationIds   string
+	Md5            []byte
 }
 
 type UpdateJournalSequence struct {

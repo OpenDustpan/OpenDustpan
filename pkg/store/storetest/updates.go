@@ -29,6 +29,7 @@ type UpdatesStore interface {
 	stack.CheckpointStore
 	stack.EventStore
 	stack.JournalStore
+	stack.BuiltCheckpointStore
 }
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
@@ -107,6 +108,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
+		{name: "build removes the journal and returns its blob keys", test: testJournalBuild},
+		{name: "build races a batch without losing its key", test: testJournalBuildRace},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},

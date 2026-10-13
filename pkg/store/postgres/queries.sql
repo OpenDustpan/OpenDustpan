@@ -616,6 +616,9 @@ UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
 WHERE blob_key IS NOT NULL AND blob_key <> ''
+UNION ALL
+SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
+FROM update_journal
 ORDER BY content_key;
 
 -- name: LastAuditEntry :one
@@ -672,9 +675,9 @@ WHERE stack_id = $1 AND update_id = $2;
 
 -- name: InsertJournal :exec
 INSERT INTO update_journal (
-    stack_id, update_id, arrival, blob_key, sha256, size,
+    stack_id, update_id, arrival, blob_key, sha256, md5, size,
     lowest_sequence, sequence_ids, operation_ids
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 
 -- name: InsertJournalSequence :exec
 INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
@@ -692,3 +695,16 @@ FOR UPDATE;
 SELECT operation_ids FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
 ORDER BY arrival;
+
+-- name: JournalBlobKeys :many
+SELECT blob_key FROM update_journal
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: DeleteJournalSequences :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: DeleteJournal :exec
+DELETE FROM update_journal
+WHERE stack_id = $1 AND update_id = $2;
