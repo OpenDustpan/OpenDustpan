@@ -18,6 +18,7 @@ same list.
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `json` (or `text`) |
+| `--log-sink` | `DUSTPAN_LOG_SINK` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
 | `--blob-store` | `DUSTPAN_BLOB_STORE` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
@@ -47,6 +48,8 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | Set `true` to make the key file with no prompt when no key exists. The server never overwrites a file that exists. |
 | `DUSTPAN_AUDIT_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. Required when `--audit-sink` names a webhook and you set no secret file. |
 | `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
+| `DUSTPAN_LOG_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. Required when `--log-sink` names a webhook and you set no secret file. |
+| `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` | A file that holds the log webhook secret. Only its owner can read it. When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins. |
 
 Make a key-encryption key with this command:
 

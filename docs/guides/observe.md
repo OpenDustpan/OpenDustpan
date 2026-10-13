@@ -105,6 +105,42 @@ Values are `debug`, `info`, `warn` and `error`.
 The default is `json`.
 Values are `json` and `text`.
 
+## Send the application log to other targets
+
+The server writes its log to stderr by default.
+`--log-sink` (`DUSTPAN_LOG_SINK`) sends it to other targets instead (ADR 60 decision 14).
+Give `--log-sink` once for each target.
+In `DUSTPAN_LOG_SINK`, separate the targets with spaces or line breaks.
+Each target is `[<name>=]<target>`:
+
+| Target | Example |
+| --- | --- |
+| Standard error, in the format of `--log-format` | `stderr` |
+| Standard output, in the format of `--log-format` | `stdout` |
+| A file of JSON lines | `file:/var/log/dustpan/server.jsonl` |
+| Syslog (RFC 5424) over UDP, TCP or TLS | `syslog+tls://logs.example:6514` |
+| A signed HTTPS webhook | `webhook:https://logs.example/hooks/dustpan` |
+
+```sh
+opendustpan serve --log-sink stderr --log-sink 'syslog+tls://logs.example:6514'
+```
+
+Name `stderr` too when you want to keep the stderr lines.
+A syslog target uses the facility `local0` (16) unless you set `?facility=<0 to 23>`.
+`?max-size=<bytes>` caps a message, from 480 to 65507 bytes, default 8192.
+The server drops a line above the cap and counts it.
+A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
+The audit log guide describes the record format, the syslog format and the webhook signature.
+Object storage is a target of the audit log only.
+
+A target other than a stream is best effort.
+The server puts each line in a queue of 4,096 lines and never waits for the target.
+It writes the queue in batches, at least once a second.
+When the queue is full or a write fails, the server drops the lines.
+`dustpan_log_sink_dropped_total{sink="<name>"}` counts them.
+Without a name, the kind is the name: `file`, `syslog` or `webhook`.
+The server opens a file target again on `SIGHUP`, as it does for the audit log.
+
 ## Request IDs
 
 The server mints a new request ID for each request.

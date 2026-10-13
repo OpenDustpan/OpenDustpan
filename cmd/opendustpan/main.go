@@ -253,6 +253,9 @@ type serveFlags struct {
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
 	auditSinks              []string
+	logSinks                []string
+	// app is the application logger and its sinks, set by run.
+	app appLog
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -293,6 +296,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
+	cli.ByFlag("log-sink").List(fs, &f.logSinks)
 }
 
 // registerLimits registers the large-body size flags.
@@ -312,10 +316,15 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 // store must hold no wrapped keys, because a new key cannot open them (issue
 // 355). Serve then uses the same store.
 func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer, terminal bool) error {
-	logger, err := f.loggerFor(stderr)
+	app, err := f.appLogFor(stderr) //nolint:contextcheck // The log writers outlive this call; close bounds them.
 	if err != nil {
 		return err
 	}
+
+	f.app = app
+	logger := app.logger
+
+	defer closeAppLog(ctx, &app, stderr)
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
@@ -794,7 +803,7 @@ func (f *serveFlags) serveWithStores(
 		}
 	}()
 
-	stopHangup := sinks.reopenOnHangup(ctx, logger)
+	stopHangup := sinks.reopenOnHangup(ctx, logger, f.app.files)
 	defer stopHangup()
 
 	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
@@ -804,6 +813,10 @@ func (f *serveFlags) serveWithStores(
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
+	}
+
+	if f.app.drops != nil {
+		f.app.drops.attach(srv.Metrics().AddLogSinkDropped)
 	}
 
 	// Run runs the start-up checks, including the key-encryption key check
@@ -1219,11 +1232,20 @@ func normalizeLogLevel(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// loggerFor builds the serve logger from the log flags. It keeps the JSON
-// default and switches to text only when asked.
-func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
+// closeAppLog flushes and closes the application log sinks. The sinks are
+// closing, so a failure goes to stderr.
+func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
+	if err := app.close(ctx); err != nil {
+		//nolint:errcheck // Nothing is left to report a failed write of stderr to.
+		fmt.Fprintln(stderr, "opendustpan: close log sinks:", err)
+	}
+}
+
+// appLogFor builds the application logger and its sinks from the log
+// flags. Without --log-sink it writes to stderr, as serve always did.
+func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
-		return nil, err
+		return appLog{}, err
 	}
 
 	var level slog.Level
@@ -1239,13 +1261,7 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 		level = slog.LevelInfo
 	}
 
-	opts := &slog.HandlerOptions{Level: level}
-
-	if normalizeLogLevel(f.logFormat) == "text" {
-		return slog.New(slog.NewTextHandler(stderr, opts)), nil
-	}
-
-	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
+	return newAppLog(f.logSinks, level, f.logFormat, stderr, os.LookupEnv)
 }
 
 // store is the persistence adapter chosen by --database.

@@ -56,6 +56,30 @@ type openedSinks struct {
 	files []*file.Sink
 }
 
+// sinkConfig holds what openSink needs beyond the spec: the setting that
+// names the sink (for errors), the live blob store (nil refuses blob:), the
+// default syslog facility and the variables of the webhook secret.
+type sinkConfig struct {
+	setting       error
+	blobs         blob.Store
+	lookup        func(string) (string, bool)
+	secretEnv     string
+	secretFileEnv string
+	facility      int
+}
+
+// auditSinkConfig answers the sink configuration of --audit-sink.
+func auditSinkConfig(blobs blob.Store, lookup func(string) (string, bool)) sinkConfig {
+	return sinkConfig{
+		setting:       errAuditSink,
+		blobs:         blobs,
+		lookup:        lookup,
+		secretEnv:     webhookSecretEnvVar,
+		secretFileEnv: webhookSecretFileEnvVar,
+		facility:      syslog.FacilityLogAudit,
+	}
+}
+
 // openAuditSinks opens the sink of each --audit-sink item. An item is
 // [<name>=]<spec>. The flag repeats, and the variable separates items with
 // white space, so a webhook URL can hold a comma. The name keys the cursor of the sink; without
@@ -74,7 +98,7 @@ func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (strin
 		named := splitSinkName(item)
 		name, spec := named.name, named.spec
 
-		sink, interval, err := openSink(spec, blobs, lookup)
+		sink, interval, err := openSink(spec, auditSinkConfig(blobs, lookup))
 		if err != nil {
 			return openedSinks{}, errors.Join(err, out.close())
 		}
@@ -125,60 +149,71 @@ func sinkKind(spec string) string {
 // openSink opens the sink of one spec and answers its ship interval.
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
-func openSink(spec string, blobs blob.Store, lookup func(string) (string, bool)) (logsink.Sink, time.Duration, error) {
+func openSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, error) {
 	switch kind := sinkKind(spec); kind {
 	case sinkKindFile:
 		s, err := file.Open(strings.TrimPrefix(spec, sinkKindFile+":"))
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
+			return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, err)
 		}
 
 		return s, 0, nil
 	case sinkKindSyslog:
-		s, err := openSyslogSink(spec)
+		s, err := openSyslogSink(spec, cfg)
 
 		return s, 0, err
 	case sinkKindWebhook:
-		s, err := openWebhookSink(strings.TrimPrefix(spec, sinkKindWebhook+":"), lookup)
+		s, err := openWebhookSink(strings.TrimPrefix(spec, sinkKindWebhook+":"), cfg)
 
 		return s, 0, err
 	case sinkKindBlob:
-		prefix := strings.TrimPrefix(spec, sinkKindBlob+":")
-
-		// The state sweepers delete unknown objects under these prefixes.
-		if first, _, _ := strings.Cut(prefix, "/"); first == "tofu" || first == "pulumi" {
-			return nil, 0, fmt.Errorf("%w %s: %w", errAuditSink, spec, errReservedPrefix)
-		}
-
-		s, err := objectstore.New(blobs, prefix, objectstore.WithPartition(audit.RecordScope))
-		if err != nil {
-			return nil, 0, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
-		}
-
-		return s, blobSinkInterval, nil
+		return openBlobSink(spec, cfg)
 	default:
 		return nil, 0, fmt.Errorf("%w %q: unknown sink kind %q: want file, syslog, webhook or blob",
-			errAuditSink, spec, kind)
+			cfg.setting, spec, kind)
 	}
 }
 
+// openBlobSink opens a blob:<prefix> sink in the live blob store.
+//
+//nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
+func openBlobSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, error) {
+	if cfg.blobs == nil {
+		return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, errNoBlobSink)
+	}
+
+	prefix := strings.TrimPrefix(spec, sinkKindBlob+":")
+
+	// The state sweepers delete unknown objects under these prefixes.
+	if first, _, _ := strings.Cut(prefix, "/"); first == "tofu" || first == "pulumi" {
+		return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, errReservedPrefix)
+	}
+
+	s, err := objectstore.New(cfg.blobs, prefix, objectstore.WithPartition(audit.RecordScope))
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, err)
+	}
+
+	return s, blobSinkInterval, nil
+}
+
 // openSyslogSink opens a syslog+udp://, syslog+tcp:// or syslog+tls://
-// sink. The query takes facility (0 to 23, default 13, log audit),
-// max-size (the message cap in bytes, 480 to 65507, default 8192) and, for
-// TLS, ca-file: a PEM bundle to trust instead of the system store.
-func openSyslogSink(spec string) (*syslog.Sink, error) {
+// sink. The query takes facility (0 to 23, default from cfg), max-size
+// (the message cap in bytes, 480 to 65507, default 8192) and, for TLS,
+// ca-file: a PEM bundle to trust instead of the system store.
+func openSyslogSink(spec string, cfg sinkConfig) (*syslog.Sink, error) {
 	u, err := url.Parse(spec)
 	if err != nil {
-		return nil, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
+		return nil, fmt.Errorf("%w %s: %w", cfg.setting, spec, err)
 	}
 
 	network := syslog.Network(strings.TrimPrefix(u.Scheme, sinkKindSyslog+"+"))
 
-	facility := syslog.FacilityLogAudit
+	facility := cfg.facility
 	if raw := u.Query().Get("facility"); raw != "" {
 		facility, err = strconv.Atoi(raw)
 		if err != nil {
-			return nil, fmt.Errorf("%w %s: facility: %w", errAuditSink, spec, err)
+			return nil, fmt.Errorf("%w %s: facility: %w", cfg.setting, spec, err)
 		}
 	}
 
@@ -186,11 +221,11 @@ func openSyslogSink(spec string) (*syslog.Sink, error) {
 	if raw := u.Query().Get("max-size"); raw != "" {
 		maxBytes, err = strconv.Atoi(raw)
 		if err != nil {
-			return nil, fmt.Errorf("%w %s: max-size: %w", errAuditSink, spec, err)
+			return nil, fmt.Errorf("%w %s: max-size: %w", cfg.setting, spec, err)
 		}
 	}
 
-	cfg := syslog.Config{
+	conf := syslog.Config{
 		TLSConfig: nil,
 		Network:   network,
 		Address:   u.Host,
@@ -203,15 +238,15 @@ func openSyslogSink(spec string) (*syslog.Sink, error) {
 	}
 
 	if network == syslog.TLS {
-		cfg.TLSConfig, err = syslogTLSConfig(u)
+		conf.TLSConfig, err = syslogTLSConfig(u)
 		if err != nil {
-			return nil, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
+			return nil, fmt.Errorf("%w %s: %w", cfg.setting, spec, err)
 		}
 	}
 
-	s, err := syslog.New(cfg)
+	s, err := syslog.New(conf)
 	if err != nil {
-		return nil, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
+		return nil, fmt.Errorf("%w %s: %w", cfg.setting, spec, err)
 	}
 
 	return s, nil
@@ -252,63 +287,69 @@ func syslogTLSConfig(u *url.URL) (*tls.Config, error) {
 var (
 	// errNoCertificates reports a CA file with no PEM certificate.
 	errNoCertificates = errors.New("holds no PEM certificate")
+	// errNoBlobSink reports a blob: sink for a setting that has no blob store.
+	errNoBlobSink = errors.New("this setting has no blob store: pick file, syslog or webhook")
 	// errReservedPrefix reports a blob sink prefix that state blobs own.
 	errReservedPrefix = errors.New("the prefixes tofu and pulumi hold state: pick another prefix")
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
 )
 
-// openWebhookSink opens a webhook sink on rawURL with the secret of
-// DUSTPAN_AUDIT_WEBHOOK_SECRET or of the file that
-// DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE names.
-func openWebhookSink(rawURL string, lookup func(string) (string, bool)) (*webhook.Sink, error) {
-	secret, err := webhookSecret(lookup)
+// openWebhookSink opens a webhook sink on rawURL with the secret of the
+// variable cfg.secretEnv or of the file that cfg.secretFileEnv names.
+func openWebhookSink(rawURL string, cfg sinkConfig) (*webhook.Sink, error) {
+	secret, err := webhookSecretFrom(cfg.lookup, cfg.secretEnv, cfg.secretFileEnv)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
 
 	s, err := webhook.New(webhook.Config{Client: nil, URL: rawURL, Secret: secret, Timeout: 0})
 	if err != nil {
-		return nil, fmt.Errorf("%w webhook: %w", errAuditSink, err)
+		return nil, fmt.Errorf("%w webhook: %w", cfg.setting, err)
 	}
 
 	return s, nil
 }
 
 // errNoWebhookSecret reports a webhook sink without a secret.
-var errNoWebhookSecret = errors.New("a webhook audit sink needs " + webhookSecretEnvVar +
-	" or " + webhookSecretFileEnvVar)
+var errNoWebhookSecret = errors.New("a webhook sink needs its secret variable or its secret file variable")
 
-// webhookSecret reads the webhook secret. The variable wins when both are
-// set. The file must not be readable by group or others.
+// webhookSecret reads the secret of a webhook audit sink.
 func webhookSecret(lookup func(string) (string, bool)) ([]byte, error) {
-	if raw, ok := lookup(webhookSecretEnvVar); ok && strings.TrimSpace(raw) != "" {
+	return webhookSecretFrom(lookup, webhookSecretEnvVar, webhookSecretFileEnvVar)
+}
+
+// webhookSecretFrom reads a webhook secret from the variable env, or from
+// the file that the variable fileEnv names. The variable wins when both
+// are set. The file must not be readable by group or others.
+func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) ([]byte, error) {
+	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
 		return []byte(strings.TrimSpace(raw)), nil
 	}
 
-	path, ok := lookup(webhookSecretFileEnvVar)
+	path, ok := lookup(fileEnv)
 	if !ok || strings.TrimSpace(path) == "" {
-		return nil, errNoWebhookSecret
+		return nil, fmt.Errorf("%w: set %s or %s", errNoWebhookSecret, env, fileEnv)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: stat file: %w", webhookSecretFileEnvVar, err)
+		return nil, fmt.Errorf("%s: stat file: %w", fileEnv, err)
 	}
 
 	if perm := info.Mode().Perm(); perm&keyFilePrivateBits != 0 {
 		return nil, fmt.Errorf("%s: %w %q (mode %04o): run chmod 600 on the file",
-			webhookSecretFileEnvVar, errSecretFilePermissions, path, perm)
+			fileEnv, errSecretFilePermissions, path, perm)
 	}
 
 	raw, err := os.ReadFile(path) //nolint:gosec // The operator names the secret file through the environment.
 	if err != nil {
-		return nil, fmt.Errorf("%s: read file: %w", webhookSecretFileEnvVar, err)
+		return nil, fmt.Errorf("%s: read file: %w", fileEnv, err)
 	}
 
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
-		return nil, errNoWebhookSecret
+		return nil, fmt.Errorf("%w: %s is empty", errNoWebhookSecret, fileEnv)
 	}
 
 	return []byte(secret), nil
@@ -328,10 +369,12 @@ func (o openedSinks) close() error {
 }
 
 // reopenOnHangup opens each file sink again on SIGHUP until ctx is done, so
-// an external rotation tool can move the files away. The returned function
-// stops the watch and waits for it. With no file sink it watches nothing.
-func (o openedSinks) reopenOnHangup(ctx context.Context, logger *slog.Logger) func() {
-	if len(o.files) == 0 {
+// an external rotation tool can move the files away. extra holds the file
+// sinks of the application log. The returned function stops the watch and
+// waits for it. With no file sink it watches nothing.
+func (o openedSinks) reopenOnHangup(ctx context.Context, logger *slog.Logger, extra []*file.Sink) func() {
+	files := append(append([]*file.Sink(nil), o.files...), extra...)
+	if len(files) == 0 {
 		return func() {}
 	}
 
@@ -349,7 +392,7 @@ func (o openedSinks) reopenOnHangup(ctx context.Context, logger *slog.Logger) fu
 			case <-watchCtx.Done():
 				return
 			case <-hangup:
-				o.reopenFiles(watchCtx, logger)
+				reopenFiles(watchCtx, logger, files)
 			}
 		}
 	}()
@@ -363,8 +406,8 @@ func (o openedSinks) reopenOnHangup(ctx context.Context, logger *slog.Logger) fu
 
 // reopenFiles opens each file sink again and logs a failure. A sink whose
 // open fails keeps its old file.
-func (o openedSinks) reopenFiles(ctx context.Context, logger *slog.Logger) {
-	for _, f := range o.files {
+func reopenFiles(ctx context.Context, logger *slog.Logger, files []*file.Sink) {
+	for _, f := range files {
 		if err := f.Reopen(); err != nil {
 			logger.WarnContext(ctx, "reopen audit sink file", slog.String("error", err.Error()))
 		}

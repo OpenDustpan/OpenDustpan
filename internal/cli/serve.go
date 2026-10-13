@@ -9,7 +9,7 @@ func ServeFlags() []*Setting {
 	return SettingsFor(
 		"database", "region",
 		"listen", "console-dir", "allowed-origins", "tls-cert", "tls-key", "public-url",
-		"log-level", "log-format",
+		"log-level", "log-format", "log-sink",
 		"blob-dir", "blob-store", "s3-endpoint", "s3-region", "backup-target",
 		"key-encryption-key-file", "generate-key-encryption-key",
 		"max-checkpoint-bytes", "checkpoint-delta-cutoff", "disable-pulumi-journaling",

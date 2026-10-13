@@ -628,10 +628,12 @@ func TestServeLogFlagDefaults(t *testing.T) {
 		t.Fatalf("debug/text log flags: %v", err)
 	}
 
-	logger, err := f.loggerFor(io.Discard)
-	if err != nil || logger == nil {
-		t.Fatalf("logger for debug/text: logger %v, err %v", logger, err)
+	app, err := f.appLogFor(io.Discard)
+	if err != nil || app.logger == nil {
+		t.Fatalf("logger for debug/text: logger %v, err %v", app.logger, err)
 	}
+
+	closeAppLog(t.Context(), &app, io.Discard)
 }
 
 func TestServeSizeFlagDefaults(t *testing.T) {

@@ -80,8 +80,8 @@ func (l Level) String() string {
 }
 
 // Attr is one named attribute of a record. Value holds a string, an int64,
-// a bool or nil. An adapter writes any other type with its default text
-// form.
+// a float64, a bool or nil. An adapter writes any other type with its
+// default JSON form.
 type Attr struct {
 	Value any
 	Key   string

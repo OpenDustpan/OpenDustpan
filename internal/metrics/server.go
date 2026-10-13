@@ -54,7 +54,7 @@ const MaxSinkSeries = 16
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
 // audit append failure counter (ADR 41 decision 5), and the audit sink
-// counters (ADR 60 decision 13). All
+// counters and the log sink drop counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -71,6 +71,7 @@ type ServerMetrics struct {
 	shipped  *Counter
 	sinkFail *Counter
 	sinkSkip *Counter
+	logDrop  *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -118,24 +119,14 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		shipped: reg.NewCounter(
-			"dustpan_audit_sink_entries_total",
-			"Audit entries that a sink accepted, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
-		),
-		sinkFail: reg.NewCounter(
-			"dustpan_audit_sink_failures_total",
-			"Failed delivery rounds of an audit sink, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
-		),
-		sinkSkip: reg.NewCounter(
-			"dustpan_audit_sink_skipped_total",
-			"Audit entries that a sink skipped because it cannot hold them, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
-		),
+		shipped: newSinkCounter(reg, "dustpan_audit_sink_entries_total",
+			"Audit entries that a sink accepted, by sink."),
+		sinkFail: newSinkCounter(reg, "dustpan_audit_sink_failures_total",
+			"Failed delivery rounds of an audit sink, by sink."),
+		sinkSkip: newSinkCounter(reg, "dustpan_audit_sink_skipped_total",
+			"Audit entries that a sink skipped because it cannot hold them, by sink."),
+		logDrop: newSinkCounter(reg, "dustpan_log_sink_dropped_total",
+			"Application log records a log sink dropped, by sink."),
 	}
 
 	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
@@ -149,6 +140,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 	reg.RegisterFunc("dustpan_go_gc_cycles_total", "Completed garbage collection cycles.", GCCycles)
 
 	return m
+}
+
+// newSinkCounter registers a counter with the one label sink, capped at
+// MaxSinkSeries series.
+func newSinkCounter(reg *Registry, name, help string) *Counter {
+	return reg.NewCounter(name, help, []string{labelSink}, maxSinkSeries)
 }
 
 // Registry returns the registry that holds every family.
@@ -233,6 +230,15 @@ func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
 func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	if entries > 0 {
 		m.sinkSkip.Add(uint64(entries), sink)
+	}
+}
+
+// AddLogSinkDropped adds records to the count of application log records
+// that the log sink named sink dropped: its queue was full or its write
+// failed (ADR 60 decision 14).
+func (m *ServerMetrics) AddLogSinkDropped(sink string, records int) {
+	if records > 0 {
+		m.logDrop.Add(uint64(records), sink)
 	}
 }
 
