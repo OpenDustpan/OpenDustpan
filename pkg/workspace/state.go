@@ -51,6 +51,19 @@ var (
 	ErrResourceNotFound = errors.New("resource not found")
 )
 
+// errTooLargeBody reports a body over the state size limit. size is the
+// number of bytes read, which is limit+1 when the read stops at the limit,
+// so the body is at least that large.
+func errTooLargeBody(what string, size, limit int64) error {
+	return fmt.Errorf(
+		"%w: %s is at least %d bytes, over the limit of %d bytes: set --max-state-bytes to raise the limit",
+		ErrTooLarge,
+		what,
+		size,
+		limit,
+	)
+}
+
 const (
 	maxLineageLength = 100
 	maxOutputsBytes  = 16 << 20

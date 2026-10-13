@@ -88,6 +88,6 @@ run measures them:
 - The number of database connections.
 - A Pulumi checkpoint larger than 4 MiB. The server accepts up to 32 MiB by
   default (`--max-checkpoint-bytes`).
-- OpenTofu state of any size. The server accepts up to 512 MiB by default
-  (`--max-state-bytes`).
+- OpenTofu state larger than 32 MiB. The server accepts up to 32 MiB by default
+  (`--max-state-bytes`). A higher value raises the memory of the call that reads the state.
 - More than one namespace, or more units than the run seeds (`-units`).

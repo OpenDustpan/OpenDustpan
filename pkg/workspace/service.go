@@ -21,7 +21,8 @@ import (
 
 const (
 	// DefaultMaxStateBytes bounds one state version unless configured otherwise.
-	DefaultMaxStateBytes = 512 << 20
+	// It is the policy default of ADR 45.
+	DefaultMaxStateBytes = 32 << 20
 	// UploadWindow is how long a state upload capability stays valid.
 	UploadWindow = 10 * time.Minute
 	// DefaultMaxPendingVersions bounds the pending state versions of one
@@ -809,7 +810,7 @@ func (s *Service) DiscardJSONRendering(
 	}
 
 	if int64(len(raw)) > s.maxState {
-		return fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		return errTooLargeBody("JSON rendering", int64(len(raw)), s.maxState)
 	}
 
 	marks, err := ExtractSensitiveMarks(raw)
@@ -1221,7 +1222,7 @@ func (s *Service) openStateBytes(ctx context.Context, id StateVersionID) ([]byte
 	}
 
 	if int64(len(raw)) > s.maxState {
-		return nil, StateVersion{}, fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		return nil, StateVersion{}, errTooLargeBody("state", int64(len(raw)), s.maxState)
 	}
 
 	return raw, sv, nil
@@ -1930,7 +1931,7 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 
 	switch {
 	case counted.n > s.maxState:
-		problem = fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		problem = errTooLargeBody("state", counted.n, s.maxState)
 	case !in.unchecked && sum != in.want:
 		problem = ErrChecksumMismatch
 	default:
