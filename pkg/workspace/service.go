@@ -445,6 +445,8 @@ func (s *Service) ForceUnlock(
 // whatever lock the unit holds. A different lock is refused with ErrLockMismatch,
 // before the fence and in the same revision the release saves, so a lock taken
 // after the caller read the unit is not released.
+//
+//nolint:revive // The lock ID is one argument more than the port takes, and the call names each part.
 func (s *Service) ForceUnlockLock(
 	ctx context.Context, id ID, lockID, by string, allow namespace.Overrides, record func() error,
 ) (Workspace, bool, error) {

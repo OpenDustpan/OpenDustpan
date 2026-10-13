@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,11 @@ const (
 	lockOne    = "lock-one"
 )
 
+// unlockedLock returns the lock of a unit that no principal holds.
+func unlockedLock() workspace.Lock {
+	return workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+}
+
 // fakeUnits is an in-memory workspace service for the handler tests. It keeps
 // the lock of one unit and enforces the lock rules that the handler relies on.
 type fakeUnits struct {
@@ -43,8 +49,19 @@ func newFakeUnits(exists bool) *fakeUnits {
 	on := namespace.Overrides{Forced: true, Unlocked: true}
 
 	return &fakeUnits{
-		ws:     workspace.Workspace{Ref: ref, ID: "ws-1", Overrides: on},
-		exists: exists,
+		mu: sync.Mutex{},
+		ws: workspace.Workspace{
+			Ref:       ref,
+			ID:        "ws-1",
+			CreatedAt: time.Time{},
+			UpdatedAt: time.Time{},
+			Lock:      unlockedLock(),
+			Revision:  0,
+			Overrides: on,
+		},
+		exists:    exists,
+		hideOnce:  false,
+		createErr: nil,
 	}
 }
 
@@ -117,12 +134,14 @@ func (f *fakeUnits) UnlockLock(_ context.Context, _ workspace.ID, lockID, holder
 		return workspace.Workspace{}, workspace.ErrLockedByOther
 	}
 
-	f.ws.Lock = workspace.Lock{}
+	f.ws.Lock = unlockedLock()
 
 	return f.ws, nil
 }
 
 // ForceUnlockLock releases the lock whoever holds it, when lockID is the lock.
+//
+//nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
 func (f *fakeUnits) ForceUnlockLock(
 	_ context.Context, _ workspace.ID, lockID, _ string, _ namespace.Overrides, _ func() error,
 ) (workspace.Workspace, bool, error) {
@@ -136,14 +155,16 @@ func (f *fakeUnits) ForceUnlockLock(
 		return workspace.Workspace{}, false, workspace.ErrLockMismatch
 	}
 
-	f.ws.Lock = workspace.Lock{}
+	f.ws.Lock = unlockedLock()
 
 	return f.ws, false, nil
 }
 
 // Current answers that the unit has no state.
 func (f *fakeUnits) Current(context.Context, workspace.ID) (workspace.StateVersion, error) {
-	return workspace.StateVersion{}, workspace.ErrNoState
+	var none workspace.StateVersion
+
+	return none, workspace.ErrNoState
 }
 
 // Open is never reached: the unit has no state.
@@ -158,18 +179,20 @@ func (f *fakeUnits) WriteState(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	var none workspace.StateVersion
+
 	switch {
 	case in.LockID == "" && f.ws.Lock.Locked():
-		return workspace.StateVersion{}, workspace.ErrLocked
+		return none, workspace.ErrLocked
 	case in.LockID != "" && f.ws.Lock.ID != in.LockID:
-		return workspace.StateVersion{}, workspace.ErrLockMismatch
+		return none, workspace.ErrLockMismatch
 	}
 
 	if _, err := io.Copy(io.Discard, body); err != nil {
-		return workspace.StateVersion{}, fmt.Errorf("drain body: %w", err)
+		return none, fmt.Errorf("drain body: %w", err)
 	}
 
-	return workspace.StateVersion{}, nil
+	return none, nil
 }
 
 // fakeNamespaces answers the switches of the namespace of the unit.
@@ -177,7 +200,13 @@ type fakeNamespaces struct{}
 
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
-	return namespace.Namespace{Overrides: namespace.Overrides{Forced: true, Unlocked: true}}, nil
+	return namespace.Namespace{
+		CreatedAt:       time.Time{},
+		Name:            "acme",
+		HomeRegion:      "",
+		FailoverVersion: 0,
+		Overrides:       namespace.Overrides{Forced: true, Unlocked: true},
+	}, nil
 }
 
 // tokenAuth accepts the admin and the user token, and no other.
@@ -191,7 +220,7 @@ func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Pr
 	case userToken:
 		return identity.Principal{Subject: "bob", DisplayName: "", Admin: false}, nil
 	default:
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{Subject: "", DisplayName: "", Admin: false}, identity.ErrUnauthenticated
 	}
 }
 
@@ -205,12 +234,14 @@ func (userAuthz) Authorize(_ context.Context, p identity.Principal, action ident
 		return nil
 	}
 
-	switch action {
-	case identity.ActionUnitRead, identity.ActionUnitWrite, identity.ActionUnitWriteUnlocked:
+	if slices.Contains(
+		[]identity.Action{identity.ActionUnitRead, identity.ActionUnitWrite, identity.ActionUnitWriteUnlocked},
+		action,
+	) {
 		return nil
-	default:
-		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
+
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
 // newTestHandler returns a handler over units.
@@ -220,7 +251,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
 		Authenticator: tokenAuth{},
 		Authorizer:    userAuthz{},
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:        slog.New(slog.DiscardHandler),
 		Workspaces:    units,
 		Namespaces:    fakeNamespaces{},
 		Audit:         nil,
@@ -234,14 +265,11 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 
 // do sends one request to the handler and returns the response.
 func do(
-	t *testing.T,
 	h http.Handler,
 	method, target, body string,
 	headers map[string]string,
 ) *httptest.ResponseRecorder {
-	t.Helper()
-
-	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), method, target, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -277,11 +305,13 @@ func TestBasicAndBearerAuth(t *testing.T) {
 		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte("ignored:"+adminToken)),
 	}
 
-	if rec := do(t, h, http.MethodGet, unitPath, "", basic); rec.Code != http.StatusNotFound {
+	rec := do(h, http.MethodGet, unitPath, "", basic)
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("basic auth with a unit that has no state: status %d, want 404", rec.Code)
 	}
 
-	if rec := do(t, h, http.MethodGet, unitPath, "", bearer(adminToken)); rec.Code != http.StatusNotFound {
+	rec = do(h, http.MethodGet, unitPath, "", bearer(adminToken))
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("bearer auth with a unit that has no state: status %d, want 404", rec.Code)
 	}
 
@@ -289,7 +319,7 @@ func TestBasicAndBearerAuth(t *testing.T) {
 		"missing token": nil,
 		"wrong token":   bearer("not-a-token-0123456789"),
 	} {
-		rec := do(t, h, http.MethodGet, unitPath, "", headers)
+		rec := do(h, http.MethodGet, unitPath, "", headers)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: status %d, want 401", name, rec.Code)
 		}
@@ -307,18 +337,19 @@ func TestLockedBodies(t *testing.T) {
 
 	h := newTestHandler(t, newFakeUnits(true))
 
-	if rec := do(t, h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("first LOCK: status %d, want 200", rec.Code)
 	}
 
-	rec := do(t, h, "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
+	rec = do(h, "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
 	if rec.Code != http.StatusLocked {
 		t.Fatalf("LOCK of a held unit: status %d, want 423", rec.Code)
 	}
 
 	assertLockBody(t, rec.Body.Bytes(), lockOne, "alice")
 
-	rec = do(t, h, "UNLOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
+	rec = do(h, "UNLOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("UNLOCK with another lock ID: status %d, want 409", rec.Code)
 	}
@@ -353,14 +384,14 @@ func TestCreateOnFirstWriteNeedsManage(t *testing.T) {
 	units := newFakeUnits(false)
 	h := newTestHandler(t, units)
 
-	if rec := do(
-		t,
+	rec := do(
 		h,
 		"LOCK",
 		unitPath,
 		lockBody(lockOne, "bob"),
 		bearer(userToken),
-	); rec.Code != http.StatusForbidden {
+	)
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("LOCK that creates the unit without unit:manage: status %d, want 403", rec.Code)
 	}
 
@@ -368,7 +399,8 @@ func TestCreateOnFirstWriteNeedsManage(t *testing.T) {
 		t.Fatal("the unit was created without unit:manage")
 	}
 
-	if rec := do(t, h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec = do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("LOCK that creates the unit as an admin: status %d, want 200", rec.Code)
 	}
 }
@@ -385,7 +417,7 @@ func TestCreateRaceReadsAgain(t *testing.T) {
 
 	h := newTestHandler(t, units)
 
-	rec := do(t, h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("LOCK after another request created the unit: status %d, want 200", rec.Code)
 	}
@@ -399,30 +431,34 @@ func TestForceUnlockNeedsItsAction(t *testing.T) {
 
 	h := newTestHandler(t, newFakeUnits(true))
 
-	if rec := do(t, h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("LOCK by alice: status %d, want 200", rec.Code)
 	}
 
-	if rec := do(
-		t,
+	rec = do(
 		h,
 		"UNLOCK",
 		unitPath,
 		lockBody(lockOne, "alice"),
 		bearer(userToken),
-	); rec.Code != http.StatusForbidden {
+	)
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("force-unlock by bob without unit:write-forced: status %d, want 403", rec.Code)
 	}
 
-	if rec := do(t, h, "UNLOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec = do(h, "UNLOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("UNLOCK by the holder: status %d, want 200", rec.Code)
 	}
 
-	if rec := do(t, h, "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken)); rec.Code != http.StatusOK {
+	rec = do(h, "LOCK", unitPath, lockBody("lock-two", "bob"), bearer(userToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("LOCK by bob: status %d, want 200", rec.Code)
 	}
 
-	if rec := do(t, h, "UNLOCK", unitPath, lockBody("lock-two", "bob"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec = do(h, "UNLOCK", unitPath, lockBody("lock-two", "bob"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("force-unlock of bob's lock by an admin: status %d, want 200", rec.Code)
 	}
 }
@@ -435,41 +471,46 @@ func TestStatusMapping(t *testing.T) {
 
 	h := newTestHandler(t, newFakeUnits(true))
 
-	if rec := do(t, h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken)); rec.Code != http.StatusOK {
+	rec := do(h, "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("LOCK: status %d, want 200", rec.Code)
 	}
 
 	state := `{"serial":1,"lineage":"l","resources":[]}`
 
-	if rec := do(t, h, http.MethodPost, unitPath, state, bearer(adminToken)); rec.Code != http.StatusLocked {
+	rec = do(h, http.MethodPost, unitPath, state, bearer(adminToken))
+	if rec.Code != http.StatusLocked {
 		t.Fatalf("POST without the lock ID of a locked unit: status %d, want 423", rec.Code)
 	}
 
-	if rec := do(
-		t,
+	rec = do(
 		h,
 		http.MethodPost,
 		unitPath+"?ID=other",
 		state,
 		bearer(adminToken),
-	); rec.Code != http.StatusConflict {
+	)
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("POST with another lock ID: status %d, want 409", rec.Code)
 	}
 
-	if rec := do(t, h, http.MethodPost, unitPath+"?ID="+lockOne, state, bearer(adminToken)); rec.Code != http.StatusOK {
+	rec = do(h, http.MethodPost, unitPath+"?ID="+lockOne, state, bearer(adminToken))
+	if rec.Code != http.StatusOK {
 		t.Fatalf("POST with the current lock ID: status %d, want 200", rec.Code)
 	}
 
-	if rec := do(t, h, http.MethodPost, unitPath+"?ID="+lockOne, state, map[string]string{
+	rec = do(h, http.MethodPost, unitPath+"?ID="+lockOne, state, map[string]string{
 		"Content-MD5": "!!not-base64!!",
-	}); rec.Code != http.StatusUnauthorized {
+	})
+	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("POST without a credential: status %d, want 401", rec.Code)
 	}
 
-	if rec := do(t, h, http.MethodPost, unitPath+"?ID="+lockOne, state, map[string]string{
+	rec = do(h, http.MethodPost, unitPath+"?ID="+lockOne, state, map[string]string{
 		"Authorization": "Bearer " + adminToken,
 		"Content-MD5":   "!!not-base64!!",
-	}); rec.Code != http.StatusBadRequest {
+	})
+	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("POST with a malformed Content-MD5: status %d, want 400", rec.Code)
 	}
 }

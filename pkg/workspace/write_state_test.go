@@ -465,8 +465,9 @@ func TestRefusedWritesDoNotFillThePendingCap(t *testing.T) {
 		t.Fatalf("dropped body: err = %v, want the body error", err)
 	}
 
-	if _, err := f.svc.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil),
-		strings.NewReader(streamDoc("lin-p", 1))); err != nil {
+	_, err = f.svc.WriteState(ctx, f.ws.ID, in, streamAuthority(noOverrides(), nil),
+		strings.NewReader(streamDoc("lin-p", 1)))
+	if err != nil {
 		t.Fatalf("valid write after eleven refusals: %v", err)
 	}
 

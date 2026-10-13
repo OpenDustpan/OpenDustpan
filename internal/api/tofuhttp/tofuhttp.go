@@ -253,34 +253,57 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 
 // classify maps an error to its status and a message that is safe to show.
 func classify(err error) (int, string) {
+	if status, message, ok := classifyAccess(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyState(err); ok {
+		return status, message
+	}
+
+	return http.StatusInternalServerError, "internal error"
+}
+
+// classifyAccess maps the errors of the sign-in, the names and the lock to a
+// status. ok is false for any other error.
+func classifyAccess(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return http.StatusUnauthorized, "unauthenticated", true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "permission denied"
+		return http.StatusForbidden, "permission denied", true
 	case errors.Is(err, workspace.ErrNotFound), errors.Is(err, workspace.ErrNoState),
 		errors.Is(err, namespace.ErrNotFound):
-		return http.StatusNotFound, "not found"
+		return http.StatusNotFound, "not found", true
 	case errors.Is(err, workspace.ErrInvalidName), errors.Is(err, namespace.ErrInvalidName),
 		errors.Is(err, workspace.ErrInvalidLockID):
-		return http.StatusBadRequest, "invalid request"
+		return http.StatusBadRequest, "invalid request", true
 	case errors.Is(err, workspace.ErrLocked), errors.Is(err, workspace.ErrLockedByOther):
-		return http.StatusLocked, "workspace is locked"
+		return http.StatusLocked, "workspace is locked", true
 	case errors.Is(err, workspace.ErrAlreadyExists):
-		return http.StatusConflict, "workspace already exists"
+		return http.StatusConflict, "workspace already exists", true
+	default:
+		return 0, "", false
+	}
+}
+
+// classifyState maps the errors of a state write to a status. ok is false for
+// any other error.
+func classifyState(err error) (int, string, bool) {
+	switch {
 	case errors.Is(err, workspace.ErrConcurrentModification), errors.Is(err, workspace.ErrLockMismatch),
 		errors.Is(err, workspace.ErrStaleSerial), errors.Is(err, workspace.ErrLineageMismatch):
-		return http.StatusConflict, "state conflicts with the current state or lock"
+		return http.StatusConflict, "state conflicts with the current state or lock", true
 	case errors.Is(err, workspace.ErrNotLocked), errors.Is(err, workspace.ErrOverrideRefused),
 		errors.Is(err, workspace.ErrClientEncrypted):
-		return http.StatusForbidden, "write refused: an override is off or not granted"
+		return http.StatusForbidden, "write refused: an override is off or not granted", true
 	case errors.Is(err, workspace.ErrChecksumMismatch), errors.Is(err, workspace.ErrInvalidState):
-		return http.StatusBadRequest, "invalid state"
+		return http.StatusBadRequest, "invalid state", true
 	case errors.Is(err, workspace.ErrTooLarge):
-		return http.StatusRequestEntityTooLarge, "state is too large"
+		return http.StatusRequestEntityTooLarge, "state is too large", true
 	case errors.Is(err, workspace.ErrTooManyPending):
-		return http.StatusTooManyRequests, "too many pending state versions"
+		return http.StatusTooManyRequests, "too many pending state versions", true
 	default:
-		return http.StatusInternalServerError, "internal error"
+		return 0, "", false
 	}
 }

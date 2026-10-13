@@ -18,6 +18,9 @@ const maxScanDepth = 512
 // minCaptureBytes is the first size of a kept value's buffer.
 const minCaptureBytes = 4 << 10
 
+// controlByteLimit is the first byte that JSON allows unescaped in a string.
+const controlByteLimit = 0x20
+
 // errCaptureFull reports that a kept value grew past its limit. The caller maps
 // it to the error of the value it keeps.
 var errCaptureFull = errors.New("kept value is over its limit")
@@ -47,7 +50,7 @@ func (c *capture) add(b byte) error {
 	}
 
 	if len(c.buf) == cap(c.buf) {
-		grown := make([]byte, len(c.buf), min(max(2*cap(c.buf), minCaptureBytes), c.limit))
+		grown := make([]byte, len(c.buf), min(max(cap(c.buf)+cap(c.buf), minCaptureBytes), c.limit))
 		copy(grown, c.buf)
 		c.buf = grown
 	}
@@ -292,8 +295,9 @@ func (s *jsonScanner) str() error {
 			if err := s.escape(); err != nil {
 				return err
 			}
-		case b < 0x20:
+		case b < controlByteLimit:
 			return syntaxError("control byte in a string")
+		default:
 		}
 	}
 }
@@ -328,48 +332,61 @@ func (s *jsonScanner) escape() error {
 
 // number consumes one JSON number, with the grammar of RFC 8259.
 func (s *jsonScanner) number() error {
+	if err := s.integer(); err != nil {
+		return err
+	}
+
+	if err := s.fraction(); err != nil {
+		return err
+	}
+
+	return s.exponent()
+}
+
+// integer consumes the sign and the integer part of a number.
+func (s *jsonScanner) integer() error {
 	b, err := s.peek()
 	if err != nil {
 		return err
 	}
 
 	if b == '-' {
-		if _, err := s.read(); err != nil {
-			return err
+		if _, readErr := s.read(); readErr != nil {
+			return readErr
 		}
 	}
 
-	b, err = s.read()
+	first, err := s.read()
 	if err != nil {
 		return err
 	}
 
 	switch {
-	case b == '0':
-	case b >= '1' && b <= '9':
-		if err := s.digits(0); err != nil {
-			return err
-		}
+	case first == '0':
+		return nil
+	case first >= '1' && first <= '9':
+		return s.digits(0)
 	default:
 		return syntaxError("bad number")
 	}
+}
 
-	b, err = s.peek()
+// fraction consumes an optional fraction of a number.
+func (s *jsonScanner) fraction() error {
+	b, err := s.peek()
 	if err != nil {
 		return err
 	}
 
-	if b == '.' {
-		if _, err := s.read(); err != nil {
-			return err
-		}
-
-		if err := s.digits(1); err != nil {
-			return err
-		}
+	if b != '.' {
+		return nil
 	}
 
-	return s.exponent()
+	if _, readErr := s.read(); readErr != nil {
+		return readErr
+	}
+
+	return s.digits(1)
 }
 
 // exponent consumes an optional exponent of a number.
@@ -383,8 +400,8 @@ func (s *jsonScanner) exponent() error {
 		return nil
 	}
 
-	if _, err := s.read(); err != nil {
-		return err
+	if _, readErr := s.read(); readErr != nil {
+		return readErr
 	}
 
 	b, err = s.peek()
@@ -393,16 +410,16 @@ func (s *jsonScanner) exponent() error {
 	}
 
 	if b == '+' || b == '-' {
-		if _, err := s.read(); err != nil {
-			return err
+		if _, signErr := s.read(); signErr != nil {
+			return signErr
 		}
 	}
 
 	return s.digits(1)
 }
 
-// digits consumes at least min decimal digits, and then as many as follow.
-func (s *jsonScanner) digits(min int) error {
+// digits consumes the decimal digits that follow, and checks that there are at least `least` of them.
+func (s *jsonScanner) digits(least int) error {
 	for i := 0; ; i++ {
 		b, err := s.peek()
 		if err != nil {
@@ -410,7 +427,7 @@ func (s *jsonScanner) digits(min int) error {
 		}
 
 		if b < '0' || b > '9' {
-			if i < min {
+			if i < least {
 				return syntaxError("missing digits in a number")
 			}
 

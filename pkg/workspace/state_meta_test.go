@@ -172,6 +172,8 @@ func totalAllocated() uint64 {
 // refused once the limit is reached, so the reader allocates about the limit
 // and not the size of the document. The test runs alone, because it reads the
 // process-wide allocation count.
+//
+//nolint:paralleltest // It reads the process-wide allocation count, so it runs with no other test.
 func TestReadStateMetaBoundsAllocations(t *testing.T) {
 	const size = 64 << 20
 
@@ -194,22 +196,25 @@ func TestReadStateMetaBoundsAllocations(t *testing.T) {
 		}
 	})
 
-	t.Run("an outputs value over the limit", func(t *testing.T) {
-		src := &fillReader{prefix: `{"outputs":"`, n: size, suffix: `","serial":1,"lineage":"l"}`}
+	t.Run(
+		"an outputs value over the limit",
+		func(t *testing.T) {
+			src := &fillReader{prefix: `{"outputs":"`, n: size, suffix: `","serial":1,"lineage":"l"}`}
 
-		before := totalAllocated()
+			before := totalAllocated()
 
-		_, err := readStateMeta(src)
-		if !errors.Is(err, ErrTooLarge) {
-			t.Fatalf("outputs of 64 MiB: err = %v, want ErrTooLarge", err)
-		}
+			_, err := readStateMeta(src)
+			if !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("outputs of 64 MiB: err = %v, want ErrTooLarge", err)
+			}
 
-		if grew := totalAllocated() - before; grew > 2*maxOutputsBytes+(4<<20) {
-			t.Fatalf(
-				"refusing 64 MiB of outputs allocated %d bytes, want about the %d-byte limit",
-				grew,
-				maxOutputsBytes,
-			)
-		}
-	})
+			if grew := totalAllocated() - before; grew > 2*maxOutputsBytes+(4<<20) {
+				t.Fatalf(
+					"refusing 64 MiB of outputs allocated %d bytes, want about the %d-byte limit",
+					grew,
+					maxOutputsBytes,
+				)
+			}
+		},
+	)
 }

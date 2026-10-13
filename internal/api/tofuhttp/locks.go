@@ -151,15 +151,12 @@ func (h *Handler) writeHeld(ctx context.Context, w http.ResponseWriter, c call, 
 func (h *Handler) workspaceOf(ctx context.Context, c call) (workspace.Workspace, error) {
 	ws, err := h.ws.Get(ctx, c.ref)
 	if !errors.Is(err, workspace.ErrNotFound) {
-		return ws, err //nolint:wrapcheck // The caller classifies the error; the port error is already wrapped.
+		return ws, err
 	}
 
 	ws, err = h.createWorkspace(ctx, c)
 	if errors.Is(err, workspace.ErrAlreadyExists) {
-		return h.ws.Get(
-			ctx,
-			c.ref,
-		) //nolint:wrapcheck // The caller classifies the error; the port error is already wrapped.
+		return h.ws.Get(ctx, c.ref)
 	}
 
 	return ws, err

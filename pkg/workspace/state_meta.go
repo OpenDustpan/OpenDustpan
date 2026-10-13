@@ -84,13 +84,13 @@ func (s *jsonScanner) topObject(meta *streamedMeta) error {
 			return err
 		}
 
-		if err := s.topMember(name, meta); err != nil {
-			return err
+		if topErr := s.topMember(name, meta); topErr != nil {
+			return topErr
 		}
 
-		done, err := s.separator('}')
-		if err != nil || done {
-			return err
+		done, sepErr := s.separator('}')
+		if sepErr != nil || done {
+			return sepErr
 		}
 	}
 }
