@@ -159,6 +159,8 @@ type settings struct {
 	disablePulumiJournaling bool
 	backupTarget            blob.Store
 	backupTargetName        string
+	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
+	auditSinks []audit.ShipSink
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
@@ -416,6 +418,7 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	shipper         *audit.Shipper
 	beforeServe     func(ctx context.Context) error
 }
 
@@ -431,48 +434,9 @@ type services struct {
 	tokens *accesstoken.Service
 }
 
-// NewServer validates the options and wires the server together.
-func NewServer(opts ...Option) (*Server, error) {
-	cfg := defaultSettings()
-
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	base, err := checkSettings(&cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
-		return nil, authzErr
-	}
-
-	svc, err := newServices(&cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	svc.tokens, err = newTokenService(&cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	backups, err := newBackupService(&cfg, svc)
-	if err != nil {
-		return nil, err
-	}
-
-	if tokensErr := wireTokens(&cfg, svc.tokens); tokensErr != nil {
-		return nil, tokensErr
-	}
-
-	return assemble(&cfg, base, svc, backups)
-}
-
-// defaultSettings returns the settings of a server before its options.
-func defaultSettings() settings {
-	return settings{
+// defaultSettings answers the settings of a server before its options.
+func defaultSettings() *settings {
+	return &settings{
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -508,7 +472,47 @@ func defaultSettings() settings {
 		backupTargetName:        "",
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		auditSinks:              nil,
 	}
+}
+
+// NewServer validates the options and wires the server together.
+func NewServer(opts ...Option) (*Server, error) {
+	cfg := defaultSettings()
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	base, err := checkSettings(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if authzErr := setDefaultAuthorizer(cfg); authzErr != nil {
+		return nil, authzErr
+	}
+
+	svc, err := newServices(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.tokens, err = newTokenService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	backups, err := newBackupService(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
+	if tokensErr := wireTokens(cfg, svc.tokens); tokensErr != nil {
+		return nil, tokensErr
+	}
+
+	return assemble(cfg, base, svc, backups)
 }
 
 // wireTokens puts the stored access tokens behind the configured
@@ -557,6 +561,11 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		restoreRegistry = reg
 	}
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -575,6 +584,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 	}, nil
 }
@@ -969,6 +979,16 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
+
+	// The shipper stops when Run returns, also after a serve error, and Run
+	// returns only after it stopped.
+	shipCtx, stopShipper := context.WithCancel(ctx)
+	waitShipper := s.startAuditShipper(shipCtx)
+
+	defer func() {
+		stopShipper()
+		waitShipper()
+	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
 }

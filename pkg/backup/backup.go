@@ -76,6 +76,7 @@ var Tables = []string{
 	"access_tokens",
 	"roles",
 	"grants",
+	"audit_sink_cursors",
 	"backups",
 	"restores",
 	"installation",

@@ -349,6 +349,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "audit_sink_cursors",
+			columns: []string{
+				"sink",
+				backupColNamespace,
+				backupColSequence,
+				backupColUpdatedAtMs,
+			},
+		},
+		{
 			table: "backups",
 			columns: []string{
 				"id",
