@@ -79,7 +79,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
-		SourceIP:   sourceIP(r),
+		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       audit.KindChange,
