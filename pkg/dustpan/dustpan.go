@@ -1425,6 +1425,11 @@ func newRestoreService(
 		return nil, errRestoreNeedsRegistry
 	}
 
+	chain, err := newChainDeps(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:        live,
 		Registry:    registry,
@@ -1434,7 +1439,7 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  sealAfterRestore(deps),
+		AfterApply:  afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, cfg.logger)),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -1443,6 +1448,20 @@ func newRestoreService(
 	}
 
 	return service, nil
+}
+
+// afterRestore returns the after-apply step of a restore that runs steps in
+// order and stops at the first error.
+func afterRestore(steps ...func(ctx context.Context) error) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		for _, step := range steps {
+			if err := step(ctx); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
 }
 
 // sealAfterRestore returns the after-apply step of a restore: it seals the

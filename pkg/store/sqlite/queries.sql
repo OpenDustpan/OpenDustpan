@@ -895,15 +895,25 @@ WHERE id = sqlc.arg('id')
   AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
 
 -- name: GetAuditChainState :one
--- The audit chain state that the installation recorded last (ADR 60
--- decision 19): '', 'on' or 'off'. A missing row reads as no record.
-SELECT audit_chain FROM installation WHERE id = 1;
+-- The audit chain state that this installation recorded last (ADR 60
+-- decision 19), and whether its log ever held a chained entry. No row
+-- means no record.
+SELECT state, ever_chained FROM audit_chain_state WHERE id = 1;
 
 -- name: SetAuditChainState :exec
--- Records the audit chain state, creating the row when it is missing.
-INSERT INTO installation (id, audit_chain)
-VALUES (1, ?)
-ON CONFLICT (id) DO UPDATE SET audit_chain = excluded.audit_chain;
+-- Records the audit chain state of this installation.
+INSERT INTO audit_chain_state (id, state, ever_chained)
+VALUES (1, ?, ?)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state, ever_chained = excluded.ever_chained;
+
+-- name: ListAuditChainOffTimes :many
+-- The times of the chained entries of the scope @server that turned the
+-- audit chain off, oldest first. The chain check accepts an entry without
+-- a hash after a chained entry only when one of these comes between them.
+SELECT at_ms FROM audit_entries
+WHERE namespace = '@server' AND action = 'server:set-audit-chain'
+  AND value_path = '/audit/chain/off' AND hash <> ''
+ORDER BY sequence ASC;
 
 -- name: HasChainedAuditEntries :one
 -- Whether any scope holds an audit entry with a hash.

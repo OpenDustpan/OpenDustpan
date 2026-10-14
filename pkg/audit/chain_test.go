@@ -13,23 +13,29 @@ import (
 )
 
 // fakeSwitch is an in-memory audit.ChainSwitch and audit.ServerStore. It
-// records the chain state each server entry was appended under.
+// records the chain state each server entry was appended under, and counts
+// the reads of the whole log.
 type fakeSwitch struct {
 	appended []audit.Entry
 	chainAt  []bool
-	state    audit.ChainState
+	rec      audit.ChainRecord
+	scans    int
 	chained  bool
 	on       bool
 }
 
 func (f *fakeSwitch) SetChain(on bool) { f.on = on }
 
-func (f *fakeSwitch) HasChainedEntries(context.Context) (bool, error) { return f.chained, nil }
+func (f *fakeSwitch) HasChainedEntries(context.Context) (bool, error) {
+	f.scans++
 
-func (f *fakeSwitch) ChainState(context.Context) (audit.ChainState, error) { return f.state, nil }
+	return f.chained, nil
+}
 
-func (f *fakeSwitch) SaveChainState(_ context.Context, s audit.ChainState) error {
-	f.state = s
+func (f *fakeSwitch) ChainRecord(context.Context) (audit.ChainRecord, error) { return f.rec, nil }
+
+func (f *fakeSwitch) SaveChainRecord(_ context.Context, rec audit.ChainRecord) error {
+	f.rec = rec
 
 	return nil
 }
@@ -103,7 +109,10 @@ func TestResolveChain(t *testing.T) {
 func runResolveCase(t *testing.T, tc resolveCase) {
 	t.Helper()
 
-	f := &fakeSwitch{appended: nil, chainAt: nil, state: tc.recorded, chained: tc.chained, on: true}
+	// A record holds whether the log was ever chained; without a record the
+	// resolve reads the log.
+	rec := audit.ChainRecord{State: tc.recorded, EverChained: tc.recorded != audit.ChainUnknown && tc.chained}
+	f := &fakeSwitch{appended: nil, chainAt: nil, rec: rec, scans: 0, chained: tc.chained, on: true}
 
 	var logs bytes.Buffer
 
@@ -123,14 +132,35 @@ func runResolveCase(t *testing.T, tc resolveCase) {
 		wantState = audit.ChainStateOn
 	}
 
-	if f.state != wantState {
-		t.Fatalf("recorded state: got %q, want %q", f.state, wantState)
+	if f.rec.State != wantState {
+		t.Fatalf("recorded state: got %q, want %q", f.rec.State, wantState)
 	}
+
+	checkRecordReads(t, f, tc)
 
 	checkChangeEntry(t, f, tc.wantEntry)
 
 	if warned := strings.Contains(logs.String(), "audit chain is off"); warned != tc.wantWarn {
 		t.Fatalf("warning: got %v, want %v (%s)", warned, tc.wantWarn, logs.String())
+	}
+}
+
+// checkRecordReads proves that only a resolve without a record read the
+// whole log, and that the record notes a log that was ever chained.
+func checkRecordReads(t *testing.T, f *fakeSwitch, tc resolveCase) {
+	t.Helper()
+
+	wantScans := 0
+	if tc.recorded == audit.ChainUnknown {
+		wantScans = 1
+	}
+
+	if f.scans != wantScans {
+		t.Fatalf("reads of the whole log: got %d, want %d", f.scans, wantScans)
+	}
+
+	if wantEver := tc.chained || tc.wantOn || tc.wantEntry != ""; f.rec.EverChained != wantEver {
+		t.Fatalf("ever chained: got %v, want %v", f.rec.EverChained, wantEver)
 	}
 }
 
@@ -159,6 +189,65 @@ func checkChangeEntry(t *testing.T, f *fakeSwitch, want string) {
 
 	if !f.chainAt[0] {
 		t.Fatal("the change entry was appended with the chain off")
+	}
+}
+
+func TestRecheckChainAfterARestore(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		rec      audit.ChainRecord
+		chained  bool
+		wantEver bool
+		wantWarn bool
+	}{
+		{
+			name:     "a chained log on a chain that is off warns",
+			rec:      audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
+			chained:  true,
+			wantEver: true,
+			wantWarn: true,
+		},
+		{
+			name:     "a chained log on a chain that is on is quiet",
+			rec:      audit.ChainRecord{State: audit.ChainStateOn, EverChained: false},
+			chained:  true,
+			wantEver: true,
+			wantWarn: false,
+		},
+		{
+			name:     "an unchained log changes nothing",
+			rec:      audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
+			chained:  false,
+			wantEver: false,
+			wantWarn: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := &fakeSwitch{appended: nil, chainAt: nil, rec: tc.rec, scans: 0, chained: tc.chained, on: true}
+
+			var logs bytes.Buffer
+
+			ports := audit.ChainPorts{Switch: f, Server: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+
+			if err := audit.RecheckChain(t.Context(), ports); err != nil {
+				t.Fatalf("recheck: %v", err)
+			}
+
+			if f.rec.State != tc.rec.State || f.rec.EverChained != tc.wantEver || len(f.appended) != 0 {
+				t.Fatalf("record %+v with %d entries, want state %q, ever %v and no entry",
+					f.rec, len(f.appended), tc.rec.State, tc.wantEver)
+			}
+
+			if warned := strings.Contains(logs.String(), "audit chain is off"); warned != tc.wantWarn {
+				t.Fatalf("warning: got %v, want %v", warned, tc.wantWarn)
+			}
+		})
 	}
 }
 
@@ -198,7 +287,10 @@ func TestChainWalk(t *testing.T) {
 	two := unchainedAt(2)
 	three := chainedAt(3, "")
 
-	walk := audit.NewChainWalk()
+	// The chain went off between entries 1 and 2.
+	offAt := []time.Time{walkEntry(1).At}
+
+	walk := audit.NewChainWalk(offAt)
 	for _, e := range []audit.Entry{one, two, three, chainedAt(4, three.Hash)} {
 		if !walk.Step(e) {
 			t.Fatalf("entry %d does not match", e.Sequence)
@@ -223,7 +315,7 @@ func TestChainWalk(t *testing.T) {
 	}
 
 	for _, tc := range bad {
-		w := audit.NewChainWalk()
+		w := audit.NewChainWalk(offAt)
 		ok := true
 
 		for _, e := range tc.entries {
@@ -236,6 +328,19 @@ func TestChainWalk(t *testing.T) {
 		if ok {
 			t.Fatalf("%s: the walk accepts it", tc.name)
 		}
+	}
+
+	// Without the change entry, an entry without a hash after a chained
+	// entry fails: someone removed its hash.
+	stripped := audit.NewChainWalk(nil)
+	if !stripped.Step(one) || stripped.Step(two) {
+		t.Fatal("the walk accepts an unchained entry after a chained one with no change entry")
+	}
+
+	// A log that starts with the chain off needs no change entry.
+	fresh := audit.NewChainWalk(nil)
+	if !fresh.Step(unchainedAt(1)) {
+		t.Fatal("the walk refuses an unchained first entry")
 	}
 }
 

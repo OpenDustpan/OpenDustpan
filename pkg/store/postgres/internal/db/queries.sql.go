@@ -1270,16 +1270,22 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 }
 
 const getAuditChainState = `-- name: GetAuditChainState :one
-SELECT audit_chain FROM installation WHERE id = 1
+SELECT state, ever_chained FROM audit_chain_state WHERE id = 1
 `
 
-// The audit chain state that the installation recorded last (ADR 60
-// decision 19): ”, 'on' or 'off'. A missing row reads as no record.
-func (q *Queries) GetAuditChainState(ctx context.Context) (string, error) {
+type GetAuditChainStateRow struct {
+	State       string
+	EverChained bool
+}
+
+// The audit chain state that this installation recorded last (ADR 60
+// decision 19), and whether its log ever held a chained entry. No row
+// means no record.
+func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
 	row := q.db.QueryRow(ctx, getAuditChainState)
-	var audit_chain string
-	err := row.Scan(&audit_chain)
-	return audit_chain, err
+	var i GetAuditChainStateRow
+	err := row.Scan(&i.State, &i.EverChained)
+	return i, err
 }
 
 const getBackup = `-- name: GetBackup :one
@@ -2448,6 +2454,36 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditChainOffTimes = `-- name: ListAuditChainOffTimes :many
+SELECT at_ms FROM audit_entries
+WHERE namespace = '@server' AND action = 'server:set-audit-chain'
+  AND value_path = '/audit/chain/off' AND hash <> ''
+ORDER BY sequence ASC
+`
+
+// The times of the chained entries of the scope @server that turned the
+// audit chain off, oldest first. The chain check accepts an entry without
+// a hash after a chained entry only when one of these comes between them.
+func (q *Queries) ListAuditChainOffTimes(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listAuditChainOffTimes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var at_ms int64
+		if err := rows.Scan(&at_ms); err != nil {
+			return nil, err
+		}
+		items = append(items, at_ms)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -4030,14 +4066,19 @@ func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionPara
 }
 
 const setAuditChainState = `-- name: SetAuditChainState :exec
-INSERT INTO installation (id, audit_chain)
-VALUES (1, $1)
-ON CONFLICT (id) DO UPDATE SET audit_chain = EXCLUDED.audit_chain
+INSERT INTO audit_chain_state (id, state, ever_chained)
+VALUES (1, $1, $2)
+ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, ever_chained = EXCLUDED.ever_chained
 `
 
-// Records the audit chain state, creating the row when it is missing.
-func (q *Queries) SetAuditChainState(ctx context.Context, auditChain string) error {
-	_, err := q.db.Exec(ctx, setAuditChainState, auditChain)
+type SetAuditChainStateParams struct {
+	State       string
+	EverChained bool
+}
+
+// Records the audit chain state of this installation.
+func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainStateParams) error {
+	_, err := q.db.Exec(ctx, setAuditChainState, arg.State, arg.EverChained)
 	return err
 }
 

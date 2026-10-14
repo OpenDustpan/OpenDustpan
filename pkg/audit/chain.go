@@ -15,7 +15,11 @@ import (
 // and the hash of the previous entry of its scope. When it is off, an entry
 // holds an empty previous hash and an empty hash. The check reads each run
 // of chained entries on its own: an entry without a hash ends a run, and
-// the next chained entry starts a new run with an empty previous hash.
+// the next chained entry starts a new run with an empty previous hash. An
+// entry without a hash after a chained entry of its scope is valid only
+// when a chained entry of ServerScope that turned the chain off comes
+// between the two in time. So a hash that someone removes from a chained
+// log fails the check.
 //
 // A new installation starts with the chain off. An installation that
 // already holds chained entries keeps the chain on until an administrator
@@ -40,6 +44,14 @@ const (
 // ChainState is the state of the chain that the installation recorded
 // last. ChainUnknown means the installation never recorded one.
 type ChainState string
+
+// ChainRecord is what the installation recorded about its chain: the state
+// and whether its log ever held a chained entry. A backup does not carry
+// it: a restore keeps the record of the target installation.
+type ChainRecord struct {
+	State       ChainState
+	EverChained bool
+}
 
 // Chain states.
 const (
@@ -78,13 +90,15 @@ type ChainSwitch interface {
 	// chain until the server sets it.
 	SetChain(on bool)
 	// HasChainedEntries reports whether any scope holds an entry with a
-	// hash.
+	// hash. It reads the whole log, so the server calls it only without a
+	// record and after a restore.
 	HasChainedEntries(ctx context.Context) (bool, error)
-	// ChainState answers the state the installation recorded last, or
-	// ChainUnknown.
-	ChainState(ctx context.Context) (ChainState, error)
-	// SaveChainState records state for the installation.
-	SaveChainState(ctx context.Context, state ChainState) error
+	// ChainRecord answers what the installation recorded about its chain.
+	// Without a record its State is ChainUnknown.
+	ChainRecord(ctx context.Context) (ChainRecord, error)
+	// SaveChainRecord records rec for the installation. rec.State is
+	// ChainStateOn or ChainStateOff.
+	SaveChainRecord(ctx context.Context, rec ChainRecord) error
 }
 
 // ChainPorts holds what ResolveChain needs: the switch, the server scope
@@ -110,33 +124,83 @@ type ChainPorts struct {
 func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, now time.Time) (bool, error) {
 	sw := ports.Switch
 
-	chained, err := sw.HasChainedEntries(ctx)
-	if err != nil {
-		return false, fmt.Errorf("read audit chain: %w", err)
-	}
-
-	recorded, err := sw.ChainState(ctx)
+	rec, err := sw.ChainRecord(ctx)
 	if err != nil {
 		return false, fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	before := recorded == ChainStateOn || (recorded == ChainUnknown && chained)
+	// Only an installation without a record reads the whole log: the record
+	// keeps the answer after that.
+	chained := rec.EverChained
+	if rec.State == ChainUnknown {
+		chained, err = sw.HasChainedEntries(ctx)
+		if err != nil {
+			return false, fmt.Errorf("read audit chain: %w", err)
+		}
+	}
+
+	before := rec.State == ChainStateOn || (rec.State == ChainUnknown && chained)
 
 	on, err := decideChain(setting, before)
 	if err != nil {
 		return false, err
 	}
 
-	if err := applyChain(ctx, sw, ports.Server, chainChange{before: before, after: on, at: now}); err != nil {
+	change := chainChange{at: now, before: before, after: on, everChained: chained}
+	if err := applyChain(ctx, sw, ports.Server, change); err != nil {
 		return false, err
 	}
 
-	if !on && chained && ports.Logger != nil {
-		ports.Logger.WarnContext(ctx, "the audit chain is off and the audit log holds chained entries: "+
-			"new entries carry no hash; set --audit-chain=on to turn the chain on again")
+	if !on && chained {
+		warnChainOff(ctx, ports.Logger)
 	}
 
 	return on, nil
+}
+
+// RecheckChain reads the chain record again after a restore. The restore
+// keeps the record of the target installation and never changes its state.
+// When the restored log holds chained entries, the record notes it, and
+// while the chain is off the server logs the warning of a start.
+func RecheckChain(ctx context.Context, ports ChainPorts) error {
+	sw := ports.Switch
+
+	rec, err := sw.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	chained, err := sw.HasChainedEntries(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain: %w", err)
+	}
+
+	if !chained {
+		return nil
+	}
+
+	if !rec.EverChained && rec.State != ChainUnknown {
+		rec.EverChained = true
+
+		if err := sw.SaveChainRecord(ctx, rec); err != nil {
+			return fmt.Errorf("save audit chain state: %w", err)
+		}
+	}
+
+	if rec.State == ChainStateOff {
+		warnChainOff(ctx, ports.Logger)
+	}
+
+	return nil
+}
+
+// warnChainOff logs the warning for a chain that is off while the log
+// holds chained entries.
+func warnChainOff(ctx context.Context, logger *slog.Logger) {
+	if logger != nil {
+		logger.WarnContext(ctx, "the audit chain is off and the audit log holds chained entries: "+
+			"new entries carry no hash; set --audit-chain=on to turn the chain on again")
+	}
 }
 
 // decideChain answers the chain after a start: on and off decide alone,
@@ -154,11 +218,13 @@ func decideChain(setting ChainSetting, before bool) (bool, error) {
 	}
 }
 
-// chainChange is the state of the chain before and after a start.
+// chainChange is the state of the chain before and after a start, and
+// whether the log held chained entries before it.
 type chainChange struct {
-	at     time.Time
-	before bool
-	after  bool
+	at          time.Time
+	before      bool
+	after       bool
+	everChained bool
 }
 
 // applyChain sets the chain, appends the change entry when the state
@@ -180,7 +246,11 @@ func applyChain(ctx context.Context, sw ChainSwitch, server ServerStore, c chain
 
 	sw.SetChain(c.after)
 
-	if err := sw.SaveChainState(ctx, state); err != nil {
+	// The change entry is chained, and a chain that is on chains the next
+	// entry, so either makes the log hold a chained entry.
+	rec := ChainRecord{State: state, EverChained: c.everChained || c.after || c.before != c.after}
+
+	if err := sw.SaveChainRecord(ctx, rec); err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)
 	}
 
@@ -244,20 +314,34 @@ func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int
 // stores use it in Check, so both dialects read the chain the same way.
 // The zero value is not ready: use NewChainWalk.
 type ChainWalk struct {
-	prevHash  string
-	next      int64
-	unchained int64
+	offTimes    []time.Time
+	lastChained time.Time
+	prevHash    string
+	next        int64
+	unchained   int64
+	seenChained bool
 }
 
-// NewChainWalk returns a walk that expects sequence 1 first.
-func NewChainWalk() *ChainWalk {
-	return &ChainWalk{prevHash: "", next: 1, unchained: 0}
+// NewChainWalk returns a walk that expects sequence 1 first. offTimes holds
+// the times of the chained entries of ServerScope that turned the chain off
+// (ActionSetChain with the value path /audit/chain/off).
+func NewChainWalk(offTimes []time.Time) *ChainWalk {
+	return &ChainWalk{
+		offTimes:    offTimes,
+		lastChained: time.Time{},
+		prevHash:    "",
+		next:        1,
+		unchained:   0,
+		seenChained: false,
+	}
 }
 
 // Step checks e and answers false at the first entry that does not match:
 // a gap in the sequence, a broken link, or a hash that does not match the
 // fields. An entry without a hash must have no previous hash. It ends the
-// run, so the next chained entry links to an empty previous hash.
+// run, so the next chained entry links to an empty previous hash. After a
+// chained entry of the scope, an entry without a hash matches only when the
+// chain was turned off between the two.
 func (w *ChainWalk) Step(e Entry) bool {
 	if e.Sequence != w.next {
 		return false
@@ -266,7 +350,7 @@ func (w *ChainWalk) Step(e Entry) bool {
 	w.next++
 
 	if e.Hash == "" {
-		if e.PrevHash != "" {
+		if e.PrevHash != "" || (w.seenChained && !w.offBetween(w.lastChained, e.At)) {
 			return false
 		}
 
@@ -281,6 +365,8 @@ func (w *ChainWalk) Step(e Entry) bool {
 	}
 
 	w.prevHash = e.Hash
+	w.lastChained = e.At
+	w.seenChained = true
 
 	return true
 }
@@ -288,4 +374,19 @@ func (w *ChainWalk) Step(e Entry) bool {
 // Unchained answers the count of entries without a hash so far.
 func (w *ChainWalk) Unchained() int64 {
 	return w.unchained
+}
+
+// offBetween reports whether the chain was turned off at a time in the
+// range from start to end, at millisecond precision, as entries store
+// their time.
+func (w *ChainWalk) offBetween(start, end time.Time) bool {
+	startMs, endMs := start.UnixMilli(), end.UnixMilli()
+
+	for _, t := range w.offTimes {
+		if ms := t.UnixMilli(); ms >= startMs && ms <= endMs {
+			return true
+		}
+	}
+
+	return false
 }

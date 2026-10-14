@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -212,7 +213,14 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staged := s.stagingPath
 
-	if err := fenceStagedFile(ctx, staged); err != nil {
+	// The chain state is bookkeeping of this installation: the staged file
+	// takes the record of the live database (RFC 22).
+	chain, err := s.ChainRecord(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := fenceStagedFile(ctx, staged, chain); err != nil {
 		return err
 	}
 
@@ -226,10 +234,12 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 }
 
 // fenceStagedFile increments the failover version of every namespace in the
-// staged file at path, so the rename carries fenced versions. It opens the
+// staged file at path, so the rename carries fenced versions, and writes the
+// audit chain record chain of the live database into it, in one
+// transaction. It opens the
 // file in rollback-journal mode, so no write-ahead-log sidecar survives the
 // fence to leak beside the renamed database.
-func fenceStagedFile(ctx context.Context, path string) error {
+func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
@@ -258,11 +268,28 @@ func fenceStagedFile(ctx context.Context, path string) error {
 		}
 	}()
 
-	if err := conn.PingContext(ctx); err != nil {
+	err = conn.PingContext(ctx)
+	if err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	if _, err := conn.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
+	}
+
+	if chain.State != audit.ChainUnknown {
+		const keepChain = `INSERT INTO audit_chain_state (id, state, ever_chained) VALUES (1, ?, ?)`
+		if _, err := tx.ExecContext(ctx, keepChain, string(chain.State), chain.EverChained); err != nil {
+			return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 

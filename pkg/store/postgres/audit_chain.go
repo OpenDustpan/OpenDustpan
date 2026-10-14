@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 var _ audit.ChainSwitch = (*Store)(nil)
@@ -27,26 +29,46 @@ func (s *Store) HasChainedEntries(ctx context.Context) (bool, error) {
 	return found, nil
 }
 
-// ChainState implements audit.ChainSwitch. A missing installation row reads
-// as no record.
-func (s *Store) ChainState(ctx context.Context) (audit.ChainState, error) {
-	state, err := s.queries.GetAuditChainState(ctx)
+// ChainRecord implements audit.ChainSwitch. A missing row reads as no
+// record.
+func (s *Store) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
+	row, err := s.queries.GetAuditChainState(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainUnknown, nil
+		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
 	}
 
 	if err != nil {
-		return audit.ChainUnknown, fmt.Errorf("read audit chain state: %w", err)
+		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	return audit.ChainState(state), nil
+	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
 }
 
-// SaveChainState implements audit.ChainSwitch.
-func (s *Store) SaveChainState(ctx context.Context, state audit.ChainState) error {
-	if err := s.queries.SetAuditChainState(ctx, string(state)); err != nil {
+// SaveChainRecord implements audit.ChainSwitch.
+func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) error {
+	err := s.queries.SetAuditChainState(ctx, db.SetAuditChainStateParams{
+		State:       string(rec.State),
+		EverChained: rec.EverChained,
+	})
+	if err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)
 	}
 
 	return nil
+}
+
+// chainOffTimes answers the times of the chained entries of the server
+// scope that turned the chain off, for the chain check.
+func chainOffTimes(ctx context.Context, q *db.Queries) ([]time.Time, error) {
+	rows, err := q.ListAuditChainOffTimes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select audit chain off times: %w", err)
+	}
+
+	out := make([]time.Time, 0, len(rows))
+	for _, ms := range rows {
+		out = append(out, time.UnixMilli(ms))
+	}
+
+	return out, nil
 }

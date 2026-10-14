@@ -39,8 +39,10 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "with the chain off an entry holds no hash", test: testChainOff},
 		{name: "a chained run after an unchained run checks as valid", test: testChainRuns},
 		{name: "a changed field in a later chained run is found", test: testChainLaterRunTamper},
+		{name: "a hash removed from a chained log is found", test: testChainStrippedHash},
+		{name: "a chain turned off without a change entry is found", test: testChainOffWithoutEntry},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
-		{name: "the chain state round-trips", test: testChainStateRoundTrip},
+		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 	}
 
 	for _, tc := range cases {
@@ -65,6 +67,26 @@ func appendRun(t *testing.T, s ChainStore, ns namespace.Namespace, first, n int)
 	}
 
 	return out
+}
+
+// turnOff turns the chain of s off as the server does: it first appends a
+// chained entry in ServerScope that records the change.
+func turnOff(t *testing.T, s ChainStore) {
+	t.Helper()
+
+	s.SetChain(true)
+
+	e := newEntry(audit.ServerScope, "opendustpan serve", "", now())
+	e.Kind = audit.KindChange
+	e.Action = audit.ActionSetChain
+	e.Object = audit.ServerScope.String()
+	e.ValuePath = "/audit/chain/off"
+
+	if _, err := s.AppendServer(t.Context(), e); err != nil {
+		t.Fatalf("append the change entry: %v", err)
+	}
+
+	s.SetChain(false)
 }
 
 // check runs Check on ns and fails the test on error.
@@ -108,7 +130,7 @@ func testChainRuns(t *testing.T, ts ChainTestStore) {
 	ns := newNamespace(t, s)
 
 	appendRun(t, s, ns, 1, 2)
-	s.SetChain(false)
+	turnOff(t, s)
 	appendRun(t, s, ns, 3, 2)
 	s.SetChain(true)
 
@@ -144,6 +166,41 @@ func testChainLaterRunTamper(t *testing.T, ts ChainTestStore) {
 	got := check(t, s, ns.Name)
 	if got.Valid || got.BadSequence != 3 {
 		t.Fatalf("check after a changed field: got %+v, want invalid at sequence 3", got)
+	}
+}
+
+func testChainStrippedHash(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendRun(t, s, ns, 1, 3)
+
+	// Someone removes the hash of the last entry of a log whose chain was
+	// always on. No change entry turned the chain off.
+	ts.TamperEntry(t, ns.Name, 3, "hash", "")
+	ts.TamperEntry(t, ns.Name, 3, "prev_hash", "")
+
+	got := check(t, s, ns.Name)
+	if got.Valid || got.BadSequence != 3 {
+		t.Fatalf("check after a removed hash: got %+v, want invalid at sequence 3", got)
+	}
+}
+
+func testChainOffWithoutEntry(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendRun(t, s, ns, 1, 2)
+	s.SetChain(false)
+	appendRun(t, s, ns, 3, 1)
+
+	got := check(t, s, ns.Name)
+	if got.Valid || got.BadSequence != 3 {
+		t.Fatalf("check after the chain went off with no change entry: got %+v, want invalid at sequence 3", got)
 	}
 }
 
@@ -190,33 +247,37 @@ func testHasChainedEntries(t *testing.T, ts ChainTestStore) {
 	}
 }
 
-func testChainStateRoundTrip(t *testing.T, ts ChainTestStore) {
+func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	s := ts.Store
 
-	read := func() audit.ChainState {
+	read := func() audit.ChainRecord {
 		t.Helper()
 
-		got, err := s.ChainState(t.Context())
+		got, err := s.ChainRecord(t.Context())
 		if err != nil {
-			t.Fatalf("chain state: %v", err)
+			t.Fatalf("chain record: %v", err)
 		}
 
 		return got
 	}
 
-	if got := read(); got != audit.ChainUnknown {
-		t.Fatalf("chain state of a new store: got %q, want no record", got)
+	if got := read(); got.State != audit.ChainUnknown || got.EverChained {
+		t.Fatalf("chain record of a new store: got %+v, want no record", got)
 	}
 
-	for _, want := range []audit.ChainState{audit.ChainStateOn, audit.ChainStateOff} {
-		if err := s.SaveChainState(t.Context(), want); err != nil {
-			t.Fatalf("save chain state %q: %v", want, err)
+	for _, want := range []audit.ChainRecord{
+		{State: audit.ChainStateOff, EverChained: false},
+		{State: audit.ChainStateOn, EverChained: true},
+		{State: audit.ChainStateOff, EverChained: true},
+	} {
+		if err := s.SaveChainRecord(t.Context(), want); err != nil {
+			t.Fatalf("save chain record %+v: %v", want, err)
 		}
 
 		if got := read(); got != want {
-			t.Fatalf("chain state: got %q, want %q", got, want)
+			t.Fatalf("chain record: got %+v, want %+v", got, want)
 		}
 	}
 }

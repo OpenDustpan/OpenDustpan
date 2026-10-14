@@ -111,12 +111,21 @@ The entry has the kind `change`, the action `server:set-audit-chain` and the val
 The server writes this entry while the chain is still on, so a chain that goes off ends with a chained entry.
 While the log holds chained entries and the chain is off, the server logs a warning at each start.
 
+The installation keeps the state of the chain, and whether its log ever held a chained entry, in a table of its own.
+A backup does not carry that table.
+A restore keeps the state of the target installation and writes no change entry.
+When the restored log holds chained entries and the chain is off, the server logs the same warning after the restore.
+
 The check reads each run of chained entries on its own.
 An entry without a hash ends a run, and the next chained entry starts a new run with an empty `prevHash`.
+Take a chained entry of a scope, and a later entry without a hash.
+The later entry passes the check only when an entry `/audit/chain/off` in `@server` comes between the two in time.
+So the check finds a hash that someone deleted from a chained log.
 The check answers `entriesUnchained`: the count of entries without a hash.
 The check cannot prove that such an entry is unchanged.
 
 While the chain is on, the server checks the chain of every namespace and of `@server` at start and every hour.
+While the chain is off, the server does not run this check.
 `dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
 
 ```yaml

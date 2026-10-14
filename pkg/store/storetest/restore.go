@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -59,6 +60,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
+		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -498,6 +500,56 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 
 	if err := pdst.ApplyStaging(ctx); !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("apply after the swap: err = %v, want ErrCorrupt", err)
+	}
+}
+
+// testRestoreKeepsChainRecord proves that a restore keeps the audit chain
+// record of the target installation (RFC 22): the backup does not carry it,
+// so the source record never reaches the target. A store without a chain
+// switch skips the case.
+func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+	newNamespace(t, src, "acme")
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	srcChain, okSrc := ps.src.(audit.ChainSwitch)
+	dstChain, okDst := ps.dst.(audit.ChainSwitch)
+
+	if !okSrc || !okDst {
+		t.Skip("the store has no audit chain switch")
+	}
+
+	source := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
+	if err := srcChain.SaveChainRecord(ctx, source); err != nil {
+		t.Fatalf("save source chain record: %v", err)
+	}
+
+	want := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	if err := dstChain.SaveChainRecord(ctx, want); err != nil {
+		t.Fatalf("save target chain record: %v", err)
+	}
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	got, err := dstChain.ChainRecord(ctx)
+	if err != nil {
+		t.Fatalf("chain record after the restore: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
 	}
 }
 

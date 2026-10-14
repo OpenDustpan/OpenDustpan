@@ -353,7 +353,6 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: "id", Kind: KindInteger},
 				{Name: portColState, Kind: KindText},
-				{Name: "audit_chain", Kind: KindText},
 			},
 		},
 	}

@@ -116,7 +116,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -229,7 +229,12 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 // grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	walk := audit.NewChainWalk()
+	offTimes, err := chainOffTimes(ctx, s.queries)
+	if err != nil {
+		return audit.CheckResult{}, err
+	}
+
+	walk := audit.NewChainWalk(offTimes)
 
 	var wantSeq int64 = 1
 

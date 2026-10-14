@@ -253,19 +253,43 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("move staged schema live: %w", err)
 		}
 
-		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
-			return fmt.Errorf("drop previous schema: %w", err)
-		}
-
-		fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
-
-		_, fenceErr := tx.Exec(ctx, fenceNamespaces)
-		if fenceErr != nil {
-			return fmt.Errorf("fence namespaces after restore: %w", fenceErr)
-		}
-
-		return nil
+		return finishSwap(ctx, tx, live, previous)
 	})
+}
+
+// finishSwap ends the swap in tx: it keeps the audit chain state of this
+// installation, drops the schema previous, and fences every namespace of
+// the restored schema live.
+func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	if err := keepChainState(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
+		return fmt.Errorf("drop previous schema: %w", err)
+	}
+
+	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
+
+	if _, err := tx.Exec(ctx, fenceNamespaces); err != nil {
+		return fmt.Errorf("fence namespaces after restore: %w", err)
+	}
+
+	return nil
+}
+
+// keepChainState copies the audit chain state from the schema previous to
+// the restored schema live, in tx. The chain state is bookkeeping of this
+// installation: a restore keeps the row of the target (RFC 22).
+func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	keep := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (id, state, ever_chained)" +
+		" SELECT id, state, ever_chained FROM " + pgIdent(previous) + ".audit_chain_state"
+
+	if _, err := tx.Exec(ctx, keep); err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
+	return nil
 }
 
 // hasStagingPrefix reports whether name is a staging schema: the prefix check

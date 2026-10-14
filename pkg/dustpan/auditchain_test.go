@@ -262,11 +262,12 @@ func waitForChainState(t *testing.T, st *sqlite.Store, want audit.ChainState) {
 	deadline := time.Now().Add(chainWait)
 
 	for {
-		got, err := st.ChainState(t.Context())
+		rec, err := st.ChainRecord(t.Context())
 		if err != nil {
 			t.Fatalf("chain state: %v", err)
 		}
 
+		got := rec.State
 		if got == want {
 			return
 		}

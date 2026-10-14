@@ -22,6 +22,12 @@ type AccessToken struct {
 	CreatedBy    string
 }
 
+type AuditChainState struct {
+	ID          int64
+	State       string
+	EverChained int64
+}
+
 type AuditEntry struct {
 	Namespace  string
 	Sequence   int64
@@ -79,9 +85,8 @@ type GroupMember struct {
 }
 
 type Installation struct {
-	ID         int64
-	State      string
-	AuditChain string
+	ID    int64
+	State string
 }
 
 type Inventory struct {

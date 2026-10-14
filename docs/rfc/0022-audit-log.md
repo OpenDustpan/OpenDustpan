@@ -146,3 +146,6 @@ chained entries keeps the chain on until an administrator turns it off on
 purpose. That change is an audit entry of the kind `change` in `@server`,
 and the server warns at each start while chained entries exist and the
 chain is off.
+A backup does not carry the chain state: a restore keeps the state of
+the target installation, writes no change entry, and warns when the
+restored log holds chained entries and the chain is off.
