@@ -158,6 +158,8 @@ var embeddedMigrationNames = []string{
 	"0032_soft_delete_workspaces.sql",
 	"0035_access_tokens.sql",
 	"0042_roles_and_grants.sql",
+	"0048_audit_changes.sql",
+	"0049_audit_sink_cursors.sql",
 	"0050_update_token_id.sql",
 }
 

@@ -257,15 +257,27 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("drop previous schema: %w", err)
 		}
 
-		fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
-
-		_, fenceErr := tx.Exec(ctx, fenceNamespaces)
-		if fenceErr != nil {
-			return fmt.Errorf("fence namespaces after restore: %w", fenceErr)
-		}
-
-		return nil
+		return fenceRestored(ctx, tx, live)
 	})
+}
+
+// fenceRestored increments the failover version of every namespace of the
+// restored schema live and resets the audit sink cursors, in tx.
+func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
+	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
+
+	if _, err := tx.Exec(ctx, fenceNamespaces); err != nil {
+		return fmt.Errorf("fence namespaces after restore: %w", err)
+	}
+
+	// The restored log can reuse sequences that a sink already holds, and
+	// a restored cursor can point past the restored entries. A reset makes
+	// every sink receive the restored log again from its first entry.
+	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_sink_cursors"); err != nil {
+		return fmt.Errorf("reset audit sink cursors after restore: %w", err)
+	}
+
+	return nil
 }
 
 // hasStagingPrefix reports whether name is a staging schema: the prefix check

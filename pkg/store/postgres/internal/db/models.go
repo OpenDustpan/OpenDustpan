@@ -42,6 +42,14 @@ type AuditEntry struct {
 	PrevHash   string
 	Hash       string
 	ValueCount pgtype.Int8
+	Changes    pgtype.Text
+}
+
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
 }
 
 type Backup struct {

@@ -87,6 +87,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected()
 }
 
+const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
+WHERE excluded.sequence > audit_sink_cursors.sequence
+`
+
+type AdvanceAuditSinkCursorParams struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
+// Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+// is already at the sequence or higher stays, so two instances that ship
+// the same batch never move it back.
+func (q *Queries) AdvanceAuditSinkCursor(ctx context.Context, arg AdvanceAuditSinkCursorParams) error {
+	_, err := q.db.ExecContext(ctx, advanceAuditSinkCursor,
+		arg.Sink,
+		arg.Namespace,
+		arg.Sequence,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
 const appendEvent = `-- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES (?, ?, ?, ?, ?)
@@ -1390,6 +1418,25 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 	return i, err
 }
 
+const getAuditSinkCursor = `-- name: GetAuditSinkCursor :one
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = ? AND namespace = ?
+`
+
+type GetAuditSinkCursorParams struct {
+	Sink      string
+	Namespace string
+}
+
+// The highest sequence of a namespace that a log sink holds (ADR 60
+// decision 13). A sink with no row holds no entry of the namespace.
+func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursorParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getAuditSinkCursor, arg.Sink, arg.Namespace)
+	var sequence int64
+	err := row.Scan(&sequence)
+	return sequence, err
+}
+
 const getBackup = `-- name: GetBackup :one
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
@@ -2405,8 +2452,8 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
@@ -2429,6 +2476,7 @@ type InsertAuditEntryParams struct {
 	PrevHash   string
 	Hash       string
 	ValueCount sql.NullInt64
+	Changes    sql.NullString
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -2452,6 +2500,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+		arg.Changes,
 	)
 	return err
 }
@@ -2620,7 +2669,7 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -2652,6 +2701,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.PrevHash,
 		&i.Hash,
 		&i.ValueCount,
+		&i.Changes,
 	)
 	return i, err
 }
@@ -2780,7 +2830,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -2826,6 +2876,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
@@ -2842,7 +2893,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -2886,6 +2937,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}

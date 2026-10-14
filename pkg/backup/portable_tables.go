@@ -267,6 +267,7 @@ func portableSpec() []PortableTable {
 				{Name: "prev_hash", Kind: KindText},
 				{Name: "hash", Kind: KindText},
 				{Name: "value_count", Kind: KindInteger},
+				{Name: "changes", Kind: KindText},
 			},
 		},
 		{
@@ -356,6 +357,16 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "revoked_by", Kind: KindText},
+			},
+		},
+		{
+			Table:   "audit_sink_cursors",
+			OrderBy: []string{"sink", portColNamespace},
+			Columns: []Column{
+				{Name: "sink", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColSequence, Kind: KindInteger},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
 		{

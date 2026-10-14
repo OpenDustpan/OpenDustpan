@@ -967,6 +967,7 @@ func deleteEntry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "stack_test",
 		Channel:    audit.ChannelAPI,
