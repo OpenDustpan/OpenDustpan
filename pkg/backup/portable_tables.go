@@ -45,6 +45,7 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "allow_forced_writes", Kind: KindBool},
 				{Name: "allow_unlocked_writes", Kind: KindBool},
+				{Name: "ip_allowlist", Kind: KindText},
 			},
 		},
 		{

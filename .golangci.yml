@@ -113,6 +113,7 @@ linters:
             - "**/pkg/secret/**"
             - "**/pkg/workspace/**"
             - "**/pkg/inventory/**"
+            - "**/pkg/ipallow/**"
             - "**/pkg/audit/**"
             - "**/pkg/principal/**"
             - "**/pkg/backup/**"

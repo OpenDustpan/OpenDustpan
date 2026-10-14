@@ -287,6 +287,21 @@ func TestWorkspaceConformance(t *testing.T) {
 	})
 }
 
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
