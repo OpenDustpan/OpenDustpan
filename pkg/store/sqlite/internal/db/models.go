@@ -157,6 +157,7 @@ type Namespace struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	IpAllowlist         string
 }
 
 type Principal struct {

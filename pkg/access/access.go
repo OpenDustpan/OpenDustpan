@@ -112,8 +112,9 @@ var families = map[identity.Action]Family{
 	identity.ActionServerManageTokens: FamilyAdministration,
 	// A custom role may still hold this deprecated action, so it keeps its
 	// family. No route declares it.
-	identity.ActionServerManageServiceTokens: FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
-	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
+	identity.ActionServerManageServiceTokens:  FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
+	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,
 

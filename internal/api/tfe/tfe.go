@@ -164,10 +164,15 @@ type StateWriter interface {
 		content io.Reader,
 	) (workspace.StateVersion, error)
 	// CheckUpload reports whether the capability tok may upload state version
-	// id now, without reading any body and without writing anything.
-	CheckUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
+	// id now, without reading any body and without writing anything. On
+	// success it also returns the namespace of the workspace of the version.
+	CheckUpload(
+		ctx context.Context, id workspace.StateVersionID, tok token.Token,
+	) (namespace.Name, error)
 	// CheckJSONRenderingUpload does the same for the JSON rendering upload.
-	CheckJSONRenderingUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
+	CheckJSONRenderingUpload(
+		ctx context.Context, id workspace.StateVersionID, tok token.Token,
+	) (namespace.Name, error)
 	// DiscardJSONRendering accepts the JSON rendering uploaded with a state
 	// version and discards it: the server keeps the state itself and the
 	// outputs declared at creation.
@@ -187,10 +192,17 @@ type StateWriter interface {
 	) (workspace.StateVersion, error)
 }
 
+// AddressGate checks the client address against the IP allowlist of a
+// namespace. Nil means no check.
+type AddressGate interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+}
+
 // Config holds the dependencies of a Handler.
 type Config struct {
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	AddressGate   AddressGate
 	Logger        *slog.Logger
 	Namespaces    *namespace.Service
 	// Workspaces serves the workspace and state routes. It is required:
@@ -219,6 +231,7 @@ type Config struct {
 type Handler struct {
 	authn          identity.Authenticator
 	authz          identity.Authorizer
+	addressGate    AddressGate
 	logger         *slog.Logger
 	namespaces     *namespace.Service
 	workspaces     WorkspaceService
@@ -249,6 +262,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
+		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
 		namespaces:     cfg.Namespaces,
 		workspaces:     cfg.Workspaces,
