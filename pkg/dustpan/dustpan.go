@@ -48,11 +48,13 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -131,8 +133,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
-	trustedProxies       []netip.Prefix
-	trustedProxyHeader   string
+	proxies              proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -274,13 +275,20 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// proxySettings holds the trusted proxy settings of the client address
+// (internal/clientip): the proxies and the forwarding header they set.
+type proxySettings struct {
+	prefixes []netip.Prefix
+	header   string
+}
+
 // WithTrustedProxies names the proxies whose forwarding headers the server
 // trusts. Empty means none: every request reads as its TCP peer. List a proxy
 // only when it always overwrites or appends the header named by
 // WithTrustedProxyHeader, so a client cannot name any address. NewServer
 // refuses a list that covers every address or holds host bits.
 func WithTrustedProxies(prefixes ...netip.Prefix) Option {
-	return func(o *settings) { o.trustedProxies = prefixes }
+	return func(o *settings) { o.proxies.prefixes = prefixes }
 }
 
 // WithTrustedProxyHeader names the one forwarding header the server reads
@@ -288,7 +296,7 @@ func WithTrustedProxies(prefixes ...netip.Prefix) Option {
 // match ignores case and "" means the default. The server never reads the
 // other header. NewServer refuses an unknown value.
 func WithTrustedProxyHeader(h string) Option {
-	return func(o *settings) { o.trustedProxyHeader = h }
+	return func(o *settings) { o.proxies.header = h }
 }
 
 // WithClock overrides the time source, for tests.
@@ -378,6 +386,9 @@ type services struct {
 	updates    *stack.Updates
 	secrets    *secret.Service
 	workspaces *workspace.Service
+	// tokens keeps the access tokens of the principals (ADR 53), or is nil
+	// when the store keeps none. NewServer sets it after newServices.
+	tokens *accesstoken.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -404,8 +415,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
-		trustedProxies:          nil,
-		trustedProxyHeader:      "",
+		proxies:                 proxySettings{prefixes: nil, header: ""},
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -433,9 +443,25 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	svc.tokens, err = newTokenService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
+	}
+
+	cfg.authenticator, err = gatedAuthenticator(cfg, svc.tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	// Every authenticated person can list and revoke its own personal
+	// tokens with no grant (ADR 53, decision 3).
+	cfg.authorizer = identity.SelfAllowed{
+		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
 	}
 
 	return assemble(cfg, base, svc, backups)
@@ -791,6 +817,7 @@ func newServices(cfg settings) (services, error) {
 		updates:    updates,
 		secrets:    secrets,
 		workspaces: workspaces,
+		tokens:     nil,
 	}, nil
 }
 
@@ -1221,6 +1248,7 @@ func newServerHandler(
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
 		Principals:    principals,
+		Tokens:        deps.services.tokens,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -1262,6 +1290,54 @@ func newPrincipalService(cfg settings) (*principal.Service, error) {
 	}
 
 	return svc, nil
+}
+
+// newTokenService builds the access token service (ADR 53) from the
+// namespace store, or returns nil when the store keeps no access tokens or
+// no principals. Every SQL adapter keeps both.
+func newTokenService(cfg settings) (*accesstoken.Service, error) {
+	store, ok := cfg.namespaceStore.(accesstoken.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
+	}
+
+	principals, ok := cfg.namespaceStore.(accesstoken.PrincipalReader)
+	if !ok {
+		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
+	}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// gatedAuthenticator returns the authenticator that every adapter and the
+// request log use: the configured authenticator first, so the bootstrap
+// admin tokens (ADR 6) never meet the failure budget, then the stored access
+// tokens when the store keeps them, behind a gate. The gate resolves a
+// token once for each request and slows the misses of secret-shaped values
+// from one source. It never refuses a valid token.
+//
+//nolint:ireturn // The adapters take the port.
+func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
+	if tokens == nil {
+		return cfg.authenticator, nil
+	}
+
+	gate, err := authgate.New(authgate.Config{
+		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authentication gate: %w", err)
+	}
+
+	return identity.Chain{cfg.authenticator, gate}, nil
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or
@@ -1476,6 +1552,17 @@ func debugRoute(pattern string) bool {
 	}
 }
 
+// remoteHost returns the remote address of r without the port: the source
+// that the authentication gate counts failures for.
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
 // subjectForRequest returns the subject of the signed-in principal, or false
 // when the request carries no valid access token. Lease and upload requests
 // carry no access token, so they log with no subject.
@@ -1548,6 +1635,7 @@ func withRequestLog(
 		w.Header()[requestIDHeader] = []string{id}
 
 		ctx = requestid.WithContext(ctx, id)
+		ctx = authgate.WithRequest(ctx, remoteHost(r))
 
 		r = r.WithContext(ctx)
 
@@ -1687,12 +1775,12 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 // the trusted proxy settings. An unknown header or a refused proxy list
 // fails the build, so the server never starts with them.
 func newClientIPResolver(cfg settings) (*clientip.Resolver, error) {
-	header, err := clientip.ParseHeader(cfg.trustedProxyHeader)
+	header, err := clientip.ParseHeader(cfg.proxies.header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxy header: %w", err)
 	}
 
-	resolver, err := clientip.NewResolver(cfg.trustedProxies, header)
+	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}

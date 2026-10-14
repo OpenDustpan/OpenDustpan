@@ -161,6 +161,11 @@ with the same key-encryption key, then restore through the API. The
 bootstrap admin token can restore into the empty installation. The new
 database may be the other kind.
 
+A restore loads the access tokens of the backup as they were at that time
+(ADR 53). A token that you revoked after the backup is active again after
+the restore. After a restore to an older point, revoke those tokens again
+with `DELETE /api/server/tokens/{id}`.
+
 ## Move a format 1 backup
 
 A format 1 backup holds the native format of the older server. An older server

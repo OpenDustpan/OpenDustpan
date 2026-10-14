@@ -855,6 +855,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // material.
 func classify(err error) (int, string) {
 	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
 	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid):
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):
