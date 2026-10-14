@@ -15,6 +15,7 @@ behavior differs from TFE. It is checked against the route table in
 | GET | /api/v2/organizations/{organization}/entitlement-set | Token, `namespace:read` | Reports `operations: false`. OpenTofu runs plans locally. |
 | GET | /api/v2/organizations/{organization}/workspaces/{workspace} | Token, `unit:read` | Reads one workspace by name. Unknown names answer 404. |
 | POST | /api/v2/organizations/{organization}/workspaces | Token, `unit:manage` | Creates one workspace. Duplicate names answer 422. |
+| DELETE | /api/v2/organizations/{organization}/workspaces/{workspace} | Token, `unit:manage` | Soft-deletes one workspace (ADR 47): it leaves every route and list, its name is free at once, and its state stays until the final delete. Answers 204. A locked workspace answers 409, an unknown name 404. |
 | GET | /api/v2/workspaces/{id} | Token, `unit:read` | Reads one workspace by ID. Unknown IDs answer 404. |
 | GET | /api/v2/organizations/{organization}/workspaces | Token, `namespace:read` | Lists the workspaces of one namespace the caller may `unit:read`. Supports the search query. `page[size]` caps at 100. |
 | POST | /api/v2/workspaces/{id}/actions/lock | Token, `unit:write` | Locks one workspace for the caller. Locked workspaces answer 409. |

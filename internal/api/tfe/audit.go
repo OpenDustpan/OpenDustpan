@@ -63,6 +63,51 @@ func (h *Handler) appendToolOperationAudit(
 	return err
 }
 
+// appendChangeAudit writes one audit entry of the kind change after a change
+// of a unit committed (ADR 60, decision 4). The change already happened, so
+// the caller does not change its answer on an error: it counts the lost entry
+// with failAudit. A nil audit store writes no entry.
+func (h *Handler) appendChangeAudit(
+	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action,
+) error {
+	if h.audit == nil {
+		return nil
+	}
+
+	ctx := r.Context()
+
+	entry := audit.Entry{
+		At:         time.Now().UTC(),
+		Namespace:  obj.Namespace(),
+		Subject:    p.Subject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(action),
+		Object:     obj.String(),
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   sourceIP(r),
+		UserAgent:  truncateUserAgent(r.UserAgent()),
+		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  requestid.FromContext(ctx),
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+
+	ns, err := h.namespaces.Get(ctx, entry.Namespace)
+	if err != nil {
+		return err
+	}
+
+	_, err = h.audit.Append(ctx, ns.Fence(), entry)
+
+	return err
+}
+
 // failAudit records a lost audit entry: one log line with no secret and no
 // value, and one count on the failure metric through the wired callback. It
 // names no error text: the text may hold driver detail (ADR 32 decision 7).

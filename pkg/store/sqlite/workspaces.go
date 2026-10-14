@@ -151,11 +151,16 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	})
 }
 
-// DeleteWorkspace implements workspace.Store: it removes the workspace with
-// its state versions, its wrapped data key and its inventory entry in one
-// fenced transaction. The data key shares the secret_keys table with stack
-// scopes, keyed by the workspace ID, so DeleteSecretKeysOfStack removes it.
-func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
+// DeleteWorkspace implements workspace.Store. It soft-deletes the workspace in
+// one fenced transaction (ADR 47): it frees the name, keeps the state versions
+// and the wrapped data key, and removes the inventory entry. It returns
+// ErrLocked while the workspace is locked, and ErrNotFound if no live
+// workspace has ref. The transaction holds the write lock from the start, so a
+// concurrent lock of the workspace either runs before the check or waits
+// until the delete commits.
+func (s *Store) DeleteWorkspace(
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, at time.Time,
+) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
@@ -169,17 +174,13 @@ func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence na
 			return fmt.Errorf("select workspace: %w", getErr)
 		}
 
-		if keyErr := q.DeleteSecretKeysOfStack(ctx, row.ID); keyErr != nil {
-			return fmt.Errorf("delete secret key: %w", keyErr)
+		if row.LockID != "" {
+			return workspace.ErrLocked
 		}
 
-		if versionsErr := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); versionsErr != nil {
-			return fmt.Errorf("delete state versions: %w", versionsErr)
-		}
-
-		n, deleteErr := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
-			Namespace: ref.Namespace.String(),
-			Name:      ref.Name.String(),
+		n, deleteErr := q.SoftDeleteWorkspace(ctx, db.SoftDeleteWorkspaceParams{
+			DeletedAtMs: sql.NullInt64{Int64: at.UnixMilli(), Valid: true},
+			ID:          row.ID,
 		})
 		if deleteErr != nil {
 			return fmt.Errorf("delete workspace: %w", deleteErr)

@@ -200,6 +200,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"updated_at_ms",
 				"allow_forced_writes",
 				"allow_unlocked_writes",
+				"deleted_at_ms",
+				"deleted_name",
 			},
 		},
 		{

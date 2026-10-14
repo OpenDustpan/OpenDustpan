@@ -200,6 +200,21 @@ func (stubWorkspaces) Get(_ context.Context, ref workspace.Ref) (workspace.Works
 	}
 }
 
+// Delete soft-deletes acme/web, answers ErrLocked for acme/locked, and
+// ErrNotFound for every other workspace.
+func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref) error {
+	switch {
+	case ref.Namespace.String() != "acme":
+		return namespace.ErrNotFound
+	case ref.Name.String() == "web":
+		return nil
+	case ref.Name.String() == "locked":
+		return workspace.ErrLocked
+	default:
+		return workspace.ErrNotFound
+	}
+}
+
 func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
 	if ref.Namespace.String() != "acme" {
 		return workspace.Workspace{}, namespace.ErrNotFound
@@ -1256,7 +1271,8 @@ func checkRouteAuthenticationDenied(t *testing.T, route tfe.Route) {
 }
 
 // checkRouteAuthenticationAllowed proves one authorized route serves when the
-// Authorizer allows it: a creation answers 201 and every other route 200.
+// Authorizer allows it: a creation answers 201, a delete 204 and every other
+// route 200.
 func checkRouteAuthenticationAllowed(t *testing.T, route tfe.Route) {
 	t.Helper()
 
@@ -1283,6 +1299,10 @@ func checkRouteAuthenticationAllowed(t *testing.T, route tfe.Route) {
 // wantSuccessStatus returns the success status of route: a creation answers
 // 201 and every other route answers 200.
 func wantSuccessStatus(route tfe.Route) int {
+	if route.Method == http.MethodDelete {
+		return http.StatusNoContent
+	}
+
 	if route.Method == http.MethodPost &&
 		(strings.HasSuffix(route.Path, "/workspaces") || strings.HasSuffix(route.Path, "/state-versions")) {
 		return http.StatusCreated
@@ -1295,6 +1315,10 @@ func wantSuccessStatus(route tfe.Route) int {
 // route streams raw state as application/json, every other route answers
 // JSON:API.
 func wantMediaType(route tfe.Route) string {
+	if route.Method == http.MethodDelete {
+		return ""
+	}
+
 	if route.Method == http.MethodGet && route.Path == "/api/v2/state-versions/{state_version_id}/download" {
 		return "application/json"
 	}
@@ -1446,6 +1470,10 @@ type errorWorkspaces struct{}
 
 func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
+}
+
+func (errorWorkspaces) Delete(_ context.Context, _ workspace.Ref) error {
+	return errTestInternal
 }
 
 func (errorWorkspaces) Get(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {

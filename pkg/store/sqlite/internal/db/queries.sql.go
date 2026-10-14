@@ -1260,7 +1260,8 @@ func (q *Queries) GetUpdateLease(ctx context.Context, arg GetUpdateLeaseParams) 
 
 const getWorkspace = `-- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
 WHERE namespace = ? AND name = ?
 `
@@ -1287,15 +1288,18 @@ func (q *Queries) GetWorkspace(ctx context.Context, arg GetWorkspaceParams) (Wor
 		&i.UpdatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+		&i.DeletedAtMs,
+		&i.DeletedName,
 	)
 	return i, err
 }
 
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = ?
+WHERE id = ? AND deleted_at_ms IS NULL
 `
 
 func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
@@ -1315,6 +1319,8 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.UpdatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+		&i.DeletedAtMs,
+		&i.DeletedName,
 	)
 	return i, err
 }
@@ -2507,9 +2513,10 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 
 const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = ?
+WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY name
 `
 
@@ -2536,6 +2543,8 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 			&i.UpdatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.DeletedAtMs,
+			&i.DeletedName,
 		); err != nil {
 			return nil, err
 		}
@@ -2942,6 +2951,28 @@ type SoftDeleteStackParams struct {
 // hold ":", so "deleted:" and the ID never match a lookup by name.
 func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, softDeleteStack, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const softDeleteWorkspace = `-- name: SoftDeleteWorkspace :execrows
+UPDATE workspaces
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?, revision = revision + 1
+WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+type SoftDeleteWorkspaceParams struct {
+	DeletedAtMs sql.NullInt64
+	ID          string
+}
+
+// Moves the name to deleted_name and frees it (ADR 47). A workspace name
+// cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
+// revision moves on, so a concurrent compare-and-swap of the row fails.
+func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, softDeleteWorkspace, arg.DeletedAtMs, arg.ID)
 	if err != nil {
 		return 0, err
 	}

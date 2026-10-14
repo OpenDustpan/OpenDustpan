@@ -178,8 +178,12 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testSensitiveMarksRoundTrip,
 		},
 		{
-			name: "delete removes the workspace with its versions and entry",
+			name: "delete hides the workspace, keeps its versions and drops its entry",
 			test: testDeleteWorkspace,
+		},
+		{
+			name: "a deleted workspace frees its name",
+			test: testDeletedWorkspaceNameIsFree,
 		},
 		{
 			name: "fence and unlock releases the lock and makes the fence current",
@@ -3099,9 +3103,11 @@ func checkSealKeepsSealedRow(
 	}
 }
 
-// testDeleteWorkspace proves the final delete removes the workspace with
-// its state versions and its inventory entry, and that a second delete and
-// a delete of a missing workspace report ErrNotFound.
+// testDeleteWorkspace proves the soft delete (ADR 47): a locked workspace
+// refuses it, and after the unlock the workspace leaves every lookup by name
+// or ID, every list and the inventory, while its state versions stay. A
+// second delete and a delete of a missing workspace report ErrNotFound, and
+// a stale fence refuses it.
 func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -3117,7 +3123,13 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("finalize state version: %v", err)
 	}
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); err != nil {
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrLocked) {
+		t.Fatalf("delete a locked workspace: err = %v, want ErrLocked", err)
+	}
+
+	unlockTestWorkspace(t, s, ns, w.Ref)
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -3129,38 +3141,88 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("get deleted workspace by ID: err = %v, want ErrNotFound", err)
 	}
 
-	if _, err := s.GetStateVersion(t.Context(), pending.ID); !errors.Is(
-		err, workspace.ErrStateVersionNotFound,
-	) {
-		t.Fatalf("get version of a deleted workspace: err = %v, want ErrStateVersionNotFound", err)
-	}
-
-	if _, err := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(err, workspace.ErrNoState) {
-		t.Fatalf("current state of a deleted workspace: err = %v, want ErrNoState", err)
+	if _, err := s.GetStateVersion(t.Context(), pending.ID); err != nil {
+		t.Fatalf("get a version of a deleted workspace: %v, want it kept for a restore", err)
 	}
 
 	if entries := listWorkspaceInventory(t, s, ns.Name); len(entries) != 0 {
 		t.Fatalf("inventory entries after delete = %+v, want none", entries)
 	}
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("delete a deleted workspace: err = %v, want ErrNotFound", err)
 	}
 
 	ghost := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "ghost")}
-	if err := s.DeleteWorkspace(t.Context(), ghost, ns.Fence()); !errors.Is(err, workspace.ErrNotFound) {
+	if err := s.DeleteWorkspace(t.Context(), ghost, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("delete a missing workspace: err = %v, want ErrNotFound", err)
 	}
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 	other := createTestWorkspace(t, s, ns, "other")
 
-	if err := s.DeleteWorkspace(t.Context(), other.Ref, stale); !errors.Is(err, namespace.ErrFenced) {
+	if err := s.DeleteWorkspace(t.Context(), other.Ref, stale, deletedAt()); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete with a stale fence: err = %v, want ErrFenced", err)
 	}
 
 	if _, err := s.GetWorkspace(t.Context(), other.Ref); err != nil {
 		t.Fatalf("get workspace after a fenced delete: %v", err)
+	}
+}
+
+// testDeletedWorkspaceNameIsFree proves a new workspace can take the name of a
+// deleted one at once, with a new ID and no state, and that the lists and the
+// inventory show only live workspaces under their own names (ADR 47).
+func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	gone := createTestWorkspace(t, s, ns, "network")
+
+	if err := s.DeleteWorkspace(t.Context(), gone.Ref, ns.Fence(), deletedAt()); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	again := createTestWorkspace(t, s, ns, "network")
+	if again.ID == gone.ID {
+		t.Fatalf("new workspace ID = %q, want a new ID", again.ID)
+	}
+
+	if _, err := s.CurrentStateVersion(t.Context(), again.ID); !errors.Is(err, workspace.ErrNoState) {
+		t.Fatalf("current state of the new workspace: err = %v, want ErrNoState", err)
+	}
+
+	list, err := s.ListWorkspaces(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+
+	if len(list) != 1 || list[0].ID != again.ID || strings.HasPrefix(list[0].Ref.Name.String(), "deleted:") {
+		t.Fatalf("workspaces = %+v, want only %s", list, again.ID)
+	}
+
+	entries := listWorkspaceInventory(t, s, ns.Name)
+	for i := range entries {
+		if entries[i].UnitID == gone.ID.String() || strings.HasPrefix(entries[i].Name, "deleted:") {
+			t.Fatalf("inventory entry %+v, want no entry of the deleted workspace", entries[i])
+		}
+	}
+}
+
+// unlockTestWorkspace clears the lock of the workspace called ref.
+func unlockTestWorkspace(t *testing.T, s WorkspaceStore, ns namespace.Namespace, ref workspace.Ref) {
+	t.Helper()
+
+	current, err := s.GetWorkspace(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get workspace %s: %v", ref, err)
+	}
+
+	current.Lock = workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""}
+	current.Revision++
+
+	if err := s.SaveWorkspace(t.Context(), current, ns.Fence()); err != nil {
+		t.Fatalf("unlock workspace %s: %v", ref, err)
 	}
 }
 

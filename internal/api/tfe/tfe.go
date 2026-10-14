@@ -46,10 +46,19 @@ const (
 // part is its own small interface; workspace.Service implements all four.
 type WorkspaceService interface {
 	WorkspaceReader
+	WorkspaceDeleter
 	WorkspaceLocker
 	OverrideWriter
 	StateReader
 	StateWriter
+}
+
+// WorkspaceDeleter is what the workspace delete route needs.
+type WorkspaceDeleter interface {
+	// Delete soft-deletes the workspace called ref (ADR 47). It returns
+	// workspace.ErrLocked while the workspace is locked, and
+	// workspace.ErrNotFound if no live workspace has ref.
+	Delete(ctx context.Context, ref workspace.Ref) error
 }
 
 // OverrideWriter is what the override switch route needs.

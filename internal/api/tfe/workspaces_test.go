@@ -633,6 +633,10 @@ type pagingWorkspaces struct {
 	items []workspace.Workspace
 }
 
+func (pagingWorkspaces) Delete(_ context.Context, _ workspace.Ref) error {
+	return workspace.ErrNotFound
+}
+
 func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 	t.Helper()
 

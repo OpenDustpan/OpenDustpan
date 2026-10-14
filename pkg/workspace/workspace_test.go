@@ -40,6 +40,7 @@ type memStore struct {
 	beforeFence func(sv workspace.StateVersion)
 	namespaces  map[namespace.Name]namespace.Namespace
 	workspaces  map[workspace.ID]workspace.Workspace
+	deleted     map[workspace.ID]workspace.Workspace
 	versions    map[workspace.StateVersionID]workspace.StateVersion
 	current     map[workspace.ID]workspace.StateVersionID
 	entries     map[memInventoryKey]inventory.Entry
@@ -65,6 +66,7 @@ func newMemStore() *memStore {
 		beforeFence:  nil,
 		namespaces:   map[namespace.Name]namespace.Namespace{},
 		workspaces:   map[workspace.ID]workspace.Workspace{},
+		deleted:      map[workspace.ID]workspace.Workspace{},
 		versions:     map[workspace.StateVersionID]workspace.StateVersion{},
 		current:      map[workspace.ID]workspace.StateVersionID{},
 		entries:      map[memInventoryKey]inventory.Entry{},
@@ -253,9 +255,11 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 	return nil
 }
 
-// DeleteWorkspace implements workspace.Store: it removes the workspace with
-// its state versions and its inventory entry.
-func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence) error {
+// DeleteWorkspace implements workspace.Store: it soft-deletes the workspace
+// (ADR 47). The workspace moves to deleted, so no lookup or list finds it and
+// its name is free, while its state versions stay. It removes the inventory
+// entry and refuses a locked workspace with ErrLocked.
+func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence, _ time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -279,13 +283,11 @@ func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence n
 		return workspace.ErrNotFound
 	}
 
-	for vid := range m.versions {
-		if m.versions[vid].Workspace == id {
-			delete(m.versions, vid)
-		}
+	if m.workspaces[id].Lock.ID != "" {
+		return workspace.ErrLocked
 	}
 
-	delete(m.current, id)
+	m.deleted[id] = m.workspaces[id]
 	delete(m.workspaces, id)
 
 	for key := range m.entries {
