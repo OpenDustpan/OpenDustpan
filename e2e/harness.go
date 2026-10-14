@@ -948,7 +948,7 @@ func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
-	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: ""})
+	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: "", scheme: ""})
 }
 
 // tfeCall is one TFE API request. An empty userAgent keeps the client default,
@@ -958,6 +958,9 @@ type tfeCall struct {
 	path      string
 	body      string
 	userAgent string
+	// scheme names the Authorization scheme: "token" for the console scheme, or
+	// empty for "Bearer" (the TFE-compatible and installation scheme).
+	scheme string
 }
 
 // TFEStatusA sends one TFE API request as principal A, the default principal
@@ -1100,7 +1103,13 @@ type APIStepSpec struct {
 	Body string
 	// Want is the expected HTTP status.
 	Want int
+	// Scheme is "token" to send the console scheme ("Authorization: token <t>").
+	// Empty sends "Bearer <t>", the scheme of the TFE-compatible API.
+	Scheme string
 }
+
+// authSchemeToken names the console Authorization scheme in APIStepSpec.Scheme.
+const authSchemeToken = "token"
 
 // APIStep runs one TFE API request as a scenario step and records it for the
 // report. It fails the subtest when the status differs from want or when
@@ -1120,6 +1129,7 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 			path:      spec.Path,
 			body:      spec.Body,
 			userAgent: spec.UserAgent,
+			scheme:    spec.Scheme,
 		})
 
 		switch {
@@ -2182,7 +2192,11 @@ func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int,
 		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	if call.scheme == authSchemeToken {
+		req.Header.Set("Authorization", "token "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/vnd.api+json")
 	}
