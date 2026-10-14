@@ -241,6 +241,9 @@ type serveFlags struct {
 	// for the start log (ADR 63 decision 7).
 	file     cli.ConfigFile
 	resolved []cli.Resolved
+	// passwordFlags holds the flags that carry a password in a URL, for the
+	// deprecation warning (issue 511).
+	passwordFlags []*cli.Setting
 
 	config                  string
 	listen                  string
@@ -296,6 +299,7 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 	}
 
 	f.resolved = resolved
+	f.passwordFlags = cli.FlagsHoldingPassword(fs, resolved)
 
 	return nil
 }
@@ -356,6 +360,14 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	}
 
 	cli.LogResolved(ctx, logger, f.resolved)
+
+	for _, s := range f.passwordFlags {
+		logger.LogAttrs(ctx, slog.LevelWarn,
+			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
+			slog.String("flag", "--"+s.Flag),
+			slog.String("use", s.Env),
+		)
+	}
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr

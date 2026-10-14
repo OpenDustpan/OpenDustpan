@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -216,6 +217,29 @@ func decodeMapping(root *yaml.Node) (ConfigFile, error) {
 	}
 
 	return out, nil
+}
+
+// FlagsHoldingPassword answers the settings whose flag holds a URL with a
+// password, for a setting that refuses a password in the configuration file
+// (ADR 63 decision 4). The flag value is read from fs, because the resolved
+// value of a sensitive setting is redacted. A flag shows in a process list,
+// so serve warns about each setting it returns, and names the flag, never the
+// value (issue 511).
+func FlagsHoldingPassword(fs *flag.FlagSet, resolved []Resolved) []*Setting {
+	var out []*Setting
+
+	for _, r := range resolved {
+		if r.Source != SourceFlag || !r.Setting.NoPasswordInFile || r.Setting.Flag == "" {
+			continue
+		}
+
+		f := fs.Lookup(r.Setting.Flag)
+		if f != nil && hasPassword(f.Value.String()) {
+			out = append(out, r.Setting)
+		}
+	}
+
+	return out
 }
 
 // hasPassword reports whether value is a URL with a password. A value that
