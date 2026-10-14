@@ -539,11 +539,13 @@ func revokeGrant(
 // classifyAccess maps the role and grant errors to their status and
 // message: a bad body or role answers 400, an escalation 403, an unknown
 // role or grant 404, a taken name or grant, a built-in role and a role in
-// use 409, and a store with no access port 501.
+// use 409, and a store with no access or review port 501.
 func classifyAccess(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, errRoleBody), errors.Is(err, errRoleChangeBody), errors.Is(err, errGrantBody),
-		errors.Is(err, errUnitQuery), errors.Is(err, access.ErrInvalid):
+		errors.Is(err, errUnitQuery), errors.Is(err, errReviewQuery), errors.Is(err, errCallerAccessQuery),
+		errors.Is(err, errExpandQuery),
+		errors.Is(err, access.ErrInvalid):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, access.ErrEscalation):
 		return http.StatusForbidden, err.Error(), true
@@ -551,7 +553,8 @@ func classifyAccess(err error) (int, string, bool) {
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, access.ErrAlreadyExists), errors.Is(err, access.ErrBuiltIn), errors.Is(err, access.ErrInUse):
 		return http.StatusConflict, err.Error(), true
-	case errors.Is(err, errNoAccessStore):
+	case errors.Is(err, errNoAccessStore), errors.Is(err, access.ErrNoReview),
+		errors.Is(err, access.ErrCollectionReview):
 		return http.StatusNotImplemented, err.Error(), true
 	default:
 		return 0, "", false
