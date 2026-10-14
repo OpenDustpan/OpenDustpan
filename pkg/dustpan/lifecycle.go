@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -115,4 +118,54 @@ func lifecycleError(err, notFound, taken error) error {
 	default:
 		return err
 	}
+}
+
+// deletedReadScope implements inventoryapi.DeletedReadScope with the scope
+// of unit:read that an access.Authorizer lists (ADR 52). Another authorizer
+// lists no scope, so it fails closed: an administrator reads every deleted
+// unit, and any other caller reads none.
+type deletedReadScope struct {
+	authz identity.Authorizer
+}
+
+var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil}
+
+// ReadableUnits implements inventoryapi.DeletedReadScope. A grant of
+// unit:read on the installation or on ns covers every deleted unit of ns. A
+// grant on a unit covers that unit while it exists, so it gives nothing on a
+// deleted unit here: ListObjects leaves out the units that do not exist.
+// Collections (#478) are not wired yet, so a grant on a collection covers
+// no deleted unit.
+func (s deletedReadScope) ReadableUnits(
+	ctx context.Context, p identity.Principal, ns namespace.Name,
+) (bool, []string, error) {
+	authz, ok := s.authz.(*access.Authorizer)
+	if !ok {
+		return p.Admin, nil, nil
+	}
+
+	scope, err := authz.ListObjects(ctx, p, identity.ActionUnitRead)
+	if err != nil {
+		return false, nil, fmt.Errorf("list readable units: %w", err)
+	}
+
+	if scope.All {
+		return true, nil, nil
+	}
+
+	for _, obj := range scope.Namespaces {
+		if obj.Namespace() == ns {
+			return true, nil, nil
+		}
+	}
+
+	ids := []string{}
+
+	for _, obj := range scope.Units {
+		if obj.Namespace() == ns && obj.UnitID() != "" {
+			ids = append(ids, obj.UnitID())
+		}
+	}
+
+	return false, ids, nil
 }

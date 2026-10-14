@@ -188,11 +188,41 @@ func moveStackInventoryToDeleted(
 // inventory.PageDeleted share. The page query reads one row more than the
 // page size, so it knows whether a next page exists.
 func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	if q.MatchesNothing() {
+		return inventory.TrimDeletedPage([]inventory.DeletedEntry{}, q.PageSize(), 0), nil
+	}
+
+	var page inventory.DeletedPage
+
+	// One REPEATABLE READ snapshot for the count and the page, so the total
+	// agrees with the rows.
+	opts := pgx.TxOptions{
+		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
+		CommitQuery: "",
+	}
+
+	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		var readErr error
+
+		page, readErr = queryDeletedPage(ctx, tx, q)
+
+		return readErr
+	})
+	if err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", err)
+	}
+
+	return page, nil
+}
+
+// queryDeletedPage counts the deleted units that match q and reads one page
+// of them with tx.
+func queryDeletedPage(ctx context.Context, tx pgx.Tx, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
 	where, args := deletedFilter(q)
 
 	var total int
 
-	count := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM inventory_deleted WHERE "+where, args...)
+	count := tx.QueryRow(ctx, "SELECT COUNT(*) FROM inventory_deleted WHERE "+where, args...)
 	if err := count.Scan(&total); err != nil {
 		return inventory.DeletedPage{}, fmt.Errorf("count deleted inventory: %w", err)
 	}
@@ -207,7 +237,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 	size := q.PageSize()
 	args = append(args, size+1)
 
-	rows, err := s.pool.Query(ctx,
+	rows, err := tx.Query(ctx,
 		"SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms FROM inventory_deleted WHERE "+
 			where+fmt.Sprintf(` ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C" LIMIT $%d`, len(args)),
 		args...)
@@ -252,6 +282,11 @@ func deletedFilter(q inventory.DeletedQuery) (string, []any) {
 	if !q.PurgeBefore.IsZero() {
 		args = append(args, q.PurgeBefore.UnixMilli())
 		where += fmt.Sprintf(" AND purge_after_ms <= $%d", len(args))
+	}
+
+	if q.Restricted {
+		args = append(args, q.UnitIDs)
+		where += fmt.Sprintf(" AND unit_id = ANY($%d::text[])", len(args))
 	}
 
 	return where, args

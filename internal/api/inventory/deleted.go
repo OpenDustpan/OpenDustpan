@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -61,8 +62,8 @@ type deletedUnitEntry struct {
 }
 
 // listDeletedUnitsResponse is one page of deleted units. Total counts every
-// deleted unit of the namespace that matches the filters, before the read
-// check of each unit. NextCursor is empty on the last page.
+// deleted unit of the namespace that matches the filters and that the caller
+// may read. NextCursor is empty on the last page.
 //
 // Contract: never remove or rename these fields.
 type listDeletedUnitsResponse struct {
@@ -96,6 +97,14 @@ type cursorWire struct {
 	Tool   string `json:"t"`
 	Name   string `json:"n"`
 	UnitID string `json:"u"`
+}
+
+// DeletedReadScope answers which deleted units of ns the principal p may
+// read (unit:read): every unit when all is true, else the units with the
+// stable IDs in ids. The list filters the store query with it, so the page,
+// the cursor and the total hold no unit that p may not read.
+type DeletedReadScope interface {
+	ReadableUnits(ctx context.Context, p identity.Principal, ns namespace.Name) (all bool, ids []string, err error)
 }
 
 // toolCode maps a tool label or code from a query to the stored code.
@@ -177,7 +186,8 @@ func intQuery(r *http.Request, name string, limit int) (int, error) {
 	return n, nil
 }
 
-// deletedQuery builds the store query of a list request for ns.
+// deletedQuery builds the store query of a list request for ns. It does not
+// set the read scope.
 func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, error) {
 	limit, err := intQuery(r, "limit", coreinventory.MaxDeletedPageSize)
 	if err != nil {
@@ -205,14 +215,17 @@ func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventor
 		Namespace:   ns,
 		Tool:        toolCode(r.URL.Query().Get("tool")),
 		NamePrefix:  r.URL.Query().Get("namePrefix"),
+		UnitIDs:     nil,
 		Limit:       limit,
+		Restricted:  false,
 	}, nil
 }
 
 // listDeletedUnits answers GET /api/inventory/deleted-units with one page of
 // the deleted units of the namespace (ADR 47). The route wrapper already
-// allowed namespace:read on the namespace; this leaves out every unit that
-// the caller may not read. The query values tool, namePrefix,
+// allowed namespace:read on the namespace. The store query holds only the
+// units that the caller may read, so the page, the cursor and the total
+// never show another unit. The query values tool, namePrefix,
 // purgeWithinDays, limit and cursor filter and page the list.
 func (h *Handler) listDeletedUnits(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
@@ -233,6 +246,18 @@ func (h *Handler) listDeletedUnits(
 		return
 	}
 
+	all, ids, err := h.readScope.ReadableUnits(ctx, p, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if !all {
+		q.Restricted = true
+		q.UnitIDs = ids
+	}
+
 	page, err := h.deleted.QueryDeletedUnits(ctx, q)
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -241,25 +266,7 @@ func (h *Handler) listDeletedUnits(
 	}
 
 	units := make([]deletedUnitEntry, 0, len(page.Entries))
-
 	for i := range page.Entries {
-		uobj, objErr := deletedObject(page.Entries[i])
-		if objErr != nil {
-			h.writeError(ctx, w, objErr)
-
-			return
-		}
-
-		if authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); authErr != nil {
-			if errors.Is(authErr, identity.ErrDenied) {
-				continue
-			}
-
-			h.writeError(ctx, w, authErr)
-
-			return
-		}
-
 		units = append(units, toDeletedUnitEntry(page.Entries[i]))
 	}
 

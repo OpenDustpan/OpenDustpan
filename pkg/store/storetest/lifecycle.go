@@ -348,13 +348,28 @@ func testQueryDeletedUnits(t *testing.T, s Store) {
 		t.Fatalf("deleted units = %d, %v, want %d", len(all), err, len(names))
 	}
 
-	queries := []inventory.DeletedQuery{
+	queries := make([]inventory.DeletedQuery, 0, 9)
+	queries = append(queries,
 		deletedQuery(ns.Name, "", "", time.Time{}, 0),
 		deletedQuery(ns.Name, "pulumi", "", time.Time{}, 2),
 		deletedQuery(ns.Name, "opentofu", "", time.Time{}, 2),
 		deletedQuery(ns.Name, "", "web/", time.Time{}, 2),
 		deletedQuery(ns.Name, "", "Web/", time.Time{}, 10),
 		deletedQuery(ns.Name, "", "", deletedAt().Add(3*24*time.Hour), 1),
+	)
+
+	// Restricted queries: the page, the cursor and the total cover only the
+	// listed unit IDs, an unknown ID matches nothing, and an empty list
+	// matches nothing.
+	for _, ids := range [][]string{
+		{all[1].UnitID, all[3].UnitID, all[4].UnitID},
+		{all[0].UnitID, "stk-unknown"},
+		{},
+	} {
+		q := deletedQuery(ns.Name, "", "", time.Time{}, 1)
+		q.Restricted = true
+		q.UnitIDs = ids
+		queries = append(queries, q)
 	}
 
 	for i := range queries {
@@ -416,7 +431,8 @@ func sameDeletedPage(a, b inventory.DeletedPage) bool {
 // page.
 func deletedQuery(ns namespace.Name, tool, prefix string, purgeBefore time.Time, limit int) inventory.DeletedQuery {
 	return inventory.DeletedQuery{
-		PurgeBefore: purgeBefore, After: nil, Namespace: ns, Tool: tool, NamePrefix: prefix, Limit: limit,
+		PurgeBefore: purgeBefore, After: nil, Namespace: ns, Tool: tool, NamePrefix: prefix, UnitIDs: nil,
+		Limit: limit, Restricted: false,
 	}
 }
 

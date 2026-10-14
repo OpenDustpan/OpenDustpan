@@ -57,7 +57,14 @@ func TestPageDeletedSizes(t *testing.T) {
 
 	for _, tc := range cases {
 		page := inventory.PageDeleted(all[:tc.count], inventory.DeletedQuery{
-			PurgeBefore: time.Time{}, After: nil, Namespace: "acme", Tool: "", NamePrefix: "", Limit: tc.limit,
+			PurgeBefore: time.Time{},
+			After:       nil,
+			Namespace:   "acme",
+			Tool:        "",
+			NamePrefix:  "",
+			UnitIDs:     nil,
+			Restricted:  false,
+			Limit:       tc.limit,
 		})
 
 		if len(page.Entries) != tc.wantLen || (page.Next != nil) != tc.wantNext || page.Total != tc.count {
@@ -74,7 +81,14 @@ func TestPageDeletedTrimMatchesPage(t *testing.T) {
 
 	all := deletedEntries(7)
 	q := inventory.DeletedQuery{
-		PurgeBefore: time.Time{}, After: nil, Namespace: "acme", Tool: "", NamePrefix: "", Limit: 3,
+		PurgeBefore: time.Time{},
+		After:       nil,
+		Namespace:   "acme",
+		Tool:        "",
+		NamePrefix:  "",
+		UnitIDs:     nil,
+		Restricted:  false,
+		Limit:       3,
 	}
 
 	want := inventory.PageDeleted(all, q)

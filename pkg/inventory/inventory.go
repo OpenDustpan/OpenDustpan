@@ -12,6 +12,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -166,13 +167,19 @@ type DeletedCursor struct {
 // units the server purges in the next days. After starts the page after a
 // cursor. Limit is the page size: zero means DefaultDeletedPageSize, and a
 // value above MaxDeletedPageSize means MaxDeletedPageSize.
+//
+// When Restricted is true, only the units whose ID is in UnitIDs match, so
+// the page, the cursor and the total cover only the units that a caller may
+// read. An empty UnitIDs then matches nothing.
 type DeletedQuery struct {
 	PurgeBefore time.Time
 	After       *DeletedCursor
 	Namespace   namespace.Name
 	Tool        string
 	NamePrefix  string
+	UnitIDs     []string
 	Limit       int
+	Restricted  bool
 }
 
 // PageSize returns the page size of q after the default and the cap.
@@ -192,7 +199,14 @@ func (q DeletedQuery) Matches(e DeletedEntry) bool {
 	return e.Namespace == q.Namespace &&
 		(q.Tool == "" || e.Tool == q.Tool) &&
 		strings.HasPrefix(e.Name, q.NamePrefix) &&
-		(q.PurgeBefore.IsZero() || !e.PurgeAfter.After(q.PurgeBefore))
+		(q.PurgeBefore.IsZero() || !e.PurgeAfter.After(q.PurgeBefore)) &&
+		(!q.Restricted || slices.Contains(q.UnitIDs, e.UnitID))
+}
+
+// MatchesNothing reports whether q is restricted to no unit. A store can
+// answer an empty page for it without a query.
+func (q DeletedQuery) MatchesNothing() bool {
+	return q.Restricted && len(q.UnitIDs) == 0
 }
 
 // DeletedPage is one page of deleted units. Total counts every unit that

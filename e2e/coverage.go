@@ -508,6 +508,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Units:         coverageReader{},
 		Deleted:       coverageReader{},
 		Lifecycles:    map[string]coreinventory.Lifecycle{"pulumi": coverageLifecycle{}},
+		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -542,6 +543,16 @@ func (coverageReader) GetDeletedUnit(
 	_ context.Context, _ namespace.Name, _, _ string,
 ) (coreinventory.DeletedEntry, error) {
 	return coreinventory.DeletedEntry{}, coreinventory.ErrNotFound
+}
+
+// coverageScope lets no caller read a deleted unit. It exists only to build a
+// Handler for its route table; no request is ever served.
+type coverageScope struct{}
+
+func (coverageScope) ReadableUnits(
+	_ context.Context, _ identity.Principal, _ namespace.Name,
+) (bool, []string, error) {
+	return false, nil, nil
 }
 
 // coverageLifecycle restores and purges nothing. It exists only to build a

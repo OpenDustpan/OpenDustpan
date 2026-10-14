@@ -1197,6 +1197,7 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates},
 			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces},
 		},
+		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,

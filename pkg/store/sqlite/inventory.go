@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -181,6 +182,10 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if q.MatchesNothing() {
+		return inventory.TrimDeletedPage([]inventory.DeletedEntry{}, q.PageSize(), 0), nil
+	}
+
 	where, args := deletedFilter(q)
 
 	var total int
@@ -237,6 +242,13 @@ func deletedFilter(q inventory.DeletedQuery) (string, []any) {
 	if !q.PurgeBefore.IsZero() {
 		where += " AND purge_after_ms <= ?"
 		args = append(args, q.PurgeBefore.UnixMilli())
+	}
+
+	if q.Restricted {
+		where += " AND unit_id IN (" + strings.TrimSuffix(strings.Repeat("?, ", len(q.UnitIDs)), ", ") + ")"
+		for _, id := range q.UnitIDs {
+			args = append(args, id)
+		}
 	}
 
 	return where, args

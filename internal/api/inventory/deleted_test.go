@@ -3,9 +3,9 @@ package inventory_test
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +42,7 @@ func (m *memDeleted) ListDeletedUnits(
 ) ([]coreinventory.DeletedEntry, error) {
 	q := coreinventory.DeletedQuery{
 		PurgeBefore: time.Time{}, After: nil, Namespace: ns, Tool: "", NamePrefix: "",
-		Limit: coreinventory.MaxDeletedPageSize,
+		UnitIDs: nil, Restricted: false, Limit: coreinventory.MaxDeletedPageSize,
 	}
 
 	return coreinventory.PageDeleted(m.sorted(), q).Entries, nil
@@ -155,6 +155,19 @@ func newDeletedFixture(
 ) deletedFixture {
 	t.Helper()
 
+	return buildDeletedFixture(t, entries, authz, lifecycleErr, fixedScope{err: nil, ids: nil, all: true})
+}
+
+// buildDeletedFixture is newDeletedFixture with the read scope scope.
+func buildDeletedFixture(
+	t *testing.T,
+	entries []coreinventory.DeletedEntry,
+	authz identity.Authorizer,
+	lifecycleErr error,
+	scope apiinventory.DeletedReadScope,
+) deletedFixture {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -173,6 +186,7 @@ func newDeletedFixture(
 			"pulumi":   pulumi,
 			"opentofu": &memLifecycle{err: nil, calls: nil},
 		},
+		ReadScope:     scope,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
@@ -396,31 +410,87 @@ func TestListDeletedUnitsInvalidQuery(t *testing.T) {
 	}
 }
 
-// denyDeletedUnit denies unit:read on the unit with the given ID.
-type denyDeletedUnit struct {
-	unitID string
+// fixedScope is a DeletedReadScope with a fixed answer for every caller.
+type fixedScope struct {
+	err error
+	ids []string
+	all bool
 }
 
-func (d denyDeletedUnit) Authorize(
-	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
-) error {
-	if action == identity.ActionUnitRead && obj.UnitID() == d.unitID {
-		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
-	}
-
-	return nil
+func (f fixedScope) ReadableUnits(
+	_ context.Context, _ identity.Principal, _ namespace.Name,
+) (bool, []string, error) {
+	return f.all, f.ids, f.err
 }
 
-// TestListDeletedUnitsFiltersDeniedUnits proves that the list leaves out a
-// unit the caller may not read, and that the check uses the unit ID.
-func TestListDeletedUnitsFiltersDeniedUnits(t *testing.T) {
+// TestListDeletedUnitsReadScope proves that the list holds only the units
+// that the caller may read, and that the cursor and the total hold no other
+// unit: a walk of every page with limit 1 sees only readable IDs, and the
+// total counts only them, also with a name prefix.
+func TestListDeletedUnitsReadScope(t *testing.T) {
 	t.Parallel()
 
-	f := newDeletedFixture(t, fiveDeleted(), denyDeletedUnit{unitID: "s2"}, nil)
-	got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{}), ""))
+	scope := fixedScope{err: nil, ids: []string{"s1", "w2"}, all: false}
+	f := buildDeletedFixture(t, fiveDeleted(), selectiveAuthorizer{deny: map[identity.Action]bool{}}, nil, scope)
 
-	if want := "w2,w1,s3,s1"; strings.Join(unitIDs(got.Units), ",") != want {
-		t.Fatalf("unit IDs = %v, want %s", unitIDs(got.Units), want)
+	var seen []string
+
+	cursor := ""
+
+	for range 5 {
+		q := url.Values{"limit": {"1"}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+
+		got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(q), ""))
+		if got.Total != 2 {
+			t.Fatalf("total = %d, want 2", got.Total)
+		}
+
+		seen = append(seen, unitIDs(got.Units)...)
+		cursor = got.NextCursor
+
+		if cursor == "" {
+			break
+		}
+
+		if raw, err := base64.RawURLEncoding.DecodeString(cursor); err != nil ||
+			!strings.Contains(string(raw), `"s1"`) && !strings.Contains(string(raw), `"w2"`) {
+			t.Fatalf("cursor %s names a unit outside the scope", raw)
+		}
+	}
+
+	if want := "w2,s1"; strings.Join(seen, ",") != want {
+		t.Fatalf("pages = %v, want %s", seen, want)
+	}
+
+	got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{"namePrefix": {"web/d"}}), ""))
+	if got.Total != 0 || len(got.Units) != 0 {
+		t.Fatalf("prefix of an unreadable unit = %+v, want no unit and total 0", got)
+	}
+}
+
+// TestListDeletedUnitsEmptyScope proves that a caller who may read no
+// deleted unit gets an empty list with total 0, and that a scope error
+// answers 500.
+func TestListDeletedUnitsEmptyScope(t *testing.T) {
+	t.Parallel()
+
+	allow := selectiveAuthorizer{deny: map[identity.Action]bool{}}
+
+	f := buildDeletedFixture(t, fiveDeleted(), allow, nil, fixedScope{err: nil, ids: nil, all: false})
+
+	got := decodeDeleted(t, f.serve(t, http.MethodGet, listTarget(url.Values{}), ""))
+	if got.Total != 0 || len(got.Units) != 0 || got.NextCursor != "" {
+		t.Fatalf("deleted units = %+v, want none", got)
+	}
+
+	failing := buildDeletedFixture(t, fiveDeleted(), allow, nil, fixedScope{err: errBoom, ids: nil, all: false})
+
+	rec := failing.serve(t, http.MethodGet, listTarget(url.Values{}), "")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 
