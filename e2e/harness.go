@@ -646,6 +646,7 @@ func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            e.server,
+		Tokens:             nil,
 		Checkpoints:        e.server,
 		Events:             e.server,
 		Namespaces:         namespaces,

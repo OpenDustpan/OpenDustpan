@@ -98,6 +98,7 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
 		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -781,6 +782,7 @@ func testEntry() audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "tester", IDPSubject: "", TokenID: "",
 		Action: "server:manage-access", Object: "", Version: "", ValuePath: "", ValueCount: nil,
+		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 	}

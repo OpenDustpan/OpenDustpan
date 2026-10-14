@@ -14,7 +14,7 @@ import (
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -38,6 +38,7 @@ type ActiveUpdateRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -60,6 +61,7 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 		&i.CreatedBy,
 		&i.RestoredFrom,
 		&i.JournalVersion,
+		&i.TokenID,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -83,6 +85,34 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = EXCLUDED.sequence, updated_at_ms = EXCLUDED.updated_at_ms
+WHERE EXCLUDED.sequence > audit_sink_cursors.sequence
+`
+
+type AdvanceAuditSinkCursorParams struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
+// Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+// is already at the sequence or higher stays, so two instances that ship
+// the same batch never move it back.
+func (q *Queries) AdvanceAuditSinkCursor(ctx context.Context, arg AdvanceAuditSinkCursorParams) error {
+	_, err := q.db.Exec(ctx, advanceAuditSinkCursor,
+		arg.Sink,
+		arg.Namespace,
+		arg.Sequence,
+		arg.UpdatedAtMs,
+	)
+	return err
 }
 
 const appendEvent = `-- name: AppendEvent :exec
@@ -257,9 +287,9 @@ const countAccessTokens = `-- name: CountAccessTokens :one
 SELECT COUNT(*) FROM access_tokens
 WHERE ($1::text = '' OR principal_id = $1::text)
   AND ($2::bigint = 0
-    OR (($2::bigint = 1 OR $2::bigint = 2) AND revoked_at_ms IS NULL AND expires_at_ms > $3::bigint
+    OR (($2::bigint = 1 OR $2::bigint = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $3::bigint
       AND ($2::bigint = 1 OR expires_at_ms <= $4::bigint))
-    OR ($2::bigint = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= $3::bigint)))
+    OR ($2::bigint = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= $3::bigint)))
 `
 
 type CountAccessTokensParams struct {
@@ -947,8 +977,8 @@ const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    created_by, restored_from, token_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 `
 
 type CreateUpdateParams struct {
@@ -966,6 +996,7 @@ type CreateUpdateParams struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	TokenID          string
 }
 
 func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) error {
@@ -984,6 +1015,7 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.EndedAtMs,
 		arg.CreatedBy,
 		arg.RestoredFrom,
+		arg.TokenID,
 	)
 	return err
 }
@@ -1033,6 +1065,19 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const databaseNowMs = `-- name: DatabaseNowMs :one
+SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+`
+
+// The time of the database clock in Unix milliseconds. The sweep uses it, so
+// a wrong clock on one instance cannot disable every record.
+func (q *Queries) DatabaseNowMs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, databaseNowMs)
+	var now_ms int64
+	err := row.Scan(&now_ms)
+	return now_ms, err
 }
 
 const deleteGroup = `-- name: DeleteGroup :execrows
@@ -1221,6 +1266,105 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams
 	return result.RowsAffected(), nil
 }
 
+const disableInactiveAccessTokens = `-- name: DisableInactiveAccessTokens :many
+UPDATE access_tokens SET disabled_at_ms = $1::bigint
+WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $1::bigint
+  AND COALESCE(last_used_at_ms, created_at_ms) <= $2::bigint
+RETURNING id, principal_id
+`
+
+type DisableInactiveAccessTokensParams struct {
+	AtMs     int64
+	CutoffMs int64
+}
+
+type DisableInactiveAccessTokensRow struct {
+	ID          string
+	PrincipalID string
+}
+
+func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableInactiveAccessTokensParams) ([]DisableInactiveAccessTokensRow, error) {
+	rows, err := q.db.Query(ctx, disableInactiveAccessTokens, arg.AtMs, arg.CutoffMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DisableInactiveAccessTokensRow
+	for rows.Next() {
+		var i DisableInactiveAccessTokensRow
+		if err := rows.Scan(&i.ID, &i.PrincipalID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const disableInactivePrincipals = `-- name: DisableInactivePrincipals :many
+UPDATE principals SET disabled_at_ms = $1::bigint
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND created_at_ms <= $2::bigint
+  AND last_active_at_ms <= $2::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > $2::bigint OR t.last_used_at_ms > $2::bigint)
+  )
+RETURNING id
+`
+
+type DisableInactivePrincipalsParams struct {
+	AtMs     int64
+	CutoffMs int64
+}
+
+// A person is inactive when its creation, its activity baseline, and the
+// creation and the last use of each of its tokens are all at or before the
+// cutoff.
+func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const enablePrincipal = `-- name: EnablePrincipal :execrows
+UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = $1::bigint,
+  last_active_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE id = $2 AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL
+`
+
+type EnablePrincipalParams struct {
+	UpdatedAtMs int64
+	ID          string
+}
+
+// An enable also sets the activity baseline from the database clock, the
+// clock of the sweep, so the next sweep does not disable the principal again.
+func (q *Queries) EnablePrincipal(ctx context.Context, arg EnablePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enablePrincipal, arg.UpdatedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const endMembershipsInGroup = `-- name: EndMembershipsInGroup :exec
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND removed_at_ms IS NULL
@@ -1254,7 +1398,7 @@ func (q *Queries) EndMembershipsOfPrincipal(ctx context.Context, arg EndMembersh
 const endRotatedAccessToken = `-- name: EndRotatedAccessToken :execrows
 UPDATE access_tokens
 SET expires_at_ms = LEAST(expires_at_ms, $1::bigint), replaced_by = $2::text
-WHERE id = $3 AND revoked_at_ms IS NULL AND replaced_by IS NULL
+WHERE id = $3 AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND replaced_by IS NULL
   AND expires_at_ms > $4::bigint
 `
 
@@ -1404,7 +1548,7 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 }
 
 const getAccessToken = `-- name: GetAccessToken :one
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = $1
 `
 
@@ -1419,6 +1563,7 @@ type GetAccessTokenRow struct {
 	RevokedAtMs  pgtype.Int8
 	ReplacedBy   pgtype.Text
 	CreatedBy    string
+	DisabledAtMs pgtype.Int8
 }
 
 func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessTokenRow, error) {
@@ -1435,33 +1580,41 @@ func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessToken
 		&i.RevokedAtMs,
 		&i.ReplacedBy,
 		&i.CreatedBy,
+		&i.DisabledAtMs,
 	)
 	return i, err
 }
 
 const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
-  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
+  t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = $1 AND p.deleted_at_ms IS NULL
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID            string
-	PrincipalID   string
-	Name          string
-	Kind          string
-	Digest        string
-	CreatedAtMs   int64
-	ExpiresAtMs   int64
-	LastUsedAtMs  pgtype.Int8
-	RevokedAtMs   pgtype.Int8
-	ReplacedBy    pgtype.Text
-	CreatedBy     string
-	Subject       string
-	DisplayName   string
-	PrincipalKind string
+	ID                    string
+	PrincipalID           string
+	Name                  string
+	Kind                  string
+	Digest                string
+	CreatedAtMs           int64
+	ExpiresAtMs           int64
+	LastUsedAtMs          pgtype.Int8
+	RevokedAtMs           pgtype.Int8
+	ReplacedBy            pgtype.Text
+	CreatedBy             string
+	DisabledAtMs          pgtype.Int8
+	Subject               string
+	DisplayName           string
+	PrincipalKind         string
+	PrincipalDisabledAtMs pgtype.Int8
+	PrincipalActiveAtMs   int64
 }
 
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
@@ -1479,11 +1632,63 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.RevokedAtMs,
 		&i.ReplacedBy,
 		&i.CreatedBy,
+		&i.DisabledAtMs,
 		&i.Subject,
 		&i.DisplayName,
 		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+		&i.PrincipalActiveAtMs,
 	)
 	return i, err
+}
+
+const getAccessTokenPolicy = `-- name: GetAccessTokenPolicy :one
+
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+FROM access_token_policy WHERE id = 1
+`
+
+type GetAccessTokenPolicyRow struct {
+	MaxLifetimeMs     int64
+	InactivityMs      int64
+	DisableTokens     bool
+	DisableAccounts   bool
+	DisableBreakGlass bool
+	UpdatedAtMs       int64
+}
+
+// Token policy and the inactivity disable (ADR 53).
+func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolicyRow, error) {
+	row := q.db.QueryRow(ctx, getAccessTokenPolicy)
+	var i GetAccessTokenPolicyRow
+	err := row.Scan(
+		&i.MaxLifetimeMs,
+		&i.InactivityMs,
+		&i.DisableTokens,
+		&i.DisableAccounts,
+		&i.DisableBreakGlass,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getAuditSinkCursor = `-- name: GetAuditSinkCursor :one
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = $1 AND namespace = $2
+`
+
+type GetAuditSinkCursorParams struct {
+	Sink      string
+	Namespace string
+}
+
+// The highest sequence of a namespace that a log sink holds (ADR 60
+// decision 13). A sink with no row holds no entry of the namespace.
+func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursorParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getAuditSinkCursor, arg.Sink, arg.Namespace)
+	var sequence int64
+	err := row.Scan(&sequence)
+	return sequence, err
 }
 
 const getBackup = `-- name: GetBackup :one
@@ -1870,20 +2075,21 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namesp
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
 
 type GetPrincipalRow struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	GroupCount  int64
+	ID           string
+	Subject      string
+	DisplayName  string
+	Kind         string
+	Source       string
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	DisabledAtMs pgtype.Int8
+	GroupCount   int64
 }
 
 func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow, error) {
@@ -1897,26 +2103,28 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.DisabledAtMs,
 		&i.GroupCount,
 	)
 	return i, err
 }
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
 
 type GetPrincipalBySubjectRow struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	GroupCount  int64
+	ID           string
+	Subject      string
+	DisplayName  string
+	Kind         string
+	Source       string
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	DisabledAtMs pgtype.Int8
+	GroupCount   int64
 }
 
 func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (GetPrincipalBySubjectRow, error) {
@@ -1930,6 +2138,7 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.DisabledAtMs,
 		&i.GroupCount,
 	)
 	return i, err
@@ -2137,7 +2346,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2165,6 +2374,7 @@ type GetUpdateRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -2187,6 +2397,7 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.CreatedBy,
 		&i.RestoredFrom,
 		&i.JournalVersion,
+		&i.TokenID,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -2528,8 +2739,8 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 `
 
 type InsertAuditEntryParams struct {
@@ -2552,6 +2763,7 @@ type InsertAuditEntryParams struct {
 	PrevHash   string
 	Hash       string
 	ValueCount pgtype.Int8
+	Changes    pgtype.Text
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -2575,6 +2787,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+		arg.Changes,
 	)
 	return err
 }
@@ -2740,7 +2953,7 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -2772,6 +2985,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.PrevHash,
 		&i.Hash,
 		&i.ValueCount,
+		&i.Changes,
 	)
 	return i, err
 }
@@ -2817,13 +3031,13 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (pgty
 }
 
 const listAccessTokens = `-- name: ListAccessTokens :many
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens
 WHERE ($1::text = '' OR principal_id = $1::text)
   AND ($2::bigint = 0
-    OR (($2::bigint = 1 OR $2::bigint = 2) AND revoked_at_ms IS NULL AND expires_at_ms > $3::bigint
+    OR (($2::bigint = 1 OR $2::bigint = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $3::bigint
       AND ($2::bigint = 1 OR expires_at_ms <= $4::bigint))
-    OR ($2::bigint = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= $3::bigint)))
+    OR ($2::bigint = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= $3::bigint)))
   AND (NOT $5::boolean
     OR created_at_ms < $6::bigint
     OR (created_at_ms = $6::bigint AND id COLLATE "C" < $7::text))
@@ -2853,6 +3067,7 @@ type ListAccessTokensRow struct {
 	RevokedAtMs  pgtype.Int8
 	ReplacedBy   pgtype.Text
 	CreatedBy    string
+	DisabledAtMs pgtype.Int8
 }
 
 func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensParams) ([]ListAccessTokensRow, error) {
@@ -2884,6 +3099,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 			&i.RevokedAtMs,
 			&i.ReplacedBy,
 			&i.CreatedBy,
+			&i.DisabledAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -2897,7 +3113,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -2943,6 +3159,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
@@ -2956,7 +3173,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -3000,6 +3217,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
@@ -3301,7 +3519,7 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 }
 
 const listGroupMembers = `-- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -3322,15 +3540,16 @@ type ListGroupMembersParams struct {
 }
 
 type ListGroupMembersRow struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	GroupCount  int64
-	AddedAtMs   int64
+	ID           string
+	Subject      string
+	DisplayName  string
+	Kind         string
+	Source       string
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	DisabledAtMs pgtype.Int8
+	GroupCount   int64
+	AddedAtMs    int64
 }
 
 func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersParams) ([]ListGroupMembersRow, error) {
@@ -3356,6 +3575,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.DisabledAtMs,
 			&i.GroupCount,
 			&i.AddedAtMs,
 		); err != nil {
@@ -3600,7 +3820,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 }
 
 const listPrincipals = `-- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -3621,14 +3841,15 @@ type ListPrincipalsParams struct {
 }
 
 type ListPrincipalsRow struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	GroupCount  int64
+	ID           string
+	Subject      string
+	DisplayName  string
+	Kind         string
+	Source       string
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	DisabledAtMs pgtype.Int8
+	GroupCount   int64
 }
 
 func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) ([]ListPrincipalsRow, error) {
@@ -3654,6 +3875,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.DisabledAtMs,
 			&i.GroupCount,
 		); err != nil {
 			return nil, err
@@ -4036,7 +4258,7 @@ func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -4068,6 +4290,7 @@ type ListUpdatesRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -4096,6 +4319,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.CreatedBy,
 			&i.RestoredFrom,
 			&i.JournalVersion,
+			&i.TokenID,
 			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
@@ -4815,9 +5039,9 @@ UPDATE updates
 SET status = $1, version = $2, revision = $3,
     lease_digest = $4, lease_expires_at_ms = $5,
     started_at_ms = $6, ended_at_ms = $7,
-    journal_version = $8
-WHERE stack_id = $9 AND id = $10
-  AND revision = $11
+    journal_version = $8, token_id = $9
+WHERE stack_id = $10 AND id = $11
+  AND revision = $12
 `
 
 type SaveUpdateParams struct {
@@ -4829,6 +5053,7 @@ type SaveUpdateParams struct {
 	StartedAtMs      int64
 	EndedAtMs        int64
 	JournalVersion   int64
+	TokenID          string
 	StackID          string
 	ID               string
 	ExpectedRevision int64
@@ -4846,6 +5071,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.StartedAtMs,
 		arg.EndedAtMs,
 		arg.JournalVersion,
+		arg.TokenID,
 		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,
@@ -4915,6 +5141,38 @@ type SealStateVersionParams struct {
 // a crash succeeds and changes nothing.
 func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setAccessTokenPolicy = `-- name: SetAccessTokenPolicy :execrows
+UPDATE access_token_policy
+SET max_lifetime_ms = $1::bigint, inactivity_ms = $2::bigint,
+  disable_tokens = $3::boolean, disable_accounts = $4::boolean,
+  disable_break_glass = $5::boolean, updated_at_ms = $6::bigint
+WHERE id = 1
+`
+
+type SetAccessTokenPolicyParams struct {
+	MaxLifetimeMs     int64
+	InactivityMs      int64
+	DisableTokens     bool
+	DisableAccounts   bool
+	DisableBreakGlass bool
+	UpdatedAtMs       int64
+}
+
+func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPolicyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAccessTokenPolicy,
+		arg.MaxLifetimeMs,
+		arg.InactivityMs,
+		arg.DisableTokens,
+		arg.DisableAccounts,
+		arg.DisableBreakGlass,
+		arg.UpdatedAtMs,
+	)
 	if err != nil {
 		return 0, err
 	}

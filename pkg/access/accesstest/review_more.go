@@ -2,6 +2,7 @@ package accesstest
 
 import (
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -124,7 +125,7 @@ func seedTeam(t *testing.T, ps principal.Store) {
 
 	for _, p := range [][2]string{{"prn-x", "xavier"}, {"prn-y", "yvonne"}} {
 		prn := principal.Principal{
-			CreatedAt: at(0), UpdatedAt: at(0), ID: p[0], Subject: p[1], DisplayName: "",
+			CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: p[0], Subject: p[1], DisplayName: "",
 			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 		}
 		if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {

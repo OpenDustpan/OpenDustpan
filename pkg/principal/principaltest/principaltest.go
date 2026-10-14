@@ -102,6 +102,7 @@ func entry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "principaltest",
 		Channel:    audit.ChannelAPI,
@@ -131,6 +132,7 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 	return principal.Principal{
 		CreatedAt:   at(0),
 		UpdatedAt:   at(0),
+		DisabledAt:  time.Time{},
 		ID:          id,
 		Subject:     subject,
 		DisplayName: "Name of " + subject,

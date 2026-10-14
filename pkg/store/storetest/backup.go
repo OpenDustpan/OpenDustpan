@@ -276,17 +276,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 
 	principals := []principal.Principal{
 		{
-			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "prn-alice",
+			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
 			Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
-			CreatedAt: now(), UpdatedAt: now(), ID: "prn-deploy",
+			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
 			Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
-			CreatedAt: now(), UpdatedAt: now(), ID: "prn-gone",
+			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
 			Source: principal.SourceSCIM, GroupCount: 0,
 		},
@@ -299,8 +299,13 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 	}
 
 	g := principal.Group{
-		CreatedAt: now(), UpdatedAt: now(), ID: "grp-ops", Name: "Ops", Description: "Runs the platform",
-		Source: principal.SourceLocal, MemberCount: 0,
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		ID:          "grp-ops",
+		Name:        "Ops",
+		Description: "Runs the platform",
+		Source:      principal.SourceLocal,
+		MemberCount: 0,
 	}
 	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -366,13 +371,59 @@ func seedBackupTokens(t *testing.T, s BackupStore) {
 	if err := ts.RotateToken(ctx, r, rotation); err != nil {
 		t.Fatalf("rotate token: %v", err)
 	}
+
+	seedBackupSweep(t, ts)
 }
 
-// backupToken returns a token of the seed that expires a day after now.
+// seedBackupSweep changes the token policy and runs one sweep, so the round
+// trip carries the policy row and the disable times of a token and of a
+// principal (ADR 53).
+func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	policy := accesstoken.Policy{
+		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
+		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: true,
+	}
+
+	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		return policy, ServerChange(now(), accesstoken.PolicyRef), nil
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	// The sweep runs at the time of the database clock, after now(): every
+	// token that has not ended and prn-alice have no use in the last hour.
+	// tok-old ends before the sweep.
+	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: true, Accounts: true}
+	res, err := ts.SweepInactive(ctx, sweep, ServerChange)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(res.Tokens) == 0 || len(res.Principals) == 0 {
+		t.Fatalf("sweep = %+v, want a disabled token and a disabled principal", res)
+	}
+}
+
+// backupToken returns a token of the seed that expires 100 years after now,
+// so it has not ended when the sweep runs at the time of the database clock.
 func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Token {
 	return accesstoken.Token{
-		CreatedAt: now(), ExpiresAt: now().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-		ID: id, PrincipalID: principalID, Name: "seed " + id, Kind: kind, ReplacedBy: "", CreatedBy: "admin",
+		CreatedAt:   now(),
+		ExpiresAt:   now().AddDate(100, 0, 0),
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          id,
+		PrincipalID: principalID,
+		Name:        "seed " + id,
+		Kind:        kind,
+		ReplacedBy:  "",
+		CreatedBy:   "admin",
 	}
 }
 
@@ -391,6 +442,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "storetest",
 		Channel:    audit.ChannelAPI,
@@ -502,20 +554,38 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 }
 
-// seedBackupAudit appends a reveal entry and a decrypt entry with a value
-// count to acme, so the round trip compares the audit table row by row,
-// carries the nullable value count both ways, and proves the chain survives
-// it.
+// backupChanges answers changes whose text JSON escapes: <, & and > (which
+// encoding/json writes as \u003c, \u0026 and \u003e), U+2028, quotes and a
+// backslash, so the round trip proves the changes column keeps the exact
+// text that the hash covers.
+func backupChanges() []audit.Change {
+	old := `say "hi" <&> \ end`
+
+	return []audit.Change{
+		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
+	}
+}
+
+// seedBackupAudit appends a reveal entry, a decrypt entry with a value
+// count and a change entry with the changes of backupChanges to acme, so the
+// round trip compares the audit table row by row, carries the nullable value
+// count and the nullable changes both ways, and proves the chain survives
+// it. A store that implements audit.Feed also gets one sink cursor row.
 func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
 	t.Helper()
 
-	out := make([]audit.Entry, 0, 2)
+	out := make([]audit.Entry, 0, 3)
 
-	for i := 1; i <= 2; i++ {
-		kind, count := audit.KindReveal, (*int64)(nil)
+	for i := 1; i <= 3; i++ {
+		kind, count, changes := audit.KindReveal, (*int64)(nil), []audit.Change(nil)
 		if i == 2 {
 			n := int64(3)
 			kind, count = audit.KindToolOperation, &n
+		}
+
+		if i == 3 {
+			kind, changes = audit.KindChange, backupChanges()
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
@@ -529,6 +599,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Version:    "",
 			ValuePath:  "",
 			ValueCount: count,
+			Changes:    changes,
 			SourceIP:   "192.0.2.1",
 			UserAgent:  "test",
 			Channel:    audit.ChannelAPI,
@@ -544,6 +615,14 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		out = append(out, stored)
+	}
+
+	// A store that ships entries to log sinks also keeps a cursor row, so
+	// the round trip carries the cursor table too (ADR 60 decision 13).
+	if feed, ok := s.(audit.Feed); ok {
+		if err := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), "siem", out[len(out)-1].Sequence); err != nil {
+			t.Fatalf("advance audit sink cursor: %v", err)
+		}
 	}
 
 	return out

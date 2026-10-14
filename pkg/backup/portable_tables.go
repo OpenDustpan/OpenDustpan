@@ -3,29 +3,30 @@ package backup
 // Column names that more than one table holds. goconst keeps each one a
 // constant.
 const (
-	portColName        = "name"
-	portColCreatedAtMs = "created_at_ms"
-	portColCreatedBy   = "created_by"
-	portColNamespace   = "namespace"
-	portColVersion     = "version"
-	portColStackID     = "stack_id"
-	portColStatus      = "status"
-	portColStartedAtMs = "started_at_ms"
-	portColEndedAtMs   = "ended_at_ms"
-	portColUpdateID    = "update_id"
-	portColSequence    = "sequence"
-	portColSize        = "size"
-	portColArrival     = "arrival"
-	portColState       = "state"
-	portColUpdatedAtMs = "updated_at_ms"
-	portColDeletedAtMs = "deleted_at_ms"
-	portColSource      = "source"
-	portColKind        = "kind"
-	portColSubject     = "subject"
-	portColDeletedName = "deleted_name"
-	portColTool        = "tool"
-	portColUnitID      = "unit_id"
-	portColPrincipalID = "principal_id"
+	portColName         = "name"
+	portColCreatedAtMs  = "created_at_ms"
+	portColCreatedBy    = "created_by"
+	portColNamespace    = "namespace"
+	portColVersion      = "version"
+	portColStackID      = "stack_id"
+	portColStatus       = "status"
+	portColStartedAtMs  = "started_at_ms"
+	portColEndedAtMs    = "ended_at_ms"
+	portColUpdateID     = "update_id"
+	portColSequence     = "sequence"
+	portColSize         = "size"
+	portColArrival      = "arrival"
+	portColState        = "state"
+	portColUpdatedAtMs  = "updated_at_ms"
+	portColDeletedAtMs  = "deleted_at_ms"
+	portColDisabledAtMs = "disabled_at_ms"
+	portColSource       = "source"
+	portColKind         = "kind"
+	portColSubject      = "subject"
+	portColDeletedName  = "deleted_name"
+	portColTool         = "tool"
+	portColUnitID       = "unit_id"
+	portColPrincipalID  = "principal_id"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -94,6 +95,7 @@ func portableSpec() []PortableTable {
 				{Name: "restored_from", Kind: KindInteger},
 				{Name: "journal_version", Kind: KindInteger},
 				{Name: "journal_closed", Kind: KindBool},
+				{Name: "token_id", Kind: KindText},
 			},
 		},
 		{
@@ -266,6 +268,7 @@ func portableSpec() []PortableTable {
 				{Name: "prev_hash", Kind: KindText},
 				{Name: "hash", Kind: KindText},
 				{Name: "value_count", Kind: KindInteger},
+				{Name: "changes", Kind: KindText},
 			},
 		},
 		{
@@ -280,6 +283,8 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: portColDisabledAtMs, Kind: KindTime},
+				{Name: "last_active_at_ms", Kind: KindTime},
 			},
 		},
 		{
@@ -321,6 +326,7 @@ func portableSpec() []PortableTable {
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
+				{Name: portColDisabledAtMs, Kind: KindTime},
 			},
 		},
 		{
@@ -355,6 +361,29 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "revoked_by", Kind: KindText},
+			},
+		},
+		{
+			Table:   "audit_sink_cursors",
+			OrderBy: []string{"sink", portColNamespace},
+			Columns: []Column{
+				{Name: "sink", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColSequence, Kind: KindInteger},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "access_token_policy",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindInteger},
+				{Name: "max_lifetime_ms", Kind: KindInteger},
+				{Name: "inactivity_ms", Kind: KindInteger},
+				{Name: "disable_tokens", Kind: KindBool},
+				{Name: "disable_accounts", Kind: KindBool},
+				{Name: "disable_break_glass", Kind: KindBool},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
 		{
