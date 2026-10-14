@@ -63,7 +63,8 @@ const MaxSinkSeries = 16
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
 // audit append failure counter (ADR 41 decision 5), the audit chain gauge
-// (ADR 60 decision 17) and the audit sink counters (ADR 60 decision 13). All
+// (ADR 60 decision 17), and the audit sink counters and the log sink drop
+// counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -232,12 +233,13 @@ func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 	m.chainBad.Set(float64(scopes))
 }
 
-// sinkFamilies holds the audit sink families: counters labeled by sink,
+// sinkFamilies holds the audit and log sink families: counters labeled by sink,
 // with one series for each configured sink.
 type sinkFamilies struct {
 	shipped  *Counter
 	sinkFail *Counter
 	sinkSkip *Counter
+	logDrop  *Counter
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -253,6 +255,7 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"dustpan_audit_sink_skipped_total",
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 		),
+		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
 	}
 }
 
@@ -296,6 +299,15 @@ func (m *ServerMetrics) ObserveConfigReload(result string) {
 
 	m.reloads.Inc(ReloadFailure)
 	m.reloadOK.Set(0, []string{}...)
+}
+
+// AddLogSinkDropped adds records to the count of application log records
+// that the log sink named sink dropped: its queue was full or its write
+// failed (ADR 60 decision 14).
+func (m *ServerMetrics) AddLogSinkDropped(sink string, records int) {
+	if records > 0 {
+		m.sinks.logDrop.Add(uint64(records), sink)
+	}
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

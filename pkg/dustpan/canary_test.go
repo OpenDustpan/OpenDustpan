@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
+	"opendustpan.org/opendustpan/pkg/logsink/slogsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -458,4 +459,67 @@ func waitForFileLine(t *testing.T, path, want string) string {
 			t.Fatal("test ended while it waited for the audit file")
 		}
 	}
+}
+
+// TestCanaryNeverInAFileLogSink sends the canary values through both tool
+// adapters with the application log on a file log sink (ADR 60 decision
+// 14). The file holds one request line for each call and none of the
+// canary values (ADR 32 decision 7).
+func TestCanaryNeverInAFileLogSink(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "app.jsonl")
+
+	logFile, err := file.Open(path)
+	if err != nil {
+		t.Fatalf("open log file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := logFile.Close(); closeErr != nil {
+			t.Errorf("close log file: %v", closeErr)
+		}
+	})
+
+	handler := slogsink.New(logFile, slogsink.Options{
+		Level:         slog.LevelDebug,
+		OnDrop:        nil,
+		QueueSize:     0,
+		BatchSize:     0,
+		FlushInterval: 0,
+		WriteTimeout:  0,
+	})
+
+	var unused requestLogSink
+
+	ts, _, st := canaryServer(t, &unused, nil, dustpan.WithLogger(slog.New(handler)))
+	seedCanaryNamespace(t, st)
+
+	created := doLogged(t, ts, logCall{
+		method: http.MethodPost, path: "/api/stacks/acme/web", auth: "token " + adminToken,
+		requestID: "", body: `{"stackName":"prod"}`,
+	})
+	if created.status != http.StatusOK {
+		t.Fatalf("create stack: status %d, body %s", created.status, created.body)
+	}
+
+	calls := canaryCalls()
+	for _, tc := range calls {
+		doLogged(t, ts, tc.call)
+	}
+
+	if closeErr := handler.Close(t.Context()); closeErr != nil {
+		t.Fatalf("flush log sink: %v", closeErr)
+	}
+
+	data, err := os.ReadFile(path) //nolint:gosec // The path is a test temp file.
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+
+	if lines := requestLines(t, string(data)); len(lines) != len(calls)+1 {
+		t.Fatalf("request lines in the log file = %d, want %d", len(lines), len(calls)+1)
+	}
+
+	requireAbsent(t, "log file sink", string(data), calls)
 }
