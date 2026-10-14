@@ -227,23 +227,32 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 // DeleteStack removes the stack identified by ref when guard allows it,
 // unless a fault fires first.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, e audit.Entry,
+	ctx context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	guard stack.DeleteGuard,
+	d inventory.Deletion,
 ) error {
 	if err := s.before(ctx, "DeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.DeleteStack(ctx, ref, fence, guard, e)
+	return s.inner.DeleteStack(ctx, ref, fence, guard, d)
 }
 
 // ForceDeleteStack removes the stack identified by ref even when it manages
 // resources, unless a fault fires first.
-func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) ForceDeleteStack(
+	ctx context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	d inventory.Deletion,
+) error {
 	if err := s.before(ctx, "ForceDeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.ForceDeleteStack(ctx, ref, fence, e)
+	return s.inner.ForceDeleteStack(ctx, ref, fence, d)
 }
 
 // UpdateStackTags replaces the tags of the stack identified by ref, unless a
@@ -494,13 +503,55 @@ func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fenc
 // DeleteWorkspace soft-deletes the workspace called ref, unless a fault
 // fires first.
 func (s *Store) DeleteWorkspace(
-	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
 	if err := s.before(ctx, "DeleteWorkspace"); err != nil {
 		return err
 	}
 
-	return s.inner.DeleteWorkspace(ctx, ref, fence, e)
+	return s.inner.DeleteWorkspace(ctx, ref, fence, d)
+}
+
+// RestoreWorkspace brings back a deleted workspace, unless a fault fires
+// first.
+func (s *Store) RestoreWorkspace(
+	ctx context.Context, id workspace.ID, newName workspace.Name, fence namespace.Fence, e audit.Entry,
+) (workspace.Ref, error) {
+	if err := s.before(ctx, "RestoreWorkspace"); err != nil {
+		return workspace.Ref{}, err
+	}
+
+	return s.inner.RestoreWorkspace(ctx, id, newName, fence, e)
+}
+
+// PurgeWorkspace removes a deleted workspace for good, unless a fault fires
+// first.
+func (s *Store) PurgeWorkspace(ctx context.Context, id workspace.ID, fence namespace.Fence, e audit.Entry) error {
+	if err := s.before(ctx, "PurgeWorkspace"); err != nil {
+		return err
+	}
+
+	return s.inner.PurgeWorkspace(ctx, id, fence, e)
+}
+
+// RestoreStack brings back a deleted stack, unless a fault fires first.
+func (s *Store) RestoreStack(
+	ctx context.Context, id stack.ID, newName stack.Name, fence namespace.Fence, e audit.Entry,
+) (stack.Ref, error) {
+	if err := s.before(ctx, "RestoreStack"); err != nil {
+		return stack.Ref{}, err
+	}
+
+	return s.inner.RestoreStack(ctx, id, newName, fence, e)
+}
+
+// PurgeStack removes a deleted stack for good, unless a fault fires first.
+func (s *Store) PurgeStack(ctx context.Context, id stack.ID, fence namespace.Fence, e audit.Entry) error {
+	if err := s.before(ctx, "PurgeStack"); err != nil {
+		return err
+	}
+
+	return s.inner.PurgeStack(ctx, id, fence, e)
 }
 
 // CreateStateVersion persists a new, pending version, unless a fault fires first.
@@ -682,6 +733,27 @@ func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inve
 	}
 
 	return s.inner.ListDeletedUnits(ctx, ns)
+}
+
+// QueryDeletedUnits returns one page of deleted units, unless a fault fires
+// first.
+func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	if err := s.before(ctx, "QueryDeletedUnits"); err != nil {
+		return inventory.DeletedPage{}, err
+	}
+
+	return s.inner.QueryDeletedUnits(ctx, q)
+}
+
+// GetDeletedUnit returns one deleted unit, unless a fault fires first.
+func (s *Store) GetDeletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
+	if err := s.before(ctx, "GetDeletedUnit"); err != nil {
+		return inventory.DeletedEntry{}, err
+	}
+
+	return s.inner.GetDeletedUnit(ctx, ns, tool, unitID)
 }
 
 // GetState returns the installation state, unless a fault fires first.

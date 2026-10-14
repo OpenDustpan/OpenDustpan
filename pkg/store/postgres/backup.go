@@ -174,6 +174,11 @@ func pgCopyScopeTables() []pgCopyTable {
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
+		{
+			table:   "blob_purges",
+			columns: []string{pgColTool, pgColUnitID, pgColNamespace, "purged_at_ms"},
+			orderBy: []string{pgColTool, pgColUnitID},
+		},
 	}
 }
 
@@ -207,7 +212,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes",
+				"changes", "object_id",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},

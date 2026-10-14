@@ -638,7 +638,7 @@ func (s *Store) inGrantTx(
 		return s.inAuditedTx(ctx, e, fn)
 	}
 
-	return s.inFencedAuditedTx(ctx, fence, e, fn)
+	return s.inFencedAuditedTx(ctx, fence, &e, fn)
 }
 
 // grantInNamespace returns access.ErrNotFound when no current grant with

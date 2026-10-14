@@ -20,6 +20,9 @@ import (
 var (
 	// ErrNotFound reports that a workspace does not exist.
 	ErrNotFound = errors.New("workspace not found")
+	// ErrBlobsRemain reports that a blob of a purged unit may remain after a
+	// delete (ADR 47). The blob purge record stays for the sweep.
+	ErrBlobsRemain = errors.New("blobs of the purged unit remain")
 	// ErrAlreadyExists reports that a workspace with the same name exists in the namespace.
 	ErrAlreadyExists = errors.New("workspace already exists")
 	// ErrInvalidName reports a workspace name that fails validation.
