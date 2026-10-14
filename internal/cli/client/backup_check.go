@@ -102,7 +102,7 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup check again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup check again", stderr)
 	if err != nil {
 		return err
 	}

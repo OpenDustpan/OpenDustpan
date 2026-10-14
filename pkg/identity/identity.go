@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -50,6 +51,10 @@ type Principal struct {
 	// (ADR 53). It is empty for a bootstrap admin token (ADR 6), which has
 	// no stored record.
 	TokenID string
+	// TokenExpiresAt is the expiry of the stored access token that
+	// authenticated the caller, so a response can warn before it (ADR 53,
+	// decision 11). It is the zero time for a bootstrap admin token.
+	TokenExpiresAt time.Time
 }
 
 // Action is something a principal wants to do.
@@ -338,8 +343,14 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 	}
 
 	return &StaticToken{
-		principal: Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: ""},
-		token:     []byte(token),
+		principal: Principal{
+			Subject:        subject,
+			DisplayName:    subject,
+			Admin:          true,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		},
+		token: []byte(token),
 	}, nil
 }
 
@@ -395,7 +406,10 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 			subject = fmt.Sprintf("admin-%d", i+1)
 		}
 
-		principals = append(principals, Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: ""})
+		principals = append(
+			principals,
+			Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: "", TokenExpiresAt: time.Time{}},
+		)
 		hashes = append(hashes, sum)
 	}
 

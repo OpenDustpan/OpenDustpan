@@ -943,6 +943,34 @@ func (e *Env) ServerAPIStatusAs(ctx context.Context, token, method, path, body s
 	return e.serverStatus(ctx, token, method, path, body)
 }
 
+// ServerAPIHeadersAs sends one GET to the installation API with token as a
+// Bearer credential and returns its status, headers and body, for steps
+// that read a response header such as the token expiry warning (ADR 53).
+func (e *Env) ServerAPIHeadersAs(ctx context.Context, token, path string) (APIResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.URL+path, http.NoBody)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("build GET %s: %w", path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("GET %s: %w", path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("read GET %s: %w", path, err)
+	}
+
+	return APIResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(body)}, nil
+}
+
 // ServerAPIStatusBare sends one installation API request without credentials
 // and returns its status and body, for steps that prove a route needs a
 // token.

@@ -428,10 +428,11 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	s.touch(ctx, m.Token, now)
 
 	return identity.Principal{
-		Subject:     m.Owner.Subject,
-		DisplayName: m.Owner.DisplayName,
-		Admin:       false,
-		TokenID:     m.Token.ID,
+		Subject:        m.Owner.Subject,
+		DisplayName:    m.Owner.DisplayName,
+		Admin:          false,
+		TokenID:        m.Token.ID,
+		TokenExpiresAt: m.Token.ExpiresAt,
 	}, nil
 }
 
