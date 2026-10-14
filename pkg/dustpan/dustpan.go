@@ -476,15 +476,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	svc, err := newServices(cfg)
+	tokens, err := newTokenService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
+	svc, err := newServices(cfg, tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	svc.tokens = tokens
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -800,10 +802,41 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	return base, nil
 }
 
+// newUpdateService builds the update service. A nil token service leaves the
+// token checker nil, so the service fails closed for any update that an
+// access token started.
+func newUpdateService(
+	cfg *settings, namespaces *namespace.Service, journal *stack.JournalEntries, tokens *accesstoken.Service,
+) (*stack.Updates, error) {
+	var checker stack.TokenChecker
+	if tokens != nil {
+		checker = tokens
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Stacks:             cfg.stackStore,
+		Blobs:              cfg.blobStore,
+		Tokens:             checker,
+		Now:                cfg.now,
+		Logger:             cfg.logger,
+		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
+	return updates, nil
+}
+
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings) (services, error) {
+func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
 	)
@@ -816,20 +849,9 @@ func newServices(cfg *settings) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            cfg.updateStore,
-		Checkpoints:        cfg.checkpointStore,
-		Events:             cfg.eventStore,
-		Namespaces:         namespaces,
-		Stacks:             cfg.stackStore,
-		Blobs:              cfg.blobStore,
-		Now:                cfg.now,
-		Logger:             cfg.logger,
-		MaxCheckpointBytes: cfg.maxCheckpointBytes,
-		Journal:            journal,
-	})
+	updates, err := newUpdateService(cfg, namespaces, journal, tokens)
 	if err != nil {
-		return services{}, fmt.Errorf("update service: %w", err)
+		return services{}, err
 	}
 
 	stacks, err := stack.NewService(stack.Config{
