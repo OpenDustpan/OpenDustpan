@@ -22,7 +22,7 @@ the same list.
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
 | `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. |
-| `--ip-allowlists-include-bootstrap` | `DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP` | `ip-allowlists-include-bootstrap` | (none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). Set `true` to apply the lists to it as well. |
+| `--ip-allowlists-include-bootstrap` | `DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP` | `ip-allowlists-include-bootstrap` | (none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blob-dir` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |

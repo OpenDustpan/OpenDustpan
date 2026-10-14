@@ -191,6 +191,19 @@ The check runs in the authorization step of every adapter.
 Requests with a capability URL (the OpenTofu state upload URLs) carry no principal and are not checked.
 A TFE route that lists units can answer 404 for a namespace that the caller may not see.
 
+### Recovery
+
+By default the bootstrap admin token is exempt: it can read, set and delete every rule from any address.
+With `--ip-allowlists-include-bootstrap` the lists apply to it too.
+A rule that holds none of the addresses that the operator uses locks the namespace.
+The server refuses the REST calls of that namespace from outside the list, including the DELETE of the rule.
+To recover, restart the server without `--ip-allowlists-include-bootstrap`.
+The bootstrap admin token is exempt again.
+Delete the rule with `DELETE /api/server/namespaces/{namespace}/ip-allowlist`.
+Then start with the flag again if wanted.
+To stop the whole feature, restart without `--ip-allowlists`.
+The rules stay stored and do not apply.
+
 ## Logs
 
 The server writes one log line for each request: the method, the route

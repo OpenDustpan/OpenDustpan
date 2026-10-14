@@ -168,7 +168,7 @@ var Settings = []*Setting{
 		"ip-allowlists-include-bootstrap", "DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP",
 		"apply IP allowlists to the bootstrap admin token too (DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP)",
 		"(none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). "+
-			"Set `true` to apply the lists to it as well.",
+			"Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path.",
 	).WithFile("ip-allowlists-include-bootstrap"),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",

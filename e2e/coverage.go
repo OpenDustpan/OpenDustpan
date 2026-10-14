@@ -705,6 +705,7 @@ func CoverageAllowlist() []AllowEntry {
 		accessAllowEntries(),
 		reviewAllowEntries(),
 		tokenAllowEntries(),
+		ipAllowlistAllowEntries(),
 	)
 }
 
@@ -842,6 +843,35 @@ func tokenAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: tokenCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// ipAllowlistCoveringTest names the test that proves the IP allowlist routes
+// instead of a CLI: no CLI manages IP allowlists.
+const ipAllowlistCoveringTest = "TestIPAllowlists"
+
+// ipAllowlistAllowEntries returns the operator and console routes of the IP
+// allowlists of the namespaces. The harness steps of
+// ipAllowlistCoveringTest drive each one through the real binary on each store.
+func ipAllowlistAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages IP allowlists. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const list = "/api/server/namespaces/{namespace}/ip-allowlist"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPut, list},
+		{http.MethodDelete, list},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
 		})
 	}
 
