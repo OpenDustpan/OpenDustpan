@@ -113,11 +113,12 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}{
 		{"/api/server/grants", "@server", bobSubject, "viewer"},
 		{"/api/server/namespaces/grants/grants", "grants", opsSubject, role.ID},
-		{"/api/server/namespaces/grants/collections/payments/grants", "grants/payments", opsSubject, "writer"},
 		{"/api/server/namespaces/grants/unit-grants", "pulumi:grants/web/prod", bobSubject, "maintainer"},
 	} {
 		checkGrantRoutes(ctx, t, env, grantKind{path: k.path, object: k.object, subject: k.subject, role: k.role})
 	}
+
+	checkCollectionGrantsWait(ctx, t, env, opsSubject)
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodDelete, "/api/server/roles/" + role.ID, "", http.StatusNoContent,
@@ -217,6 +218,28 @@ func stacksOnlyIn(ns string) func(e2e.Result) error {
 
 		return nil
 	}
+}
+
+// checkCollectionGrantsWait drives the grant routes of a collection. No
+// collection exists until the collections are wired (#478), so a grant on
+// one answers 404, its list is empty, and a revoke finds nothing.
+func checkCollectionGrantsWait(ctx context.Context, t *testing.T, env *e2e.Env, subject string) {
+	t.Helper()
+
+	const grants = "/api/server/namespaces/grants/collections/payments/grants"
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, grants, `{"subject":"` + subject + `","role":"writer"}`, http.StatusNotFound,
+	}, nil)
+
+	var list e2eGrantList
+	principalCall(ctx, t, env, principalStep{http.MethodGet, grants, "", http.StatusOK}, &list)
+
+	if list.Total != 0 || len(list.Grants) != 0 {
+		t.Fatalf("grants on a collection = %+v, want none", list)
+	}
+
+	principalCall(ctx, t, env, principalStep{http.MethodDelete, grants + "/grt-missing", "", http.StatusNotFound}, nil)
 }
 
 // checkRoles reads the catalog, makes, changes and reads a custom role, and

@@ -732,6 +732,13 @@ func wantSuccessStatus(route apiserver.Route) int {
 		return http.StatusAccepted
 	}
 
+	if route.Method == http.MethodPost &&
+		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/grants" {
+		// No collection exists until the collections are wired (#478), so
+		// a grant on one answers 404 after the authorization.
+		return http.StatusNotFound
+	}
+
 	if route.Method == http.MethodPost && createsRecord(route.Path) {
 		return http.StatusCreated
 	}

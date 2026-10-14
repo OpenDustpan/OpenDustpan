@@ -246,6 +246,22 @@ Lead decisions under owner delegation, 2026-10-13:
     grant, so a delete that commits first wins.
   - The TFE-compatible API answers the same 404 for an object that does not
     exist and for an object that the caller cannot read.
+- Re-review of the roles and grants change. The lead decided these on
+  2026-10-14, by the delegation of the owner:
+  - A grant or a revoke on a namespace, a collection or a unit carries the
+    fence of its namespace. Its audit entry goes to that namespace, so the
+    auditor of the namespace sees the access changes in it. A grant on the
+    installation stays in `@server`.
+  - The routes of the Pulumi Cloud-compatible API whose object is the caller
+    need only `caller:read`. Their handlers filter each namespace, so a
+    principal that is not an administrator can log in with the Pulumi CLI.
+  - A grant below the installation gives the data actions of its role only,
+    also when a role change races a grant.
+  - A role change needs every action that it removes, on the installation.
+  - A grant on a collection needs the collection to exist. Until the
+    collections are wired (#478), a grant on a collection answers 404.
+  - The TFE-compatible API answers a failed read check with its error, not
+    with 404.
 - Decisions at scale. One decision reads the groups of the caller in one
   query, the grants on the chain of the object in one query, and the custom
   roles of those grants in one query. A request reads the groups and the

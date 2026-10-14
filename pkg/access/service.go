@@ -604,6 +604,12 @@ func (s *Service) checkGrant(
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
+	if kind == ObjectCollection {
+		// The core has no collection port yet (#478), so no collection
+		// exists, and a grant cannot name one before it exists.
+		return none, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, in.Object.String())
+	}
+
 	if kind != ObjectInstallation {
 		for _, a := range role.Actions {
 			if family, _ := FamilyOf(a); family != FamilyData {

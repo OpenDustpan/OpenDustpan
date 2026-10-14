@@ -476,8 +476,9 @@ func TestEscalation(t *testing.T) {
 			obj: identity.NamespaceObject("acme"), want: access.ErrEscalation,
 		},
 		{
+			// No collection exists until the collections are wired (#478).
 			name: "collection admin gives writer on its collection", granter: collAdmin, role: access.RoleWriter,
-			obj: payments, want: nil,
+			obj: payments, want: access.ErrNotFound,
 		},
 		{
 			name: "account administrator gives operator", granter: account, role: access.RoleInstallationOperator,
