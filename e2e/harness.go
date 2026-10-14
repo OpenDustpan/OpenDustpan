@@ -64,12 +64,12 @@ const (
 	tokenBytes     = 24
 	commandTimeout = 2 * time.Minute
 	waitDelay      = 5 * time.Second
-	// killWait bounds the wait for the recorded request that triggers the
-	// kill of a running CLI. It stays well under commandTimeout, so the
-	// kill and the reap always finish before the step times out.
+	// killWait bounds the wait for the marker file that triggers the kill
+	// of a running CLI. It stays well under commandTimeout, so the kill and
+	// the reap always finish before the step times out.
 	killWait = time.Minute
-	// killPoll is how often the kill helper checks the recorder for the
-	// request it waits for.
+	// killPoll is how often the kill helper checks for the marker file it
+	// waits for.
 	killPoll       = 20 * time.Millisecond
 	maxShown       = 2000
 	baseEnvEntries = 8
@@ -1367,10 +1367,11 @@ func (e *Env) RunSavedLogin(ctx context.Context, dir string, extra []string, arg
 	return e.runWithEnv(ctx, dir, e.savedLoginEnv(extra), "", args...)
 }
 
-// KillSpec describes one CLI invocation killed at a recorded request: the
-// harness starts the CLI, waits until the recorder shows the request, kills
-// the process with SIGKILL and reaps it. The wait uses the recorder, never a
-// fixed sleep.
+// KillSpec describes one CLI invocation killed at a marker file: the
+// harness starts the CLI in its own process group, waits until the file
+// exists, kills the whole group with SIGKILL and reaps the CLI. A child of
+// the CLI, for example a provisioner, writes the file, so the kill lands
+// while that child runs. The wait polls the file, never a fixed sleep.
 type KillSpec struct {
 	// Name labels the subtest, the report row and the requests the run makes.
 	Name string
@@ -1378,24 +1379,16 @@ type KillSpec struct {
 	Args []string
 	// Env holds extra NAME=value pairs for this run only.
 	Env []string
-	// Method is the HTTP method to wait for, for example POST.
-	Method string
-	// PathSuffix is the suffix of the request path to wait for, for example
-	// /actions/lock.
-	PathSuffix string
+	// Marker is the path of the file to wait for.
+	Marker string
 }
 
-// WaitForRequest reports whether the recorder shows a request with method and
-// path suffix during step before ctx ends. It polls the recorder, never
-// sleeps a fixed time.
-func (e *Env) WaitForRequest(ctx context.Context, step, method, suffix string) bool {
+// waitForFile reports whether path exists before ctx ends. It polls the
+// file system, never sleeps a fixed time.
+func waitForFile(ctx context.Context, path string) bool {
 	for {
-		entries := e.Recorder.Entries()
-		for i := range entries {
-			if entries[i].Step == step && entries[i].Method == method &&
-				strings.HasSuffix(entries[i].Path, suffix) {
-				return true
-			}
+		if _, err := os.Stat(path); err == nil {
+			return true
 		}
 
 		select {
@@ -1406,12 +1399,12 @@ func (e *Env) WaitForRequest(ctx context.Context, step, method, suffix string) b
 	}
 }
 
-// KillAtRequest runs the CLI with spec.Args and kills it with SIGKILL once
-// the recorder shows spec.Method with spec.PathSuffix during spec.Name. It
-// reaps the process, so no process stays behind, and records the run as the
-// spec.Name step. The step passes when the request arrived and the process
-// was reaped; the exit code of the killed process is reported, not checked.
-func (e *Env) KillAtRequest(ctx context.Context, t *testing.T, spec KillSpec) Result {
+// KillAtMarker runs the CLI with spec.Args and kills its process group with
+// SIGKILL once spec.Marker exists. It reaps the CLI, checks that no process
+// of the group stays behind, and records the run as the spec.Name step. The
+// step passes when the marker appeared and the group is gone; the exit code
+// of the killed process is reported, not checked.
+func (e *Env) KillAtMarker(ctx context.Context, t *testing.T, spec KillSpec) Result {
 	t.Helper()
 
 	var res Result
@@ -1904,11 +1897,11 @@ func (e *Env) runCLI(ctx context.Context, call cliCall) (Result, error) {
 	return res, nil
 }
 
-// runAndKill starts the CLI with spec.Args, waits for the recorded request,
-// kills the process with SIGKILL and reaps it, so no process stays behind.
-// It returns the run and the step failure, or "" when the request arrived
-// and the process was reaped. The exit code of the killed process is
-// reported, not checked.
+// runAndKill starts the CLI with spec.Args in a new process group, waits
+// for spec.Marker, kills the group with SIGKILL and reaps the CLI, so no
+// process stays behind. It returns the run and the step failure, or "" when
+// the marker appeared and the kill reached the whole group. The exit code of
+// the killed process is reported, not checked.
 func (e *Env) runAndKill(ctx context.Context, spec KillSpec) (Result, string) {
 	killCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
@@ -1922,6 +1915,10 @@ func (e *Env) runAndKill(ctx context.Context, spec KillSpec) (Result, string) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = waitDelay
+	// The CLI and its children share a new process group, so the kill
+	// reaches a child that the CLI started, for example a provisioner.
+	cmd.SysProcAttr = new(syscall.SysProcAttr)
+	cmd.SysProcAttr.Setpgid = true
 
 	res := Result{
 		Command:  e.cli.Tool + " " + strings.Join(spec.Args, " "),
@@ -1938,21 +1935,28 @@ func (e *Env) runAndKill(ctx context.Context, spec KillSpec) (Result, string) {
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(killCtx, killWait)
-	seen := e.WaitForRequest(waitCtx, spec.Name, spec.Method, spec.PathSuffix)
+	seen := waitForFile(waitCtx, spec.Marker)
 	waitCancel()
 
 	failure := ""
 	if !seen {
-		failure = fmt.Sprintf("no %s %q recorded within %s", spec.Method, spec.PathSuffix, killWait)
+		failure = fmt.Sprintf("no marker file %s within %s", spec.Marker, killWait)
 	}
 
-	if killErr := cmd.Process.Signal(syscall.SIGKILL); killErr != nil {
-		failure = joinFailure(failure, fmt.Sprintf("kill: %v", killErr))
+	// The process group ID is the PID of the CLI (Setpgid above).
+	pgid := cmd.Process.Pid
+	if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil {
+		failure = joinFailure(failure, fmt.Sprintf("kill process group: %v", killErr))
 	}
 
 	// Reap the process, so the kill leaves none behind. The exit error of a
-	// killed process is the expected outcome, not a failure.
-	_ = cmd.Wait() //nolint:errcheck // The exit of a killed process is recorded below.
+	// killed process is the expected outcome, not a failure. ErrWaitDelay
+	// means that a child still held the output of the CLI open after the
+	// kill, so the kill missed it.
+	if waitErr := cmd.Wait(); errors.Is(waitErr, exec.ErrWaitDelay) {
+		failure = joinFailure(failure, "a child of the CLI kept its output open after the kill")
+	}
+
 	res.Stdout = stdout.String()
 	res.Stderr = stderr.String()
 	res.Duration = time.Since(start)
