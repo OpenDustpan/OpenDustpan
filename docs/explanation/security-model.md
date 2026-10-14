@@ -59,14 +59,30 @@ persons and services.
   a stored token can: today the bootstrap admin token (ADR 6), later a
   sign-in (ADR 55). A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
-- **A create or rotation for another principal is a grant by proxy.** The
-  caller must hold every action that the grants of that principal give,
-  through its groups too. Otherwise the server answers 403.
-- **Known gap: the check runs at create and rotation only.** A token acts
-  with the grants of its principal at the time of each request. When an
-  administrator later gives that principal a new grant, its tokens get the
-  new actions too, also tokens that a caller without those actions made.
-  Issue #531 tracks this question.
+- **A personal token for another person is a grant by proxy.** The caller
+  must hold every action that the grants of that person give, through its
+  groups too. Otherwise the server answers 403. So an administrator can
+  never act as a person who holds more.
+- **A service token needs `principal:manage-tokens` on its service
+  principal.** A holder can make, rotate and revoke the tokens of that
+  principal. So it can act as the principal, with every grant that the
+  principal has now or gets later. A token acts with the grants of its
+  principal at the time of each request. The design wants this: the grant of
+  `principal:manage-tokens` is the decision, and no escalation check runs.
+- **An account administrator can act as any service principal.** The
+  built-in roles `account-administrator` and `site-administrator` hold
+  `principal:manage-tokens` on the installation, which holds every
+  principal. To let a principal act as one service principal only, give it
+  the role `token-manager` on that principal.
+- **Only a holder of `server:manage-access` on the installation can give
+  `principal:manage-tokens`.** A grant on a principal must name a service
+  principal and a role with principal actions only. Otherwise the server
+  answers 400.
+- **The export of a service principal lists who can act as it.**
+  `GET /api/server/principals/{id}/access-review` lists the holders of
+  `principal:manage-tokens` on the principal. The audit entry of each grant
+  to a service principal names the same holders in the change
+  `tokenManagers`.
 
 ## Pulumi secrets
 

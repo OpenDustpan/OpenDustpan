@@ -3,7 +3,8 @@
 //
 // A grant is a tuple: one subject, one role and one object. The subject is a
 // principal, or a group, which stands for each of its members. The object is
-// the installation, a namespace, a collection or a unit. A grant applies to
+// the installation, a namespace, a collection, a unit or a service principal.
+// A grant applies to
 // its object and to every object that its object holds, along the fixed
 // chain installation > namespace > collection > unit (ADR 52, decision 5).
 // Nothing else inherits: groups do not nest, and roles do not hold roles.
@@ -14,7 +15,11 @@
 //     maintenance, metrics, the installation audit log),
 //   - administration: the principals, groups, roles and grants of the
 //     installation, and namespace create,
-//   - data: every action inside a namespace, its access included.
+//   - data: every action inside a namespace, its access included,
+//   - delegation: the issue of the access tokens of a service principal.
+//
+// The installation holds every principal. A grant on a service principal
+// gives the delegation actions of its role on that principal only.
 //
 // No family holds an action of another, so a grant of an operator role on
 // the installation gives no data action in any namespace. The inputs of a
@@ -73,6 +78,9 @@ const (
 	FamilyAdministration Family = "administration"
 	// FamilyData holds every action inside a namespace.
 	FamilyData Family = "data"
+	// FamilyDelegation holds the actions that let a principal act as a
+	// service principal: the issue of its access tokens.
+	FamilyDelegation Family = "delegation"
 	// FamilySelf holds the actions that every signed-in principal can do:
 	// read its own record and read the role catalog. No grant gives them.
 	FamilySelf Family = "self"
@@ -100,10 +108,14 @@ var families = map[identity.Action]Family{
 	identity.ActionServerCreateNamespace:  FamilyAdministration,
 	identity.ActionServerReadAccess:       FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
-	identity.ActionServerReadTokens:          FamilyAdministration,
-	identity.ActionServerManageTokens:        FamilyAdministration,
-	identity.ActionServerManageServiceTokens: FamilyAdministration,
+	identity.ActionServerReadTokens:   FamilyAdministration,
+	identity.ActionServerManageTokens: FamilyAdministration,
+	// A custom role may still hold this deprecated action, so it keeps its
+	// family. No route declares it.
+	identity.ActionServerManageServiceTokens: FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
 	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
+
+	identity.ActionPrincipalManageTokens: FamilyDelegation,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,
@@ -217,12 +229,15 @@ const maxSubjectIDLength = 64
 // ObjectKind names the type of a grant object.
 type ObjectKind string
 
-// Object kinds, outermost first: each holds the next.
+// Object kinds. The installation holds every namespace and every
+// principal. Each of namespace, collection and unit holds the next.
 const (
 	ObjectInstallation ObjectKind = "installation"
 	ObjectNamespace    ObjectKind = "namespace"
 	ObjectCollection   ObjectKind = "collection"
 	ObjectUnit         ObjectKind = "unit"
+	// ObjectPrincipal is one service principal.
+	ObjectPrincipal ObjectKind = "principal"
 )
 
 // KindOf returns the object kind of obj, and false for the caller object.
@@ -232,6 +247,8 @@ func KindOf(obj identity.Object) (ObjectKind, bool) {
 		return ObjectInstallation, true
 	case obj.IsCaller():
 		return "", false
+	case obj.IsPrincipal():
+		return ObjectPrincipal, true
 	case obj.IsUnit():
 		return ObjectUnit, true
 	case obj.IsCollection():
@@ -366,16 +383,19 @@ type GrantStore interface {
 }
 
 // GrantLookups reads the current grants that a change of who holds them
-// must check (ADR 52): the grants of one subject, and whether a role is
-// granted below the installation.
+// must check: the grants of one subject, and where a role is
+// granted.
 type GrantLookups interface {
 	// GrantsOf returns every current grant of subject, on any object, in
 	// one query. It serves the checks of a membership change and of a
 	// delete.
 	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
 	// RoleGrantedBelowInstallation reports whether a current grant gives
-	// the role with the ID role on an object that is not the installation.
+	// the role with the ID role on a namespace, a collection or a unit.
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
+	// RoleGrantedOnPrincipal reports whether a current grant gives the
+	// role with the ID role on a principal.
+	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
 }
 
 // RoleStore keeps the custom roles. The built-in roles live in code. The

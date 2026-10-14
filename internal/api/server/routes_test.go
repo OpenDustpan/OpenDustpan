@@ -240,6 +240,14 @@ type allowGrants struct{}
 
 func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
 
+// allowAll allows every action, so the token service passes its own check
+// of principal:manage-tokens and the route alone decides.
+type allowAll struct{}
+
+func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return nil
+}
+
 // seedRouteTokens writes the person record of the test caller and one
 // token of each kind, so the token routes with an ID answer their success
 // status, and returns the service over st. seedRoutePrincipals runs first.
@@ -294,7 +302,8 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
+		NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -310,6 +319,7 @@ const (
 	testNamespaceGrantID  = "grt-routes-namespace"
 	testCollectionGrantID = "grt-routes-collection"
 	testUnitGrantID       = "grt-routes-unit"
+	testPrincipalGrantID  = "grt-routes-principal"
 )
 
 // testCollection and testUnitName name the collection and the unit of the
@@ -362,6 +372,11 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		{
 			CreatedAt: at, Condition: nil, Object: unit, ID: testUnitGrantID,
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.PrincipalObject(testOtherPrincipalID),
+			ID: testPrincipalGrantID, Role: access.RoleTokenManager, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectPrincipal, ID: testPrincipalID},
 		},
 	}
 	for i := range grants {
@@ -461,6 +476,9 @@ var routeBodies = map[string]string{
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
 	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
+	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
+	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 }
@@ -468,6 +486,11 @@ var routeBodies = map[string]string{
 // routeGrantBody is the body of each grant route: a role that no seeded
 // grant gives to the group.
 const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"writer"}`
+
+// routePrincipalGrantBody is the body of the grant route of a principal: a
+// role with principal actions only, which no seeded grant gives to the
+// group.
+const routePrincipalGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"token-manager"}`
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
@@ -732,8 +755,11 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	t.Helper()
 
 	id := string(testBackupID)
+	owner := routePrincipalIDs(route.Path)
 
 	switch {
+	case owner.ofOne:
+		id = owner.id
 	case strings.HasPrefix(route.Path, "/api/server/restores"):
 		id = string(testRestoreID)
 	case strings.HasPrefix(route.Path, "/api/server/principals"):
@@ -754,7 +780,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
-	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
+	path = strings.ReplaceAll(path, "{principal}", owner.principal)
 	path = strings.ReplaceAll(path, "{collection}", testCollection)
 
 	path += routeQuery(route.Path)
@@ -770,7 +796,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	// sets in production.
 	req.SetPathValue("namespace", testNamespace)
 	req.SetPathValue("id", id)
-	req.SetPathValue("principal", testPrincipalID)
+	req.SetPathValue("principal", owner.principal)
 	req.SetPathValue("collection", testCollection)
 
 	if token != "" {
@@ -778,6 +804,29 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	return req
+}
+
+// routeOwner is the {principal} of a route, and for a route of one
+// principal the {id} of its seeded grant or token.
+type routeOwner struct {
+	principal string
+	id        string
+	ofOne     bool
+}
+
+// routePrincipalIDs returns the owner of a route of one principal: the
+// service principal testOtherPrincipalID, with its seeded grant or token.
+// Any other path answers testPrincipalID.
+func routePrincipalIDs(path string) routeOwner {
+	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {
+		return routeOwner{principal: testPrincipalID, id: "", ofOne: false}
+	}
+
+	if strings.Contains(path, "/grants") {
+		return routeOwner{principal: testOtherPrincipalID, id: testPrincipalGrantID, ofOne: true}
+	}
+
+	return routeOwner{principal: testOtherPrincipalID, id: testServiceTokenID, ofOne: true}
 }
 
 // routeQuery returns the query that a route with the path pattern path
@@ -1028,7 +1077,7 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
 	}
 
-	for _, action := range route.Actions {
+	for _, action := range route.ActionsOn(expected) {
 		if !containsCall(recorder.calls, recordedCall{action: action, object: expected.String()}) {
 			t.Fatalf("route never asks %s on %q (calls %v)", action, expected.String(), recorder.calls)
 		}

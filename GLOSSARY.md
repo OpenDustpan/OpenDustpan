@@ -178,12 +178,16 @@ A named set of actions (ADR 52). A built-in role has a fixed name. An administra
 _Avoid_: Permission set, policy
 
 **Action family**:
-One of three sets of actions that do not overlap: operator, administration and data. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only (RFC 19).
+One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
 _Avoid_: Permission category, scope
 
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
+A record that gives one role to a principal or a group on one object. The object is the installation, a namespace, a collection, a unit or a service principal. A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
+
+**Token manager**:
+A holder of `principal:manage-tokens` on a service principal. It can make, rotate and revoke the tokens of that principal. So it can act as the principal, with every grant that the principal has now or gets later. The built-in role `token-manager` gives this action on one service principal.
+_Avoid_: Token owner, delegate
 
 **Access review**:
 An export of the grants that give access to one object. It holds the grants on the object and inside it. It also holds the grants with a role that gives a data action or manages access on each object that contains it. A bootstrap admin token has a row too. It is a snapshot at one time, or a history between two times (ADR 52, decision 10). Each export request writes an audit entry.
