@@ -38,6 +38,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -139,6 +141,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
+	proxies              proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -291,6 +294,30 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// proxySettings holds the trusted proxy settings of the client address
+// (internal/clientip): the proxies and the forwarding header they set.
+type proxySettings struct {
+	prefixes []netip.Prefix
+	header   string
+}
+
+// WithTrustedProxies names the proxies whose forwarding headers the server
+// trusts. Empty means none: every request reads as its TCP peer. List a proxy
+// only when it always overwrites or appends the header named by
+// WithTrustedProxyHeader, so a client cannot name any address. NewServer
+// refuses a list that covers every address or holds host bits.
+func WithTrustedProxies(prefixes ...netip.Prefix) Option {
+	return func(o *settings) { o.proxies.prefixes = prefixes }
+}
+
+// WithTrustedProxyHeader names the one forwarding header the server reads
+// from trusted proxies: "x-forwarded-for" (the default) or "forwarded". The
+// match ignores case and "" means the default. The server never reads the
+// other header. NewServer refuses an unknown value.
+func WithTrustedProxyHeader(h string) Option {
+	return func(o *settings) { o.proxies.header = h }
+}
+
 // WithClock overrides the time source, for tests.
 func WithClock(now func() time.Time) Option {
 	return func(o *settings) { o.now = now }
@@ -415,6 +442,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
+		proxies:                 proxySettings{prefixes: nil, header: ""},
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -1741,15 +1769,19 @@ func warnTokenExpiry(w http.ResponseWriter, caller identity.Principal, now time.
 	w.Header().Set(accesstoken.ExpiryHeader, caller.TokenExpiresAt.UTC().Format(time.RFC3339))
 }
 
-// remoteHost returns the remote address of r without the port: the source
-// that the authentication gate counts failures for.
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// unknownGateSource names the shared budget of requests with no client
+// address: the authentication gate counts their failures together.
+const unknownGateSource = "unknown"
+
+// gateSource returns the source text that the authentication gate counts
+// the failures of addr for: the address in text, or unknownGateSource when
+// the address is unknown. The gate maps an IPv6 address to its /64 itself.
+func gateSource(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return unknownGateSource
 	}
 
-	return host
+	return addr.String()
 }
 
 // callerForRequest returns the signed-in principal, or false when the
@@ -1783,11 +1815,12 @@ func callerForRequest(ctx context.Context, authn identity.Authenticator, r *http
 	return caller, true
 }
 
-// withRequestLog mints a request ID, stores it in the context, records the
-// request in the metrics registry, and writes one log line for each request.
-// The line holds the method, the route, the status, the duration, the size,
-// the ID, the adapter and, for a signed-in request, the subject. It holds
-// nothing else.
+// withRequestLog resolves the client address, mints a request ID, stores
+// both in the context, records the request in the metrics registry, and
+// writes one log line for each request. The line holds the method, the
+// route, the status, the duration, the size, the ID, the adapter, the client
+// address when known and, for a signed-in request, the subject. It holds
+// nothing else, in particular no header value.
 //
 // Go's ServeMux stores the matched pattern in Request.Pattern. The root mux
 // matches a prefix such as /api/ and forwards the request to an adapter
@@ -1797,20 +1830,35 @@ func callerForRequest(ctx context.Context, authn identity.Authenticator, r *http
 // the line uses unmatched. The line names the pattern only, never the path,
 // so a capability token in the path cannot leak into the log. The metrics
 // use the same pattern and adapter, so no label holds a path value.
+// requestAddr resolves the client address of each request and rate-limits
+// the missing-header warning.
+type requestAddr struct {
+	resolver *clientip.Resolver
+	warns    *warnLimiter
+}
+
 func withRequestLog(
 	next http.Handler,
+	addr requestAddr,
 	logger *slog.Logger,
 	authn identity.Authenticator,
 	observed *metrics.ServerMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved := addr.resolver.Resolve(r)
+		ctx := clientip.WithAddr(r.Context(), resolved)
+
+		if addr.warns != nil {
+			addr.warns.warnMissingHeader(ctx, r, resolved, addr.resolver, logger)
+		}
+
 		id := newRequestID()
 		// A direct assignment keeps the header name of ADR 32. The key is already
 		// in canonical form, so http.Header reads it with Get.
 		w.Header()[requestIDHeader] = []string{id}
 
-		ctx := requestid.WithContext(r.Context(), id)
-		ctx = authgate.WithRequest(ctx, remoteHost(r))
+		ctx = requestid.WithContext(ctx, id)
+		ctx = authgate.WithRequest(ctx, gateSource(resolved))
 
 		r = r.WithContext(ctx)
 
@@ -1834,18 +1882,7 @@ func withRequestLog(
 		next.ServeHTTP(wrapped, r)
 
 		elapsed := time.Since(start)
-
-		route := r.Pattern
-		if route == "" {
-			route = unmatchedRoute
-		}
-
-		// A root prefix without a method means the adapter found no route.
-		// Log it as unmatched, so the line never names a bare prefix.
-		if !strings.Contains(route, " ") && route != unmatchedRoute {
-			route = unmatchedRoute
-		}
-
+		route := logRoute(r)
 		adapter := adapterForRequest(r.Pattern, r.URL.Path)
 
 		if observed != nil {
@@ -1862,6 +1899,8 @@ func withRequestLog(
 			slog.String("adapter", adapter),
 		}
 
+		attrs = appendClientIP(attrs, resolved)
+
 		if signedIn {
 			attrs = append(attrs, slog.String("subject", caller.Subject))
 		}
@@ -1873,6 +1912,29 @@ func withRequestLog(
 
 		logger.LogAttrs(ctx, level, "request", attrs...)
 	})
+}
+
+// logRoute answers the route label of the request log line: the matched
+// pattern, or unmatched when nothing matched or the adapter found no route.
+// A root prefix without a method means the adapter found no route, so it
+// logs as unmatched and the line never names a bare prefix.
+func logRoute(r *http.Request) string {
+	route := r.Pattern
+	if route == "" || !strings.Contains(route, " ") {
+		return unmatchedRoute
+	}
+
+	return route
+}
+
+// appendClientIP adds the client address to attrs when it is known. It adds
+// the resolved address only, never a header value.
+func appendClientIP(attrs []slog.Attr, addr netip.Addr) []slog.Attr {
+	if !addr.IsValid() {
+		return attrs
+	}
+
+	return append(attrs, slog.String("client_ip", addr.String()))
 }
 
 func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Handler, error) {
@@ -1925,5 +1987,29 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		mux.Handle("/", console)
 	}
 
-	return withRequestCache(withRequestLog(mux, cfg.logger, cfg.authenticator, observed)), nil
+	resolver, err := newClientIPResolver(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
+
+	return withRequestCache(withRequestLog(mux, addr, cfg.logger, cfg.authenticator, observed)), nil
+}
+
+// newClientIPResolver builds the client address resolver of the server from
+// the trusted proxy settings. An unknown header or a refused proxy list
+// fails the build, so the server never starts with them.
+func newClientIPResolver(cfg settings) (*clientip.Resolver, error) {
+	header, err := clientip.ParseHeader(cfg.proxies.header)
+	if err != nil {
+		return nil, fmt.Errorf("trusted proxy header: %w", err)
+	}
+
+	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
+	if err != nil {
+		return nil, fmt.Errorf("trusted proxies: %w", err)
+	}
+
+	return resolver, nil
 }

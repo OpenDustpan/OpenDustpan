@@ -120,9 +120,10 @@ var (
 // ("<tool>:<namespace>/<name>") or a namespace. Version and ValuePath name
 // the state version and the value path of a state read and stay empty
 // otherwise. ValueCount holds the count of secret values of a decrypt call
-// and stays nil for every other entry. At is the time of the action in UTC. SourceIP is the remote
-// address that the server sees. UserAgent is the client user agent, capped
-// at MaxUserAgentLen bytes. Channel is where the request came from.
+// and stays nil for every other entry. At is the time of the action in UTC.
+// SourceIP is the client address (internal/clientip): the TCP peer, or the
+// address that a trusted proxy forwarded. UserAgent is the client user agent,
+// capped at MaxUserAgentLen bytes. Channel is where the request came from.
 // RequestID is the X-Request-Id of the request (ADR 32). ObjectID is the
 // stable ID of the unit that Object names (ADR 19, ADR 47), so the history of
 // one unit can be found across a rename or a reuse of its name; it is empty
