@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -35,7 +36,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
-		SourceIP:   sourceIP(a.request),
+		SourceIP:   clientip.String(a.request),
 		UserAgent:  truncateUserAgent(a.request.UserAgent()),
 		Channel:    audit.NormalizeChannel(a.request.Header.Get(channelHeader)),
 		Kind:       audit.KindChange,

@@ -37,6 +37,7 @@ import (
 	"syscall"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -248,6 +249,8 @@ type serveFlags struct {
 	tlsCert                 string
 	tlsKey                  string
 	publicURL               string
+	trustedProxies          string
+	trustedProxyHeader      string
 	blobDir                 string
 	blobStore               string
 	s3Endpoint              string
@@ -323,6 +326,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
+	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -818,7 +823,11 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
-	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
+	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
+	if optErr != nil {
+		return optErr
+	}
+
 	opts = append(opts, f.backupOptions(backupTarget)...)
 
 	srv, err := dustpan.NewServer(opts...)
@@ -909,7 +918,12 @@ func (f *serveFlags) serverOptions(
 	authn *identity.StaticTokens,
 	wrapper secret.Wrapper,
 	logger *slog.Logger,
-) []dustpan.Option {
+) ([]dustpan.Option, error) {
+	proxies, parseErr := clientip.ParseList(f.trustedProxies)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
+	}
+
 	return []dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
@@ -928,6 +942,8 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithListenAddr(f.listen),
 		dustpan.WithConsoleDir(f.consoleDir),
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
+		dustpan.WithTrustedProxies(proxies...),
+		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
 		dustpan.WithVersion(version),
@@ -937,7 +953,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
-	}
+	}, nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

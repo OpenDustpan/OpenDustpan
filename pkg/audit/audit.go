@@ -120,9 +120,10 @@ var (
 // ("<tool>:<namespace>/<name>") or a namespace. Version and ValuePath name
 // the state version and the value path of a state read and stay empty
 // otherwise. ValueCount holds the count of secret values of a decrypt call
-// and stays nil for every other entry. At is the time of the action in UTC. SourceIP is the remote
-// address that the server sees. UserAgent is the client user agent, capped
-// at MaxUserAgentLen bytes. Channel is where the request came from.
+// and stays nil for every other entry. At is the time of the action in UTC.
+// SourceIP is the client address (internal/clientip): the TCP peer, or the
+// address that a trusted proxy forwarded. UserAgent is the client user agent,
+// capped at MaxUserAgentLen bytes. Channel is where the request came from.
 // RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).
