@@ -69,6 +69,11 @@ func (s *Store) loadPortableStaging(
 			return fmt.Errorf("clear staged installation state: %w", backup.ErrCorrupt)
 		}
 
+		// The migration seeds the token policy row too (ADR 53).
+		if _, err := tx.Exec(ctx, `DELETE FROM access_token_policy`); err != nil {
+			return fmt.Errorf("clear staged token policy: %w", backup.ErrCorrupt)
+		}
+
 		return nil
 	})
 	if clearErr != nil {

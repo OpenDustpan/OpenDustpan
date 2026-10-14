@@ -49,6 +49,8 @@ var (
 	// a group that a directory sync keeps (ADR 55). The error names the
 	// directory.
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
+	// ErrNotDisabled reports an enable of a principal that is not disabled.
+	ErrNotDisabled = errors.New("principal is not disabled")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -112,9 +114,13 @@ const (
 // exactly: OIDC subjects are case-sensitive. DisplayName is a name for people
 // to read. Source names where the record comes from. GroupCount is the
 // count of its current memberships: a read sets it, and a write ignores it.
+// DisabledAt is zero for a principal that the inactivity disable of access
+// tokens did not end (ADR 53, decision 4). A disabled principal does not
+// authenticate until an administrator enables it again. A write ignores it.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	DisabledAt  time.Time
 	ID          string
 	Subject     string
 	DisplayName string

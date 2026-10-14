@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -99,9 +100,11 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 			ID: row.ID, PrincipalID: row.PrincipalID, Name: row.Name, Kind: row.Kind,
 			CreatedAtMs: row.CreatedAtMs, ExpiresAtMs: row.ExpiresAtMs, LastUsedAtMs: row.LastUsedAtMs,
 			RevokedAtMs: row.RevokedAtMs, ReplacedBy: row.ReplacedBy, CreatedBy: row.CreatedBy,
+			DisabledAtMs: row.DisabledAtMs,
 		})),
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
+			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
 		}),
 		Digest: stored,
 	}, nil
@@ -230,6 +233,192 @@ func (s *Store) TouchToken(ctx context.Context, id string, at time.Time, every t
 	return nil
 }
 
+// GetPolicy implements accesstoken.Store.
+func (s *Store) GetPolicy(ctx context.Context) (accesstoken.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetAccessTokenPolicy(ctx)
+	if err != nil {
+		return accesstoken.Policy{}, fmt.Errorf("select access token policy: %w", err)
+	}
+
+	return policyOf(row), nil
+}
+
+// UpdatePolicy implements accesstoken.Store. The write lock of the transaction orders it with every other change of
+// @server.
+func (s *Store) UpdatePolicy(ctx context.Context, update accesstoken.PolicyUpdate) (accesstoken.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var stored accesstoken.Policy
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		row, err := q.GetAccessTokenPolicy(ctx)
+		if err != nil {
+			return fmt.Errorf("select access token policy: %w", err)
+		}
+
+		p, e, err := update(policyOf(row))
+		if err != nil {
+			return err
+		}
+
+		if err := validServerEntry(e); err != nil {
+			return err
+		}
+
+		if err := setPolicy(ctx, q, p); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		stored = p
+
+		return nil
+	})
+	if err != nil {
+		return accesstoken.Policy{}, err
+	}
+
+	return stored, nil
+}
+
+// policyOf maps the generated policy row to the policy.
+func policyOf(row db.GetAccessTokenPolicyRow) accesstoken.Policy {
+	return codec.FromAccessTokenPolicyRow(codec.AccessTokenPolicyRow{
+		MaxLifetimeMs:     row.MaxLifetimeMs,
+		InactivityMs:      row.InactivityMs,
+		UpdatedAtMs:       row.UpdatedAtMs,
+		DisableTokens:     row.DisableTokens,
+		DisableAccounts:   row.DisableAccounts,
+		DisableBreakGlass: row.DisableBreakGlass,
+	})
+}
+
+// setPolicy writes p in the transaction of q.
+func setPolicy(ctx context.Context, q *db.Queries, p accesstoken.Policy) error {
+	row := codec.ToAccessTokenPolicyRow(p)
+
+	n, err := q.SetAccessTokenPolicy(ctx, db.SetAccessTokenPolicyParams{
+		MaxLifetimeMs:     row.MaxLifetimeMs,
+		InactivityMs:      row.InactivityMs,
+		DisableTokens:     row.DisableTokens,
+		DisableAccounts:   row.DisableAccounts,
+		DisableBreakGlass: row.DisableBreakGlass,
+		UpdatedAtMs:       row.UpdatedAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("update access token policy: %w", err)
+	}
+
+	if n != 1 {
+		return errNoPolicyRow
+	}
+
+	return nil
+}
+
+// SweepInactive implements accesstoken.Store. The write lock of the transaction orders it with every other change of
+// @server. The time of the run
+// comes from the database clock.
+func (s *Store) SweepInactive(
+	ctx context.Context, sw accesstoken.Sweep, entry accesstoken.SweepEntryFunc,
+) (accesstoken.SweepResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var res accesstoken.SweepResult
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		res, err = sweepInactive(ctx, q, sw)
+		if err != nil {
+			return err
+		}
+
+		return appendSweepEntries(ctx, q, res, entry)
+	})
+	if err != nil {
+		return accesstoken.SweepResult{}, err
+	}
+
+	return res, nil
+}
+
+// sweepInactive disables the inactive tokens and accounts of sw in the
+// transaction of q, at the time of the database clock.
+func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (accesstoken.SweepResult, error) {
+	nowMs, err := q.DatabaseNowMs(ctx)
+	if err != nil {
+		return accesstoken.SweepResult{}, fmt.Errorf("read database clock: %w", err)
+	}
+
+	res := accesstoken.SweepResult{
+		At: codec.FromMillis(nowMs), Tokens: []accesstoken.SweptToken{}, Principals: []string{},
+	}
+	params := db.DisableInactiveAccessTokensParams{AtMs: nowMs, CutoffMs: nowMs - sw.Inactivity.Milliseconds()}
+
+	if sw.Tokens {
+		rows, err := q.DisableInactiveAccessTokens(ctx, params)
+		if err != nil {
+			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive access tokens: %w", err)
+		}
+
+		for _, r := range rows {
+			res.Tokens = append(res.Tokens, accesstoken.SweptToken{ID: r.ID, PrincipalID: r.PrincipalID})
+		}
+	}
+
+	if sw.Accounts {
+		ids, err := q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
+		if err != nil {
+			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive accounts: %w", err)
+		}
+
+		res.Principals = ids
+	}
+
+	return res, nil
+}
+
+// appendSweepEntries appends one entry for each record of res, in the
+// transaction of q.
+func appendSweepEntries(
+	ctx context.Context, q *db.Queries, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
+) error {
+	objects := make([]string, 0, len(res.Tokens)+len(res.Principals))
+	for _, t := range res.Tokens {
+		objects = append(objects, accesstoken.TokenRef(t.PrincipalID, t.ID))
+	}
+
+	for _, id := range res.Principals {
+		objects = append(objects, principal.Ref(id))
+	}
+
+	for _, object := range objects {
+		e := entry(res.At, object)
+		if err := validServerEntry(e); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// errNoPolicyRow reports a database without the seeded policy row, which
+// migration 0054 writes.
+var errNoPolicyRow = errors.New("access token policy row is missing")
+
 // tokenRow maps a generated token row to its codec row.
 func tokenRow(r db.ListAccessTokensRow) codec.AccessTokenRow {
 	return codec.AccessTokenRow{
@@ -243,5 +432,6 @@ func tokenRow(r db.ListAccessTokensRow) codec.AccessTokenRow {
 		ExpiresAtMs:  r.ExpiresAtMs,
 		LastUsedAtMs: r.LastUsedAtMs.Int64,
 		RevokedAtMs:  r.RevokedAtMs.Int64,
+		DisabledAtMs: r.DisabledAtMs.Int64,
 	}
 }
