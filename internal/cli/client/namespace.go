@@ -110,7 +110,7 @@ func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan namespace create again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan namespace create again", stderr)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -365,8 +366,20 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
-	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false, TokenID: ""}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	viewer := identity.Principal{
+		Subject:        "viewer",
+		DisplayName:    "viewer",
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()} {
 		for _, action := range actions {
@@ -592,8 +605,20 @@ func TestChain(t *testing.T) {
 
 	var none identity.Principal
 
-	alice := identity.Principal{Subject: "alice", DisplayName: "Alice", Admin: false, TokenID: "tok-1"}
-	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
+	alice := identity.Principal{
+		Subject:        "alice",
+		DisplayName:    "Alice",
+		Admin:          false,
+		TokenID:        "tok-1",
+		TokenExpiresAt: time.Time{},
+	}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 	unauth := fixedAuthenticator{err: identity.ErrUnauthenticated, principal: none}
 	broken := fixedAuthenticator{err: errStoreDown, principal: none}
 	acceptAdmin := fixedAuthenticator{err: nil, principal: admin}
@@ -635,7 +660,13 @@ func TestSelfAllowed(t *testing.T) {
 	t.Parallel()
 
 	authz := identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}}
-	person := identity.Principal{Subject: "bob", DisplayName: "Bob", Admin: false, TokenID: "tok-1"}
+	person := identity.Principal{
+		Subject:        "bob",
+		DisplayName:    "Bob",
+		Admin:          false,
+		TokenID:        "tok-1",
+		TokenExpiresAt: time.Time{},
+	}
 	ns, err := identity.ParseObject("acme")
 	if err != nil {
 		t.Fatalf("parse object: %v", err)
