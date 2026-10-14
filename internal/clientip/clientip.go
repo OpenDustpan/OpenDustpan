@@ -49,6 +49,13 @@ const maxPortValue = 65535
 // value is out of range without parsing it.
 const maxPortDigits = 5
 
+// asciiZero and asciiNine bound the ASCII digits that a port in a forwarding
+// header may hold.
+const (
+	asciiZero = '0'
+	asciiNine = '9'
+)
+
 // xffHeader names the de facto standard forwarding header.
 const xffHeader = "X-Forwarded-For"
 
@@ -257,7 +264,12 @@ func (r *Resolver) Resolve(req *http.Request) netip.Addr {
 		return netip.Addr{}
 	}
 
-	return r.resolveHops(headerEntries(r.header, lines))
+	entries, ok := headerEntries(r.header, lines)
+	if !ok {
+		return netip.Addr{}
+	}
+
+	return r.resolveHops(entries)
 }
 
 // Header returns the header the resolver reads, or the default for a nil or
@@ -343,13 +355,16 @@ func peerAddr(remote string) netip.Addr {
 }
 
 // headerEntries joins the lines of the named header in order and splits them
-// into one entry per address, so several header lines read as one list.
-func headerEntries(header Header, lines []string) []string {
+// into one entry per address, so several header lines read as one list. It
+// reports false when a Forwarded line ends inside quotes: the whole header
+// is then unreadable. An X-Forwarded-For line has no quote handling and
+// always reports true.
+func headerEntries(header Header, lines []string) ([]string, bool) {
 	if header == HeaderForwarded {
 		return forwardedFors(lines)
 	}
 
-	return xffValues(lines)
+	return xffValues(lines), true
 }
 
 // xffValues joins X-Forwarded-For lines in order and splits them into
@@ -395,11 +410,18 @@ func parseHop(s string) (netip.Addr, bool) {
 // forwardedFors returns one entry per Forwarded element, in order. The entry
 // is the for value, or an empty string when the element holds no for pair: an
 // empty entry never parses, so the walk ends with unknown instead of
-// skipping it.
-func forwardedFors(lines []string) []string {
+// skipping it. It reports false when any line ends inside a quoted string or
+// after a dangling backslash inside quotes: such a line may hide the comma
+// that a trusted proxy appended, so the whole header is unreadable. Each
+// line is checked on its own: a quote never spans two lines.
+func forwardedFors(lines []string) ([]string, bool) {
 	out := make([]string, 0)
 
 	for _, line := range lines {
+		if !quotesBalanced(line) {
+			return out, false
+		}
+
 		for _, elem := range splitOutsideQuotes(line, ',') {
 			value, ok := forwardedForOf(elem)
 			if !ok {
@@ -412,12 +434,42 @@ func forwardedFors(lines []string) []string {
 		}
 	}
 
-	return out
+	return out, true
+}
+
+// quotesBalanced reports whether every double-quoted section of line closes
+// and no backslash inside quotes dangles at its end. It uses the same quote
+// and escape rules as splitOutsideQuotes: a backslash escapes the next byte
+// only inside quotes, and outside quotes it is an ordinary byte.
+func quotesBalanced(line string) bool {
+	quoted := false
+	escaped := false
+
+	for i := range len(line) {
+		c := line[i]
+
+		switch {
+		case escaped:
+			escaped = false
+		case quoted && c == '\\':
+			escaped = true
+		case c == '"':
+			quoted = !quoted
+		default:
+		}
+	}
+
+	return !quoted && !escaped
 }
 
 // forwardedForOf returns the for value of one Forwarded element. The element
 // holds semicolon-separated name=value pairs and the name match ignores case.
+// An element with two for pairs has no usable for: it returns the empty
+// entry, which never parses, so the walk ends with unknown.
 func forwardedForOf(elem string) (string, bool) {
+	foundFor := false
+	first := ""
+
 	for _, pair := range splitOutsideQuotes(elem, ';') {
 		name, value, found := strings.Cut(pair, "=")
 		if !found {
@@ -428,10 +480,19 @@ func forwardedForOf(elem string) (string, bool) {
 			continue
 		}
 
-		return strings.TrimSpace(value), true
+		if foundFor {
+			return "", true
+		}
+
+		first = strings.TrimSpace(value)
+		foundFor = true
 	}
 
-	return "", false
+	if !foundFor {
+		return "", false
+	}
+
+	return first, true
 }
 
 // splitOutsideQuotes splits s on each sep outside double-quoted sections. A
@@ -675,10 +736,18 @@ func parseBracketed(s string) (netip.Addr, bool) {
 	return addr.Unmap().WithZone(""), true
 }
 
-// validPort reports whether s holds a port: digits only, 0 to 65535.
+// validPort reports whether s holds a port: ASCII digits only, 0 to 65535.
+// The digit check runs first, so "+80", "-0", "0x50" and non-ASCII digits
+// never reach the parse.
 func validPort(s string) bool {
 	if s == "" || len(s) > maxPortDigits {
 		return false
+	}
+
+	for i := range len(s) {
+		if s[i] < asciiZero || s[i] > asciiNine {
+			return false
+		}
 	}
 
 	num, err := strconv.Atoi(s)

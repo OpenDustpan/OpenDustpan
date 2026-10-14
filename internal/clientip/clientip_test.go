@@ -317,6 +317,34 @@ func TestResolveAdversarialXFF(t *testing.T) {
 			want:    "",
 		},
 		{
+			name:    "plus port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{"1.2.3.4:+80, 10.9.9.9"},
+			want:    "",
+		},
+		{
+			name:    "minus zero port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{"1.2.3.4:-0, 10.9.9.9"},
+			want:    "",
+		},
+		{
+			name:    "hex port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{"1.2.3.4:0x50, 10.9.9.9"},
+			want:    "",
+		},
+		{
+			name:    "non-ascii port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{"1.2.3.4:٨٠, 10.9.9.9"},
+			want:    "",
+		},
+		{
 			name:    "ipv6 peer with garbage",
 			trusted: "2001:db8::/32",
 			remote:  "[2001:db8::99]:1234",
@@ -381,6 +409,10 @@ func TestResolveForwarded(t *testing.T) {
 		{name: "bad v6 port gives unknown", lines: []string{`for="[2001:db8::1]:abc"`}, want: ""},
 		{name: "obfuscated v6 port gives unknown", lines: []string{`for="[2001:db8::1]:_x"`}, want: ""},
 		{name: "port out of range gives unknown", lines: []string{"for=1.1.1.1:99999"}, want: ""},
+		{name: "plus port gives unknown", lines: []string{"for=1.1.1.1:+80"}, want: ""},
+		{name: "minus zero port gives unknown", lines: []string{"for=1.1.1.1:-0"}, want: ""},
+		{name: "hex port gives unknown", lines: []string{"for=1.1.1.1:0x50"}, want: ""},
+		{name: "non-ascii port gives unknown", lines: []string{"for=1.1.1.1:٨٠"}, want: ""},
 		{name: "unquoted brackets give unknown", lines: []string{"for=[2001:db8::1]"}, want: ""},
 		{name: "bare ipv6 gives unknown", lines: []string{"for=2001:db8::1"}, want: ""},
 		{
@@ -421,6 +453,189 @@ func TestResolveForwarded(t *testing.T) {
 
 			resolver := mustResolverHeader(t, "10.0.0.0/8", "forwarded")
 			req := newRequest(t, "10.1.2.3:1234")
+
+			for _, line := range tc.lines {
+				req.Header.Add("Forwarded", line)
+			}
+
+			if got := addrText(resolver.Resolve(req)); got != tc.want {
+				t.Fatalf("Resolve = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveAdversarialForwarded proves a Forwarded header that a client
+// can bend reads as unknown: an unbalanced quote on any line may hide the
+// comma that a trusted proxy appended, so the whole header is unreadable; a
+// second for pair in one element and a non-digit port are bad entries. The
+// peer 10.0.0.1 is in the trusted list 10.0.0.0/8 unless the case names an
+// IPv6 peer in 2001:db8::/32.
+func TestResolveAdversarialForwarded(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		trusted string
+		remote  string
+		lines   []string
+		want    string
+	}{
+		{
+			name:    "open quote hides appended entry",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by=", for=1.2.3.4`},
+			want:    "",
+		},
+		{
+			name:    "open quote on trusted entry",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=10.0.0.77;x="`},
+			want:    "",
+		},
+		{
+			name:    "open quote hides appended entry on trusted entry",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=10.0.0.77;x=", for=1.2.3.4`},
+			want:    "",
+		},
+		{
+			name:    "escaped quote at end of line",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by="\"`},
+			want:    "",
+		},
+		{
+			name:    "escaped quote hides appended entry",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by="\", for=1.2.3.4`},
+			want:    "",
+		},
+		{
+			name:    "dangling backslash in quotes",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by="abc\`},
+			want:    "",
+		},
+		{
+			name:    "balanced quotes still work",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.2.3.4;by="proxy one"`},
+			want:    "1.2.3.4",
+		},
+		{
+			name:    "balanced escaped quote still works",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for="[2001:db8::1]:4711";by="x\"y"`},
+			want:    "2001:db8::1",
+		},
+		{
+			name:    "first line unbalanced",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by="`, `for=1.2.3.4`},
+			want:    "",
+		},
+		{
+			name:    "two balanced lines give the second",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6`, `for=1.2.3.4`},
+			want:    "1.2.3.4",
+		},
+		{
+			name:    "quote never spans two lines",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=6.6.6.6;by="`, `x"`},
+			want:    "",
+		},
+		{
+			name:    "repeated for",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.1.1.1;for=2.2.2.2`},
+			want:    "",
+		},
+		{
+			name:    "repeated for in other case",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.1.1.1;FOR=2.2.2.2`},
+			want:    "",
+		},
+		{
+			name:    "one for with other pairs",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.1.1.1;by=x;proto=http`},
+			want:    "1.1.1.1",
+		},
+		{
+			name:    "plus port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.2.3.4:+80`},
+			want:    "",
+		},
+		{
+			name:    "minus zero port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.2.3.4:-0`},
+			want:    "",
+		},
+		{
+			name:    "hex port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.2.3.4:0x50`},
+			want:    "",
+		},
+		{
+			name:    "non-ascii port",
+			trusted: "10.0.0.0/8",
+			remote:  "10.0.0.1:1234",
+			lines:   []string{`for=1.2.3.4:٨٠`},
+			want:    "",
+		},
+		{
+			name:    "ipv6 peer with open quote",
+			trusted: "2001:db8::/32",
+			remote:  "[2001:db8::99]:1234",
+			lines:   []string{`for=6.6.6.6;by=", for=1.2.3.4`},
+			want:    "",
+		},
+		{
+			name:    "ipv6 peer with escaped quote",
+			trusted: "2001:db8::/32",
+			remote:  "[2001:db8::99]:1234",
+			lines:   []string{`for=6.6.6.6;by="\"`},
+			want:    "",
+		},
+		{
+			name:    "ipv6 peer with dangling backslash",
+			trusted: "2001:db8::/32",
+			remote:  "[2001:db8::99]:1234",
+			lines:   []string{`for=6.6.6.6;by="abc\`},
+			want:    "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resolver := mustResolverHeader(t, tc.trusted, "forwarded")
+			req := newRequest(t, tc.remote)
 
 			for _, line := range tc.lines {
 				req.Header.Add("Forwarded", line)

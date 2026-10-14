@@ -1552,15 +1552,19 @@ func debugRoute(pattern string) bool {
 	}
 }
 
-// remoteHost returns the remote address of r without the port: the source
-// that the authentication gate counts failures for.
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// unknownGateSource names the shared budget of requests with no client
+// address: the authentication gate counts their failures together.
+const unknownGateSource = "unknown"
+
+// gateSource returns the source text that the authentication gate counts
+// the failures of addr for: the address in text, or unknownGateSource when
+// the address is unknown. The gate maps an IPv6 address to its /64 itself.
+func gateSource(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return unknownGateSource
 	}
 
-	return host
+	return addr.String()
 }
 
 // subjectForRequest returns the subject of the signed-in principal, or false
@@ -1635,7 +1639,7 @@ func withRequestLog(
 		w.Header()[requestIDHeader] = []string{id}
 
 		ctx = requestid.WithContext(ctx, id)
-		ctx = authgate.WithRequest(ctx, remoteHost(r))
+		ctx = authgate.WithRequest(ctx, gateSource(resolved))
 
 		r = r.WithContext(ctx)
 
