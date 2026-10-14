@@ -31,8 +31,8 @@ const (
 	// it.
 	RoleNamespaceAdmin = RoleAdmin
 	// RoleInstallationOperator holds the operator actions only: backups,
-	// restores, maintenance and metrics. It reads no data and manages no
-	// principal.
+	// restores, maintenance, metrics and the installation audit log. It reads
+	// no namespace data and manages no principal.
 	RoleInstallationOperator = "installation-operator"
 	// RoleAccountAdministrator holds the administration and data actions:
 	// the tenant side of a hosted installation. It holds no operator action.
@@ -58,7 +58,10 @@ var builtInDescriptions = []struct {
 		"Writes, and makes, renames, deletes, restores, unlocks and moves units, and manages collections.",
 	},
 	{RoleAdmin, "Holds every action inside its object, access management included."},
-	{RoleInstallationOperator, "Operates the installation: backups, restores, maintenance and metrics. Reads no data."},
+	{
+		RoleInstallationOperator,
+		"Operates the installation: backups, restores, maintenance, metrics and the installation audit log. Reads no namespace data.",
+	},
 	{
 		RoleAccountAdministrator,
 		"Manages principals, groups, roles, grants and namespaces, and holds every data action.",

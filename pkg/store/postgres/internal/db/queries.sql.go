@@ -257,6 +257,128 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const callerGrants = `-- name: CallerGrants :many
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, $2::text
+  UNION ALL SELECT 'group'::text, unnest($8::text[])
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  COALESCE(m.added_at_ms, 0)::bigint AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  COALESCE(m.principal_id, '')::text AS member_id,
+  COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(p.subject, pg.name, '')::text AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= $1::bigint
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > $1::bigint) AS member_count
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = $2::text
+  AND m.added_at_ms <= $1::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > $1::bigint
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= $1::bigint
+  AND (g.created_at_ms > $3::bigint
+    OR (g.created_at_ms = $3::bigint
+      AND (g.id COLLATE "C" > $4::text
+        OR (g.id = $4::text
+          AND (COALESCE(m.added_at_ms, 0) > $5::bigint
+            OR (COALESCE(m.added_at_ms, 0) = $5::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > $6::text))))))
+ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
+LIMIT $7::bigint
+`
+
+type CallerGrantsParams struct {
+	AsOfMs          int64
+	Principal       string
+	AfterAtMs       int64
+	AfterID         string
+	AfterMemberAtMs int64
+	AfterMemberID   string
+	RowLimit        int64
+	Groups          []string
+}
+
+type CallerGrantsRow struct {
+	ID                string
+	Subject           string
+	SubjectKind       string
+	SubjectID         string
+	Role              string
+	Object            string
+	Target            string
+	Condition         pgtype.Text
+	CreatedAtMs       int64
+	CreatedBy         string
+	RevokedAtMs       pgtype.Int8
+	RevokedBy         string
+	MemberAddedAtMs   int64
+	MemberRemovedAtMs pgtype.Int8
+	MemberID          string
+	MemberSubject     string
+	SubjectName       string
+	MemberCount       int64
+}
+
+// One page of the current grants of a caller (ADR 52): the grants of the
+// principal, and the grants of each of its groups through its membership
+// at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+// follows the grants of the caller, not the grants of the installation. The
+// IDs order with the C collation, as in SQLite.
+func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]CallerGrantsRow, error) {
+	rows, err := q.db.Query(ctx, callerGrants,
+		arg.AsOfMs,
+		arg.Principal,
+		arg.AfterAtMs,
+		arg.AfterID,
+		arg.AfterMemberAtMs,
+		arg.AfterMemberID,
+		arg.RowLimit,
+		arg.Groups,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CallerGrantsRow
+	for rows.Next() {
+		var i CallerGrantsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+			&i.RevokedAtMs,
+			&i.RevokedBy,
+			&i.MemberAddedAtMs,
+			&i.MemberRemovedAtMs,
+			&i.MemberID,
+			&i.MemberSubject,
+			&i.SubjectName,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
@@ -324,6 +446,34 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countCallerGrants = `-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, $1::text
+  UNION ALL SELECT 'group'::text, unnest($3::text[])
+)
+SELECT COUNT(*)
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = $1::text
+  AND m.added_at_ms <= $2::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > $2::bigint
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= $2::bigint
+`
+
+type CountCallerGrantsParams struct {
+	Principal string
+	AsOfMs    int64
+	Groups    []string
+}
+
+func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countCallerGrants, arg.Principal, arg.AsOfMs, arg.Groups)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEndedGrantRecords = `-- name: CountEndedGrantRecords :one
 SELECT (SELECT COUNT(*) FROM principals p WHERE $1::text = 'principal' AND p.id = $2::text
           AND p.deleted_at_ms IS NOT NULL)
@@ -349,11 +499,20 @@ func (q *Queries) CountEndedGrantRecords(ctx context.Context, arg CountEndedGran
 }
 
 const countGrantsOn = `-- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE target = $1 AND revoked_at_ms IS NULL
+SELECT COUNT(*) FROM grants
+WHERE target = $1 AND revoked_at_ms IS NULL
+  AND ($2::text = '' OR subject = $2::text)
+  AND ($3::text = '' OR role = $3::text)
 `
 
-func (q *Queries) CountGrantsOn(ctx context.Context, target string) (int64, error) {
-	row := q.db.QueryRow(ctx, countGrantsOn, target)
+type CountGrantsOnParams struct {
+	Target  string
+	Subject string
+	Role    string
+}
+
+func (q *Queries) CountGrantsOn(ctx context.Context, arg CountGrantsOnParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGrantsOn, arg.Target, arg.Subject, arg.Role)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2305,9 +2464,18 @@ FROM namespaces
 WHERE name = $1
 `
 
-func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, error) {
+type GetNamespaceRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
 	row := q.db.QueryRow(ctx, getNamespace, name)
-	var i Namespace
+	var i GetNamespaceRow
 	err := row.Scan(
 		&i.Name,
 		&i.HomeRegion,
@@ -2326,11 +2494,20 @@ WHERE name = $1
 FOR SHARE
 `
 
+type GetNamespaceForShareRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
 // Reads the namespace row with a shared lock. A switch change waits for the
 // transaction that reads it, so the switch it reads is the one that commits.
-func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namespace, error) {
+func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (GetNamespaceForShareRow, error) {
 	row := q.db.QueryRow(ctx, getNamespaceForShare, name)
-	var i Namespace
+	var i GetNamespaceForShareRow
 	err := row.Scan(
 		&i.Name,
 		&i.HomeRegion,
@@ -2340,6 +2517,19 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namesp
 		&i.AllowUnlockedWrites,
 	)
 	return i, err
+}
+
+const getNamespaceIPAllowlist = `-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = $1
+`
+
+func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRow(ctx, getNamespaceIPAllowlist, name)
+	var ip_allowlist string
+	err := row.Scan(&ip_allowlist)
+	return ip_allowlist, err
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
@@ -3818,16 +4008,25 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 }
 
 const listGrantsOn = `-- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants
-WHERE target = $1 AND revoked_at_ms IS NULL
-  AND (subject > $2 OR (subject = $2 AND role > $3))
-ORDER BY subject, role
-LIMIT $4
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
+  g.condition, g.created_at_ms, g.created_by,
+  COALESCE(NULLIF(p.display_name, ''), p.subject, pg.name, '')::text AS holder_name,
+  COALESCE(p.kind, CASE WHEN pg.id IS NOT NULL THEN 'group' END, '')::text AS holder_kind
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+WHERE g.target = $1 AND g.revoked_at_ms IS NULL
+  AND ($2::text = '' OR g.subject = $2::text)
+  AND ($3::text = '' OR g.role = $3::text)
+  AND (g.subject > $4 OR (g.subject = $4 AND g.role > $5))
+ORDER BY g.subject, g.role
+LIMIT $6
 `
 
 type ListGrantsOnParams struct {
 	Target       string
+	Subject      string
+	Role         string
 	AfterSubject string
 	AfterRole    string
 	RowLimit     int32
@@ -3846,11 +4045,19 @@ type ListGrantsOnRow struct {
 	Condition   pgtype.Text
 	CreatedAtMs int64
 	CreatedBy   string
+	HolderName  string
+	HolderKind  string
 }
 
+// One page of the current grants on a target, with the name and the kind of
+// each holder: the display name (else the subject) and the kind of a
+// principal, or the name of a group and the kind "group". An empty subject
+// or role filter keeps every grant.
 func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]ListGrantsOnRow, error) {
 	rows, err := q.db.Query(ctx, listGrantsOn,
 		arg.Target,
+		arg.Subject,
+		arg.Role,
 		arg.AfterSubject,
 		arg.AfterRole,
 		arg.RowLimit,
@@ -3875,6 +4082,8 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 			&i.Condition,
 			&i.CreatedAtMs,
 			&i.CreatedBy,
+			&i.HolderName,
+			&i.HolderKind,
 		); err != nil {
 			return nil, err
 		}
@@ -4179,15 +4388,24 @@ FROM namespaces
 ORDER BY name
 `
 
-func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
+type ListNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, error) {
 	rows, err := q.db.Query(ctx, listNamespaces)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Namespace
+	var items []ListNamespacesRow
 	for rows.Next() {
-		var i Namespace
+		var i ListNamespacesRow
 		if err := rows.Scan(
 			&i.Name,
 			&i.HomeRegion,
@@ -5701,6 +5919,26 @@ type SetInstallationStateIfParams struct {
 // nothing when the stored state differs or the row is missing.
 func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallationStateIfParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setInstallationStateIf, arg.State, arg.State_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
+UPDATE namespaces
+SET ip_allowlist = $1
+WHERE name = $2
+`
+
+type SetNamespaceIPAllowlistParams struct {
+	IpAllowlist string
+	Name        string
+}
+
+// Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+func (q *Queries) SetNamespaceIPAllowlist(ctx context.Context, arg SetNamespaceIPAllowlistParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setNamespaceIPAllowlist, arg.IpAllowlist, arg.Name)
 	if err != nil {
 		return 0, err
 	}

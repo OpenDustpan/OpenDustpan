@@ -19,6 +19,17 @@ UPDATE namespaces
 SET allow_forced_writes = $1, allow_unlocked_writes = $2
 WHERE name = $3;
 
+-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = $1;
+
+-- name: SetNamespaceIPAllowlist :execrows
+-- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+UPDATE namespaces
+SET ip_allowlist = $1
+WHERE name = $2;
+
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.
@@ -949,15 +960,29 @@ SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind,
 FROM grants WHERE id = $1 AND revoked_at_ms IS NULL;
 
 -- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants
-WHERE target = @target AND revoked_at_ms IS NULL
-  AND (subject > @after_subject OR (subject = @after_subject AND role > @after_role))
-ORDER BY subject, role
+-- One page of the current grants on a target, with the name and the kind of
+-- each holder: the display name (else the subject) and the kind of a
+-- principal, or the name of a group and the kind "group". An empty subject
+-- or role filter keeps every grant.
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
+  g.condition, g.created_at_ms, g.created_by,
+  COALESCE(NULLIF(p.display_name, ''), p.subject, pg.name, '')::text AS holder_name,
+  COALESCE(p.kind, CASE WHEN pg.id IS NOT NULL THEN 'group' END, '')::text AS holder_kind
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+WHERE g.target = @target AND g.revoked_at_ms IS NULL
+  AND (@subject::text = '' OR g.subject = @subject::text)
+  AND (@role::text = '' OR g.role = @role::text)
+  AND (g.subject > @after_subject OR (g.subject = @after_subject AND g.role > @after_role))
+ORDER BY g.subject, g.role
 LIMIT @row_limit;
 
 -- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE target = @target AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants
+WHERE target = @target AND revoked_at_ms IS NULL
+  AND (@subject::text = '' OR subject = @subject::text)
+  AND (@role::text = '' OR role = @role::text);
 
 -- name: RevokeGrant :execrows
 UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL;
@@ -1079,6 +1104,61 @@ WHERE (@all_grants::boolean
   AND CASE WHEN @history::boolean THEN
     g.created_at_ms < @to_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @from_ms::bigint
   ELSE g.created_at_ms <= @as_of_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @as_of_ms::bigint END;
+
+-- name: CallerGrants :many
+-- One page of the current grants of a caller (ADR 52): the grants of the
+-- principal, and the grants of each of its groups through its membership
+-- at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+-- follows the grants of the caller, not the grants of the installation. The
+-- IDs order with the C collation, as in SQLite.
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, @principal::text
+  UNION ALL SELECT 'group'::text, unnest(@groups::text[])
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  COALESCE(m.added_at_ms, 0)::bigint AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  COALESCE(m.principal_id, '')::text AS member_id,
+  COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(p.subject, pg.name, '')::text AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= @as_of_ms::bigint
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint) AS member_count
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = @principal::text
+  AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= @as_of_ms::bigint
+  AND (g.created_at_ms > @after_at_ms::bigint
+    OR (g.created_at_ms = @after_at_ms::bigint
+      AND (g.id COLLATE "C" > @after_id::text
+        OR (g.id = @after_id::text
+          AND (COALESCE(m.added_at_ms, 0) > @after_member_at_ms::bigint
+            OR (COALESCE(m.added_at_ms, 0) = @after_member_at_ms::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > @after_member_id::text))))))
+ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
+LIMIT @row_limit::bigint;
+
+-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, @principal::text
+  UNION ALL SELECT 'group'::text, unnest(@groups::text[])
+)
+SELECT COUNT(*)
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = @principal::text
+  AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= @as_of_ms::bigint;
 
 -- name: ReviewStacksByIDs :many
 -- The stacks of the unit grants of an export, deleted ones included (ADR 47):

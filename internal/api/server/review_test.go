@@ -16,21 +16,28 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 type reviewRowDoc struct {
-	LastAccessTracked *bool  `json:"lastAccessTracked"`
-	LastAccessAtMs    *int64 `json:"lastAccessAtMs"`
-	Subject           string `json:"subject"`
-	SubjectName       string `json:"subjectName"`
-	Holder            string `json:"holder"`
-	Role              string `json:"role"`
-	Object            string `json:"object"`
-	ObjectState       string `json:"objectState"`
-	InheritedFrom     string `json:"inheritedFrom"`
-	CanGrantAccess    bool   `json:"canGrantAccess"`
+	Via               *reviewViaDoc `json:"via"`
+	LastAccessTracked *bool         `json:"lastAccessTracked"`
+	LastAccessAtMs    *int64        `json:"lastAccessAtMs"`
+	Subject           string        `json:"subject"`
+	SubjectName       string        `json:"subjectName"`
+	Holder            string        `json:"holder"`
+	Role              string        `json:"role"`
+	Object            string        `json:"object"`
+	ObjectState       string        `json:"objectState"`
+	InheritedFrom     string        `json:"inheritedFrom"`
+	CanGrantAccess    bool          `json:"canGrantAccess"`
+}
+
+type reviewViaDoc struct {
+	Group  string `json:"group"`
+	Member string `json:"member"`
 }
 
 type reviewDoc struct {
@@ -271,6 +278,149 @@ func TestCallerAccess(t *testing.T) {
 			http.MethodGet, "/api/server/caller/access?" + query, "", http.StatusBadRequest,
 		}, nil)
 	}
+}
+
+// TestCallerGrants reads the grants of callers: bob holds a grant of his
+// own and one through a group, read one row a page.
+func TestCallerGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	seedOpsGrants(t, f)
+
+	var got []string
+
+	path := "/api/server/caller/grants?limit=1"
+
+	for page := 0; path != ""; page++ {
+		var doc reviewDoc
+		f.as(t, "bob", apiCall{http.MethodGet, path, "", http.StatusOK}, &doc)
+
+		if (page == 0) != (doc.Total != nil) || (doc.Total != nil && *doc.Total != 2) || doc.AsOfMs == nil {
+			t.Fatalf("page %d = %+v, want a total of 2 on the first page only, and a time", page, doc)
+		}
+
+		got = append(got, callerGrantRows(doc)...)
+
+		path = ""
+		if doc.NextCursor != "" {
+			path = "/api/server/caller/grants?limit=1&cursor=" + doc.NextCursor
+		}
+	}
+
+	want := []string{
+		"principal:prn-bob bob viewer acme",
+		"group:grp-ops#member ops installation-operator @server via group:grp-ops#member principal:prn-bob",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("grants of bob = %q, want %q", got, want)
+	}
+}
+
+// TestCallerGrantsOfOtherCallers reads the grants of olga, who holds one,
+// and of the bootstrap admin, who holds none.
+func TestCallerGrantsOfOtherCallers(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	for subject, rows := range map[string]int{"olga": 1, "admin": 0} {
+		var doc reviewDoc
+		f.as(t, subject, apiCall{http.MethodGet, "/api/server/caller/grants", "", http.StatusOK}, &doc)
+
+		if doc.Total == nil || *doc.Total != int64(rows) || len(doc.Grants) != rows || doc.NextCursor != "" {
+			t.Fatalf("grants of %s = %+v, want %d", subject, doc, rows)
+		}
+	}
+}
+
+// TestCallerGrantsRefusals sends the queries that the caller grants
+// refuse. A cursor of one caller does not page the grants of another.
+func TestCallerGrantsRefusals(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	seedOpsGrants(t, f)
+
+	var first reviewDoc
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/grants?limit=1", "", http.StatusOK}, &first)
+
+	for _, c := range []struct{ subject, query string }{
+		{"olga", "cursor=" + first.NextCursor},
+		{"bob", "limit=0"},
+		{"bob", "limit=x"},
+		{"bob", "cursor=%21"},
+	} {
+		f.as(t, c.subject, apiCall{
+			http.MethodGet, "/api/server/caller/grants?" + c.query, "", http.StatusBadRequest,
+		}, nil)
+	}
+}
+
+// seedOpsGrants gives bob a viewer grant on acme and makes him a member of
+// the group ops, which holds installation-operator on the installation.
+func seedOpsGrants(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 13, 0, 0, 0, time.UTC)
+
+	group := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: "grp-ops", Name: "ops", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+	if err := f.store.CreateGroup(t.Context(), group, storetest.ServerChange(at, "group:grp-ops")); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	member := principal.Membership{AddedAt: at, GroupID: "grp-ops", PrincipalID: "prn-bob"}
+	joined := storetest.ServerChange(at, "group:grp-ops#member:prn-bob")
+
+	if err := f.store.AddMember(t.Context(), member, joined); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	grants := []access.Grant{
+		{
+			CreatedAt: at,
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-bob-own",
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
+		},
+		{
+			CreatedAt: at.Add(time.Second), Condition: nil, Object: identity.ServerObject(), ID: "grt-ops",
+			Role: access.RoleInstallationOperator, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectGroup, ID: "grp-ops"},
+		},
+	}
+
+	for i := range grants {
+		fence, e := storetest.GrantWrite(t, f.store, grants[i].Object, at, "grant:"+grants[i].ID)
+		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e); err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+	}
+}
+
+// callerGrantRows returns each row of doc as its subject, subject name,
+// role, object and membership.
+func callerGrantRows(doc reviewDoc) []string {
+	out := make([]string, 0, len(doc.Grants))
+
+	for i := range doc.Grants {
+		r := &doc.Grants[i]
+
+		via := ""
+		if r.Via != nil {
+			via = " via " + r.Via.Group + " " + r.Via.Member
+		}
+
+		out = append(out, r.Subject+" "+r.SubjectName+" "+r.Role+" "+r.Object+via)
+	}
+
+	return out
 }
 
 // TestCallerAccessPaging walks the objects of a caller one page at a time.

@@ -54,6 +54,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "grant on the caller object is ErrInvalid", test: testGrantOnCaller},
 		{name: "missing grant is ErrNotFound", test: testMissingGrant},
 		{name: "list grants on an object pages by subject and role", test: testListGrants},
+		{name: "list grants names each holder and filters by holder and role", test: testListGrantHolders},
 		{name: "grants on objects match subjects and objects", test: testGrantsOn},
 		{name: "grants with roles match subjects and roles", test: testGrantsWithRoles},
 		{name: "namespace and grant commit together", test: testNamespaceWithGrant},
@@ -152,7 +153,17 @@ func refused() audit.Entry {
 
 // everyGrant asks for every grant on an object.
 func everyGrant() access.GrantQuery {
-	return access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: access.MaxLimit + 1}
+	return access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: access.MaxLimit + 1}
+}
+
+// grantsOf returns the grants of a list, without their holders.
+func grantsOf(listed []access.ListedGrant) []access.Grant {
+	out := make([]access.Grant, 0, len(listed))
+	for i := range listed {
+		out = append(out, listed[i].Grant)
+	}
+
+	return out
 }
 
 func newGrant(id string, subject access.Subject, role string, obj identity.Object) access.Grant {
@@ -519,36 +530,44 @@ func testListGrants(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	acme := identity.NamespaceObject("acme")
 
-	all, total, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: 10})
+	all, total, err := s.ListGrantsOn(
+		ctx,
+		acme,
+		access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 10},
+	)
 	if err != nil {
 		t.Fatalf("list grants on acme: %v", err)
 	}
 
-	assertIDs(t, "grants on acme", all, "grt-2", "grt-1", "grt-3")
+	assertIDs(t, "grants on acme", grantsOf(all), "grt-2", "grt-1", "grt-3")
 
 	if total != 3 {
 		t.Fatalf("total on acme = %d, want 3", total)
 	}
 
 	page, total, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{
-		AfterSubject: "principal:prn-a", AfterRole: access.RoleViewer, Limit: 10,
+		AfterSubject: "principal:prn-a", AfterRole: access.RoleViewer, Subject: "", Role: "", Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("list grants after a key: %v", err)
 	}
 
-	assertIDs(t, "grants after prn-a viewer", page, "grt-3")
+	assertIDs(t, "grants after prn-a viewer", grantsOf(page), "grt-3")
 
 	if total != 3 {
 		t.Fatalf("total after a key = %d, want 3 with no regard to the key", total)
 	}
 
-	first, _, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: 1})
+	first, _, err := s.ListGrantsOn(
+		ctx,
+		acme,
+		access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 1},
+	)
 	if err != nil {
 		t.Fatalf("list one grant: %v", err)
 	}
 
-	assertIDs(t, "first grant on acme", first, "grt-2")
+	assertIDs(t, "first grant on acme", grantsOf(first), "grt-2")
 }
 
 func testGrantsOn(t *testing.T, s access.Store) {
@@ -641,7 +660,7 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 		t.Fatalf("list grants: %v", err)
 	}
 
-	assertIDs(t, "grants on beta", list)
+	assertIDs(t, "grants on beta", grantsOf(list))
 }
 
 func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
@@ -717,7 +736,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 		t.Fatalf("list grants: %v", err)
 	}
 
-	assertIDs(t, "grants after the deletes", list, "grt-3")
+	assertIDs(t, "grants after the deletes", grantsOf(list), "grt-3")
 
 	// A grant to a deleted subject is refused in the transaction of the
 	// grant, so a delete that commits first wins.
