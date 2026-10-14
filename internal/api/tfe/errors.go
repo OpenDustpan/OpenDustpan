@@ -148,6 +148,7 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
 	case errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),
+		errors.Is(err, workspace.ErrPendingState),
 		errors.Is(err, workspace.ErrNotLocked),
 		errors.Is(err, workspace.ErrLockedByOther),
 		errors.Is(err, workspace.ErrConcurrentModification),

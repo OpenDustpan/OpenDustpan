@@ -203,8 +203,8 @@ func (stubWorkspaces) Get(_ context.Context, ref workspace.Ref) (workspace.Works
 	}
 }
 
-// Delete soft-deletes acme/web, answers ErrLocked for acme/locked, and
-// ErrNotFound for every other workspace.
+// Delete soft-deletes acme/web, answers ErrLocked for acme/locked,
+// ErrPendingState for acme/pending, and ErrNotFound for every other workspace.
 func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry) error {
 	switch {
 	case ref.Namespace.String() != "acme":
@@ -213,6 +213,8 @@ func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry
 		return nil
 	case ref.Name.String() == "locked":
 		return workspace.ErrLocked
+	case ref.Name.String() == "pending":
+		return workspace.ErrPendingState
 	default:
 		return workspace.ErrNotFound
 	}

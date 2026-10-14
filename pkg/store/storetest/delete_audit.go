@@ -419,3 +419,25 @@ func assertWorkspaceUnchanged(t *testing.T, s WorkspaceStore, ns namespace.Names
 		t.Fatalf("deleted units after the failed delete = %+v, want none", deleted)
 	}
 }
+
+// testDeleteWorkspaceRefusesPendingState declares a pending state version,
+// releases the lock and deletes the workspace: the delete returns
+// ErrPendingState and changes nothing, so an upload never loses its
+// workspace. testDeleteWorkspace covers the delete after a finalize.
+func testDeleteWorkspaceRefusesPendingState(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+	createPendingVersion(t, s, ns, newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1)))
+
+	unlockTestWorkspace(t, s, ns, w.Ref)
+
+	err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name))
+	if !errors.Is(err, workspace.ErrPendingState) {
+		t.Fatalf("delete with a pending state version: err = %v, want ErrPendingState", err)
+	}
+
+	assertWorkspaceUnchanged(t, s, ns, w)
+}

@@ -288,7 +288,8 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 // DeleteWorkspace implements workspace.Store: it soft-deletes the workspace
 // (ADR 47). The workspace moves to deleted, so no lookup or list finds it and
 // its name is free, while its state versions stay. It removes the inventory
-// entry and refuses a locked workspace with ErrLocked.
+// entry, refuses a locked workspace with ErrLocked and one with a pending
+// state version with ErrPendingState.
 func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -298,8 +299,6 @@ func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence n
 		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
-	at := e.At
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -307,29 +306,14 @@ func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence n
 		return err
 	}
 
-	var id workspace.ID
-
-	found := false
-
-	for wid := range m.workspaces {
-		if m.workspaces[wid].Ref == ref {
-			id, found = wid, true
-
-			break
-		}
-	}
-
-	if !found {
-		return workspace.ErrNotFound
-	}
-
-	if m.workspaces[id].Lock.ID != "" {
-		return workspace.ErrLocked
+	id, err := deletableWorkspace(m, ref)
+	if err != nil {
+		return err
 	}
 
 	m.deleted[id] = inventory.DeletedEntry{
-		DeletedAt:  at,
-		PurgeAfter: at.Add(inventory.DeletedRetention),
+		DeletedAt:  e.At,
+		PurgeAfter: e.At.Add(inventory.DeletedRetention),
 		Namespace:  ref.Namespace,
 		Tool:       memInventoryTool,
 		UnitID:     id.String(),
@@ -344,6 +328,30 @@ func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence n
 	}
 
 	return nil
+}
+
+// deletableWorkspace returns the ID of the live workspace called ref, or
+// ErrNotFound, ErrLocked or ErrPendingState. The caller holds m.mu.
+func deletableWorkspace(m *memStore, ref workspace.Ref) (workspace.ID, error) {
+	for id := range m.workspaces {
+		if m.workspaces[id].Ref != ref {
+			continue
+		}
+
+		if m.workspaces[id].Lock.ID != "" {
+			return "", workspace.ErrLocked
+		}
+
+		for vid := range m.versions {
+			if sv := m.versions[vid]; sv.Workspace == id && sv.Status == workspace.StatusPending {
+				return "", workspace.ErrPendingState
+			}
+		}
+
+		return id, nil
+	}
+
+	return "", workspace.ErrNotFound
 }
 
 func (m *memStore) CreateStateVersion(

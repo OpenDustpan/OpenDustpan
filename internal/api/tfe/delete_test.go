@@ -39,7 +39,8 @@ func (d recordingDeleter) Delete(ctx context.Context, ref workspace.Ref, e audit
 }
 
 // TestDeleteWorkspace proves the workspace delete route (ADR 47): a delete
-// answers 204, a locked workspace 409, an unknown one 404, and a store whose
+// answers 204, a locked workspace or one with a pending state version 409, an
+// unknown one 404, and a store whose
 // audit append fails 500. Each delete hands one timed change entry to the
 // store, which appends it in the delete transaction (ADR 60, fail closed), and
 // the handler appends no entry of its own.
@@ -53,6 +54,7 @@ func TestDeleteWorkspace(t *testing.T) {
 	}{
 		{name: "delete", workspace: "web", wantCode: http.StatusNoContent},
 		{name: "locked", workspace: "locked", wantCode: http.StatusConflict},
+		{name: "pending state version", workspace: "pending", wantCode: http.StatusConflict},
 		{name: "unknown", workspace: "ghost", wantCode: http.StatusNotFound},
 		{name: "failed append", workspace: "broken", wantCode: http.StatusInternalServerError},
 	}

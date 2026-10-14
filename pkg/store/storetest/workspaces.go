@@ -200,6 +200,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testDeletedWorkspaceStoredNameFindsNothing,
 		},
 		{
+			name: "a workspace with a pending state version refuses the delete",
+			test: testDeleteWorkspaceRefusesPendingState,
+		},
+		{
 			name: "fence and unlock releases the lock and makes the fence current",
 			test: testFenceAndUnlock,
 		},

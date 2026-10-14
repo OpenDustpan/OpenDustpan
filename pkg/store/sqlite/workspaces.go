@@ -157,13 +157,17 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 // closed): it frees the name, keeps the state versions
 // and the wrapped data key, and moves the inventory entry to the deleted
 // units. It returns
-// ErrLocked while the workspace is locked, and ErrNotFound if no live
+// ErrLocked while the workspace is locked, ErrPendingState while it has a
+// pending state version, and ErrNotFound if no live
 // workspace has ref. The transaction holds the write lock from the start, so a
 // concurrent lock of the workspace either runs before the check or waits
 // until the delete commits.
 func (s *Store) DeleteWorkspace(
 	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
 ) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
@@ -177,8 +181,8 @@ func (s *Store) DeleteWorkspace(
 			return fmt.Errorf("select workspace: %w", getErr)
 		}
 
-		if row.LockID != "" {
-			return workspace.ErrLocked
+		if busyErr := refuseBusyWorkspace(ctx, q, row.LockID, row.ID); busyErr != nil {
+			return busyErr
 		}
 
 		n, deleteErr := q.SoftDeleteWorkspace(ctx, db.SoftDeleteWorkspaceParams{
@@ -195,6 +199,27 @@ func (s *Store) DeleteWorkspace(
 
 		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, e.At)
 	})
+}
+
+// refuseBusyWorkspace returns ErrLocked while the workspace holds a lock, and
+// ErrPendingState while it has a pending state version, so a delete never
+// leaves an upload without its workspace. The caller runs it in the delete
+// transaction, which holds the write lock, so no declare runs between the count and the delete.
+func refuseBusyWorkspace(ctx context.Context, q *db.Queries, lockID, workspaceID string) error {
+	if lockID != "" {
+		return workspace.ErrLocked
+	}
+
+	pending, err := q.CountPendingStateVersions(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("count pending state versions: %w", err)
+	}
+
+	if pending > 0 {
+		return workspace.ErrPendingState
+	}
+
+	return nil
 }
 
 // moveWorkspaceInventoryToDeleted moves the inventory entry of the deleted
