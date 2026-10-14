@@ -136,6 +136,45 @@ func (s *Store) inFencedAuditedTx(
 	})
 }
 
+// inLockedFencedAuditedTx is inFencedAuditedTx that takes the advisory lock
+// of the scope @server first, then the namespace row of fence. A write that
+// must be ordered with the writes of the installation (a grant inside a
+// namespace, against the delete of its subject or its role) uses it. No
+// transaction takes the lock after a namespace row, so the lock order
+// cannot deadlock.
+func (s *Store) inLockedFencedAuditedTx(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+			return err
+		}
+
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // validServerEntry returns audit.ErrInvalidEntry when e fails validation or
 // names a scope other than @server.
 func validServerEntry(e audit.Entry) error {
@@ -240,21 +279,32 @@ func (s *Store) inFencedUpdateTx(
 	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
 ) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
-		version, err := q.GetFailoverVersionForUpdate(ctx, fence.Namespace.String())
-		if errors.Is(err, pgx.ErrNoRows) {
-			return namespace.ErrNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("read failover version: %w", err)
-		}
-
-		if version != fence.FailoverVersion {
-			return namespace.ErrFenced
+		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+			return err
 		}
 
 		return fn(q)
 	})
+}
+
+// checkFenceForUpdate holds the namespace row of fence FOR UPDATE and
+// checks its failover version. It returns namespace.ErrNotFound for a
+// missing namespace and namespace.ErrFenced for a stale version.
+func checkFenceForUpdate(ctx context.Context, q *db.Queries, fence namespace.Fence) error {
+	version, err := q.GetFailoverVersionForUpdate(ctx, fence.Namespace.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return namespace.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("read failover version: %w", err)
+	}
+
+	if version != fence.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
 }
 
 // List implements audit.Store: one page of the entries of ns, newest first,
