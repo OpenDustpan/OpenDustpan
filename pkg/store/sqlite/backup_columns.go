@@ -40,8 +40,16 @@ type sqliteBackupTable struct {
 // schema, so a migration that adds a column fails until its author adds the
 // column here (ADR 42, decision 5).
 //
-//nolint:funlen // A constant table of column names; its length is the schema.
+// The list is split in two functions to keep each one readable.
 func sqliteBackupTables() []sqliteBackupTable {
+	return append(sqliteStackBackupTables(), sqliteWorkspaceBackupTables()...)
+}
+
+// sqliteStackBackupTables lists the tables of backup.Tables from namespaces
+// to blob_purges, in that order.
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteStackBackupTables() []sqliteBackupTable {
 	return []sqliteBackupTable{
 		{
 			table: "namespaces",
@@ -198,6 +206,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"purged_at_ms",
 			},
 		},
+	}
+}
+
+// sqliteWorkspaceBackupTables lists the tables of backup.Tables from
+// workspaces to installation, in that order.
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteWorkspaceBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: "workspaces",
 			columns: []string{
