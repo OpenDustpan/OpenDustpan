@@ -39,8 +39,20 @@ This process is public. Only the fix is private.
    unmerged code runs there.
 3. The fix merges to the `main` branch and goes into a release no more
    than 14 days after the hosted service starts to run it.
-4. At disclosure, the fix merges, the release is published and the
+4. Three to seven days before the release, the project posts a
+   pre-announcement (see "Pre-announcement" below).
+5. At disclosure, the fix merges, the release is published and the
    advisory is published together.
+
+## Pre-announcement
+
+The project announces the date and the severity of a security release 3 to
+7 days before the release. The announcement gives no details of the fix or of
+the vulnerability.
+
+Until an announce list exists, the project posts the pre-announcement on its
+GitHub repository. RFC 69 describes the announce list and the other channels
+that the project plans.
 
 ## Supported versions
 

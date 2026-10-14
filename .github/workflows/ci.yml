@@ -25,6 +25,11 @@ concurrency:
 # unset means GitHub-hosted "ubuntu-latest"; ["self-hosted","linux","x64"]
 # means the project's own machines. Never point a public repository's
 # pull requests from forks at self-hosted runners.
+#
+# A self-hosted machine keeps the Go build cache, the Go module cache and
+# the golangci-lint cache on its disk between jobs, and also the CLI
+# archives of the e2e suite. Thus the jobs use the GitHub Actions cache only
+# on a GitHub-hosted runner, where each job starts on an empty machine.
 
 jobs:
   go:
@@ -45,6 +50,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
@@ -57,6 +63,7 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
       - name: Nil-panic analysis
         run: make nilaway
       - name: Known vulnerabilities
@@ -102,6 +109,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Install Trivy and TruffleHog
         run: |
           set -euo pipefail
@@ -145,9 +153,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: ${{ runner.environment == 'github-hosted' }}
       # The pinned versions of the matrix are in e2e/tool.go, so the key changes
       # when they change. The "latest" versions are downloaded on each run.
       - name: Cache the CLI archives
+        if: ${{ runner.environment == 'github-hosted' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/opendustpan-e2e

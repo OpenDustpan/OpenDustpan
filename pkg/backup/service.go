@@ -467,19 +467,43 @@ type sqlExport struct {
 // streams into the target while the export writes it, so the SQL part never sits
 // in memory whole. A file that fails before it completes is aborted in the
 // target, so no partial table file stays there as a good one.
+//
+// The service finishes every file it opened before it returns, also when the
+// exporter returns without a Close or an Abort of a file. An open file keeps
+// its target Put waiting on the pipe, so it must never outlive the export.
 func (s *Service) exportPortable(ctx context.Context, id ID) (sqlExport, error) {
+	var (
+		mu     sync.Mutex
+		opened []*targetWriter
+	)
+
 	sink := func(path string) (io.WriteCloser, error) {
 		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
 		if err != nil {
 			return nil, fmt.Errorf("name table file %q: %w", path, err)
 		}
 
-		return newTargetWriter(ctx, s.target, key, s.maxSQL), nil
+		w := newTargetWriter(ctx, s.target, key, s.maxSQL)
+
+		mu.Lock()
+		opened = append(opened, w)
+		mu.Unlock()
+
+		return w, nil
 	}
 
 	sum, files, err := s.exporter.ExportPortable(ctx, sink)
+
+	mu.Lock()
+	left := abortOpen(opened, err)
+	mu.Unlock()
+
 	if err != nil {
 		return sqlExport{}, fmt.Errorf("export SQL data: %w", err)
+	}
+
+	if left > 0 {
+		return sqlExport{}, fmt.Errorf("export SQL data: %w: %d table files", errTableFileOpen, left)
 	}
 
 	size, sha, err := sqlAggregate(files)
@@ -512,15 +536,45 @@ func sqlAggregate(files []PortableFile) (int64, [sha256.Size]byte, error) {
 	return size, sha, nil
 }
 
+// errTableFileOpen reports an export that returned with a table file that it
+// did not close or abort. The service aborts the file, so the target keeps
+// nothing for it.
+var errTableFileOpen = errors.New("exporter left a table file open")
+
+// abortOpen aborts each writer that is not finished and returns their count.
+// cause is the error of the export, or nil when the export reported success.
+func abortOpen(writers []*targetWriter, cause error) int {
+	if cause == nil {
+		cause = errTableFileOpen
+	}
+
+	left := 0
+
+	for _, w := range writers {
+		if w.abortOpen(cause) {
+			left++
+		}
+	}
+
+	return left
+}
+
 // targetWriter streams one table file into the target. Close finishes the
 // object and reports the target's error. Abort ends the object with err, so the
-// target stores nothing for the file.
+// target stores nothing for the file. Only the first Close or Abort acts. A
+// later Close returns the error of the first Close, or nil after an Abort.
 type targetWriter struct {
-	pipe  *io.PipeWriter
-	done  chan error
-	size  int64
-	limit int64
+	pipe     *io.PipeWriter
+	done     chan error
+	size     int64
+	limit    int64
+	once     sync.Once
+	closeErr error
 }
+
+// targetWriter is the abort sink of WritePortable, so a failed table file never
+// completes in the target.
+var _ abortSink = (*targetWriter)(nil)
 
 // newTargetWriter starts a Put of key on target that reads from a pipe. A limit
 // above zero bounds the bytes of the object, as an S3-compatible target bounds
@@ -538,7 +592,7 @@ func newTargetWriter(ctx context.Context, target blob.Store, key blob.Key, limit
 		done <- err
 	}()
 
-	return &targetWriter{pipe: writer, done: done, size: 0, limit: limit}
+	return &targetWriter{pipe: writer, done: done, size: 0, limit: limit, once: sync.Once{}, closeErr: nil}
 }
 
 // Write streams p into the object. It fails above the limit, so an oversized
@@ -557,21 +611,40 @@ func (w *targetWriter) Write(p []byte) (int, error) {
 
 // Close finishes the object and returns the target's error.
 func (w *targetWriter) Close() error {
-	if err := w.pipe.Close(); err != nil {
-		return fmt.Errorf("finish table file: %w", err)
-	}
+	w.once.Do(func() {
+		if err := w.pipe.Close(); err != nil {
+			w.closeErr = fmt.Errorf("finish table file: %w", err)
 
-	if err := <-w.done; err != nil {
-		return fmt.Errorf("write table file: %w", err)
-	}
+			return
+		}
 
-	return nil
+		if err := <-w.done; err != nil {
+			w.closeErr = fmt.Errorf("write table file: %w", err)
+		}
+	})
+
+	return w.closeErr
 }
 
-// Abort ends the object with err, so the target stores nothing for it.
+// Abort ends the object with err, so the target stores nothing for it. It
+// waits until the target Put returns. It does nothing after a Close or an
+// Abort.
 func (w *targetWriter) Abort(err error) {
-	_ = w.pipe.CloseWithError(err) // PipeWriter.CloseWithError always returns nil.
-	<-w.done
+	w.abortOpen(err)
+}
+
+// abortOpen aborts the object as Abort does, and reports whether it acted:
+// false means that an earlier Close or Abort already finished the object.
+func (w *targetWriter) abortOpen(err error) bool {
+	acted := false
+
+	w.once.Do(func() {
+		acted = true
+		_ = w.pipe.CloseWithError(err) // PipeWriter.CloseWithError always returns nil.
+		<-w.done
+	})
+
+	return acted
 }
 
 // copyBufferSize sizes the counting pass buffer, so the passes that hash

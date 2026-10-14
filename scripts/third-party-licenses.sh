@@ -24,13 +24,18 @@ usage() {
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The functions below match file names without regard to case. They use
+# nocasematch and no child process: a process for each file made the check
+# take minutes, because the linked packages hold thousands of files.
+
 # copy_license_files <source dir> <destination dir>: copy each file with a
 # license name. The module cache is read-only, so the copies get mode 0644.
 copy_license_files() {
   local src="$1" dst="$2" file
+  shopt -s nocasematch
   for file in "$src"/*; do
     [[ -f "$file" ]] || continue
-    case "$(basename "$file" | tr '[:lower:]' '[:upper:]')" in
+    case "${file##*/}" in
       # Source code with a license name, for example notice_response.go.
       *.GO) ;;
       LICENSE* | LICENCE* | COPYING* | NOTICE* | PATENTS* | AUTHORS* | CONTRIBUTORS*)
@@ -39,25 +44,34 @@ copy_license_files() {
         ;;
     esac
   done
+  shopt -u nocasematch
 }
 
 # has_license <dir>: true if the directory holds a LICENSE, LICENCE or
 # COPYING file.
 has_license() {
-  local file
+  local file found=1
+  shopt -s nocasematch
   for file in "$1"/*; do
     [[ -f "$file" ]] || continue
-    case "$(basename "$file" | tr '[:lower:]' '[:upper:]')" in
-      LICENSE* | LICENCE* | COPYING*) return 0 ;;
+    case "${file##*/}" in
+      LICENSE* | LICENCE* | COPYING*)
+        found=0
+        break
+        ;;
     esac
   done
+  shopt -u nocasematch
 
-  return 1
+  return "$found"
 }
 
 collect() {
   local goos="$1" goarch="$2" out="$3"
   local module module_dir package_dir dir rel goroot go_license
+  # The directories that are done, one on each line. Many packages share
+  # their parent directories, so each directory is copied only one time.
+  local seen=$'\n'
 
   rm -rf "$out"
   mkdir -p "$out"
@@ -67,8 +81,11 @@ collect() {
   while IFS=$'\t' read -r module module_dir package_dir; do
     dir="$package_dir"
     while :; do
-      rel="${dir#"$module_dir"}"
-      copy_license_files "$dir" "$out/$module$rel"
+      if [[ "$seen" != *$'\n'"$dir"$'\n'* ]]; then
+        rel="${dir#"$module_dir"}"
+        copy_license_files "$dir" "$out/$module$rel"
+        seen+="$dir"$'\n'
+      fi
       [[ "$dir" == "$module_dir" ]] && break
       dir="$(dirname "$dir")"
     done

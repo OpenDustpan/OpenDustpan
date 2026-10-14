@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 var (
 	errConnectionReset   = errors.New("connection reset")
 	errTargetUnavailable = errors.New("target unavailable")
+	errExport            = errors.New("export failed")
 )
 
 // memStore is an in-memory blob.Store. failPut injects a Put error per key.
@@ -843,6 +845,96 @@ func TestRunRefusesSQLPartOverTheTargetLimit(t *testing.T) {
 
 	assertFailed(t, fix.registry, "bkp-big")
 	assertNoManifest(t, fix.target, "bkp-big")
+}
+
+// openExporter writes data to the first table file and returns err without a
+// Close or an Abort of the file, as a custom exporter with a bug can (ADR 35).
+type openExporter struct {
+	data []byte
+	err  error
+}
+
+func (f *openExporter) ExportPortable(
+	_ context.Context, sink backup.PortableSink,
+) (backup.Summary, []backup.PortableFile, error) {
+	w, err := sink(backup.PortablePath(backup.Tables[0]))
+	if err != nil {
+		return backup.Summary{}, nil, fmt.Errorf("open test table file: %w", err)
+	}
+
+	if _, err := w.Write(f.data); err != nil {
+		return backup.Summary{}, nil, fmt.Errorf("write test SQL data: %w", err)
+	}
+
+	return backup.Summary{}, nil, f.err
+}
+
+// putTracker counts the target Puts that have not returned.
+type putTracker struct {
+	*memStore
+
+	running atomic.Int64
+}
+
+func (p *putTracker) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	p.running.Add(1)
+	defer p.running.Add(-1)
+
+	return p.memStore.Put(ctx, key, r)
+}
+
+// TestRunFinishesTableFilesTheExporterLeavesOpen proves that Run never returns
+// while a target Put still waits on a table file (issue 476). A file that the
+// exporter leaves open is aborted, so the target keeps nothing for it.
+func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "export fails", err: errExport},
+		{name: "export succeeds", err: nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			target := &putTracker{memStore: newMemStore(), running: atomic.Int64{}}
+			registry := newFakeRegistry()
+
+			service, err := backup.NewService(backup.Config{
+				Exporter:    &openExporter{data: []byte("a part of a table file"), err: tc.err},
+				Registry:    registry,
+				Blobs:       newMemStore(),
+				StateOpener: nil,
+				Target:      target,
+				TargetName:  "mem:target",
+				Now:         time.Now,
+				Version:     "test-1.0",
+				MaxSQLBytes: 0,
+			})
+			if err != nil {
+				t.Fatalf("new service: %v", err)
+			}
+
+			if _, err := service.Run(t.Context(), "bkp-open"); err == nil {
+				t.Fatal("run with a table file left open: err = nil, want an error")
+			}
+
+			if n := target.running.Load(); n != 0 {
+				t.Fatalf("target Puts running after Run returned = %d, want 0", n)
+			}
+
+			key := "backups/bkp-open/" + backup.PortablePath(backup.Tables[0])
+			if target.has(key) {
+				t.Fatalf("target holds %s, want no object for an aborted file", key)
+			}
+
+			assertFailed(t, registry, "bkp-open")
+		})
+	}
 }
 
 func TestCheck(t *testing.T) {

@@ -208,6 +208,7 @@ Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 | [RFC 66](rfc/0066-moving-units-between-namespaces-and-installations.md) Moving units | unit lifecycle (RFC 17, ADR 47)                  |
 | [RFC 67](rfc/0067-spend-and-cost-tool-integration.md) Spend and cost tools  | a decision on cost estimation (RFC 45)                   |
 | [RFC 68](rfc/0068-installation-settings.md) Installation settings          | the shape of the installation API (RFC 59)               |
+| [RFC 69](rfc/0069-community-channels.md) Community channels                 | the owner sets up the channels                           |
 
 ## Candidates to drop or merge
 
