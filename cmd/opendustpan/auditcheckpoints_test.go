@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 )
@@ -56,6 +57,48 @@ func TestReadSigningKeyFile(t *testing.T) {
 	}
 }
 
+func TestAddVerifyKeys(t *testing.T) {
+	t.Parallel()
+
+	signer, err := readSigningKeyFile(writeSigningKey(t, 32, 0o600))
+	if err != nil {
+		t.Fatalf("read signing key: %v", err)
+	}
+
+	old, err := audit.NewSigner(bytes.Repeat([]byte{5}, 32))
+	if err != nil {
+		t.Fatalf("old signer: %v", err)
+	}
+
+	dir := t.TempDir()
+	good := filepath.Join(dir, "verify-keys")
+	content := "# the key before the change\n\n" + base64.StdEncoding.EncodeToString(old.PublicKey()) + "\n"
+
+	if err := os.WriteFile(good, []byte(content), 0o600); err != nil {
+		t.Fatalf("write verify keys: %v", err)
+	}
+
+	if err := addVerifyKeys(signer, good); err != nil {
+		t.Fatalf("add verify keys: %v", err)
+	}
+
+	cp := old.Sign(audit.Checkpoint{
+		At: time.Unix(1, 0), Scope: "acme", Hash: "abc", KeyID: "", Signature: nil, Sequence: 1,
+	})
+	if err := signer.Verify(cp); err != nil {
+		t.Fatalf("verify a checkpoint of the old key: %v", err)
+	}
+
+	bad := filepath.Join(dir, "bad-keys")
+	if err := os.WriteFile(bad, []byte("not a key\n"), 0o600); err != nil {
+		t.Fatalf("write bad keys: %v", err)
+	}
+
+	if err := addVerifyKeys(signer, bad); !errors.Is(err, audit.ErrInvalidVerifyKey) {
+		t.Fatalf("add a bad key: got %v, want ErrInvalidVerifyKey", err)
+	}
+}
+
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestServeCheckpointFlags(t *testing.T) {
 	key := writeSigningKey(t, 32, 0o600)
@@ -73,6 +116,10 @@ func TestServeCheckpointFlags(t *testing.T) {
 		{
 			name: "the chain on auto", want: errCheckpointsNeedChain,
 			args: []string{"--audit-checkpoints", "--audit-signing-key-file", key},
+		},
+		{
+			name: "verify keys without checkpoints", want: errVerifyKeysWithoutCheckpoints,
+			args: []string{"--audit-verify-keys-file", key},
 		},
 	}
 

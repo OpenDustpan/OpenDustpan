@@ -62,21 +62,22 @@ func newMetricsHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  authn,
-		Authorizer:     identity.AdminOnly{},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        metrics,
-		Version:        "test",
-		Schema:         nil,
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
+		Authenticator:    authn,
+		Authorizer:       identity.AdminOnly{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          metrics,
+		Version:          "test",
+		Schema:           nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

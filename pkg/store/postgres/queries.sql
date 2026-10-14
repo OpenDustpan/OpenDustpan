@@ -674,6 +674,14 @@ SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 ORDER BY content_key;
 
+-- name: GetAuditEntry :one
+-- The entry of a scope at one sequence, for the check of signed
+-- checkpoints. A missing entry matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+FROM audit_entries
+WHERE namespace = $1 AND sequence = $2;
+
 -- name: LastAuditEntry :one
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.

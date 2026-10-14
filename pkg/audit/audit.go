@@ -114,6 +114,8 @@ var (
 	ErrInvalidEntry = errors.New("invalid audit entry")
 	// ErrNotFound reports that a namespace in a fence does not exist.
 	ErrNotFound = errors.New("audit namespace not found")
+	// ErrEntryNotFound reports that a scope holds no entry at a sequence.
+	ErrEntryNotFound = errors.New("audit entry not found")
 )
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -394,6 +396,19 @@ type Store interface {
 	// entries and reports the first entry that does not match. A namespace
 	// with no entries checks as valid. ns can be ServerScope.
 	Check(ctx context.Context, ns namespace.Name) (CheckResult, error)
+}
+
+// EntryReader reads one entry of a scope without a count and an offset, for
+// the check of signed checkpoints (ADR 60 decision 18). The SQL stores
+// implement it next to Store.
+type EntryReader interface {
+	// EntryAt answers the entry of scope ns at sequence seq. It returns
+	// ErrEntryNotFound when ns holds no entry at seq. ns can be ServerScope.
+	EntryAt(ctx context.Context, ns namespace.Name, seq int64) (Entry, error)
+	// LastEntry answers the entry of ns with the highest sequence. It
+	// returns ErrEntryNotFound when ns holds no entry. ns can be
+	// ServerScope.
+	LastEntry(ctx context.Context, ns namespace.Name) (Entry, error)
 }
 
 // ServerStore appends the entries of ServerScope. It is a port of its own,

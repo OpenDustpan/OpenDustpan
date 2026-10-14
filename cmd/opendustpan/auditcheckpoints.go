@@ -11,9 +11,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
-// signingKeyEnvVar names the file that holds the audit signing key (ADR 60
-// decision 18).
-const signingKeyEnvVar = "DUSTPAN_AUDIT_SIGNING_KEY_FILE"
+// Variables of the files of the audit signing key and of the verify keys
+// (ADR 60 decision 18).
+const (
+	signingKeyEnvVar = "DUSTPAN_AUDIT_SIGNING_KEY_FILE"
+	verifyKeysEnvVar = "DUSTPAN_AUDIT_VERIFY_KEYS_FILE"
+)
 
 var (
 	errCheckpointsNeedKey = errors.New(
@@ -24,6 +27,9 @@ var (
 	)
 	errCheckpointsNeedChain = errors.New(
 		"--audit-checkpoints needs the audit chain: set --audit-chain=on",
+	)
+	errVerifyKeysWithoutCheckpoints = errors.New(
+		"--audit-verify-keys-file is set and --audit-checkpoints is off: set --audit-checkpoints=true",
 	)
 )
 
@@ -37,6 +43,8 @@ func (f *serveFlags) checkCheckpointFlags() error {
 		return errKeyWithoutCheckpoints
 	case f.auditCheckpoints && f.auditChain != string(audit.ChainOn):
 		return errCheckpointsNeedChain
+	case !f.auditCheckpoints && f.auditVerifyKeysFile != "":
+		return errVerifyKeysWithoutCheckpoints
 	default:
 		return nil
 	}
@@ -54,7 +62,42 @@ func (f *serveFlags) checkpointOptions() ([]dustpan.Option, error) {
 		return nil, err
 	}
 
+	if f.auditVerifyKeysFile != "" {
+		if err := addVerifyKeys(signer, f.auditVerifyKeysFile); err != nil {
+			return nil, err
+		}
+	}
+
 	return []dustpan.Option{dustpan.WithAuditCheckpoints(signer)}, nil
+}
+
+// addVerifyKeys reads the file at path and adds each key to signer. The file
+// holds one base64 Ed25519 public key on each line. An empty line and a
+// line that starts with # are skipped. A public key is not a secret, so the
+// file needs no mode check.
+func addVerifyKeys(signer *audit.Signer, path string) error {
+	raw, err := os.ReadFile(path) //nolint:gosec // The operator names the file through a setting.
+	if err != nil {
+		return fmt.Errorf("%s: read file: %w", verifyKeysEnvVar, err)
+	}
+
+	for n, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		pub, err := audit.ParseVerifyKey(line)
+		if err != nil {
+			return fmt.Errorf("%s: line %d: %w", verifyKeysEnvVar, n+1, err)
+		}
+
+		if err := signer.AddVerifyKey(pub); err != nil {
+			return fmt.Errorf("%s: line %d: %w", verifyKeysEnvVar, n+1, err)
+		}
+	}
+
+	return nil
 }
 
 // readSigningKeyFile reads the base64 Ed25519 seed from the file at path,

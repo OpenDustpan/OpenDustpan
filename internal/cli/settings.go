@@ -276,6 +276,12 @@ var Settings = []*Setting{
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	).WithFile("audit-sink").WithSensitive(),
 	stringSetting(
+		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
+		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
+			"but never sign them, for example the key before a key change (DUSTPAN_AUDIT_VERIFY_KEYS_FILE)",
+		referenceNone,
+	).WithFile("audit-verify-keys-file"),
+	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,

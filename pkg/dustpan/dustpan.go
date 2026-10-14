@@ -1446,20 +1446,21 @@ func newServerHandler(
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		Namespaces:    deps.services.namespaces,
-		Backups:       deps.backups,
-		Restores:      restores,
-		Maintenance:   deps.maint,
-		Metrics:       deps.observed,
-		Version:       cfg.version,
-		Schema:        schemaReporterOf(cfg.namespaceStore),
-		Principals:    principals,
-		Access:        grants,
-		Tokens:        deps.services.tokens,
-		Audit:         serverAuditOf(cfg.namespaceStore),
+		Authenticator:    cfg.authenticator,
+		Authorizer:       cfg.authorizer,
+		Logger:           cfg.logger,
+		Namespaces:       deps.services.namespaces,
+		Backups:          deps.backups,
+		Restores:         restores,
+		Maintenance:      deps.maint,
+		Metrics:          deps.observed,
+		Version:          cfg.version,
+		Schema:           schemaReporterOf(cfg.namespaceStore),
+		Principals:       principals,
+		Access:           grants,
+		Tokens:           deps.services.tokens,
+		Audit:            serverAuditOf(cfg.namespaceStore),
+		CheckpointEpochs: checkpointEpochsOf(cfg),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
@@ -1767,11 +1768,11 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply: afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, restoreChain{
-			logger:   cfg.logger,
-			now:      cfg.now,
-			observed: deps.observed,
-		})),
+		AfterApply: afterRestore(
+			sealAfterRestore(deps),
+			recheckChainAfterRestore(chain, restoreChain{logger: cfg.logger, now: cfg.now, observed: deps.observed}),
+			newEpochAfterRestore(checkpointsOf(chain), serverAuditOf(cfg.namespaceStore), cfg.now),
+		),
 		Now:    cfg.now,
 		Logger: cfg.logger,
 	})

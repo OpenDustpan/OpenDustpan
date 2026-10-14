@@ -3,6 +3,8 @@ package dustpan_test
 import (
 	"bytes"
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +25,7 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	acme := createChainNamespace(t, st)
 	appendChainEntry(t, st, acme, "req-1")
 
-	key, err := audit.CheckpointKey(acme.Name, 1)
+	key, err := audit.CheckpointKey(0, acme.Name, 1)
 	if err != nil {
 		t.Fatalf("checkpoint key: %v", err)
 	}
@@ -35,8 +37,21 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 
 	srv, stopOther := runAuditServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(newTestSigner(t, 2)))
-	waitForMetricLine(t, srv, "dustpan_audit_chain_invalid 1")
+	// Every scope that the first key signed fails: acme, and @server when
+	// the first server signed it before it stopped.
+	waitForInvalidScopes(t, srv)
 	stopOther()
+
+	// With the first key as a verify key, the checkpoint matches again.
+	rotated := newTestSigner(t, 2)
+	if err := rotated.AddVerifyKey(newTestSigner(t, 1).PublicKey()); err != nil {
+		t.Fatalf("add verify key: %v", err)
+	}
+
+	srv, stopRotated := runAuditServer(t, st, blobs,
+		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(rotated))
+	waitForMetricLine(t, srv, "dustpan_audit_chain_invalid 0")
+	stopRotated()
 }
 
 // TestAuditCheckpointsNeedTheChain proves that checkpoints with the chain
@@ -87,6 +102,32 @@ func waitForBlob(t *testing.T, blobs blob.Store, key blob.Key) {
 
 		if time.Now().After(deadline) {
 			t.Fatalf("no checkpoint %s after %s", key, chainWait)
+		}
+
+		pauseChain(t)
+	}
+}
+
+// waitForInvalidScopes waits until the chain check of srv counts at least
+// one invalid scope, or fails the test.
+func waitForInvalidScopes(t *testing.T, srv *dustpan.Server) {
+	t.Helper()
+
+	line := regexp.MustCompile(`(?m)^dustpan_audit_chain_invalid [1-9]\d*$`)
+	deadline := time.Now().Add(chainWait)
+
+	for {
+		var out strings.Builder
+		if err := srv.Metrics().Write(&out); err != nil {
+			t.Fatalf("write metrics: %v", err)
+		}
+
+		if line.MatchString(out.String()) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("no invalid audit scope after %s:\n%s", chainWait, out.String())
 		}
 
 		pauseChain(t)

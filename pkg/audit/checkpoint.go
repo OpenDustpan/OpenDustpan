@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -20,11 +24,18 @@ import (
 
 // Signed checkpoints are opt-in (ADR 60 decision 18). A checkpoint signs the
 // hash at one sequence of a scope with an Ed25519 key. It goes to the blob
-// store under a key that names the scope and the sequence, so two instances
-// that write the checkpoint of one sequence write it once. A copy of the
-// database that an attacker changes and chains again does not match the
-// checkpoints that the server signed before: the attacker does not hold the
-// signing key.
+// store under a key that names the epoch, the scope and the sequence, so two
+// instances that write the checkpoint of one sequence write it once. A copy
+// of the database that an attacker changes and chains again does not match
+// the checkpoints that the server signed before: the attacker does not hold
+// the signing key.
+//
+// An epoch groups the checkpoints of one history of the log. A restore
+// starts a new epoch, because the restored log can lose entries that older
+// checkpoints sign. An administrator can also start a new epoch, after
+// checking why a checkpoint does not match. The check reads only the
+// checkpoints of the current epoch. An epoch is an object under
+// audit-checkpoints/epochs/, so the current epoch needs no database.
 
 // CheckpointPrefix is the first segment of every checkpoint key. No other
 // writer may use it.
@@ -40,12 +51,20 @@ const (
 	// checkpointSequenceDigits pads the sequence in a key, so the keys of
 	// one scope list in order of sequence.
 	checkpointSequenceDigits = 20
+	// checkpointEpochDigits pads the epoch in a key.
+	checkpointEpochDigits = 8
 	// checkpointContext starts the signed message, so a signature of a
 	// checkpoint is never valid for other data.
 	checkpointContext = "opendustpan audit checkpoint v1"
-	// hashAtReads caps the reads of the entry at one sequence while appends
-	// move it to later pages.
-	hashAtReads = 3
+	// epochDir is the key directory of the epoch objects.
+	epochDir = CheckpointPrefix + "/epochs/"
+	// MaxNewCheckpoints caps the checkpoints newer than the last good one
+	// that one check reads for a scope. Older ones join the sample pool.
+	MaxNewCheckpoints = 256
+	// CheckpointSample is the count of older checkpoints that one check
+	// reads at random for a scope, so a change to an old checkpoint shows
+	// in time without a read of every checkpoint.
+	CheckpointSample = 8
 )
 
 // Checkpoint errors.
@@ -57,6 +76,9 @@ var (
 	// bad signature, another key, a key that does not name its contents,
 	// or a hash that differs from the entry at its sequence.
 	ErrCheckpointMismatch = errors.New("audit checkpoint does not match")
+	// ErrInvalidVerifyKey reports a verify key that is not a 32-byte
+	// Ed25519 public key.
+	ErrInvalidVerifyKey = errors.New("invalid audit verify key: want a base64 32-byte Ed25519 public key")
 )
 
 // Checkpoint is the signed hash at one sequence of a scope.
@@ -93,12 +115,11 @@ func (c Checkpoint) Message() []byte {
 	}, "\n"))
 }
 
-// CheckpointKey returns the blob key of the checkpoint of scope at seq. The
-// segment of the scope is the scope name in hexadecimal, because a scope
-// name can hold capital letters and '@', which a blob key cannot.
-func CheckpointKey(scope namespace.Name, seq int64) (blob.Key, error) {
-	key, err := blob.ParseKey(fmt.Sprintf("%s/%s/%0*d.json",
-		CheckpointPrefix, hex.EncodeToString([]byte(scope)), checkpointSequenceDigits, seq))
+// CheckpointKey returns the blob key of the checkpoint of scope at seq in
+// epoch. The segment of the scope is the scope name in hexadecimal, because
+// a scope name can hold capital letters and '@', which a blob key cannot.
+func CheckpointKey(epoch int64, scope namespace.Name, seq int64) (blob.Key, error) {
+	key, err := blob.ParseKey(fmt.Sprintf("%s%0*d.json", checkpointDir(epoch, scope), checkpointSequenceDigits, seq))
 	if err != nil {
 		return "", fmt.Errorf("checkpoint key of %s: %w", scope, err)
 	}
@@ -106,9 +127,10 @@ func CheckpointKey(scope namespace.Name, seq int64) (blob.Key, error) {
 	return key, nil
 }
 
-// checkpointDir returns the key directory of the checkpoints of scope.
-func checkpointDir(scope namespace.Name) string {
-	return CheckpointPrefix + "/" + hex.EncodeToString([]byte(scope)) + "/"
+// checkpointDir returns the key directory of the checkpoints of scope in
+// epoch.
+func checkpointDir(epoch int64, scope namespace.Name) string {
+	return fmt.Sprintf("%s/%0*d/%s/", CheckpointPrefix, checkpointEpochDigits, epoch, hex.EncodeToString([]byte(scope)))
 }
 
 // KeyID returns the ID of an Ed25519 public key: the first 16 hexadecimal
@@ -119,12 +141,14 @@ func KeyID(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(sum[:])[:checkpointKeyIDLength]
 }
 
-// Signer signs checkpoints with one Ed25519 key and checks them with its
-// public key.
+// Signer signs checkpoints with one Ed25519 key. It checks them with its
+// own public key and with the verify keys, for example the public key of a
+// signing key that an administrator replaced.
 type Signer struct {
-	key ed25519.PrivateKey
-	pub ed25519.PublicKey
-	id  string
+	verify map[string]ed25519.PublicKey
+	key    ed25519.PrivateKey
+	pub    ed25519.PublicKey
+	id     string
 }
 
 // NewSigner returns a signer for the 32-byte Ed25519 seed. It returns
@@ -141,7 +165,32 @@ func NewSigner(seed []byte) (*Signer, error) {
 		return nil, fmt.Errorf("%w: no Ed25519 public key", ErrInvalidSigningKey)
 	}
 
-	return &Signer{key: key, pub: pub, id: KeyID(pub)}, nil
+	id := KeyID(pub)
+
+	return &Signer{verify: map[string]ed25519.PublicKey{id: pub}, key: key, pub: pub, id: id}, nil
+}
+
+// ParseVerifyKey decodes a base64 32-byte Ed25519 public key. It returns
+// ErrInvalidVerifyKey for any other value.
+func ParseVerifyKey(raw string) (ed25519.PublicKey, error) {
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return nil, ErrInvalidVerifyKey
+	}
+
+	return ed25519.PublicKey(pub), nil
+}
+
+// AddVerifyKey lets the signer check checkpoints that pub signed. It never
+// signs with pub. Call it before the server starts, not while a check runs.
+func (s *Signer) AddVerifyKey(pub ed25519.PublicKey) error {
+	if len(pub) != ed25519.PublicKeySize {
+		return ErrInvalidVerifyKey
+	}
+
+	s.verify[KeyID(pub)] = pub
+
+	return nil
 }
 
 // KeyID returns the ID of the public key of the signer.
@@ -164,14 +213,16 @@ func (s *Signer) Sign(c Checkpoint) Checkpoint {
 	return c
 }
 
-// Verify checks the key ID and the signature of c. It returns
-// ErrCheckpointMismatch when either does not match.
+// Verify checks the key ID and the signature of c with the public key of
+// the signer or a verify key. It returns ErrCheckpointMismatch when no key
+// has the key ID or the signature does not match.
 func (s *Signer) Verify(c Checkpoint) error {
-	if c.KeyID != s.id {
-		return fmt.Errorf("%w: key %q, want %q", ErrCheckpointMismatch, c.KeyID, s.id)
+	pub, ok := s.verify[c.KeyID]
+	if !ok {
+		return fmt.Errorf("%w: key %q is not the signing key or a verify key", ErrCheckpointMismatch, c.KeyID)
 	}
 
-	if !ed25519.Verify(s.pub, c.Message(), c.Signature) {
+	if !ed25519.Verify(pub, c.Message(), c.Signature) {
 		return fmt.Errorf("%w: bad signature", ErrCheckpointMismatch)
 	}
 
@@ -217,40 +268,128 @@ func UnmarshalCheckpoint(raw []byte) (Checkpoint, error) {
 	}, nil
 }
 
-// Checkpoints writes and checks the checkpoints of the audit log.
-type Checkpoints struct {
+// CheckpointsConfig configures Checkpoints.
+type CheckpointsConfig struct {
 	Blobs   blob.Store
-	Entries Store
+	Entries EntryReader
 	Signer  *Signer
 }
 
+// Checkpoints writes and checks the checkpoints of the audit log. It keeps
+// the sequence of the last checkpoint that matched in each scope, so a
+// check reads the newer checkpoints and a sample of the older ones. It is
+// safe for concurrent use.
+type Checkpoints struct {
+	good    map[goodKey]int64
+	blobs   blob.Store
+	entries EntryReader
+	signer  *Signer
+	mu      sync.Mutex
+}
+
+// goodKey names the scope of a last good checkpoint in one epoch.
+type goodKey struct {
+	scope namespace.Name
+	epoch int64
+}
+
+// NewCheckpoints returns checkpoints for cfg.
+func NewCheckpoints(cfg CheckpointsConfig) *Checkpoints {
+	return &Checkpoints{
+		good:    map[goodKey]int64{},
+		blobs:   cfg.Blobs,
+		entries: cfg.Entries,
+		signer:  cfg.Signer,
+		mu:      sync.Mutex{},
+	}
+}
+
+// Signer answers the signer of the checkpoints.
+func (c *Checkpoints) Signer() *Signer {
+	return c.signer
+}
+
 // CheckpointResult reports the checkpoint check of a scope. Valid is true
-// when every checkpoint matches. When Valid is false, BadSequence holds
-// the sequence of the first checkpoint that does not match, or 0 when its
-// key names no sequence. Checked counts the checkpoints the check read.
+// when every checkpoint that the check read matches. When Valid is false,
+// BadSequence holds the sequence of the first checkpoint that does not
+// match, or 0 when its key names no sequence. Checked counts the
+// checkpoints the check read.
 type CheckpointResult struct {
 	Checked     int64
 	BadSequence int64
 	Valid       bool
 }
 
+// Epoch answers the current epoch: the highest epoch object, or 0 when no
+// epoch object exists.
+func (c *Checkpoints) Epoch(ctx context.Context) (int64, error) {
+	objects, err := c.blobs.List(ctx, epochDir)
+	if err != nil {
+		return 0, fmt.Errorf("list audit checkpoint epochs: %w", err)
+	}
+
+	var epoch int64
+
+	for _, obj := range objects {
+		name := strings.TrimSuffix(strings.TrimPrefix(obj.Key.String(), epochDir), ".json")
+
+		if n, err := strconv.ParseInt(name, 10, 64); err == nil && n > epoch {
+			epoch = n
+		}
+	}
+
+	return epoch, nil
+}
+
+// NewEpoch starts the epoch after the current one and answers it. When
+// another instance starts the same epoch at the same time, both answer it.
+func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error) {
+	current, err := c.Epoch(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	next := current + 1
+
+	key, err := blob.ParseKey(fmt.Sprintf("%s%0*d.json", epochDir, checkpointEpochDigits, next))
+	if err != nil {
+		return 0, fmt.Errorf("audit checkpoint epoch key: %w", err)
+	}
+
+	body := `{"at":"` + now.UTC().Format(time.RFC3339Nano) + `"}`
+
+	err = c.blobs.Put(ctx, key, strings.NewReader(body))
+	if err != nil && !errors.Is(err, blob.ErrExists) {
+		return 0, fmt.Errorf("store audit checkpoint epoch %d: %w", next, err)
+	}
+
+	return next, nil
+}
+
 // Write signs the hash of the last entry of scope and stores the
-// checkpoint. It answers false and no error when scope holds no entry, when
-// the last entry holds no hash, or when a checkpoint of that sequence
-// already exists.
-func (c Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
-	head, err := c.Entries.List(ctx, scope, Page{Number: 1, Size: 1})
+// checkpoint in the current epoch. It answers false and no error when scope
+// holds no entry, when the last entry holds no hash, or when a checkpoint
+// of that sequence already exists.
+func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
+	last, err := c.entries.LastEntry(ctx, scope)
+	if errors.Is(err, ErrEntryNotFound) {
+		return false, nil
+	}
+
 	if err != nil {
 		return false, fmt.Errorf("read last audit entry of %s: %w", scope, err)
 	}
 
-	if len(head.Entries) == 0 || head.Entries[0].Hash == "" {
+	if last.Hash == "" {
 		return false, nil
 	}
 
-	last := head.Entries[0]
+	epoch, err := c.Epoch(ctx)
+	if err != nil {
+		return false, err
+	}
 
-	cp := c.Signer.Sign(Checkpoint{
+	cp := c.signer.Sign(Checkpoint{
 		At:        now,
 		Scope:     scope,
 		Hash:      last.Hash,
@@ -259,7 +398,7 @@ func (c Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.T
 		Sequence:  last.Sequence,
 	})
 
-	key, err := CheckpointKey(scope, cp.Sequence)
+	key, err := CheckpointKey(epoch, scope, cp.Sequence)
 	if err != nil {
 		return false, err
 	}
@@ -269,7 +408,7 @@ func (c Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.T
 		return false, err
 	}
 
-	err = c.Blobs.Put(ctx, key, bytes.NewReader(raw))
+	err = c.blobs.Put(ctx, key, bytes.NewReader(raw))
 	if errors.Is(err, blob.ErrExists) {
 		return false, nil
 	}
@@ -281,20 +420,34 @@ func (c Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.T
 	return true, nil
 }
 
-// Verify checks every checkpoint of scope: the signature, the key, the
-// scope and sequence that its key names, and the hash of the entry at its
-// sequence. It answers an error only when it cannot read a checkpoint or
-// an entry.
-func (c Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
+// Verify checks the checkpoints of scope in the current epoch: every one
+// newer than the last one that matched, up to MaxNewCheckpoints, and up to
+// CheckpointSample older ones at random. For each it checks the
+// signature, the key, the scope and sequence that its key names, and the
+// hash of the entry at its sequence. It answers an error only when it
+// cannot read a checkpoint or an entry.
+func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
 	result := CheckpointResult{Checked: 0, BadSequence: 0, Valid: true}
 
-	objects, err := c.Blobs.List(ctx, checkpointDir(scope))
+	epoch, err := c.Epoch(ctx)
+	if err != nil {
+		return result, err
+	}
+
+	dir := checkpointDir(epoch, scope)
+
+	objects, err := c.blobs.List(ctx, dir)
 	if err != nil {
 		return result, fmt.Errorf("list audit checkpoints of %s: %w", scope, err)
 	}
 
-	for _, obj := range objects {
-		seq, err := c.verifyOne(ctx, scope, obj.Key)
+	gk := goodKey{scope: scope, epoch: epoch}
+	plan := c.plan(objects, c.lastGood(gk))
+
+	var best int64
+
+	for _, obj := range plan.read {
+		seq, err := c.verifyOne(ctx, dir, scope, obj.Key)
 		result.Checked++
 
 		if errors.Is(err, ErrCheckpointMismatch) {
@@ -307,18 +460,84 @@ func (c Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpoi
 		if err != nil {
 			return result, err
 		}
+
+		if obj.newer {
+			best = max(best, seq)
+		}
 	}
+
+	c.markGood(gk, best)
 
 	return result, nil
 }
 
-// verifyOne checks the checkpoint under key and answers the sequence that
-// its key names.
-func (c Checkpoints) verifyOne(ctx context.Context, scope namespace.Name, key blob.Key) (int64, error) {
-	name := strings.TrimSuffix(strings.TrimPrefix(key.String(), checkpointDir(scope)), ".json")
+// planned is one checkpoint to read, and whether it is newer than the last
+// good one.
+type planned struct {
+	Key   blob.Key
+	newer bool
+}
 
-	seq, err := strconv.ParseInt(name, 10, 64)
-	if err != nil {
+// readPlan is the checkpoints that one check reads.
+type readPlan struct {
+	read []planned
+}
+
+// plan chooses the checkpoints to read: every one newer than good, up to
+// MaxNewCheckpoints of the newest, and a random sample of the others.
+func (c *Checkpoints) plan(objects []blob.Object, good int64) readPlan {
+	var newer, older []blob.Key
+
+	for _, obj := range objects {
+		if checkpointSeq(obj.Key) > good {
+			newer = append(newer, obj.Key)
+		} else {
+			older = append(older, obj.Key)
+		}
+	}
+
+	if len(newer) > MaxNewCheckpoints {
+		older = append(older, newer[:len(newer)-MaxNewCheckpoints]...)
+		newer = newer[len(newer)-MaxNewCheckpoints:]
+	}
+
+	out := readPlan{read: make([]planned, 0, len(newer)+CheckpointSample)}
+
+	for _, key := range newer {
+		out.read = append(out.read, planned{Key: key, newer: true})
+	}
+
+	for _, key := range sample(older, CheckpointSample) {
+		out.read = append(out.read, planned{Key: key, newer: false})
+	}
+
+	return out
+}
+
+// lastGood answers the sequence of the last checkpoint that matched in gk.
+func (c *Checkpoints) lastGood(gk goodKey) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.good[gk]
+}
+
+// markGood records seq as the last checkpoint that matched in gk, when it
+// is higher.
+func (c *Checkpoints) markGood(gk goodKey, seq int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if seq > c.good[gk] {
+		c.good[gk] = seq
+	}
+}
+
+// verifyOne checks the checkpoint under key in dir and answers the sequence
+// that its key names.
+func (c *Checkpoints) verifyOne(ctx context.Context, dir string, scope namespace.Name, key blob.Key) (int64, error) {
+	seq := checkpointSeq(key)
+	if seq <= 0 || !strings.HasPrefix(key.String(), dir) {
 		return 0, fmt.Errorf("%w: key %s names no sequence", ErrCheckpointMismatch, key)
 	}
 
@@ -331,17 +550,21 @@ func (c Checkpoints) verifyOne(ctx context.Context, scope namespace.Name, key bl
 		return seq, fmt.Errorf("%w: key %s holds %s at %d", ErrCheckpointMismatch, key, cp.Scope, cp.Sequence)
 	}
 
-	err = c.Signer.Verify(cp)
+	err = c.signer.Verify(cp)
 	if err != nil {
 		return seq, err
 	}
 
-	hash, err := c.hashAt(ctx, scope, seq)
-	if err != nil {
-		return seq, err
+	entry, err := c.entries.EntryAt(ctx, scope, seq)
+	if errors.Is(err, ErrEntryNotFound) {
+		return seq, fmt.Errorf("%w: %s holds no entry %d", ErrCheckpointMismatch, scope, seq)
 	}
 
-	if hash != cp.Hash {
+	if err != nil {
+		return seq, fmt.Errorf("read audit entry %s %d: %w", scope, seq, err)
+	}
+
+	if entry.Hash != cp.Hash {
 		return seq, fmt.Errorf("%w: hash at %s %d differs", ErrCheckpointMismatch, scope, seq)
 	}
 
@@ -349,8 +572,8 @@ func (c Checkpoints) verifyOne(ctx context.Context, scope namespace.Name, key bl
 }
 
 // read reads and decodes the checkpoint under key.
-func (c Checkpoints) read(ctx context.Context, key blob.Key) (Checkpoint, error) {
-	body, err := c.Blobs.Get(ctx, key)
+func (c *Checkpoints) read(ctx context.Context, key blob.Key) (Checkpoint, error) {
+	body, err := c.blobs.Get(ctx, key)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("read audit checkpoint %s: %w", key, err)
 	}
@@ -370,42 +593,49 @@ func (c Checkpoints) read(ctx context.Context, key blob.Key) (Checkpoint, error)
 	return UnmarshalCheckpoint(raw)
 }
 
-// hashAt answers the hash of the entry of scope at seq. List answers
-// entries newest first, so it reads the page of one entry that holds seq
-// from the count of entries. An append between two reads moves the entry to
-// a later page, so it reads again from the sequence it found, at most
-// hashAtReads times. An entry that is missing or holds another sequence
-// does not match.
-func (c Checkpoints) hashAt(ctx context.Context, scope namespace.Name, seq int64) (string, error) {
-	head, err := c.Entries.List(ctx, scope, Page{Number: 1, Size: 1})
+// checkpointSeq answers the sequence that the last segment of key names,
+// or 0 when it names none.
+func checkpointSeq(key blob.Key) int64 {
+	name := key.String()
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+
+	seq, err := strconv.ParseInt(strings.TrimSuffix(name, ".json"), 10, 64)
 	if err != nil {
-		return "", fmt.Errorf("read audit entries of %s: %w", scope, err)
+		return 0
 	}
 
-	if head.Total < seq || seq < 1 {
-		return "", fmt.Errorf("%w: %s holds no entry %d", ErrCheckpointMismatch, scope, seq)
+	return seq
+}
+
+// sample answers up to n keys of keys, chosen at random.
+func sample(keys []blob.Key, n int) []blob.Key {
+	if len(keys) <= n {
+		return keys
 	}
 
-	number := head.Total - seq + 1
+	pool := append([]blob.Key(nil), keys...)
 
-	for range hashAtReads {
-		page, err := c.Entries.List(ctx, scope, Page{Number: int(number), Size: 1})
-		if err != nil {
-			return "", fmt.Errorf("read audit entry %s %d: %w", scope, seq, err)
-		}
-
-		if len(page.Entries) != 1 || page.Entries[0].Sequence < seq {
-			break
-		}
-
-		if got := page.Entries[0].Sequence; got > seq {
-			number += got - seq
-
-			continue
-		}
-
-		return page.Entries[0].Hash, nil
+	for i := range n {
+		j := i + randomIndex(len(pool)-i)
+		pool[i], pool[j] = pool[j], pool[i]
 	}
 
-	return "", fmt.Errorf("%w: %s holds no entry %d", ErrCheckpointMismatch, scope, seq)
+	return pool[:n]
+}
+
+// randomIndex answers a random number from 0 to n-1, from crypto/rand, so
+// a person who changes old checkpoints cannot predict the sample.
+func randomIndex(n int) int {
+	if n <= 1 {
+		return 0
+	}
+
+	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	if err != nil {
+		return 0
+	}
+
+	return int(v.Int64())
 }

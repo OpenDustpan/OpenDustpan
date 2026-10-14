@@ -133,21 +133,22 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  subjectAuthenticator{},
-		Authorizer:     authz,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "",
-		Schema:         stubSchema{migrations: nil},
-		Principals:     principals,
-		Tokens:         nil,
-		Access:         grants,
-		Audit:          entries(st),
-		OnAuditFailure: nil,
+		Authenticator:    subjectAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Principals:       principals,
+		Tokens:           nil,
+		Access:           grants,
+		Audit:            entries(st),
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

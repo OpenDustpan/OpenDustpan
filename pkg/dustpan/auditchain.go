@@ -2,15 +2,19 @@ package dustpan
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
+	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -77,14 +81,9 @@ func newChainDeps(cfg *settings) (*chainDeps, error) {
 		checker = nil
 	}
 
-	var checkpoints *audit.Checkpoints
-
-	if cfg.auditSigner != nil {
-		if cfg.blobStore == nil {
-			return nil, fmt.Errorf("audit checkpoints need a blob store: %w", ErrMissingOption)
-		}
-
-		checkpoints = &audit.Checkpoints{Blobs: cfg.blobStore, Entries: entries, Signer: cfg.auditSigner}
+	checkpoints, err := newCheckpoints(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	return &chainDeps{
@@ -95,6 +94,30 @@ func newChainDeps(cfg *settings) (*chainDeps, error) {
 		checkpoints: checkpoints,
 		setting:     cfg.auditChain,
 	}, nil
+}
+
+// newCheckpoints answers the signed checkpoints of cfg, or nil while they
+// are off. They need a blob store and a store that reads one entry at a
+// sequence.
+func newCheckpoints(cfg settings) (*audit.Checkpoints, error) {
+	if cfg.auditSigner == nil {
+		return nil, nil //nolint:nilnil // Nil without an error means signed checkpoints are off.
+	}
+
+	if cfg.blobStore == nil {
+		return nil, fmt.Errorf("audit checkpoints need a blob store: %w", ErrMissingOption)
+	}
+
+	reader, ok := cfg.namespaceStore.(audit.EntryReader)
+	if !ok {
+		return nil, fmt.Errorf("audit checkpoints need a store that reads one audit entry: %w", ErrMissingOption)
+	}
+
+	return audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs:   cfg.blobStore,
+		Entries: reader,
+		Signer:  cfg.auditSigner,
+	}), nil
 }
 
 // resolveAuditChain resolves the chain setting before the server serves.
@@ -120,8 +143,10 @@ func (s *Server) resolveAuditChain(ctx context.Context) error {
 		return ErrCheckpointsNeedChain
 	}
 
+	signer := s.chain.checkpoints.Signer()
 	s.logger.InfoContext(ctx, "audit checkpoints are on",
-		slog.String("key_id", s.chain.checkpoints.Signer.KeyID()))
+		slog.String("key_id", signer.KeyID()),
+		slog.String("public_key", base64.StdEncoding.EncodeToString(signer.PublicKey())))
 
 	return nil
 }
@@ -288,9 +313,9 @@ func (s *Server) checkScopes(ctx context.Context, scopes []namespace.Name) (int,
 	return invalid, errors.Join(errs...)
 }
 
-// checkScope checks the chain of scope, signs a checkpoint of its last
-// hash when the chain matches, and checks the stored checkpoints of scope.
-// It never signs a chain that does not match.
+// checkScope checks the chain of scope, then the stored checkpoints of
+// scope, and signs a checkpoint of its last hash only when both match. It
+// never signs a head while the chain or an older checkpoint does not match.
 func (s *Server) checkScope(ctx context.Context, scope namespace.Name) (bool, error) {
 	chain, err := s.chain.entries.Check(ctx, scope)
 	if err != nil {
@@ -303,11 +328,6 @@ func (s *Server) checkScope(ctx context.Context, scope namespace.Name) (bool, er
 
 	cps := s.chain.checkpoints
 
-	_, err = cps.Write(ctx, scope, s.now())
-	if err != nil {
-		return false, fmt.Errorf("checkpoint: %w", err)
-	}
-
 	result, err := cps.Verify(ctx, scope)
 	if err != nil {
 		return false, fmt.Errorf("checkpoints: %w", err)
@@ -316,7 +336,92 @@ func (s *Server) checkScope(ctx context.Context, scope namespace.Name) (bool, er
 	if !result.Valid {
 		s.logger.ErrorContext(ctx, "audit checkpoint does not match",
 			slog.String("scope", scope.String()), slog.Int64("sequence", result.BadSequence))
+
+		return false, nil
 	}
 
-	return result.Valid, nil
+	if _, err := cps.Write(ctx, scope, s.now()); err != nil {
+		return false, fmt.Errorf("checkpoint: %w", err)
+	}
+
+	return true, nil
+}
+
+// newEpochAfterRestore returns the after-apply step of a restore for the
+// signed audit checkpoints: it starts a new epoch, because the restored log
+// can lose entries that older checkpoints sign, and writes one entry of the
+// kind change in @server. Without checkpoints it does nothing.
+func newEpochAfterRestore(
+	checkpoints *audit.Checkpoints, server audit.ServerStore, now func() time.Time,
+) restoreStep {
+	return func(ctx context.Context, _ backup.AppliedRestore) error {
+		if checkpoints == nil {
+			return nil
+		}
+
+		at := now()
+
+		epoch, err := checkpoints.NewEpoch(ctx, at)
+		if err != nil {
+			return fmt.Errorf("audit checkpoints after restore: %w", err)
+		}
+
+		if server == nil {
+			return nil
+		}
+
+		if _, err := server.AppendServer(ctx, epochEntry(epoch, at)); err != nil {
+			return fmt.Errorf("record audit checkpoint epoch: %w", err)
+		}
+
+		return nil
+	}
+}
+
+// epochEntry returns the entry that records the checkpoint epoch that a
+// restore started.
+func epochEntry(epoch int64, at time.Time) audit.Entry {
+	return audit.Entry{
+		At:         at,
+		Namespace:  audit.ServerScope,
+		Subject:    "opendustpan serve",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(identity.ActionServerManageAudit),
+		Object:     audit.ServerScope.String(),
+		Version:    "",
+		ValuePath:  "/audit/checkpoints/epoch/" + strconv.FormatInt(epoch, 10),
+		ValueCount: nil,
+		SourceIP:   "",
+		UserAgent:  "",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
+// checkpointEpochsOf answers the checkpoint epochs of cfg for the server
+// API, or nil while signed checkpoints are off.
+//
+//nolint:ireturn // A nil *audit.Checkpoints in the interface is not nil, so the route would call it; answer a nil interface.
+func checkpointEpochsOf(cfg settings) serverapi.CheckpointEpochs {
+	checkpoints, err := newCheckpoints(cfg)
+	if err != nil || checkpoints == nil {
+		return nil
+	}
+
+	return checkpoints
+}
+
+// checkpointsOf answers the signed checkpoints of chain, or nil.
+func checkpointsOf(chain *chainDeps) *audit.Checkpoints {
+	if chain == nil {
+		return nil
+	}
+
+	return chain.checkpoints
 }

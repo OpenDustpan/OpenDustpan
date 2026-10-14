@@ -78,6 +78,9 @@ type Config struct {
 	// (audit.Store), because each access-review export writes an entry (ADR
 	// 52, decision 13). Without Access, nil writes no entry.
 	Audit audit.ServerStore
+	// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
+	// Nil means signed checkpoints are off: the epoch route answers 409.
+	CheckpointEpochs CheckpointEpochs
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
@@ -108,6 +111,7 @@ type Handler struct {
 	access         *access.Service
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
+	epochs         CheckpointEpochs
 	onAuditFailure func()
 	mux            *patternMux
 	routes         []Route
@@ -151,6 +155,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		audit:          cfg.Audit,
+		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
 		routes:         nil,
@@ -285,24 +290,12 @@ func classifyIdentity(err error) (int, string, bool) {
 // callers. Backup errors map in classifyBackup, namespace errors in
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
-	if status, message, ok := classifyMaintenance(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyNamespace(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyBackup(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyPrincipal(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyIdentity(err); ok {
-		return status, message
+	for _, try := range []func(error) (int, string, bool){
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+	} {
+		if status, message, ok := try(err); ok {
+			return status, message
+		}
 	}
 
 	switch {
@@ -316,6 +309,8 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, errInvalidBody.Error()
 	case errors.Is(err, errOverrideSwitchesBody):
 		return http.StatusBadRequest, errOverrideSwitchesBody.Error()
+	case errors.Is(err, errCheckpointsOff):
+		return http.StatusConflict, errCheckpointsOff.Error()
 	default:
 		return classifyRegistry(err)
 	}

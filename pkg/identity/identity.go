@@ -192,6 +192,10 @@ const (
 	// create or a rotation also runs the escalation check against the
 	// grants of the service principal.
 	ActionServerManageServiceTokens Action = "server:manage-service-tokens"
+	// ActionServerManageAudit allows changing how the audit log protects
+	// itself, for example starting a new epoch of the signed audit
+	// checkpoints (ADR 60 decision 18). Its object is ServerObject.
+	ActionServerManageAudit Action = "server:manage-audit"
 	// ActionTokenManageOwn allows a person to list, create, rotate and
 	// revoke its own personal tokens (ADR 53, decisions 3 and 10). Its
 	// object is CallerObject. Every authenticated person holds it with no

@@ -229,24 +229,63 @@ Make a key with this command:
 
 At each check, the server does these steps for each scope whose chain matches:
 
-1. It signs the hash of the last entry of the scope.
+1. It checks the checkpoints of the scope in the current epoch.
+   It reads every checkpoint that is newer than the last checkpoint that matched, up to 256.
+   It also reads a random sample of 8 older checkpoints.
+   For each checkpoint, it checks the key ID, the signature, and the hash of the entry at its sequence.
+2. If all of them match, it signs the hash of the last entry of the scope.
    The checkpoint holds the scope, the sequence, the hash, the time, the key ID and the signature.
    The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
-   The server logs the key ID at start.
-2. It writes the checkpoint to the blob store under `audit-checkpoints/<scope in hexadecimal>/<sequence>.json`.
+3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
    A key holds one checkpoint and the server never writes it again, so two instances write it once.
-3. It checks every checkpoint of the scope: the key ID, the signature, and the hash of the entry at its sequence.
 
 A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
-The server never signs a scope whose chain does not match.
+The server never signs a scope whose chain or checkpoints do not match.
+
+The server logs the key ID and the public key in base64 at start.
+Keep a copy of the public key outside the server.
 
 Keep the blob store apart from the database: give the two stores different credentials.
 If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
 An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
 A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
-A restore of an older backup deletes entries that later checkpoints sign, so those checkpoints do not match.
 
-A change of the key makes every older checkpoint fail the check, because the check knows only the current key.
+### Epochs
+
+An epoch is one history of the log.
+The check reads only the checkpoints of the current epoch.
+The server keeps the number of the current epoch in the blob store under `audit-checkpoints/epochs/`.
+
+A restore starts a new epoch, because a restore of an older backup deletes entries that older checkpoints sign.
+The restore writes a change entry in the scope `@server` with the value path `/audit/checkpoints/epoch/<number>`.
+The checkpoints of older epochs stay in the blob store.
+The server does not check them again.
+
+### Change the signing key
+
+A checkpoint that a key signed passes the check only while the server knows that key.
+Before you change the signing key, put the old public key in a file and name the file with `--audit-verify-keys-file` (`DUSTPAN_AUDIT_VERIFY_KEYS_FILE`).
+The file holds one public key in base64 on each line.
+The server ignores empty lines and lines that start with `#`.
+The server uses these keys only to check checkpoints and never signs with them.
+The server does not start when the file holds a line that is not a 32-byte Ed25519 public key in base64.
+
+### Clear the alarm
+
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero.
+First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
+When you know the cause, start a new epoch.
+The server then checks only the checkpoints that it signs after this time.
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  https://dustpan.example/api/server/audit/checkpoint-epochs
+```
+
+The request needs the action `server:manage-audit`.
+It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
+It answers 409 when signed checkpoints are off.
+Each instance reads the new epoch at its next check.
 
 ## What the chain protects against
 

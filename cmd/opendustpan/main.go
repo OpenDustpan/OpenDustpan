@@ -282,6 +282,7 @@ type serveFlags struct {
 	// app is the application logger and its sinks, set by run.
 	app                 appLog
 	auditSigningKeyFile string
+	auditVerifyKeysFile string
 	auditCheckpoints    bool
 }
 
@@ -403,6 +404,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
 	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
+	cli.ByFlag("audit-verify-keys-file").String(fs, &f.auditVerifyKeysFile)
 }
 
 // registerNet registers the network and console flags.

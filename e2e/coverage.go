@@ -590,21 +590,22 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:  coverageAuthenticator{},
-		Authorizer:     coverageAuthorizer{},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     coverageNamespaces(tb),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    coverageMaintenance{},
-		Metrics:        coverageMetrics{},
-		Version:        "test",
-		Schema:         coverageSchema{},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
+		Authenticator:    coverageAuthenticator{},
+		Authorizer:       coverageAuthorizer{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       coverageNamespaces(tb),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      coverageMaintenance{},
+		Metrics:          coverageMetrics{},
+		Version:          "test",
+		Schema:           coverageSchema{},
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -965,6 +966,12 @@ func operatorAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
+			CoveringTest: "TestNewCheckpointEpochIsAChange",
+			Reason: "Operator route (ADR 60): no CLI calls it. An administrator starts a new " +
+				"checkpoint epoch after a restore or a failed check of the signed checkpoints.",
 		},
 		{
 			Method: http.MethodGet, Path: "/health/live",

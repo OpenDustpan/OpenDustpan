@@ -134,6 +134,29 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditEntryReaderConformance runs the audit.EntryReader cases: one
+// entry at a sequence and the last entry of a scope.
+func TestAuditEntryReaderConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunEntryReader(t, func(t *testing.T) audittest.EntryStore {
+		t.Helper()
+
+		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return s
+	})
+}
+
 // TestAuditChainConformance runs the chain switch cases: entries without a
 // hash, runs of chained entries, and the recorded chain state.
 func TestAuditChainConformance(t *testing.T) {

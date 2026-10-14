@@ -97,21 +97,22 @@ func newAuditedPrincipalHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "",
-		Schema:         stubSchema{migrations: nil},
-		Principals:     principals,
-		Access:         nil,
-		Tokens:         nil,
-		OnAuditFailure: nil,
-		Audit:          entries,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Principals:       principals,
+		Access:           nil,
+		Tokens:           nil,
+		OnAuditFailure:   nil,
+		Audit:            entries,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
