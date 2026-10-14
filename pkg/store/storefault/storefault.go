@@ -491,14 +491,16 @@ func (s *Store) ReleaseUnfenced(ctx context.Context, w workspace.Workspace, fenc
 	return s.inner.ReleaseUnfenced(ctx, w, fence)
 }
 
-// DeleteWorkspace removes the workspace called ref with its state versions
-// and its data key, unless a fault fires first.
-func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
+// DeleteWorkspace soft-deletes the workspace called ref, unless a fault
+// fires first.
+func (s *Store) DeleteWorkspace(
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
+) error {
 	if err := s.before(ctx, "DeleteWorkspace"); err != nil {
 		return err
 	}
 
-	return s.inner.DeleteWorkspace(ctx, ref, fence)
+	return s.inner.DeleteWorkspace(ctx, ref, fence, e)
 }
 
 // CreateStateVersion persists a new, pending version, unless a fault fires first.
