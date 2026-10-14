@@ -623,6 +623,79 @@ func TestExplain(t *testing.T) {
 	}
 }
 
+// TestExplainListsOnlyGrantsThatGive proves that an answer lists only the
+// grants that give an action: not a grant whose custom role no longer
+// exists, and not a grant below the installation whose role gives no data
+// action. The store refuses to delete a role that a grant holds, and the
+// Service refuses an operator role below the installation, so the test
+// reads the role through a store that has lost it and stores the operator
+// role directly, as a role change that races a grant could leave them.
+func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	p := f.person(t, "alice")
+	acme := identity.NamespaceObject("acme")
+
+	gone, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "gone", Description: "", Actions: []identity.Action{identity.ActionUnitRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	at := time.Unix(0, 0)
+	backup := access.Role{
+		CreatedAt: at, UpdatedAt: at, ID: "rol-backup", Name: "backup", Description: "", BuiltIn: false,
+		Actions: []identity.Action{identity.ActionServerBackup},
+	}
+	err = f.store.CreateRole(ctx, backup, storetest.ServerChange(at, "role:rol-backup"))
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	f.grant(t, prn("alice"), access.RoleViewer, acme)
+	f.grant(t, prn("alice"), gone.ID, acme)
+	f.grant(t, prn("alice"), backup.ID, acme)
+
+	lost := &lostRoleStore{Store: f.store, role: gone.ID}
+
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost},
+	)
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	got, err := authz.Explain(ctx, p, acme)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	viewer, _ := access.BuiltInRole(access.RoleViewer)
+	if !slices.Equal(got.Actions, viewer.Actions) {
+		t.Errorf("actions = %v, want %v", got.Actions, viewer.Actions)
+	}
+
+	if len(got.Grants) != 1 || got.Grants[0].Role != access.RoleViewer {
+		t.Errorf("grants = %+v, want the viewer grant only", got.Grants)
+	}
+}
+
+// lostRoleStore reads the custom role with the ID role as deleted.
+type lostRoleStore struct {
+	*sqlite.Store
+
+	role string
+}
+
+func (l *lostRoleStore) GetRoles(ctx context.Context, ids []string) ([]access.Role, error) {
+	roles, err := l.Store.GetRoles(ctx, ids)
+
+	return slices.DeleteFunc(roles, func(r access.Role) bool { return r.ID == l.role }), err
+}
+
 func TestListObjects(t *testing.T) {
 	t.Parallel()
 

@@ -118,7 +118,9 @@ type Access struct {
 }
 
 // Explain answers the actions that p holds on obj and the grants that give
-// them. An administrator holds every classified action through no grant.
+// them. Only a grant that gives at least one of the actions is in the
+// answer: a grant whose role no longer exists gives none. An administrator
+// holds every classified action through no grant.
 func (a *Authorizer) Explain(ctx context.Context, p identity.Principal, obj identity.Object) (Access, error) {
 	out := Access{Object: obj, Actions: nil, Grants: nil}
 
@@ -292,7 +294,7 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		return none, err
 	}
 
-	out := held{set: map[identity.Action]bool{}, grants: grants}
+	out := held{set: map[identity.Action]bool{}, grants: nil}
 
 	for i := range grants {
 		role, ok := roles[grants[i].Role]
@@ -300,10 +302,18 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 			continue
 		}
 
+		gives := false
+
 		for _, action := range role.Actions {
 			if givenOn(action, grants[i].Object) {
-				out.set[action] = true
+				out.set[action], gives = true, true
 			}
+		}
+
+		// A grant whose role no longer exists, or gives no action on its
+		// object, gives nothing: an answer does not list it.
+		if gives {
+			out.grants = append(out.grants, grants[i])
 		}
 	}
 
