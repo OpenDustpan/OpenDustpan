@@ -75,6 +75,7 @@ func newFixture(tb testing.TB) *fixture {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"},
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
