@@ -341,6 +341,17 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 // grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
+	lowest, err := s.queries.MinAuditSequence(ctx, ns.String())
+	if err != nil {
+		return audit.CheckResult{}, fmt.Errorf("select lowest audit sequence: %w", err)
+	}
+
+	// The walk starts at sequence 1, so a row below it would never be
+	// checked: it fails the scope.
+	if lowest < 1 {
+		return audit.CheckResult{Checked: 0, BadSequence: lowest, Unchained: 0, Valid: false}, nil
+	}
+
 	timeline, err := chainTimeline(ctx, s.queries)
 	if err != nil {
 		return audit.CheckResult{}, err

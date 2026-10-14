@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -56,7 +57,7 @@ func (s ChainSetting) String() string {
 		return names[s]
 	}
 
-	return names[ChainAuto]
+	return strconv.Itoa(int(s))
 }
 
 // ChainState is the state of the chain that the installation recorded
@@ -368,50 +369,95 @@ func ChainPointFromPath(at time.Time, path string) (ChainPoint, bool) {
 }
 
 // ChainTimeline is what the check knows about the history of the chain:
-// the trusted switch entries of ServerScope as points, oldest first, and
-// whether the installation holds a recorded chain state. An installation
-// with a record always writes its start switch entry in the same
-// transaction (ADR 64), so a record with no point means that someone
-// removed the switch entries.
+// the trusted switch entries of ServerScope as points, oldest first,
+// whether the installation holds a recorded chain state, and whether the
+// timeline is broken. An installation with a record always writes its start
+// switch entry in the same transaction (ADR 64), so a record with no point
+// means that someone removed the switch entries. A broken timeline fails
+// every scope.
 type ChainTimeline struct {
 	Points   []ChainPoint
 	Recorded bool
+	Broken   bool
 }
 
-// TimelineFromSwitches answers the points of the switch entries switches,
-// which are in order of sequence. A switch entry counts only when its hash
-// matches its fields, because a row without a hash is easy to add. The one
-// exception is the first switch entry when it is off and has no hash: a
-// new installation writes it at its first start with the chain off. A
-// point earlier than the point before it does not count either.
-func TimelineFromSwitches(switches []Entry) []ChainPoint {
-	out := make([]ChainPoint, 0, len(switches))
-
-	for i := range switches {
-		p, ok := ChainPointFromPath(switches[i].At, switches[i].ValuePath)
-		if !ok || !trustedSwitch(&switches[i], p, i == 0) {
-			continue
-		}
-
-		if n := len(out); n > 0 && p.At.UnixMilli() < out[n-1].At.UnixMilli() {
-			continue
-		}
-
-		out = append(out, p)
-	}
-
-	return out
+// TimelineBuilder builds the timeline of the chain from the entries of
+// ServerScope. The caller adds them in order of sequence from 1, up to the
+// last switch entry. A switch entry counts only when the walk of ServerScope
+// accepts it: its hash matches its fields and links it to the entry before
+// it. The one exception is a switch entry to off without a hash at sequence
+// 1, which a new installation writes at its first start. The first entry
+// that the walk refuses, a switch entry without a hash after sequence 1,
+// and a switch entry earlier than the switch entry before it break the
+// timeline. The zero value is not ready: use NewTimelineBuilder.
+type TimelineBuilder struct {
+	walk   *ChainWalk
+	points []ChainPoint
+	broken bool
 }
 
-// trustedSwitch reports whether the switch entry e with the point p can go
-// in the timeline: its hash matches its fields, or it is the first switch
-// entry, off and without a hash.
-func trustedSwitch(e *Entry, p ChainPoint, first bool) bool {
-	if e.Hash == "" {
-		return first && !p.On && e.PrevHash == ""
+// NewTimelineBuilder returns a builder that expects sequence 1 first.
+func NewTimelineBuilder() *TimelineBuilder {
+	return &TimelineBuilder{
+		walk:   NewChainWalk(ChainTimeline{Points: nil, Recorded: false, Broken: false}),
+		points: nil,
+		broken: false,
+	}
+}
+
+// Add adds the next entry of ServerScope and answers false once the
+// timeline is broken, so the caller can stop.
+func (b *TimelineBuilder) Add(e Entry) bool {
+	if b.broken {
+		return false
 	}
 
-	return ComputeHash(*e, e.PrevHash) == e.Hash
+	if p, ok := switchPoint(e); ok {
+		if !b.acceptSwitch(e, p) {
+			b.broken = true
+
+			return false
+		}
+
+		b.points = append(b.points, p)
+		b.walk.points = b.points
+	}
+
+	if !b.walk.Step(e) {
+		b.broken = true
+
+		return false
+	}
+
+	return true
+}
+
+// Timeline answers the timeline that the builder holds, with recorded as
+// whether the installation holds a recorded chain state.
+func (b *TimelineBuilder) Timeline(recorded bool) ChainTimeline {
+	return ChainTimeline{Points: b.points, Recorded: recorded, Broken: b.broken}
+}
+
+// acceptSwitch reports whether the switch entry e with the point p can join
+// the timeline before the walk checks its link: it has a hash, or it is the
+// switch to off at sequence 1, and its time does not go back.
+func (b *TimelineBuilder) acceptSwitch(e Entry, p ChainPoint) bool {
+	if e.Hash == "" && (e.Sequence != 1 || p.On || e.PrevHash != "") {
+		return false
+	}
+
+	n := len(b.points)
+
+	return n == 0 || p.At.UnixMilli() >= b.points[n-1].At.UnixMilli()
+}
+
+// switchPoint answers the point of e when e is a switch entry of the chain.
+func switchPoint(e Entry) (ChainPoint, bool) {
+	if e.Namespace != ServerScope || e.Action != ActionSetChain {
+		return ChainPoint{At: e.At, On: false}, false
+	}
+
+	return ChainPointFromPath(e.At, e.ValuePath)
 }
 
 // ChainWalk checks the entries of one scope in order of sequence. The
@@ -439,7 +485,7 @@ func NewChainWalk(timeline ChainTimeline) *ChainWalk {
 		points:        timeline.Points,
 		next:          1,
 		unchained:     0,
-		broken:        timeline.Recorded && len(timeline.Points) == 0,
+		broken:        timeline.Broken || (timeline.Recorded && len(timeline.Points) == 0),
 		seenChained:   false,
 		lastUnchained: false,
 	}

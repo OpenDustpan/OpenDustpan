@@ -1190,13 +1190,17 @@ INSERT INTO audit_chain_state (id, state, ever_chained)
 VALUES (1, $1, $2)
 ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, ever_chained = EXCLUDED.ever_chained;
 
--- name: ListAuditChainSwitches :many
--- The switch entries of the audit chain in the scope @server, oldest
--- first: the timeline of the chain for the chain check. The whole row
--- comes back, so the check can verify the hash of each switch entry.
-SELECT * FROM audit_entries
-WHERE namespace = '@server' AND action = 'server:set-audit-chain'
-ORDER BY sequence ASC;
+-- name: LastAuditChainSwitchSequence :one
+-- The sequence of the last switch entry of the audit chain in the scope
+-- @server, or 0 when there is none. The chain check walks @server up to it
+-- to build the timeline of the chain.
+SELECT CAST(COALESCE(MAX(sequence), 0) AS BIGINT) FROM audit_entries
+WHERE namespace = '@server' AND action = 'server:set-audit-chain' AND sequence >= 1;
+
+-- name: MinAuditSequence :one
+-- The lowest sequence of a namespace, or 1 when it has no entry. The chain
+-- check fails a namespace with a row below 1, because the walk starts at 1.
+SELECT CAST(COALESCE(MIN(sequence), 1) AS BIGINT) FROM audit_entries WHERE namespace = $1;
 
 -- name: HasChainedAuditEntries :one
 -- Whether any scope holds an audit entry with a hash.

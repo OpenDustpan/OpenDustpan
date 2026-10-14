@@ -135,8 +135,11 @@ An entry without a hash passes the check only when the switch entries say that t
 An instance can keep the old state for 2 seconds after a switch to on.
 So the check also accepts an entry without a hash up to 2 seconds after that switch.
 So the check finds a hash that someone deleted from a chained log.
-A switch entry counts only when its hash matches its fields, so an added row without a hash cannot turn the chain off.
-The first switch entry of a new installation is the one exception: it is off and has no hash.
+The check reads the switch entries in the chain of `@server`, from sequence 1.
+A switch entry counts only when its hash matches its fields and links it to the entry before it.
+So an added row cannot turn the chain off.
+The first entry of `@server` of a new installation is the one exception: it is a switch to off without a hash.
+A row below sequence 1 fails the check.
 Next to an entry without a hash, the times of the entries must not go back.
 When the switch entries are gone and the installation still holds the state of the chain, every scope fails the check.
 Keep the clocks of the instances synchronized.

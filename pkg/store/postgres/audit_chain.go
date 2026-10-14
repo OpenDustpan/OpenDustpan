@@ -109,25 +109,67 @@ func readChainState(ctx context.Context, q *db.Queries) (audit.ChainState, bool,
 	return audit.ChainState(row.State), true, nil
 }
 
-// chainTimeline answers the timeline of the chain for the chain check: the
-// trusted switch entries of the server scope, and whether the installation
-// holds a recorded chain state.
+// chainTimeline answers the timeline of the chain for the chain check. It
+// walks the server scope from sequence 1 up to its last switch entry in
+// bounded pages, so only switch entries that the walk accepts in the chain
+// count (see audit.TimelineBuilder). A row of the server scope below
+// sequence 1 breaks the timeline.
 func chainTimeline(ctx context.Context, q *db.Queries) (audit.ChainTimeline, error) {
 	_, recorded, err := readChainState(ctx, q)
 	if err != nil {
 		return audit.ChainTimeline{}, err
 	}
 
-	rows, err := q.ListAuditChainSwitches(ctx)
+	last, err := q.LastAuditChainSwitchSequence(ctx)
 	if err != nil {
-		return audit.ChainTimeline{}, fmt.Errorf("select audit chain switches: %w", err)
+		return audit.ChainTimeline{}, fmt.Errorf("select last audit chain switch: %w", err)
 	}
 
-	switches := make([]audit.Entry, 0, len(rows))
-
-	for i := range rows {
-		switches = append(switches, fromAuditRow(rows[i]))
+	lowest, err := q.MinAuditSequence(ctx, audit.ServerScope.String())
+	if err != nil {
+		return audit.ChainTimeline{}, fmt.Errorf("select lowest server audit sequence: %w", err)
 	}
 
-	return audit.ChainTimeline{Points: audit.TimelineFromSwitches(switches), Recorded: recorded}, nil
+	b := audit.NewTimelineBuilder()
+	if lowest < 1 {
+		return audit.ChainTimeline{Points: nil, Recorded: recorded, Broken: true}, nil
+	}
+
+	if err := walkServerScope(ctx, q, b, last); err != nil {
+		return audit.ChainTimeline{}, err
+	}
+
+	return b.Timeline(recorded), nil
+}
+
+// walkServerScope adds the entries of the server scope from sequence 1 up
+// to last to b, in pages of audit.CheckPageSize, and stops early when b
+// breaks.
+func walkServerScope(ctx context.Context, q *db.Queries, b *audit.TimelineBuilder, last int64) error {
+	var after int64
+
+	for after < last {
+		rows, err := q.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
+			Namespace: audit.ServerScope.String(),
+			Sequence:  after,
+			Limit:     audit.CheckPageSize,
+		})
+		if err != nil {
+			return fmt.Errorf("select server audit chain: %w", err)
+		}
+
+		for i := range rows {
+			if rows[i].Sequence > last || !b.Add(fromAuditRow(rows[i])) {
+				return nil
+			}
+
+			after = rows[i].Sequence
+		}
+
+		if len(rows) < audit.CheckPageSize {
+			return nil
+		}
+	}
+
+	return nil
 }

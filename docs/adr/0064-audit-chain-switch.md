@@ -46,10 +46,17 @@ A review of the first build found three gaps:
    switch entry and no recorded state keeps the rule of the first build: an
    entry without a hash matches only before the first chained entry of its
    scope.
-   - A switch entry counts only when its hash matches its fields. The one
-     exception is the first switch entry when it is off and has no hash,
-     because a new installation writes it so. A switch entry earlier than
-     the switch entry before it does not count.
+   - The check builds the timeline from a walk of `@server` from sequence
+     1 up to its last switch entry. A switch entry counts only when the
+     walk accepts it: its hash matches its fields and links it to the
+     entry before it. The one exception is a switch entry to off without a
+     hash at sequence 1, because a new installation writes it so.
+   - When the walk of `@server` fails before its last switch entry, when a
+     switch entry after sequence 1 has no hash, or when a switch entry is
+     earlier than the switch entry before it, the timeline is broken and
+     every scope fails the check.
+   - A scope with a row below sequence 1 fails the check, because the walk
+     starts at sequence 1.
    - After a chained entry of a scope, an entry without a hash also needs a
      switch to off after that chained entry, less the switch lag, or a time
      within the switch lag after a switch to on.
@@ -90,6 +97,9 @@ A review of the first build found three gaps:
   their times into an off window that started after that chained entry,
   and the check still answers valid. Signed audit checkpoints cover this
   case.
+- A person who removes the tail of `@server`, for example a last switch
+  to on, makes the log shorter and leaves a valid chain. The check cannot
+  see such a cut. Signed audit checkpoints catch it.
 - A person who can compute SHA-256 can write a switch entry with a hash
   that matches its fields. The chain does not stop such a person (ADR 60
   decision 17). Signed audit checkpoints do.

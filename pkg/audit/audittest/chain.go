@@ -50,6 +50,8 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a forged switch to off at the tail with an early time is found", test: testChainForgedOffAtTail},
 		{name: "the time of an entry moved back after its hash is gone is found", test: testChainTimeMovedBack},
 		{name: "a chain record without switch entries is found", test: testChainSwitchesRemoved},
+		{name: "a forged switch to off at sequence 0 is found", test: testChainForgedOffAtZero},
+		{name: "a forged switch to off at sequence -1 with an early time is found", test: testChainForgedOffBelowZero},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a refused switch entry records nothing", test: testRecordChainIsAtomic},
@@ -399,6 +401,53 @@ func testChainSwitchesRemoved(t *testing.T, ts ChainTestStore) {
 	ts.TamperEntry(t, audit.ServerScope, 1, "action", "server:other")
 
 	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+// forgeBelowOne appends a forged switch to off without a hash at at, then
+// moves it to the sequence seq of @server, below 1, where the walk of the
+// check never reads it.
+func forgeBelowOne(t *testing.T, ts ChainTestStore, tl *timeline, at time.Time, seq int64) {
+	t.Helper()
+
+	tl.forgeOff(at)
+
+	last, err := ts.Store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 1})
+	if err != nil || len(last.Entries) != 1 {
+		t.Fatalf("read the last entry of @server: %v", err)
+	}
+
+	ts.TamperEntry(t, audit.ServerScope, last.Entries[0].Sequence, "sequence", strconv.FormatInt(seq, 10))
+}
+
+func testChainForgedOffAtZero(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(3)
+
+	// The forged row sorts first and claims the chain went off long ago,
+	// with a time in the year 2100 that covers nothing in order.
+	forgeBelowOne(t, ts, tl, time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC), 0)
+	strip(t, ts, tl.ns.Name, 1, 2, 3)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+	wantInvalidAt(t, check(t, ts.Store, audit.ServerScope), 0)
+}
+
+func testChainForgedOffBelowZero(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	early := tl.at.Add(-time.Hour)
+	tl.append(3)
+
+	forgeBelowOne(t, ts, tl, early, -1)
+	strip(t, ts, tl.ns.Name, 1, 2, 3)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+	wantInvalidAt(t, check(t, ts.Store, audit.ServerScope), -1)
 }
 
 func testHasChainedEntries(t *testing.T, ts ChainTestStore) {

@@ -298,7 +298,7 @@ func walkChained(seq int64, prev string) audit.Entry {
 
 // walkOK reports whether the walk over points accepts every entry.
 func walkOK(points []audit.ChainPoint, entries ...audit.Entry) bool {
-	w := audit.NewChainWalk(audit.ChainTimeline{Points: points, Recorded: len(points) > 0})
+	w := audit.NewChainWalk(audit.ChainTimeline{Points: points, Recorded: len(points) > 0, Broken: false})
 
 	for i := range entries {
 		if !w.Step(entries[i]) {
@@ -325,7 +325,7 @@ func TestChainWalk(t *testing.T) {
 		{At: walkAt(2, time.Second), On: true},
 	}
 
-	walk := audit.NewChainWalk(audit.ChainTimeline{Points: timeline, Recorded: true})
+	walk := audit.NewChainWalk(audit.ChainTimeline{Points: timeline, Recorded: true, Broken: false})
 	for _, e := range []audit.Entry{one, two, three, four} {
 		if !walk.Step(e) {
 			t.Fatalf("entry %d does not match", e.Sequence)
@@ -468,44 +468,115 @@ func walkChainedSwitch(seq int64, state audit.ChainState, at time.Time) audit.En
 	return e
 }
 
-func TestTimelineFromSwitches(t *testing.T) {
-	t.Parallel()
+// serverLink numbers es from 1 as entries of the server scope and chains
+// every entry whose hash is set: it links to the entry before it, or to an
+// empty hash after an entry without a hash.
+func serverLink(es ...audit.Entry) []audit.Entry {
+	prev := ""
 
-	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
-	on := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
-	forgedOff := walkSwitch(3, audit.ChainStateOff, walkAt(2, 0))
-	badHash := walkChainedSwitch(4, audit.ChainStateOff, walkAt(3, 0))
-	badHash.Subject = "mallory"
-	early := walkChainedSwitch(5, audit.ChainStateOff, walkAt(0, time.Millisecond))
-	off := walkChainedSwitch(6, audit.ChainStateOff, walkAt(4, 0))
+	for i := range es {
+		es[i].Namespace, es[i].Sequence = audit.ServerScope, int64(i+1)
 
-	got := audit.TimelineFromSwitches([]audit.Entry{startOff, on, forgedOff, badHash, early, off})
-	want := []audit.ChainPoint{
-		{At: walkAt(0, 0), On: false}, {At: walkAt(1, 0), On: true}, {At: walkAt(4, 0), On: false},
+		if es[i].Hash == "" {
+			prev = ""
+
+			continue
+		}
+
+		es[i].PrevHash = prev
+		es[i].Hash = audit.ComputeHash(es[i], prev)
+		prev = es[i].Hash
 	}
 
-	if len(got) != len(want) {
-		t.Fatalf("points: got %+v, want %+v", got, want)
-	}
+	return es
+}
 
-	for i := range want {
-		if !got[i].At.Equal(want[i].At) || got[i].On != want[i].On {
-			t.Fatalf("point %d: got %+v, want %+v", i, got[i], want[i])
+// build adds es to a new builder and answers the timeline.
+func build(es []audit.Entry) audit.ChainTimeline {
+	b := audit.NewTimelineBuilder()
+
+	for i := range es {
+		if !b.Add(es[i]) {
+			break
 		}
 	}
 
-	// A first switch entry to on without a hash is not the start of a new
-	// installation, which writes on only with a hash.
-	unhashedOn := walkSwitch(1, audit.ChainStateOn, walkAt(0, 0))
-	if got := audit.TimelineFromSwitches([]audit.Entry{unhashedOn}); len(got) != 0 {
-		t.Fatalf("an unhashed first switch to on: got %+v, want no point", got)
+	return b.Timeline(true)
+}
+
+func TestTimelineBuilder(t *testing.T) {
+	t.Parallel()
+
+	plain := walkChained(0, "")
+	plain.At = walkAt(2, 0)
+
+	got := build(serverLink(
+		walkSwitch(1, audit.ChainStateOff, walkAt(0, 0)),
+		walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0)),
+		plain,
+		walkChainedSwitch(4, audit.ChainStateOff, walkAt(3, 0)),
+	))
+	if got.Broken || len(got.Points) != 3 || got.Points[0].On || !got.Points[1].On || got.Points[2].On {
+		t.Fatalf("timeline: got %+v, want off, on, off and not broken", got)
+	}
+
+	replayed := serverLink(
+		walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
+		walkChainedSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
+	)
+	replayed[1].PrevHash = "other-installation"
+	replayed[1].Hash = audit.ComputeHash(replayed[1], replayed[1].PrevHash)
+
+	broken := []struct {
+		name    string
+		entries []audit.Entry
+	}{
+		{name: "an unhashed switch to off after sequence 1", entries: serverLink(
+			walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
+			walkSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
+		)},
+		{name: "a switch entry that links to another chain", entries: replayed},
+		{name: "a switch entry earlier than the one before it", entries: serverLink(
+			walkChainedSwitch(1, audit.ChainStateOn, walkAt(2, 0)),
+			walkChainedSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
+		)},
+		{name: "an unhashed switch to on at sequence 1", entries: serverLink(
+			walkSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
+		)},
+	}
+
+	for _, tc := range broken {
+		if got := build(tc.entries); !got.Broken {
+			t.Fatalf("%s: timeline is not broken: %+v", tc.name, got)
+		}
+	}
+}
+
+func TestChainWalkBrokenTimeline(t *testing.T) {
+	t.Parallel()
+
+	timeline := audit.ChainTimeline{
+		Points:   []audit.ChainPoint{{At: walkAt(0, 0), On: false}},
+		Recorded: true,
+		Broken:   true,
+	}
+	if audit.NewChainWalk(timeline).Step(walkEntry(1)) {
+		t.Fatal("the walk accepts an entry against a broken timeline")
+	}
+}
+
+func TestChainSettingString(t *testing.T) {
+	t.Parallel()
+
+	if got := audit.ChainSetting(9).String(); got != "9" {
+		t.Fatalf("an unknown setting prints %q, want 9", got)
 	}
 }
 
 func TestChainWalkRecordWithoutSwitches(t *testing.T) {
 	t.Parallel()
 
-	walk := audit.NewChainWalk(audit.ChainTimeline{Points: nil, Recorded: true})
+	walk := audit.NewChainWalk(audit.ChainTimeline{Points: nil, Recorded: true, Broken: false})
 	if walk.Step(walkChained(1, "")) {
 		t.Fatal("the walk accepts an entry while the switch entries of a recorded chain are gone")
 	}

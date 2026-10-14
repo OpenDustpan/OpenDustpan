@@ -257,7 +257,7 @@ var errUnknownAuditField = errors.New("unknown audit field")
 // names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "hash", "prev_hash", "at_ms":
+	case "subject", "action", "object", "outcome", "kind", "hash", "prev_hash", "at_ms", "sequence":
 		return field, true
 	default:
 		return "", false
@@ -265,9 +265,9 @@ func tamperAuditColumn(field string) (string, bool) {
 }
 
 // tamperValue answers the parameter of the tamper hook for column: at_ms
-// is a number, every other column is text.
+// and sequence are numbers, every other column is text.
 func tamperValue(column string) string {
-	if column == "at_ms" {
+	if column == "at_ms" || column == "sequence" {
 		return "$1::text::bigint"
 	}
 

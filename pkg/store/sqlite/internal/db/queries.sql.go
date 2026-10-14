@@ -2643,6 +2643,21 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 	return i, err
 }
 
+const lastAuditChainSwitchSequence = `-- name: LastAuditChainSwitchSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM audit_entries
+WHERE namespace = '@server' AND action = 'server:set-audit-chain' AND sequence >= 1
+`
+
+// The sequence of the last switch entry of the audit chain in the scope
+// @server, or 0 when there is none. The chain check walks @server up to it
+// to build the timeline of the chain.
+func (q *Queries) LastAuditChainSwitchSequence(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lastAuditChainSwitchSequence)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
@@ -2824,58 +2839,6 @@ type ListAuditChainPageParams struct {
 // with a large log never grows the check without a bound.
 func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPageParams) ([]AuditEntry, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditChainPage, arg.Namespace, arg.Sequence, arg.Limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []AuditEntry
-	for rows.Next() {
-		var i AuditEntry
-		if err := rows.Scan(
-			&i.Namespace,
-			&i.Sequence,
-			&i.Subject,
-			&i.IdpSubject,
-			&i.TokenID,
-			&i.Action,
-			&i.Object,
-			&i.Version,
-			&i.ValuePath,
-			&i.AtMs,
-			&i.SourceIp,
-			&i.UserAgent,
-			&i.Channel,
-			&i.Kind,
-			&i.Outcome,
-			&i.RequestID,
-			&i.PrevHash,
-			&i.Hash,
-			&i.ValueCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAuditChainSwitches = `-- name: ListAuditChainSwitches :many
-SELECT namespace, sequence, subject, idp_subject, token_id, "action", object, version, value_path, at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count FROM audit_entries
-WHERE namespace = '@server' AND action = 'server:set-audit-chain'
-ORDER BY sequence ASC
-`
-
-// The switch entries of the audit chain in the scope @server, oldest
-// first: the timeline of the chain for the chain check. The whole row
-// comes back, so the check can verify the hash of each switch entry.
-func (q *Queries) ListAuditChainSwitches(ctx context.Context) ([]AuditEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listAuditChainSwitches)
 	if err != nil {
 		return nil, err
 	}
@@ -4191,6 +4154,19 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const minAuditSequence = `-- name: MinAuditSequence :one
+SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE namespace = ?
+`
+
+// The lowest sequence of a namespace, or 1 when it has no entry. The chain
+// check fails a namespace with a row below 1, because the walk starts at 1.
+func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, minAuditSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const nextJournalArrival = `-- name: NextJournalArrival :one
