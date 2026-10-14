@@ -345,7 +345,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 // build a Handler for its route table; no request is ever served.
 type coverageWorkspaces struct{}
 
-func (coverageWorkspaces) Delete(_ context.Context, _ workspace.Ref) error {
+func (coverageWorkspaces) Delete(_ context.Context, _ workspace.Ref, _ audit.Entry) error {
 	return workspace.ErrNotFound
 }
 

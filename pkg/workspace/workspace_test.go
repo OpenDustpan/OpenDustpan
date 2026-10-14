@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -288,7 +289,17 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 // (ADR 47). The workspace moves to deleted, so no lookup or list finds it and
 // its name is free, while its state versions stay. It removes the inventory
 // entry and refuses a locked workspace with ErrLocked.
-func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence, at time.Time) error {
+func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	at := e.At
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

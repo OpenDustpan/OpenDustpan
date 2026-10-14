@@ -430,7 +430,7 @@ func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 	}
 
 	at := time.UnixMilli(1_760_000_000_000).UTC()
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), at); err != nil {
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deleteEntry(ns.Name, at)); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 

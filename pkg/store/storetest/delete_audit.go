@@ -10,14 +10,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// AuditBreaker is an optional UpdatesStore capability for the fail-closed
-// delete case: after BreakAuditAppends, every insert of an audit entry fails
-// inside its transaction. Only SQL can make a valid append fail there, so the
-// adapters implement it with a trigger.
+// AuditBreaker is an optional capability of the stores of the update and
+// workspace suites for the fail-closed delete cases: after BreakAuditAppends,
+// every insert of an audit entry fails inside its transaction. Only SQL can
+// make a valid append fail there, so the adapters implement it with a trigger.
 type AuditBreaker interface {
-	UpdatesStore
 	// BreakAuditAppends makes every later insert of an audit entry fail.
 	BreakAuditAppends(ctx context.Context) error
 }
@@ -269,5 +269,153 @@ func testPortableDeleteKeepsChildren(t *testing.T, newStore PortableFactory) {
 		if got, want := sumAfter.RowCounts[table], sumBefore.RowCounts[table]+delta; got != want {
 			t.Fatalf("rows of %s after the delete = %d, want %d", table, got, want)
 		}
+	}
+}
+
+// workspaceDeleteEntry returns the audit entry of a delete of the workspace
+// "network" in ns, the workspace of the delete cases.
+func workspaceDeleteEntry(ns namespace.Name) audit.Entry {
+	e := deleteEntry(ns)
+	e.Object = "opentofu:" + ns.String() + "/network"
+
+	return e
+}
+
+// testDeleteWorkspaceAppendsChangeEntry deletes a workspace and expects the
+// audit chain of the namespace to hold the entry of the delete.
+func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	lister, ok := s.(auditLister)
+	if !ok {
+		t.Skip("store does not list audit entries")
+	}
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	want := workspaceDeleteEntry(ns.Name)
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), want); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	listing, err := lister.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 1 {
+		t.Fatalf("audit entries = %+v, want the entry of the delete", listing.Entries)
+	}
+
+	got := listing.Entries[0]
+	if got.Kind != audit.KindChange || got.Object != want.Object || !got.At.Equal(want.At) || got.Sequence != 1 {
+		t.Fatalf("audit entry = %+v, want %+v as sequence 1", got, want)
+	}
+}
+
+// testDeleteWorkspaceRefusedEntryChangesNothing passes an entry that fails
+// validation and an entry of another namespace: each delete returns
+// audit.ErrInvalidEntry, and the workspace stays.
+func testDeleteWorkspaceRefusedEntryChangesNothing(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	invalid := workspaceDeleteEntry(ns.Name)
+	invalid.Subject = ""
+
+	refused := []audit.Entry{invalid, workspaceDeleteEntry("other")}
+	for i := range refused {
+		err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), refused[i])
+		if !errors.Is(err, audit.ErrInvalidEntry) {
+			t.Fatalf("delete with entry %+v: err = %v, want ErrInvalidEntry", refused[i], err)
+		}
+	}
+
+	assertWorkspaceUnchanged(t, s, ns, w)
+}
+
+// testDeleteWorkspaceFailedAppendChangesNothing breaks the audit appends of
+// the store, then deletes a workspace with a valid entry: the delete fails,
+// and the workspace, its inventory entry and its name stay (ADR 60, fail
+// closed).
+func testDeleteWorkspaceFailedAppendChangesNothing(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	breaker, ok := s.(AuditBreaker)
+	if !ok {
+		t.Skip("store cannot make an audit append fail")
+	}
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if err := breaker.BreakAuditAppends(t.Context()); err != nil {
+		t.Fatalf("break audit appends: %v", err)
+	}
+
+	err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name))
+	if err == nil {
+		t.Fatal("delete with a failing audit append: err = nil, want an error")
+	}
+
+	assertWorkspaceUnchanged(t, s, ns, w)
+}
+
+// testDeletedWorkspaceStoredNameFindsNothing deletes a workspace, then looks
+// it up by its stored name, "deleted:" and the workspace ID: the lookup finds
+// nothing (ADR 47).
+func testDeletedWorkspaceStoredNameFindsNothing(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name)); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	tomb := workspace.Ref{Namespace: ns.Name, Name: workspace.Name("deleted:" + w.ID.String())}
+	if _, err := s.GetWorkspace(t.Context(), tomb); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get workspace by the stored name: err = %v, want ErrNotFound", err)
+	}
+}
+
+// assertWorkspaceUnchanged checks that w is still live under its name with its
+// ID, that its live inventory entry stays, and that ns has no deleted unit.
+func assertWorkspaceUnchanged(t *testing.T, s WorkspaceStore, ns namespace.Namespace, w workspace.Workspace) {
+	t.Helper()
+
+	got, err := s.GetWorkspace(t.Context(), w.Ref)
+	if err != nil {
+		t.Fatalf("get workspace after the failed delete: %v", err)
+	}
+
+	if got.ID != w.ID {
+		t.Fatalf("workspace after the failed delete = %s, want %s", got.ID, w.ID)
+	}
+
+	found := false
+
+	entries := listWorkspaceInventory(t, s, ns.Name)
+	for i := range entries {
+		if entries[i].UnitID == w.ID.String() {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatalf("inventory has no entry of workspace %s after the failed delete", w.ID)
+	}
+
+	deleted, err := s.ListDeletedUnits(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("list deleted units: %v", err)
+	}
+
+	if len(deleted) != 0 {
+		t.Fatalf("deleted units after the failed delete = %+v, want none", deleted)
 	}
 }

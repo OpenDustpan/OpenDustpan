@@ -58,8 +58,9 @@ type WorkspaceService interface {
 type WorkspaceDeleter interface {
 	// Delete soft-deletes the workspace called ref (ADR 47). It returns
 	// workspace.ErrLocked while the workspace is locked, and
-	// workspace.ErrNotFound if no live workspace has ref.
-	Delete(ctx context.Context, ref workspace.Ref) error
+	// workspace.ErrNotFound if no live workspace has ref. The store appends
+	// the audit entry e in the delete transaction (ADR 60, fail closed).
+	Delete(ctx context.Context, ref workspace.Ref, e audit.Entry) error
 }
 
 // OverrideWriter is what the override switch route needs.

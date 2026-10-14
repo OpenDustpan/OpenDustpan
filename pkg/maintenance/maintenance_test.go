@@ -300,7 +300,7 @@ func (f *fakeWorkspaces) SaveWorkspace(
 }
 
 // DeleteWorkspace implements workspace.Store.
-func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, time.Time) error {
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, audit.Entry) error {
 	return workspace.ErrNotFound
 }
 

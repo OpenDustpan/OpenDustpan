@@ -186,6 +186,19 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "a deleted workspace frees its name",
 			test: testDeletedWorkspaceNameIsFree,
 		},
+		{name: "a workspace delete appends its change entry", test: testDeleteWorkspaceAppendsChangeEntry},
+		{
+			name: "a workspace delete with a refused entry changes nothing",
+			test: testDeleteWorkspaceRefusedEntryChangesNothing,
+		},
+		{
+			name: "a workspace delete whose audit append fails changes nothing",
+			test: testDeleteWorkspaceFailedAppendChangesNothing,
+		},
+		{
+			name: "the stored name of a deleted workspace finds nothing",
+			test: testDeletedWorkspaceStoredNameFindsNothing,
+		},
 		{
 			name: "fence and unlock releases the lock and makes the fence current",
 			test: testFenceAndUnlock,
@@ -3124,25 +3137,34 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("finalize state version: %v", err)
 	}
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrLocked) {
+	err := s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(
+		err,
+		workspace.ErrLocked,
+	) {
 		t.Fatalf("delete a locked workspace: err = %v, want ErrLocked", err)
 	}
 
 	unlockTestWorkspace(t, s, ns, w.Ref)
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); err != nil {
+	if err = s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	if _, err := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {
+	if _, err = s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("get deleted workspace: err = %v, want ErrNotFound", err)
 	}
 
-	if _, err := s.GetWorkspaceByID(t.Context(), w.ID); !errors.Is(err, workspace.ErrNotFound) {
+	if _, err = s.GetWorkspaceByID(t.Context(), w.ID); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("get deleted workspace by ID: err = %v, want ErrNotFound", err)
 	}
 
-	if _, err := s.GetStateVersion(t.Context(), pending.ID); err != nil {
+	if _, err = s.GetStateVersion(t.Context(), pending.ID); err != nil {
 		t.Fatalf("get a version of a deleted workspace: %v, want it kept for a restore", err)
 	}
 
@@ -3150,19 +3172,46 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("inventory entries after delete = %+v, want none", entries)
 	}
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrNotFound) {
+	err = s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(
+		err,
+		workspace.ErrNotFound,
+	) {
 		t.Fatalf("delete a deleted workspace: err = %v, want ErrNotFound", err)
 	}
 
 	ghost := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, "ghost")}
-	if err := s.DeleteWorkspace(t.Context(), ghost, ns.Fence(), deletedAt()); !errors.Is(err, workspace.ErrNotFound) {
+	err = s.DeleteWorkspace(
+		t.Context(),
+		ghost,
+		ns.Fence(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(
+		err,
+		workspace.ErrNotFound,
+	) {
 		t.Fatalf("delete a missing workspace: err = %v, want ErrNotFound", err)
 	}
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 	other := createTestWorkspace(t, s, ns, "other")
 
-	if err := s.DeleteWorkspace(t.Context(), other.Ref, stale, deletedAt()); !errors.Is(err, namespace.ErrFenced) {
+	err = s.DeleteWorkspace(
+		t.Context(),
+		other.Ref,
+		stale,
+		deleteEntry(stale.Namespace),
+	)
+	if !errors.Is(
+		err,
+		namespace.ErrFenced,
+	) {
 		t.Fatalf("delete with a stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -3181,7 +3230,7 @@ func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
 	ns := newWorkspaceNamespace(t, s, "acme")
 	gone := createTestWorkspace(t, s, ns, "network")
 
-	if err := s.DeleteWorkspace(t.Context(), gone.Ref, ns.Fence(), deletedAt()); err != nil {
+	if err := s.DeleteWorkspace(t.Context(), gone.Ref, ns.Fence(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 

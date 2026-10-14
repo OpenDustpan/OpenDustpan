@@ -199,14 +199,11 @@ func (h *Handler) deleteWorkspace(
 		return
 	}
 
-	if err := h.workspaces.Delete(ctx, workspace.Ref{Namespace: ns, Name: name}); err != nil {
+	entry := changeEntry(r, p, obj, identity.ActionUnitManage)
+	if err := h.workspaces.Delete(ctx, workspace.Ref{Namespace: ns, Name: name}, entry); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
-	}
-
-	if err := h.appendChangeAudit(r, p, obj, identity.ActionUnitManage); err != nil {
-		h.failAudit(ctx)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

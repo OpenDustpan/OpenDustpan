@@ -797,6 +797,7 @@ type DeleteWorkspaceParams struct {
 	Name      string
 }
 
+// Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
 // Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
 // the data key through DeleteSecretKeysOfStack with the workspace ID.
 func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams) (int64, error) {
@@ -1591,7 +1592,7 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = ? AND name = ?
+WHERE namespace = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetWorkspaceParams struct {

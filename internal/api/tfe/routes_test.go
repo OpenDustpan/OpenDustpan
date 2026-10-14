@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -204,7 +205,7 @@ func (stubWorkspaces) Get(_ context.Context, ref workspace.Ref) (workspace.Works
 
 // Delete soft-deletes acme/web, answers ErrLocked for acme/locked, and
 // ErrNotFound for every other workspace.
-func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref) error {
+func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry) error {
 	switch {
 	case ref.Namespace.String() != "acme":
 		return namespace.ErrNotFound
@@ -1496,7 +1497,7 @@ func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Wor
 	return workspace.Workspace{}, errTestInternal
 }
 
-func (errorWorkspaces) Delete(_ context.Context, _ workspace.Ref) error {
+func (errorWorkspaces) Delete(_ context.Context, _ workspace.Ref, _ audit.Entry) error {
 	return errTestInternal
 }
 

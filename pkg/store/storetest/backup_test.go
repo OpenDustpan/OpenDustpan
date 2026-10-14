@@ -1330,7 +1330,7 @@ func (s *fakeBackupStore) SaveWorkspace(
 // DeleteWorkspace implements workspace.Store: it removes the workspace with
 // its state versions, its wrapped data key and its inventory entry.
 func (s *fakeBackupStore) DeleteWorkspace(
-	_ context.Context, ref workspace.Ref, fence namespace.Fence, _ time.Time,
+	_ context.Context, ref workspace.Ref, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

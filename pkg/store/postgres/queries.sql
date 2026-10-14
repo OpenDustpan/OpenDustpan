@@ -371,7 +371,7 @@ SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
        locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
        deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = $1 AND name = $2;
+WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
@@ -421,6 +421,7 @@ SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision =
 WHERE id = $2 AND deleted_at_ms IS NULL;
 
 -- name: DeleteWorkspace :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
 -- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
 -- the data key through DeleteSecretKeysOfStack with the workspace ID.
 DELETE FROM workspaces

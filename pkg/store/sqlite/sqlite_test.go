@@ -292,7 +292,7 @@ func TestWorkspaceConformance(t *testing.T) {
 	storetest.RunWorkspace(t, func(t *testing.T) storetest.WorkspaceStore {
 		t.Helper()
 
-		return open(t)
+		return openAuditedWorkspaces(t)
 	})
 }
 
@@ -670,10 +670,52 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 // errNoAuditList reports a wrapped store without an audit list.
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
-// BreakAuditAppends implements storetest.AuditBreaker with a trigger that
-// aborts every insert of an audit entry.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) (err error) {
-	conn, err := openRawDB(s.path)
+// BreakAuditAppends implements storetest.AuditBreaker.
+func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.path)
+}
+
+// auditedWorkspaces is a store for the workspace suite that can break its
+// audit appends. It embeds the store itself, so the suite also reads its
+// audit list.
+type auditedWorkspaces struct {
+	*sqlite.Store
+
+	path string
+}
+
+var _ storetest.AuditBreaker = (*auditedWorkspaces)(nil)
+
+// BreakAuditAppends implements storetest.AuditBreaker.
+func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.path)
+}
+
+// openAuditedWorkspaces returns a fresh store in a temporary directory whose
+// audit appends the suite can break.
+func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
+
+	return &auditedWorkspaces{Store: s, path: path}
+}
+
+// breakAuditAppends creates a trigger in the database at path that aborts
+// every insert of an audit entry.
+func breakAuditAppends(ctx context.Context, path string) (err error) {
+	conn, err := openRawDB(path)
 	if err != nil {
 		return fmt.Errorf("open raw database: %w", err)
 	}

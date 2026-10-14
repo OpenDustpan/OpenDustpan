@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -60,15 +61,18 @@ type Store interface {
 	// the unit are on, in the same transaction. It is the unfenced release of a
 	// client-encrypted state under the forced-write override (ADR 44, decision 4).
 	ReleaseUnfenced(ctx context.Context, w Workspace, fence namespace.Fence) error
-	// DeleteWorkspace soft-deletes the workspace called ref at the time at, in
-	// one fenced transaction (ADR 47). The workspace leaves every lookup by
+	// DeleteWorkspace soft-deletes the workspace called ref at the time e.At,
+	// in one fenced transaction (ADR 47), and appends the audit entry e to the
+	// chain of the namespace in the same transaction. If the append fails,
+	// nothing changes (ADR 60, fail closed). The workspace leaves every lookup by
 	// name or ID and every list, and its name is free at once. Its state
 	// versions and its wrapped data key stay until the final delete. It
 	// removes the inventory entry in the same transaction. It returns
 	// ErrLocked while the workspace is locked, ErrNotFound if no live
 	// workspace has ref, namespace.ErrNotFound if the namespace does not
-	// exist, or namespace.ErrFenced if fence is stale.
-	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, at time.Time) error
+	// exist, namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry
+	// if e fails validation or names another namespace.
+	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
 }
 
 // StateStore persists state version metadata.
@@ -319,14 +323,17 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 // but its state versions and data key stay until the final delete. It
 // returns ErrLocked while the workspace is locked, and ErrNotFound if no live
 // workspace has ref. The write is fenced on the namespace's failover version
-// and only allowed in its home region.
-func (s *Service) Delete(ctx context.Context, ref Ref) error {
+// and only allowed in its home region. The delete and the audit entry e,
+// stamped with the time of the delete, commit together or not at all (ADR 60,
+// fail closed).
+func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	fence, err := s.fence(ctx, ref.Namespace)
 	if err != nil {
 		return err
 	}
 
-	if err := s.workspaces.DeleteWorkspace(ctx, ref, fence, s.clock()); err != nil {
+	e.At = s.clock()
+	if err := s.workspaces.DeleteWorkspace(ctx, ref, fence, e); err != nil {
 		return fmt.Errorf("delete workspace %s: %w", ref, err)
 	}
 

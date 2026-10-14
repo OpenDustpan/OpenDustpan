@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -133,7 +134,8 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 }
 
 // DeleteWorkspace implements workspace.Store. It soft-deletes the workspace in
-// one fenced transaction (ADR 47): it frees the name, keeps the state versions
+// one fenced transaction (ADR 47), with its audit entry e (ADR 60, fail
+// closed): it frees the name, keeps the state versions
 // and the wrapped data key, and moves the inventory entry to the deleted
 // units. It returns
 // ErrLocked while the workspace is locked, and ErrNotFound if no live
@@ -141,9 +143,9 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 // the workspace either commits first and the delete refuses, or waits until
 // the delete commits and then finds no workspace.
 func (s *Store) DeleteWorkspace(
-	ctx context.Context, ref workspace.Ref, fence namespace.Fence, at time.Time,
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		found, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
 			Name:      ref.Name.String(),
@@ -166,7 +168,7 @@ func (s *Store) DeleteWorkspace(
 		}
 
 		n, deleteErr := q.SoftDeleteWorkspace(ctx, db.SoftDeleteWorkspaceParams{
-			DeletedAtMs: pgtype.Int8{Int64: at.UnixMilli(), Valid: true},
+			DeletedAtMs: pgtype.Int8{Int64: e.At.UnixMilli(), Valid: true},
 			ID:          row.ID,
 		})
 		if deleteErr != nil {
@@ -177,7 +179,7 @@ func (s *Store) DeleteWorkspace(
 			return workspace.ErrNotFound
 		}
 
-		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, at)
+		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, e.At)
 	})
 }
 

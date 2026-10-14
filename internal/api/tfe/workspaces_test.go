@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -635,7 +636,7 @@ type pagingWorkspaces struct {
 	items []workspace.Workspace
 }
 
-func (pagingWorkspaces) Delete(_ context.Context, _ workspace.Ref) error {
+func (pagingWorkspaces) Delete(_ context.Context, _ workspace.Ref, _ audit.Entry) error {
 	return workspace.ErrNotFound
 }
 

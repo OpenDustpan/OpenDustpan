@@ -63,21 +63,13 @@ func (h *Handler) appendToolOperationAudit(
 	return err
 }
 
-// appendChangeAudit writes one audit entry of the kind change after a change
-// of a unit committed (ADR 60, decision 4). The change already happened, so
-// the caller does not change its answer on an error: it counts the lost entry
-// with failAudit. A nil audit store writes no entry.
-func (h *Handler) appendChangeAudit(
-	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action,
-) error {
-	if h.audit == nil {
-		return nil
-	}
-
-	ctx := r.Context()
-
-	entry := audit.Entry{
-		At:         time.Now().UTC(),
+// changeEntry returns the audit entry of the kind change for a change of a
+// unit (ADR 60, decision 4). The store appends it in the transaction of the
+// change, so the change and its entry commit together or not at all (fail
+// closed). The service stamps the time of the change on it.
+func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
 		Namespace:  obj.Namespace(),
 		Subject:    p.Subject,
 		IDPSubject: "",
@@ -92,20 +84,11 @@ func (h *Handler) appendChangeAudit(
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestid.FromContext(ctx),
+		RequestID:  requestid.FromContext(r.Context()),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
 	}
-
-	ns, err := h.namespaces.Get(ctx, entry.Namespace)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.audit.Append(ctx, ns.Fence(), entry)
-
-	return err
 }
 
 // failAudit records a lost audit entry: one log line with no secret and no
