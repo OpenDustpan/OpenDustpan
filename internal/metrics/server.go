@@ -320,7 +320,7 @@ func newDeletedSweepCounter(reg *Registry) *Counter {
 	)
 }
 
-// Outcomes of the retention sweep (ADR 47).
+// Outcomes of the retention sweep.
 const (
 	// DeletedSweepPurged counts the deleted units that the sweep purged.
 	DeletedSweepPurged = "purged"

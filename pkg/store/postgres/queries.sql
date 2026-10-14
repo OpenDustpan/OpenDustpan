@@ -346,7 +346,7 @@ ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
 -- name: ListExpiredInventory :many
 -- The first page of the deleted units of every namespace whose retention
--- ended at or before $1 (ADR 47), for the retention sweep. Byte order
+-- ended at or before $1, for the retention sweep. Byte order
 -- (COLLATE "C"), as inventory.PageExpired orders.
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted

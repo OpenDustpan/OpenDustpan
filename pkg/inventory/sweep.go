@@ -15,7 +15,7 @@ import (
 )
 
 // BlobPurgeGrace is how long a blob purge record stays before the sweep can
-// finish it (ADR 47). A checkpoint save or a state upload can pass its checks
+// finish it. A checkpoint save or a state upload can pass its checks
 // before a force-delete and a purge, then write its blob after the first
 // delete of the blobs of the unit, and then fail its SQL commit. The sweep
 // deletes the blobs of a record again only when the record is older than this
@@ -41,8 +41,8 @@ type ExpiredCursor struct {
 	UnitID     string
 }
 
-// ExpiredDeleted reads the deleted units whose retention period has ended
-// (ADR 47), across every namespace.
+// ExpiredDeleted reads the deleted units whose retention period has ended,
+// across every namespace.
 type ExpiredDeleted interface {
 	// ListExpiredDeleted returns at most limit deleted units whose PurgeAfter
 	// is at or before now, ordered by PurgeAfter, then tool, then unit ID.
@@ -94,7 +94,7 @@ type SweeperConfig struct {
 // ErrMissingDependency reports a SweeperConfig without a required port.
 var ErrMissingDependency = errors.New("missing dependency")
 
-// Sweeper runs the retention sweep of ADR 47: the final delete of each
+// Sweeper runs the retention sweep: the final delete of each
 // deleted unit whose retention period has ended, and the finish of the blob
 // purge records. One sweep runs at a time.
 type Sweeper struct {

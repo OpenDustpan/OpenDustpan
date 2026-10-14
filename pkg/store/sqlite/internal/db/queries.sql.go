@@ -3474,7 +3474,7 @@ type ListExpiredInventoryParams struct {
 }
 
 // The first page of the deleted units of every namespace whose retention
-// ended at or before the time (ADR 47), for the retention sweep.
+// ended at or before the time, for the retention sweep.
 func (q *Queries) ListExpiredInventory(ctx context.Context, arg ListExpiredInventoryParams) ([]InventoryDeleted, error) {
 	rows, err := q.db.QueryContext(ctx, listExpiredInventory, arg.PurgeAfterMs, arg.Limit)
 	if err != nil {

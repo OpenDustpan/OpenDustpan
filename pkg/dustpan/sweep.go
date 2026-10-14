@@ -16,7 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// deletedSweepEvery is the period of the retention sweep (ADR 47). The
+// deletedSweepEvery is the period of the retention sweep. The
 // retention period counts at least one hour, so one run each hour is ample.
 const deletedSweepEvery = time.Hour
 

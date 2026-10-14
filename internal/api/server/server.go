@@ -81,7 +81,7 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
-	// DeletedUnits runs the retention sweep of the deleted units (ADR 47).
+	// DeletedUnits runs the retention sweep of the deleted units.
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
 	DeletedUnits DeletedUnitSweeper

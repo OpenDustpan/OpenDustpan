@@ -1,6 +1,6 @@
 package server
 
-// Retention sweep route of the installation API (ADR 47). The server runs
+// Retention sweep route of the installation API. The server runs
 // the sweep on its own schedule. This route runs it at once. It purges only
 // the deleted units whose retention period has ended, which the schedule
 // would purge anyway, so it needs server:maintenance on the object @server
@@ -15,7 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
-// DeletedUnitSweeper runs the retention sweep of the deleted units (ADR 47).
+// DeletedUnitSweeper runs the retention sweep of the deleted units.
 // inventory.Sweeper implements it. It is defined here, in the package that
 // consumes it.
 type DeletedUnitSweeper interface {

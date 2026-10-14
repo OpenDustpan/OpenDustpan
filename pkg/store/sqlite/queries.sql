@@ -317,7 +317,7 @@ ORDER BY tool, name, unit_id;
 
 -- name: ListExpiredInventory :many
 -- The first page of the deleted units of every namespace whose retention
--- ended at or before the time (ADR 47), for the retention sweep.
+-- ended at or before the time, for the retention sweep.
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
 WHERE purge_after_ms <= ?

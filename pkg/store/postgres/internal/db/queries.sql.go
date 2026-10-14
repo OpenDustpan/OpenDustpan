@@ -3563,7 +3563,7 @@ type ListExpiredInventoryParams struct {
 }
 
 // The first page of the deleted units of every namespace whose retention
-// ended at or before $1 (ADR 47), for the retention sweep. Byte order
+// ended at or before $1, for the retention sweep. Byte order
 // (COLLATE "C"), as inventory.PageExpired orders.
 func (q *Queries) ListExpiredInventory(ctx context.Context, arg ListExpiredInventoryParams) ([]InventoryDeleted, error) {
 	rows, err := q.db.Query(ctx, listExpiredInventory, arg.PurgeAfterMs, arg.Limit)

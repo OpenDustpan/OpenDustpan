@@ -105,7 +105,7 @@ names the key and the rule.
 The `result` label is `success` or `failure`.
 Alert when the `failure` series grows: a failed run disables nothing.
 `dustpan_deleted_unit_sweep_total` counts the outcomes of the retention
-sweep (ADR 47). The `result` label is `purged`, `skipped`, `finished` or
+sweep. The `result` label is `purged`, `skipped`, `finished` or
 `failed`. `finished` counts the blob purge records that the sweep finished.
 `failed` counts the failed purges, blob deletes and record finishes, and the
 sweeps that could not read the store.

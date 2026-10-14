@@ -424,8 +424,7 @@ type Server struct {
 	tokens      *accesstoken.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
-	// deleted runs the retention sweep of the deleted units on a schedule
-	// (ADR 47).
+	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
 }
 
@@ -439,7 +438,7 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
-	// deleted runs the retention sweep (ADR 47). assemble sets it, because
+	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
 }
@@ -1446,7 +1445,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
-// unitLifecycles returns the restore and purge of each tool (ADR 47). The
+// unitLifecycles returns the restore and purge of each tool. The
 // inventory API and the retention sweep share them.
 func unitLifecycles(svc services, cfg *settings) (pulumiLifecycle, opentofuLifecycle) {
 	blobs := blobPurger{logger: cfg.logger}

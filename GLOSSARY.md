@@ -113,11 +113,11 @@ The same as a purge. Use "purge" in code and in the API, and "final delete" wher
 _Avoid_: Permanent delete
 
 **Retention sweep**:
-The server task that purges each deleted unit whose retention period ended (ADR 47). It runs at start and then one time each hour. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
+The server task that purges each deleted unit whose retention period ended. It runs at start and then one time each hour. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
 _Avoid_: Garbage collection, reaper
 
 **Blob purge record**:
-A row that a purge writes for a unit whose blobs may still exist (ADR 47). A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
+A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
 _Avoid_: Tombstone
 
 **Maintenance mode**:
