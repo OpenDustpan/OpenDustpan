@@ -477,6 +477,64 @@ func (a *Authorizer) rolesWith(ctx context.Context, action identity.Action) ([]s
 	return out, nil
 }
 
+// reviewRoles returns the roles that put a grant on a container in an
+// access-review export: each role that gives a data action or manages
+// access. The map holds the roles that manage access.
+func (a *Authorizer) reviewRoles(ctx context.Context) ([]string, map[string]bool, error) {
+	var out []string
+
+	grantAccess := map[string]bool{}
+
+	custom, err := a.store.ListRoles(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list roles: %w", err)
+	}
+
+	all := append(BuiltInRoles(), custom...)
+	for i := range all {
+		manages := managesAccess(all[i])
+		if manages {
+			grantAccess[all[i].ID] = true
+		}
+
+		if manages || givesData(all[i]) {
+			out = append(out, all[i].ID)
+		}
+	}
+
+	return out, grantAccess, nil
+}
+
+// managesAccess reports whether r holds an action that changes who has
+// access to an object: a grant, a custom role, a membership of a group
+// that has access, or a grant on a namespace, a collection or a unit. A
+// service token gets no access without a grant, so
+// server:manage-service-tokens does not count.
+func managesAccess(r Role) bool {
+	return slices.ContainsFunc(r.Actions, func(a identity.Action) bool {
+		return slices.Contains(accessManagementActions(), a)
+	})
+}
+
+// accessManagementActions are the actions that managesAccess looks for.
+func accessManagementActions() []identity.Action {
+	return []identity.Action{
+		identity.ActionServerManageAccess, identity.ActionServerManageRoles, identity.ActionServerManageGroups,
+		identity.ActionNamespaceManageAccess, identity.ActionCollectionManageAccess, identity.ActionUnitManageAccess,
+	}
+}
+
+// givesData reports whether r holds a data action.
+func givesData(r Role) bool {
+	for _, action := range r.Actions {
+		if families[action] == FamilyData {
+			return true
+		}
+	}
+
+	return false
+}
+
 // withUnitID returns the unit obj with its stable ID, read once for each
 // request. A unit that does not exist, or an Authorizer with no Units,
 // keeps no ID: a grant on the unit then matches nothing.

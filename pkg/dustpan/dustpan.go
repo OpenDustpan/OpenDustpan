@@ -216,6 +216,13 @@ func WithInventoryReader(r inventory.Reader) Option {
 }
 
 // WithAuthenticator sets how access tokens are resolved to principals. Required.
+//
+// An authenticator that signs in administrators (principals with Admin set,
+// which hold every action with no grant) must also implement
+// AdminSubjects() []string and answer their subjects, as
+// identity.StaticTokens and identity.Chain do. Otherwise those
+// administrators are missing from the access-review export (ADR 52,
+// decision 10).
 func WithAuthenticator(a identity.Authenticator) Option {
 	return func(o *settings) { o.authenticator = a }
 }
@@ -1298,6 +1305,22 @@ func serverAuditOf(store namespace.Store) audit.ServerStore {
 	return entries
 }
 
+// adminSubjects is met by an authenticator that signs in bootstrap
+// administrators with no grant, as identity.StaticTokens does.
+type adminSubjects interface {
+	AdminSubjects() []string
+}
+
+// adminSubjectsOf returns the subjects of the bootstrap administrators of
+// authn, or none when authn does not name them.
+func adminSubjectsOf(authn identity.Authenticator) []string {
+	if a, ok := authn.(adminSubjects); ok {
+		return a.AdminSubjects()
+	}
+
+	return nil
+}
+
 // newPrincipalService builds the principal and group service (ADR 52) from
 // the namespace store, or returns nil when the store keeps no principals.
 // Every SQL adapter serves all ports from one database connection, so the
@@ -1407,6 +1430,7 @@ func newAccessService(cfg settings) (*access.Service, error) {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
