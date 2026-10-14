@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
@@ -388,6 +389,9 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	// tokens runs the inactivity disable of access tokens and accounts on a
+	// schedule (ADR 53), or is nil when the store keeps no tokens.
+	tokens *accesstoken.Service
 }
 
 // services holds the domain services that NewServer wires together.
@@ -539,6 +543,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		tokens:          svc.tokens,
 	}, nil
 }
 
@@ -913,7 +918,70 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
+	// The first run of the inactivity disable ends before the server
+	// serves a request.
+	s.sweepOnce(ctx)
+
+	sweepCtx, stopSweeps := context.WithCancel(ctx)
+
+	var sweeps sync.WaitGroup
+
+	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+
+	defer func() {
+		stopSweeps()
+		sweeps.Wait()
+	}()
+
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// sweepEvery is the period of the inactivity disable. The inactivity period
+// counts in days by default, so one run each hour is ample.
+const sweepEvery = time.Hour
+
+// sweepInactive runs the inactivity disable of ADR 53 once each
+// sweepEvery, until ctx is done. Run makes the first run before it serves.
+func (s *Server) sweepInactive(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	ticker := time.NewTicker(sweepEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweepOnce(ctx)
+		}
+	}
+}
+
+// sweepOnce runs the inactivity disable once and counts the result. A failed
+// run logs no error text, which may hold driver detail (ADR 32 decision 7),
+// and the next run tries again.
+func (s *Server) sweepOnce(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
+
+	switch {
+	case err != nil && ctx.Err() == nil:
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "inactivity disable failed")
+	case err != nil:
+	case len(res.Tokens) > 0 || len(res.Principals) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "inactivity disable",
+			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
 }
 
 // startUpResult answers the result of Run when a start-up step fails with

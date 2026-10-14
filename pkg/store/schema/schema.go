@@ -158,6 +158,7 @@ var embeddedMigrationNames = []string{
 	"0032_soft_delete_workspaces.sql",
 	"0035_access_tokens.sql",
 	"0042_roles_and_grants.sql",
+	"0046_token_policy.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

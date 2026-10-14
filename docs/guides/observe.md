@@ -79,6 +79,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_go_gc_cycles_total` | (none) |
 | `dustpan_readiness_failures_total` | (none) |
 | `dustpan_audit_append_failures_total` | (none) |
+| `dustpan_inactivity_sweeps_total` | `result` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -91,6 +92,9 @@ The duration family also writes `_bucket`, `_sum` and `_count` series.
 append failed.
 Alert when it is above zero. The audit guide shows the rule.
 This is the alert for failed logging (PCI DSS 10.7).
+`dustpan_inactivity_sweeps_total` counts the runs of the inactivity disable.
+The `result` label is `success` or `failure`.
+Alert when the `failure` series grows: a failed run disables nothing.
 
 ## Request log
 

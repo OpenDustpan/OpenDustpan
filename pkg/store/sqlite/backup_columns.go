@@ -270,6 +270,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"disabled_at_ms",
+				"last_active_at_ms",
 			},
 		},
 		{
@@ -303,6 +305,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"revoked_at_ms",
 				"replaced_by",
 				backupColCreatedBy,
+				"disabled_at_ms",
 			},
 		},
 		{
@@ -335,6 +338,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedBy,
 				"revoked_at_ms",
 				"revoked_by",
+			},
+		},
+		{
+			table: "access_token_policy",
+			columns: []string{
+				"id",
+				"max_lifetime_ms",
+				"inactivity_ms",
+				"disable_tokens",
+				"disable_accounts",
+				"disable_break_glass",
+				backupColUpdatedAtMs,
 			},
 		},
 		{

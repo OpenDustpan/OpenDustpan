@@ -100,6 +100,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadTokens:          FamilyAdministration,
 	identity.ActionServerManageTokens:        FamilyAdministration,
 	identity.ActionServerManageServiceTokens: FamilyAdministration,
+	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,

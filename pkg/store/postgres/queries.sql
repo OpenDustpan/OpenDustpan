@@ -776,17 +776,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -874,7 +874,7 @@ UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -1132,24 +1132,25 @@ SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
 SELECT COUNT(*) FROM access_tokens WHERE id = $1;
 
 -- name: GetAccessToken :one
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = $1;
 
 -- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
-  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
+  t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: ListAccessTokens :many
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens
 WHERE (sqlc.arg('principal_id')::text = '' OR principal_id = sqlc.arg('principal_id')::text)
   AND (sqlc.arg('status')::bigint = 0
-    OR ((sqlc.arg('status')::bigint = 1 OR sqlc.arg('status')::bigint = 2) AND revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
+    OR ((sqlc.arg('status')::bigint = 1 OR sqlc.arg('status')::bigint = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
       AND (sqlc.arg('status')::bigint = 1 OR expires_at_ms <= sqlc.arg('soon_ms')::bigint))
-    OR (sqlc.arg('status')::bigint = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= sqlc.arg('at_ms')::bigint)))
+    OR (sqlc.arg('status')::bigint = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= sqlc.arg('at_ms')::bigint)))
   AND (NOT sqlc.arg('has_after')::boolean
     OR created_at_ms < sqlc.arg('after_ms')::bigint
     OR (created_at_ms = sqlc.arg('after_ms')::bigint AND id COLLATE "C" < sqlc.arg('after_id')::text))
@@ -1160,9 +1161,9 @@ LIMIT sqlc.arg('row_limit');
 SELECT COUNT(*) FROM access_tokens
 WHERE (sqlc.arg('principal_id')::text = '' OR principal_id = sqlc.arg('principal_id')::text)
   AND (sqlc.arg('status')::bigint = 0
-    OR ((sqlc.arg('status')::bigint = 1 OR sqlc.arg('status')::bigint = 2) AND revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
+    OR ((sqlc.arg('status')::bigint = 1 OR sqlc.arg('status')::bigint = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
       AND (sqlc.arg('status')::bigint = 1 OR expires_at_ms <= sqlc.arg('soon_ms')::bigint))
-    OR (sqlc.arg('status')::bigint = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= sqlc.arg('at_ms')::bigint)));
+    OR (sqlc.arg('status')::bigint = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= sqlc.arg('at_ms')::bigint)));
 
 -- name: RevokeAccessToken :execrows
 UPDATE access_tokens SET revoked_at_ms = sqlc.arg('revoked_at_ms')::bigint
@@ -1171,9 +1172,54 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL;
 -- name: EndRotatedAccessToken :execrows
 UPDATE access_tokens
 SET expires_at_ms = LEAST(expires_at_ms, sqlc.arg('ends_at_ms')::bigint), replaced_by = sqlc.arg('replaced_by')::text
-WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND replaced_by IS NULL
   AND expires_at_ms > sqlc.arg('now_ms')::bigint;
 
 -- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
 WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);
+
+-- Token policy and the inactivity disable (ADR 53).
+
+-- name: GetAccessTokenPolicy :one
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+FROM access_token_policy WHERE id = 1;
+
+-- name: SetAccessTokenPolicy :execrows
+UPDATE access_token_policy
+SET max_lifetime_ms = sqlc.arg('max_lifetime_ms')::bigint, inactivity_ms = sqlc.arg('inactivity_ms')::bigint,
+  disable_tokens = sqlc.arg('disable_tokens')::boolean, disable_accounts = sqlc.arg('disable_accounts')::boolean,
+  disable_break_glass = sqlc.arg('disable_break_glass')::boolean, updated_at_ms = sqlc.arg('updated_at_ms')::bigint
+WHERE id = 1;
+
+-- name: DatabaseNowMs :one
+-- The time of the database clock in Unix milliseconds. The sweep uses it, so
+-- a wrong clock on one instance cannot disable every record.
+SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms;
+
+-- name: DisableInactiveAccessTokens :many
+UPDATE access_tokens SET disabled_at_ms = sqlc.arg('at_ms')::bigint
+WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
+  AND COALESCE(last_used_at_ms, created_at_ms) <= sqlc.arg('cutoff_ms')::bigint
+RETURNING id, principal_id;
+
+-- name: DisableInactivePrincipals :many
+-- A person is inactive when its creation, its activity baseline, and the
+-- creation and the last use of each of its tokens are all at or before the
+-- cutoff.
+UPDATE principals SET disabled_at_ms = sqlc.arg('at_ms')::bigint
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND created_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND last_active_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > sqlc.arg('cutoff_ms')::bigint OR t.last_used_at_ms > sqlc.arg('cutoff_ms')::bigint)
+  )
+RETURNING id;
+
+-- name: EnablePrincipal :execrows
+-- An enable also sets the activity baseline, so the next sweep does not
+-- disable the principal again.
+UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = sqlc.arg('updated_at_ms')::bigint, last_active_at_ms = sqlc.arg('updated_at_ms')::bigint
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL;

@@ -28,6 +28,9 @@ const (
 	maxRequestSeries = 1024
 	maxInFlightCount = 16
 	maxBuildCount    = 4
+	// maxSweepResults is the count of the sweep results: success and
+	// failure.
+	maxSweepResults = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -38,6 +41,7 @@ const (
 	labelMethod  = "method"
 	labelCode    = "code"
 	labelVersion = "version"
+	labelResult  = "result"
 )
 
 // ServerMetrics holds the request count, the request duration histogram,
@@ -47,7 +51,8 @@ const (
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
-// the HTTP middleware do (ADR 32 decision 9).
+// the HTTP middleware do (ADR 32 decision 9). It also counts the runs of
+// the inactivity disable by result (ADR 53).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -57,6 +62,7 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	sweeps   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -103,6 +109,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			"Audit entries lost because the append failed.",
 			nil,
 			1,
+		),
+		sweeps: reg.NewCounter(
+			"dustpan_inactivity_sweeps_total",
+			"Runs of the inactivity disable by result.",
+			[]string{labelResult},
+			maxSweepResults,
 		),
 	}
 
@@ -177,6 +189,24 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// Results of a run of the inactivity disable.
+const (
+	SweepSuccess = "success"
+	SweepFailure = "failure"
+)
+
+// ObserveSweep adds one to the inactivity disable counter for result:
+// SweepSuccess or SweepFailure. Any other value counts as SweepFailure. The
+// server calls it after each run (ADR 53). Operators alert when the failure
+// series grows: a failed run disables nothing.
+func (m *ServerMetrics) ObserveSweep(result string) {
+	if result != SweepSuccess {
+		result = SweepFailure
+	}
+
+	m.sweeps.Inc(result)
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any
