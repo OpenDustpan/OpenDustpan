@@ -496,15 +496,19 @@ func checkUnitGrant(t *testing.T, as access.Store, want error) {
 func testPurgeStackRevokesItsGrants(t *testing.T, f fixture) {
 	t.Helper()
 
-	as, ok := f.s.(access.Store)
+	as, ok := storeAs[access.Store](f.s)
 	if !ok {
 		return
 	}
+
+	st := mustGetFixtureStack(t, f)
 
 	obj, err := identity.UnitObject("pulumi", f.ref.Namespace, f.ref.Project.String()+"/"+f.ref.Stack.String())
 	if err != nil {
 		t.Fatalf("unit object: %v", err)
 	}
+
+	obj = obj.WithUnitID(st.ID.String())
 
 	if err := createUnitGrants(t, f.s, as, obj); err != nil {
 		t.Fatal(err)
@@ -543,13 +547,13 @@ func deleteWorkspaceOf(t *testing.T, s WorkspaceStore, ns namespace.Namespace, w
 
 // testPurgeWorkspaceRevokesItsGrants is testPurgeStackRevokesItsGrants for
 // a workspace.
-//
-// Until #486 merges, the stores resolve no stable ID of a workspace for a
-// grant, so they refuse the grant on the workspace with ErrInvalid. Then
-// this case proves only the restore and the purge. When #486 is on main, the
-// refusal fails this case, and the grant checks run.
 func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 	t.Helper()
+
+	as, ok := storeAs[access.Store](s)
+	if !ok {
+		return
+	}
 
 	ns := newWorkspaceNamespace(t, s, "acme")
 	w := createTestWorkspace(t, s, ns, "network")
@@ -559,13 +563,7 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	as, granted := s.(access.Store)
-	if granted {
-		err = createUnitGrants(t, s, as, obj)
-		granted = err == nil
-	}
-
-	if err != nil && !errors.Is(err, access.ErrInvalid) {
+	if err := createUnitGrants(t, s, as, obj.WithUnitID(w.ID.String())); err != nil {
 		t.Fatal(err)
 	}
 
@@ -576,17 +574,14 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("restore workspace: %v", err)
 	}
 
-	if granted {
-		checkUnitGrant(t, as, nil)
-	}
+	checkUnitGrant(t, as, nil)
 
 	deleteWorkspaceOf(t, s, ns, w)
 
-	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), lifecycleEntry(ns.Name, "unit:purge")); err != nil {
+	purge := lifecycleEntry(ns.Name, "unit:purge")
+	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), purge); err != nil {
 		t.Fatalf("purge workspace: %v", err)
 	}
 
-	if granted {
-		checkUnitGrant(t, as, access.ErrNotFound)
-	}
+	checkUnitGrant(t, as, access.ErrNotFound)
 }

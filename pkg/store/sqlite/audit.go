@@ -142,9 +142,19 @@ func validServerEntry(e audit.Entry) error {
 }
 
 // appendAuditEntry reads the last entry of the scope of e and inserts e as
-// the next one, with its sequence, previous hash and hash. The caller runs
+// the next one, with its sequence, previous hash and hash. An entry with no
+// ObjectID gets the stable ID of the live unit that its Object names. The caller runs
 // it in a transaction that orders the appends of the scope.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	if e.ObjectID == "" {
+		id, err := auditObjectID(ctx, q, e.Object)
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		e.ObjectID = id
+	}
+
 	var prevHash string
 
 	var seq int64 = 1

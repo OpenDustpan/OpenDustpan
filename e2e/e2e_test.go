@@ -3447,7 +3447,38 @@ type auditListItem struct {
 	Kind       string `json:"kind"`
 	Outcome    string `json:"outcome"`
 	RequestID  string `json:"requestID"`
+	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
+}
+
+// checkUnitObjectIDs fails the test unless each successful entry on a unit
+// carries the stable ID of the unit (ADR 47). The store fills it in the
+// append transaction, so this covers each adapter that wrote an entry.
+func checkUnitObjectIDs(t *testing.T, entries []auditListItem) {
+	t.Helper()
+
+	actions := map[string]int{}
+
+	for i := range entries {
+		e := &entries[i]
+		onUnit := strings.HasPrefix(e.Object, "pulumi:") || strings.HasPrefix(e.Object, "opentofu:")
+
+		if e.Outcome != "success" || !onUnit {
+			continue
+		}
+
+		if e.ObjectID == "" {
+			t.Fatalf("audit entry %s %s on %s holds no object ID", e.Kind, e.Action, e.Object)
+		}
+
+		actions[e.Kind+" "+e.Action]++
+	}
+
+	if len(actions) == 0 {
+		t.Fatal("no successful audit entry on a unit")
+	}
+
+	t.Logf("unit audit entries with an object ID: %v", actions)
 }
 
 // fetchAuditEntries lists every audit entry of org through the API, one page
@@ -3536,6 +3567,7 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
 	checkRevealFields(t, findRevealEntry(t, entries))
+	checkUnitObjectIDs(t, entries)
 
 	// Each decrypt audit call writes exactly one reveal entry, and nothing
 	// else writes one for the secrets stack.
@@ -4146,6 +4178,7 @@ func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: true,
 	})
+	checkUnitObjectIDs(t, readAuditEntries(ctx, t, env, e2e.Namespace))
 	checkAuditChain(ctx, t, env, e2e.Namespace)
 }
 

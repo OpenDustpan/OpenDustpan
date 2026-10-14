@@ -206,6 +206,7 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "a restore brings a deleted workspace back", test: testRestoreWorkspace},
 		{name: "a purge removes a deleted workspace for good", test: testPurgeWorkspace},
 		{name: "a purge ends the grants on the workspace", test: testPurgeWorkspaceRevokesItsGrants},
+		{name: "an audit entry on a workspace gets its stable ID", test: testAppendFillsWorkspaceID},
 		{
 			name: "fence and unlock releases the lock and makes the fence current",
 			test: testFenceAndUnlock,

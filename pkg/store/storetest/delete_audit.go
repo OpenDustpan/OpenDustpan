@@ -543,3 +543,104 @@ func testPortablePurgeRemovesChildren(t *testing.T, newStore PortableFactory) {
 		t.Fatal("export holds no stack, want the other stacks of the seed")
 	}
 }
+
+// Wrapper is a test wrapper around a store, as an adapter test builds one
+// to break or count a part of it. Inner returns the store it wraps, so a
+// conformance case reaches the optional ports of that store.
+type Wrapper interface {
+	Inner() any
+}
+
+// storeAs returns s, or the store that s wraps, as a T. It reports false
+// when neither is a T.
+func storeAs[T any](s any) (T, bool) {
+	if v, ok := s.(T); ok {
+		return v, true
+	}
+
+	if w, ok := s.(Wrapper); ok {
+		return storeAs[T](w.Inner())
+	}
+
+	var zero T
+
+	return zero, false
+}
+
+// auditAppender is the part of audit.Store that the object ID cases write.
+type auditAppender interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
+// unitEntry returns an audit entry of the kind tool-operation on object in
+// ns, with no object ID, as a tool adapter writes it.
+func unitEntry(ns namespace.Name, object string) audit.Entry {
+	e := deleteEntry(ns)
+	e.Kind = audit.KindToolOperation
+	e.Action = "unit:read-secrets"
+	e.Object = object
+
+	return e
+}
+
+// checkAppendedObjectID appends e and checks that the store stored want as
+// its object ID.
+func checkAppendedObjectID(t *testing.T, s auditAppender, fence namespace.Fence, e audit.Entry, want string) {
+	t.Helper()
+
+	stored, err := s.Append(t.Context(), fence, e)
+	if err != nil {
+		t.Fatalf("append entry on %s: %v", e.Object, err)
+	}
+
+	if stored.ObjectID != want {
+		t.Fatalf("object ID of the entry on %s = %q, want %q", e.Object, stored.ObjectID, want)
+	}
+
+	if stored.Hash != audit.ComputeHash(stored, stored.PrevHash) {
+		t.Fatalf("hash of the entry on %s does not cover its object ID", e.Object)
+	}
+}
+
+// testAppendFillsStackID appends entries with no object ID, as the tool
+// adapters write them (ADR 47). An entry on the live stack gets its stable
+// ID in the append transaction; an entry on an unknown stack or on the
+// namespace gets none.
+func testAppendFillsStackID(t *testing.T, f fixture) {
+	t.Helper()
+
+	appender, ok := storeAs[auditAppender](f.s)
+	if !ok {
+		return
+	}
+
+	st := mustGetFixtureStack(t, f)
+	ns := f.ref.Namespace
+	unit := "pulumi:" + ns.String() + "/" + f.ref.Project.String() + "/" + f.ref.Stack.String()
+
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, unit), st.ID.String())
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, "pulumi:"+ns.String()+"/web/unknown"), "")
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, ns.String()), "")
+}
+
+// testAppendFillsWorkspaceID is testAppendFillsStackID for a workspace.
+func testAppendFillsWorkspaceID(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	appender, ok := storeAs[auditAppender](s)
+	if !ok {
+		return
+	}
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	checkAppendedObjectID(
+		t,
+		appender,
+		ns.Fence(),
+		unitEntry(ns.Name, "opentofu:acme/"+w.Ref.Name.String()),
+		w.ID.String(),
+	)
+	checkAppendedObjectID(t, appender, ns.Fence(), unitEntry(ns.Name, "opentofu:acme/unknown"), "")
+}
