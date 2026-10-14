@@ -38,6 +38,11 @@ func TestAuditRoutes(t *testing.T) {
 		"GET /api/audit/check":   {identity.ActionNamespaceReadAudit},
 	}
 
+	wantServer := map[string][]identity.Action{
+		"GET /api/audit/entries": {identity.ActionServerReadAudit},
+		"GET /api/audit/check":   {identity.ActionServerReadAudit},
+	}
+
 	routes := handler.Routes()
 	if len(routes) != len(want) {
 		t.Fatalf("routes = %d, want %d", len(routes), len(want))
@@ -51,24 +56,48 @@ func TestAuditRoutes(t *testing.T) {
 			t.Fatalf("unexpected route %q", pattern)
 		}
 
-		if len(route.Actions) != len(actions) {
-			t.Fatalf("route %q actions = %v, want %v", pattern, route.Actions, actions)
-		}
+		checkRouteActions(t, route, actions, wantServer[pattern])
+	}
+}
 
-		for i, action := range actions {
-			if route.Actions[i] != action {
-				t.Fatalf("route %q actions = %v, want %v", pattern, route.Actions, actions)
-			}
-		}
+// checkRouteActions fails when a route does not declare the actions of its
+// object and the actions of the installation, or is not an authorized route
+// with a resolver.
+func checkRouteActions(t *testing.T, route apitaudit.Route, actions, serverActions []identity.Action) {
+	t.Helper()
 
-		if route.Scope != apitaudit.ScopeAuthorized {
-			t.Fatalf("route %q is not an authorized route", pattern)
-		}
+	pattern := route.Method + " " + route.Path
 
-		if route.Resolve == nil {
-			t.Fatalf("route %q declares actions but no resolver", pattern)
+	if !sameActions(route.Actions, actions) {
+		t.Fatalf("route %q actions = %v, want %v", pattern, route.Actions, actions)
+	}
+
+	if !sameActions(route.ServerActions, serverActions) {
+		t.Fatalf("route %q server actions = %v, want %v", pattern, route.ServerActions, serverActions)
+	}
+
+	if route.Scope != apitaudit.ScopeAuthorized {
+		t.Fatalf("route %q is not an authorized route", pattern)
+	}
+
+	if route.Resolve == nil {
+		t.Fatalf("route %q declares actions but no resolver", pattern)
+	}
+}
+
+// sameActions reports whether a and b hold the same actions in the same order.
+func sameActions(a, b []identity.Action) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
+
+	return true
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -95,6 +124,7 @@ func TestRoutesDeclareActions(t *testing.T) {
 		byPattern[pattern] = route
 
 		checkRouteScope(t, route, public)
+		checkServerActions(t, route)
 	}
 
 	for _, pattern := range handler.RegisteredPatterns() {
@@ -406,4 +436,23 @@ func (r *recordingAuthorizer) Authorize(
 	r.calls = append(r.calls, recordedCall{action: action, object: obj.String()})
 
 	return nil
+}
+
+// checkServerActions fails when a route can resolve to the installation object
+// and declares no ServerActions. The check asks the resolver itself, with the
+// organization @server, so a new route cannot skip it.
+func checkServerActions(t *testing.T, route apitaudit.Route) {
+	t.Helper()
+
+	if route.Resolve == nil || len(route.ServerActions) > 0 {
+		return
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), route.Method, route.Path+"?organization=@server", http.NoBody)
+
+	obj, err := route.Resolve(rec, req)
+	if err == nil && obj.IsServer() {
+		t.Fatalf("route %q resolves @server but declares no server actions", route.Method+" "+route.Path)
+	}
 }

@@ -194,16 +194,33 @@ type checkResponse struct {
 	Valid          bool  `json:"valid"`
 }
 
+// auditScope returns the scope of the audit entries of obj: @server for the
+// installation, else the namespace. The namespace must exist; @server is not a
+// namespace, so it needs no lookup. An unknown namespace answers 404.
+func (h *Handler) auditScope(ctx context.Context, obj identity.Object) (namespace.Name, error) {
+	if obj.IsServer() {
+		return audit.ServerScope, nil
+	}
+
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		return "", err
+	}
+
+	return ns, nil
+}
+
 // listEntries answers GET /api/audit/entries with one page of the entries
-// of the namespace, newest first. The route wrapper already allowed
-// namespace:read-audit on the namespace. An unknown namespace answers 404.
+// of the scope, newest first. The route wrapper already allowed the action
+// on the object. An unknown namespace answers 404.
 func (h *Handler) listEntries(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	ns := obj.Namespace()
 
-	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -231,16 +248,16 @@ func (h *Handler) listEntries(
 	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
 }
 
-// checkChain answers GET /api/audit/check with the chain check of the
-// namespace. The route wrapper already allowed namespace:read-audit on the
-// namespace. An unknown namespace answers 404.
+// checkChain answers GET /api/audit/check with the chain check of the scope.
+// The route wrapper already allowed the action on the object. An unknown
+// namespace answers 404.
 func (h *Handler) checkChain(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	ns := obj.Namespace()
 
-	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return

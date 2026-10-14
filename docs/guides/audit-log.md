@@ -146,6 +146,16 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/check?organization=acme"
 ```
 
+The installation writes the entries of an action that is not in a namespace,
+such as a namespace create, to the scope `@server`. Read that scope with
+`organization=@server`. It needs the action `server:read-audit` on the
+installation instead, and the same paging. The check works the same way:
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries?organization=@server"
+```
+
 ## What the chain protects against
 
 The chain shows a change or a deletion of an entry.

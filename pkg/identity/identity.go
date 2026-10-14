@@ -99,6 +99,10 @@ const (
 	// ActionServerObserve allows reading installation metrics. Its object
 	// is ServerObject.
 	ActionServerObserve Action = "server:observe"
+	// ActionServerReadAudit allows reading the audit entries of the
+	// installation, the scope @server (ADR 60, decision 7). Its object is
+	// ServerObject.
+	ActionServerReadAudit Action = "server:read-audit"
 	// ActionServerMaintenance allows reading and changing the installation
 	// state between normal operation and maintenance mode. Its object is
 	// ServerObject.
