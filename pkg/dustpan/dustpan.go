@@ -54,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -400,6 +401,10 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// access keeps the roles and grants (ADR 52), or is nil when the store
+	// keeps none. NewServer sets it after newServices. The installation API
+	// and the escalation check of the token service share it.
+	access *access.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -458,9 +463,8 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
-	if err != nil {
-		return nil, err
+	if identityErr := addIdentityServices(cfg, &svc); identityErr != nil {
+		return nil, identityErr
 	}
 
 	backups, err := newBackupService(cfg, svc)
@@ -803,8 +807,7 @@ func newServices(cfg settings) (services, error) {
 	}
 
 	stacks, err := stack.NewService(stack.Config{
-		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates,
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -843,6 +846,7 @@ func newServices(cfg settings) (services, error) {
 		secrets:    secrets,
 		workspaces: workspaces,
 		tokens:     nil,
+		access:     nil,
 	}, nil
 }
 
@@ -1256,10 +1260,7 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	grants, err := newAccessService(cfg)
-	if err != nil {
-		return nil, err
-	}
+	grants := deps.services.access
 
 	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
@@ -1439,10 +1440,32 @@ func newAccessService(cfg settings) (*access.Service, error) {
 	return svc, nil
 }
 
+// addIdentityServices sets the role and grant service (ADR 52) and the
+// access token service (ADR 53) of svc. The token service takes the role
+// and grant service as its escalation check.
+func addIdentityServices(cfg settings, svc *services) error {
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return err
+	}
+
+	tokens, err := newTokenService(cfg, grants)
+	if err != nil {
+		return err
+	}
+
+	svc.access, svc.tokens = grants, tokens
+
+	return nil
+}
+
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
-// no principals. Every SQL adapter keeps both.
-func newTokenService(cfg settings) (*accesstoken.Service, error) {
+// no principals. Every SQL adapter keeps both. The escalation check of a
+// token for another principal (decision 3) is the grants of grants (ADR
+// 52). With nil grants, a store that keeps none, only an administrator
+// passes it.
+func newTokenService(cfg settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1453,22 +1476,13 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	// The escalation check of a token for another principal (ADR 53,
-	// decision 3) is the grants of ADR 52. A store that keeps no grants
-	// leaves it nil: only an administrator passes.
-	var grants accesstoken.GrantCheck
-
-	accessSvc, err := newAccessService(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	if accessSvc != nil {
-		grants = tokenGrants{access: accessSvc}
+	var check accesstoken.GrantCheck
+	if grants != nil {
+		check = tokengrants.Check{Grants: grants, Principals: principals}
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: grants, Logger: cfg.logger, Now: cfg.now,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
 		NewID: nil,
 	})
 	if err != nil {
@@ -1476,29 +1490,6 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 	}
 
 	return svc, nil
-}
-
-// tokenGrants is the escalation check of the access token service over the
-// grants of ADR 52. A token acts as its principal, so the caller must hold
-// every action that the grants of the principal give, through its groups
-// too: the check of a principal delete.
-type tokenGrants struct {
-	access *access.Service
-}
-
-// RequireHeld implements accesstoken.GrantCheck. A refusal wraps
-// identity.ErrDenied, so the API answers 403.
-func (g tokenGrants) RequireHeld(ctx context.Context, caller identity.Principal, principalID string) error {
-	err := g.access.CheckPrincipalGrants(ctx, caller, principalID)
-	if errors.Is(err, access.ErrEscalation) {
-		return fmt.Errorf("%w: %w", identity.ErrDenied, err)
-	}
-
-	if err != nil {
-		return fmt.Errorf("check the grants of principal %q: %w", principalID, err)
-	}
-
-	return nil
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the

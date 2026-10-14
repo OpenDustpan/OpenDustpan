@@ -31,11 +31,11 @@ var (
 	// ErrWrongKind reports a token or a principal whose kind does not fit
 	// the scope, for example a service token through the personal routes.
 	ErrWrongKind = errors.New("access token kind does not fit the route")
-	// ErrSignInRequired reports a create or a rotation of an own personal
-	// token with an access token. A personal token comes from a sign-in
-	// (ADR 53, decision 10): a token that could make new tokens would
-	// outlive its maximum lifetime and a revoke.
-	ErrSignInRequired = errors.New("sign in to create or rotate a personal token: an access token cannot")
+	// ErrSignInRequired reports a create or a rotation of a token, in any
+	// scope, by a caller that authenticated with an access token. A token
+	// comes from a sign-in (ADR 53, decision 10): a token that could make
+	// new tokens would outlive its maximum lifetime and a revoke.
+	ErrSignInRequired = errors.New("sign in to create or rotate an access token: an access token cannot")
 	// ErrNoOwnPrincipal reports a caller that has no person record, so it
 	// cannot own personal tokens: a bootstrap admin token, a service or a
 	// workload.
@@ -54,9 +54,10 @@ type GrantCheck interface {
 }
 
 // requireSignIn returns ErrSignInRequired when caller authenticated with a
-// stored access token. Sign-in does not exist yet (ADR 55), so no caller
-// can create or rotate an own personal token until it does: a bootstrap
-// admin token has no person record either.
+// stored access token. Every create and rotation runs it, in each scope.
+// Sign-in does not exist yet (ADR 55), so until it does only a bootstrap
+// admin token (ADR 6), which is not a stored token, can make or rotate a
+// token; and it has no person record, so it cannot own a personal token.
 func requireSignIn(caller identity.Principal) error {
 	if caller.TokenID != "" {
 		return ErrSignInRequired
@@ -92,11 +93,11 @@ func (s *Service) ownPrincipal(ctx context.Context, caller identity.Principal) (
 func (s *Service) targetPrincipal(
 	ctx context.Context, caller identity.Principal, scope Scope, id string,
 ) (principal.Principal, error) {
-	if scope == ScopeOwn {
-		if err := requireSignIn(caller); err != nil {
-			return principal.Principal{}, err
-		}
+	if err := requireSignIn(caller); err != nil {
+		return principal.Principal{}, err
+	}
 
+	if scope == ScopeOwn {
 		return s.ownPrincipal(ctx, caller)
 	}
 
@@ -150,16 +151,17 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 	return nil
 }
 
-// authorizeRotate checks that caller can rotate the token t in scope. For
-// ScopeOwn, t must belong to the person of caller. For the other scopes, t
-// must have the kind of the scope, and the escalation check runs: the new
-// token acts as its principal.
+// authorizeRotate checks that caller can rotate the token t in scope. The
+// caller must not use an access token. For ScopeOwn, t must belong to the
+// person of caller. For the other scopes, t must have the kind of the
+// scope, and the escalation check runs: the new token acts as its
+// principal.
 func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
-	if scope == ScopeOwn {
-		if err := requireSignIn(caller); err != nil {
-			return err
-		}
+	if err := requireSignIn(caller); err != nil {
+		return err
+	}
 
+	if scope == ScopeOwn {
 		return s.checkOwner(ctx, caller, t)
 	}
 

@@ -399,15 +399,15 @@ func checkNoLockout(ctx context.Context, t *testing.T, env *e2e.Env, valid strin
 }
 
 // checkDelegatedTokens gives a person that is not an administrator the role
-// account-administrator, which holds server:manage-service-tokens. With its
-// own access token, it makes a service token for a principal that holds no
-// grant. It cannot make or rotate a token for a principal that holds
-// installation-operator: a token acts as its principal, so that would give
-// the person actions it does not hold (ADR 53, decision 3).
+// account-administrator, which holds server:manage-tokens and
+// server:manage-service-tokens, and a personal token. With that token, it
+// cannot make or rotate any token: a token comes from a sign-in (ADR 53,
+// decision 10), and a token that could make tokens would outlive a revoke.
+// The bootstrap admin token is not a stored token, so it still can.
 func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	var delegate, plain, operator e2ePrincipal
+	var delegate, plain e2ePrincipal
 
 	for _, p := range []struct {
 		dst  *e2ePrincipal
@@ -415,53 +415,45 @@ func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}{
 		{&delegate, `{"subject":"delegate@example.com","kind":"person"}`},
 		{&plain, `{"subject":"ci-plain","kind":"service"}`},
-		{&operator, `{"subject":"ci-operator","kind":"service"}`},
 	} {
-		principalCall(
-			ctx,
-			t,
-			env,
-			principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated},
-			p.dst,
-		)
+		principalCall(ctx, t, env, principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated}, p.dst)
 	}
 
-	for _, g := range []struct{ id, role string }{
-		{delegate.ID, "account-administrator"},
-		{operator.ID, "installation-operator"},
-	} {
-		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + g.id + `","role":"` + g.role + `"}`,
-			http.StatusCreated,
-		}, nil)
-	}
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants", `{"subject":"principal:` + delegate.ID + `","role":"account-administrator"}`,
+		http.StatusCreated,
+	}, nil)
 
-	var own, operatorTok e2eToken
+	var own, plainTok e2eToken
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"delegate"}`,
 		http.StatusCreated,
 	}, &own)
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + operator.ID + `","name":"ops"}`,
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`,
 		http.StatusCreated,
-	}, &operatorTok)
+	}, &plainTok)
 
 	for _, step := range []principalStep{
-		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusCreated},
-		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + operator.ID + `","name":"ops"}`, http.StatusForbidden},
-		{http.MethodPost, "/api/server/service-tokens/" + operatorTok.ID + "/rotate", `{}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"again"}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/tokens/" + own.ID + "/rotate", `{}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/service-tokens/" + plainTok.ID + "/rotate", `{}`, http.StatusForbidden},
 	} {
 		status, body, err := env.ServerAPIStatusAs(ctx, own.Secret, step.method, step.path, step.body)
 		if err != nil || status != step.want {
-			t.Fatalf(
-				"%s %s as the delegate = %d, %v (%s); want %d",
-				step.method,
-				step.path,
-				status,
-				err,
-				body,
-				step.want,
-			)
+			t.Fatalf("%s %s with the token of the delegate = %d, %v (%s); want %d",
+				step.method, step.path, status, err, body, step.want)
 		}
 	}
+
+	// The token of the delegate still reads the tokens: only a create and
+	// a rotation need a sign-in.
+	checkTokenSignIn(ctx, t, env, own.Secret, http.StatusOK)
+
+	// Without a stored token, the same create succeeds.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"admin"}`,
+		http.StatusCreated,
+	}, nil)
 }

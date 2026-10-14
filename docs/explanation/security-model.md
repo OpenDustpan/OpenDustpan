@@ -43,6 +43,26 @@ single sign-on with directory sync (RFC 21).
 The actions already split, for example, reading a unit from reading its
 secrets. With only administrators, that split has no effect yet.
 
+## Access tokens
+
+ADR 53 adds access tokens that the server stores (`odp_` secrets) for
+persons and services.
+
+- **The server stores only a SHA-256 digest of each secret.** It shows the
+  secret once, at create or rotation.
+- **An access token cannot make or rotate a token.** Only a caller without
+  a stored token can: today the bootstrap admin token (ADR 6), later a
+  sign-in (ADR 55). A token that could make tokens would outlive its
+  maximum lifetime and a revoke of the token that made it.
+- **A create or rotation for another principal is a grant by proxy.** The
+  caller must hold every action that the grants of that principal give,
+  through its groups too. Otherwise the server answers 403.
+- **Known gap: the check runs at create and rotation only.** A token acts
+  with the grants of its principal at the time of each request. When an
+  administrator later gives that principal a new grant, its tokens get the
+  new actions too, also tokens that a caller without those actions made.
+  Issue #531 tracks this question.
+
 ## Pulumi secrets
 
 The Pulumi CLI sends each secret config value to the server to encrypt and
