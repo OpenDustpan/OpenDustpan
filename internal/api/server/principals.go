@@ -17,7 +17,8 @@ package server
 // The list routes answer one page: the query parameters limit (1 to 1000;
 // 100 when the request names none, and 0 answers 400), cursor (the
 // nextCursor of the page before, at most 512 bytes) and prefix (the start of
-// the subject, or of the group name without regard to case).
+// the subject, or of the group name without regard to case). The list of
+// principals also takes kind (person, service or workload).
 
 import (
 	"bytes"
@@ -97,8 +98,8 @@ type memberResponse struct {
 }
 
 // principalListResponse, groupListResponse and memberListResponse wrap one
-// page of a list. Total is the count of every row that matches the prefix,
-// on every page. NextCursor is empty on the last page.
+// page of a list. Total is the count of every row that matches the prefix
+// and the kind, on every page. NextCursor is empty on the last page.
 type principalListResponse struct {
 	Principals []principalResponse `json:"principals"`
 	NextCursor string              `json:"nextCursor"`
@@ -487,7 +488,8 @@ func createPrincipal(
 }
 
 // listPrincipals serves GET /api/server/principals: one page, ordered by
-// subject.
+// subject. The query parameter kind keeps the principals of one kind. An
+// unknown kind answers 400.
 func listPrincipals(
 	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
@@ -496,7 +498,7 @@ func listPrincipals(
 		return failed(""), err
 	}
 
-	page, err := svc.ListPrincipals(r.Context(), req)
+	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(r.URL.Query().Get("kind")))
 	if err != nil {
 		return failed(""), err
 	}
