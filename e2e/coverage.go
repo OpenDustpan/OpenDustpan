@@ -230,11 +230,17 @@ func (coverageStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack,
 	return none, stack.ErrNotFound
 }
 
-func (coverageStackStore) DeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ stack.DeleteGuard) error {
+func (coverageStackStore) DeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ stack.DeleteGuard,
+	_ audit.Entry,
+) error {
 	return stack.ErrNotFound
 }
 
-func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence) error {
+func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 

@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -100,6 +101,7 @@ type Inner interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	inventory.DeletedReader
 	maintenance.Store
 }
 
@@ -225,23 +227,23 @@ func (s *Store) ListStacks(ctx context.Context, filter stack.Filter) ([]stack.St
 // DeleteStack removes the stack identified by ref when guard allows it,
 // unless a fault fires first.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, e audit.Entry,
 ) error {
 	if err := s.before(ctx, "DeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.DeleteStack(ctx, ref, fence, guard)
+	return s.inner.DeleteStack(ctx, ref, fence, guard, e)
 }
 
 // ForceDeleteStack removes the stack identified by ref even when it manages
 // resources, unless a fault fires first.
-func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *Store) ForceDeleteStack(ctx context.Context, ref stack.Ref, fence namespace.Fence, e audit.Entry) error {
 	if err := s.before(ctx, "ForceDeleteStack"); err != nil {
 		return err
 	}
 
-	return s.inner.ForceDeleteStack(ctx, ref, fence)
+	return s.inner.ForceDeleteStack(ctx, ref, fence, e)
 }
 
 // UpdateStackTags replaces the tags of the stack identified by ref, unless a
@@ -668,6 +670,16 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 	}
 
 	return s.inner.ListUnits(ctx, ns)
+}
+
+// ListDeletedUnits returns the deleted inventory entries of ns, unless a fault
+// fires first.
+func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
+	if err := s.before(ctx, "ListDeletedUnits"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListDeletedUnits(ctx, ns)
 }
 
 // GetState returns the installation state, unless a fault fires first.

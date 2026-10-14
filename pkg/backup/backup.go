@@ -65,6 +65,7 @@ var Tables = []string{
 	"update_journal_sequences",
 	"secret_keys",
 	"inventory",
+	"inventory_deleted",
 	"workspaces",
 	"state_versions",
 	"audit_entries",

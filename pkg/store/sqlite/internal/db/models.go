@@ -100,6 +100,15 @@ type Inventory struct {
 	LockOperation sql.NullString
 }
 
+type InventoryDeleted struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
 type Namespace struct {
 	Name                string
 	HomeRegion          string
@@ -169,6 +178,8 @@ type Stack struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	ID          string
+	DeletedAtMs sql.NullInt64
+	DeletedName sql.NullString
 }
 
 type StackTag struct {

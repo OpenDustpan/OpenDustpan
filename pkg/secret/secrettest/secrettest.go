@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -49,7 +50,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "get of a missing key is ErrKeyNotFound", test: testMissingKey},
 		{name: "create with a stale fence is ErrFenced", test: testStaleFence},
 		{name: "wrapper IDs are listed", test: testWrapperIDs},
-		{name: "delete of the stack deletes its key", test: testDeleteStackDeletesKey},
+		{name: "delete of the stack keeps its key", test: testDeleteStackKeepsKey},
 		{name: "delete of the workspace deletes its key", test: testDeleteWorkspaceDeletesKey},
 		{name: "seal stream round trips across chunk borders", test: testSealStreamRoundTrip},
 		{name: "seal stream binds the scope", test: testSealStreamBindsScope},
@@ -67,6 +68,31 @@ func Run(t *testing.T, newStore Factory) {
 // now is a fixed, millisecond-precision instant: stores keep milliseconds.
 func now() time.Time {
 	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+}
+
+// deleteEntry returns the audit entry of a stack delete in ns at the time at.
+func deleteEntry(ns namespace.Name, at time.Time) audit.Entry {
+	return audit.Entry{
+		At:         at,
+		Namespace:  ns,
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "pulumi:" + ns.String() + "/web/deleted",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "secrettest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
 }
 
 func newNamespace(t *testing.T, s Store) namespace.Namespace {
@@ -330,7 +356,10 @@ func testWrapperIDs(t *testing.T, s Store) {
 	}
 }
 
-func testDeleteStackDeletesKey(t *testing.T, s Store) {
+// testDeleteStackKeepsKey checks that a soft delete keeps the data key of the
+// stack, so a restore can read its secrets again (ADR 47, decision 3). Only
+// the final delete removes the key (ADR 23, decision 5).
+func testDeleteStackKeepsKey(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := newNamespace(t, s)
@@ -341,12 +370,13 @@ func testDeleteStackDeletesKey(t *testing.T, s Store) {
 		t.Fatalf("create key: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
+	at := time.UnixMilli(1_760_000_000_000).UTC()
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name, at)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	if _, err := s.GetKey(t.Context(), scope); !errors.Is(err, secret.ErrKeyNotFound) {
-		t.Fatalf("get key after delete: err = %v, want ErrKeyNotFound", err)
+	if _, err := s.GetKey(t.Context(), scope); err != nil {
+		t.Fatalf("get key after a soft delete: %v", err)
 	}
 
 	got, err := s.ListWrapperIDs(t.Context())
@@ -354,8 +384,8 @@ func testDeleteStackDeletesKey(t *testing.T, s Store) {
 		t.Fatalf("list wrapper IDs after delete: %v", err)
 	}
 
-	if len(got) != 0 {
-		t.Fatalf("wrapper IDs after delete = %v, want none", got)
+	if len(got) != 1 || got[0] != "kek-1" {
+		t.Fatalf("wrapper IDs after delete = %v, want [kek-1]", got)
 	}
 
 	if _, err := s.GetStack(t.Context(), st.Ref); !errors.Is(err, stack.ErrNotFound) {

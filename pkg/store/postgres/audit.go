@@ -106,6 +106,36 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 	})
 }
 
+// inFencedAuditedTx runs fn and appends e to the chain of the namespace of
+// fence in one fenced transaction: the change and its audit entry commit
+// together, or neither does (ADR 60, fail closed). An entry that fails
+// validation or names another namespace changes nothing. The transaction holds the
+// namespace row FOR UPDATE, as Append does, so the appends form one sequence.
+func (s *Store) inFencedAuditedTx(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	return s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+		if err := fn(q); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	})
+}
+
 // validServerEntry returns audit.ErrInvalidEntry when e fails validation or
 // names a scope other than @server.
 func validServerEntry(e audit.Entry) error {

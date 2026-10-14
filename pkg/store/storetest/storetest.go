@@ -16,11 +16,13 @@ package storetest
 import (
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -32,6 +34,7 @@ type Store interface {
 	namespace.Store
 	stack.Store
 	inventory.Reader
+	inventory.DeletedReader
 	maintenance.Store
 }
 
@@ -62,7 +65,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "delete then create gives a new ID", test: testStackIDAfterDelete},
 		{name: "delete of a missing stack is ErrNotFound", test: testDeleteMissingStack},
 		{name: "delete with a stale fence is ErrFenced", test: testDeleteStaleFence},
-		{name: "delete removes the tags of the stack", test: testDeleteRemovesTags},
+		{name: "a new stack with the name of a deleted stack has its own tags", test: testDeleteRemovesTags},
+		{name: "a deleted stack leaves the lists", test: testDeletedStackLeavesLists},
+		{name: "a second delete of a stack is ErrNotFound", test: testDeleteTwice},
+		{name: "a delete moves the inventory entry to the deleted units", test: testDeleteMovesInventoryEntry},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
@@ -114,6 +120,38 @@ func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namesp
 	}
 
 	return ns
+}
+
+// deletedAt returns the time that the suite passes to a stack delete.
+func deletedAt() time.Time {
+	return now().Add(time.Hour)
+}
+
+// deleteEntry returns the audit entry that the suite passes to a stack
+// delete in ns: a change at deletedAt, which the store appends in the delete
+// transaction.
+func deleteEntry(ns namespace.Name) audit.Entry {
+	return audit.Entry{
+		At:         deletedAt(),
+		Namespace:  ns,
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "pulumi:" + ns.String() + "/web/deleted",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "storetest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
 }
 
 func newStack(ns namespace.Name, project, name string) stack.Stack {
@@ -438,7 +476,7 @@ func testStackIDAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -471,7 +509,14 @@ func testDeleteMissingStack(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	ghost := stack.Ref{Namespace: ns.Name, Project: "web", Stack: "ghost"}
 
-	if err := s.DeleteStack(t.Context(), ghost, ns.Fence(), stack.EmptyGuard()); !errors.Is(err, stack.ErrNotFound) {
+	err := s.DeleteStack(
+		t.Context(),
+		ghost,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
 	}
 }
@@ -487,7 +532,14 @@ func testDeleteStaleFence(t *testing.T, s Store) {
 	}
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
-	if err := s.DeleteStack(t.Context(), st.Ref, stale, stack.EmptyGuard()); !errors.Is(err, namespace.ErrFenced) {
+	err := s.DeleteStack(
+		t.Context(),
+		st.Ref,
+		stale,
+		stack.EmptyGuard(),
+		deleteEntry(stale.Namespace),
+	)
+	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
 	}
 
@@ -794,7 +846,7 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -810,6 +862,162 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 
 	if !maps.Equal(got.Tags, second.Tags) {
 		t.Fatalf("recreated stack tags = %v, want %v", got.Tags, second.Tags)
+	}
+}
+
+// testDeletedStackLeavesLists deletes one of two stacks and checks that the
+// lists of the namespace and of the project hold only the other (ADR 47).
+func testDeletedStackLeavesLists(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	gone := newStack(ns.Name, "web", "prod")
+	kept := newStack(ns.Name, "web", "dev")
+
+	if err := s.CreateStack(t.Context(), gone, ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", gone.Ref, err)
+	}
+
+	if err := s.CreateStack(t.Context(), kept, ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", kept.Ref, err)
+	}
+
+	if err := s.DeleteStack(t.Context(), gone.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	for _, filter := range []stack.Filter{
+		{Namespace: ns.Name, Project: ""},
+		{Namespace: ns.Name, Project: "web"},
+	} {
+		list, err := s.ListStacks(t.Context(), filter)
+		if err != nil {
+			t.Fatalf("list stacks %+v: %v", filter, err)
+		}
+
+		if len(list) != 1 || list[0].ID != kept.ID {
+			t.Fatalf("list stacks %+v = %v, want only %s", filter, list, kept.Ref)
+		}
+
+		if !maps.Equal(list[0].Tags, kept.Tags) {
+			t.Fatalf("listed tags = %v, want %v", list[0].Tags, kept.Tags)
+		}
+
+		if strings.HasPrefix(list[0].Ref.Stack.String(), "deleted:") {
+			t.Fatalf("listed stack name = %q, want a live name", list[0].Ref.Stack)
+		}
+	}
+
+	assertNoDeletedEntry(t, s, ns.Name, gone.ID)
+}
+
+// assertNoDeletedEntry fails when the inventory of ns holds the deleted stack
+// with id, or any entry under the stored name of a deleted unit.
+func assertNoDeletedEntry(t *testing.T, s Store, ns namespace.Name, id stack.ID) {
+	t.Helper()
+
+	entries := listInventory(t, s, ns)
+	for i := range entries {
+		if entries[i].UnitID == id.String() || strings.HasPrefix(entries[i].Name, "deleted:") {
+			t.Fatalf("inventory entry %+v, want no entry of the deleted stack", entries[i])
+		}
+	}
+}
+
+// testDeleteTwice checks that a deleted stack cannot be deleted again by its
+// name, with or without force.
+func testDeleteTwice(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	st := newStack(ns.Name, "web", "prod")
+
+	if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+		t.Fatalf("create stack: %v", err)
+	}
+
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); !errors.Is(
+		err, stack.ErrNotFound,
+	) {
+		t.Fatalf("second delete: err = %v, want ErrNotFound", err)
+	}
+
+	err := s.ForceDeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(
+		err,
+		stack.ErrNotFound,
+	) {
+		t.Fatalf("second force delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testDeleteMovesInventoryEntry deletes a stack, creates a stack with the same
+// name and deletes it too. Each delete moves the inventory entry to the
+// deleted units, keyed by the stack ID, with the name, the time of the delete
+// and the end of the retention period (ADR 13, ADR 47).
+func testDeleteMovesInventoryEntry(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+	second := newStack(ns.Name, "web", "prod")
+
+	for _, st := range []*stack.Stack{&first, &second} {
+		if err := s.CreateStack(t.Context(), *st, ns.Fence()); err != nil {
+			t.Fatalf("create stack: %v", err)
+		}
+
+		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+			t.Fatalf("delete stack: %v", err)
+		}
+	}
+
+	if entries := listInventory(t, s, ns.Name); len(entries) != 0 {
+		t.Fatalf("live inventory after the deletes = %+v, want none", entries)
+	}
+
+	checkDeletedStackEntries(t, s, ns.Name, first.ID.String(), second.ID.String())
+}
+
+// checkDeletedStackEntries checks that the deleted units of ns are exactly
+// the stacks web/prod with the IDs ids, each deleted at deletedAt with the
+// retention end that follows from it.
+func checkDeletedStackEntries(t *testing.T, s Store, ns namespace.Name, ids ...string) {
+	t.Helper()
+
+	deleted, err := s.ListDeletedUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list deleted units: %v", err)
+	}
+
+	got := make([]string, 0, len(deleted))
+
+	for i := range deleted {
+		e := deleted[i]
+		if e.Tool != "pulumi" || e.Name != "web/prod" || e.Namespace != ns ||
+			!e.DeletedAt.Equal(deletedAt()) || !e.PurgeAfter.Equal(deletedAt().Add(inventory.DeletedRetention)) {
+			t.Fatalf("deleted unit = %+v, want pulumi web/prod deleted at %v", e, deletedAt())
+		}
+
+		got = append(got, e.UnitID)
+	}
+
+	slices.Sort(got)
+
+	want := slices.Clone(ids)
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("deleted unit IDs = %v, want %v", got, want)
 	}
 }
 
@@ -895,7 +1103,7 @@ func testInventoryAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

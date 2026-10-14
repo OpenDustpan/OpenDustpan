@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -249,7 +250,11 @@ func TestUnitGrantsFollowTheStableID(t *testing.T) {
 		t.Fatalf("stack ref: %v", err)
 	}
 
-	if deleteErr := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard()); deleteErr != nil {
+	gone := testEntry()
+	gone.At, gone.Namespace, gone.Action = time.Unix(1, 0), "acme", "unit:manage"
+	gone.Object, gone.Kind, gone.Outcome = web.String(), audit.KindChange, audit.OutcomeSuccess
+
+	if deleteErr := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), gone); deleteErr != nil {
 		t.Fatalf("delete stack: %v", deleteErr)
 	}
 

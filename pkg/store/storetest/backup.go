@@ -38,6 +38,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	stack.BuiltCheckpointStore
 	secret.KeyStore
 	inventory.Reader
+	inventory.DeletedReader
 	workspace.Store
 	workspace.StateStore
 	backup.KeyPeeker
@@ -126,8 +127,8 @@ type backupSeed struct {
 // seedBackupStore fills s through the real ports: namespaces, stacks with
 // tags, a finished and a waiting update, one checkpoint, events, secret keys
 // under two wrappers, workspaces with a finalized and a pending state
-// version, and one finished backup row. Inventory rows follow from the tool
-// writes. The finished update carries a creator, the waiting update is a
+// version, one deleted stack, and one finished backup row. Inventory rows
+// follow from the tool writes. The finished update carries a creator, the waiting update is a
 // restore with a creator and a restore source, the checkpoint manages one
 // resource, and the pending state version is a restore of the finalized one,
 // so the round trip proves the columns that later migrations added survive
@@ -172,6 +173,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	other = mustGetNamespace(t, s, "other")
 	dev := mustCreateStack(t, s, acme, "dev")
 	otherProd := mustCreateStack(t, s, other, "prod")
+
+	// A deleted stack keeps its row and moves its inventory entry to the
+	// deleted units (ADR 47), so the round trip carries both.
+	gone := mustCreateStack(t, s, acme, "gone")
+	if err := s.ForceDeleteStack(ctx, gone.Ref, acme.Fence(), deleteEntry(acme.Name)); err != nil {
+		t.Fatalf("delete stack %s: %v", gone.Ref, err)
+	}
 
 	running := f.run(t, f.ref, "u1", stack.Plan{
 		Kind:         stack.KindUpdate,
