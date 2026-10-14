@@ -37,8 +37,8 @@ type e2eToken struct {
 // calls them with the bootstrap admin token, which keeps working (ADR 6).
 //
 // A stored token authenticates a principal that is not an administrator.
-// Until grants exist (ADR 52), that principal can do no action: a route
-// answers 403 for it, and 401 for a token that the server refuses.
+// Its grants (ADR 52) decide what it can do: a route answers 403 for an
+// action that it does not hold, and 401 for a token that the server refuses.
 func TestAccessTokens(t *testing.T) {
 	t.Parallel()
 
@@ -105,6 +105,7 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkTokenRefusals(ctx, t, env, deploy, robot)
 	checkPersonalTokens(ctx, t, env)
+	checkDelegatedTokens(ctx, t, env)
 	checkNoLockout(ctx, t, env, created.Secret)
 	checkTokenSignIn(ctx, t, env, created.Secret, http.StatusForbidden)
 	checkTokenReads(ctx, t, env, deploy, created)
@@ -395,4 +396,72 @@ func checkNoLockout(ctx context.Context, t *testing.T, env *e2e.Env, valid strin
 
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, nil)
 	checkTokenSignIn(ctx, t, env, valid, http.StatusForbidden)
+}
+
+// checkDelegatedTokens gives a person that is not an administrator the role
+// account-administrator, which holds server:manage-tokens and
+// server:manage-service-tokens, and a personal token. With that token, it
+// cannot make or rotate any token: a token comes from a sign-in (ADR 53,
+// decision 10), and a token that could make tokens would outlive a revoke.
+// The bootstrap admin token is not a stored token, so it still can.
+func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var delegate, plain e2ePrincipal
+
+	for _, p := range []struct {
+		dst  *e2ePrincipal
+		body string
+	}{
+		{&delegate, `{"subject":"delegate@example.com","kind":"person"}`},
+		{&plain, `{"subject":"ci-plain","kind":"service"}`},
+	} {
+		principalCall(
+			ctx,
+			t,
+			env,
+			principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated},
+			p.dst,
+		)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost,
+		"/api/server/grants",
+		`{"subject":"principal:` + delegate.ID + `","role":"account-administrator"}`,
+		http.StatusCreated,
+	}, nil)
+
+	var own, plainTok e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"delegate"}`,
+		http.StatusCreated,
+	}, &own)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`,
+		http.StatusCreated,
+	}, &plainTok)
+
+	for _, step := range []principalStep{
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"again"}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/tokens/" + own.ID + "/rotate", `{}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/service-tokens/" + plainTok.ID + "/rotate", `{}`, http.StatusForbidden},
+	} {
+		status, body, err := env.ServerAPIStatusAs(ctx, own.Secret, step.method, step.path, step.body)
+		if err != nil || status != step.want {
+			t.Fatalf("%s %s with the token of the delegate = %d, %v (%s); want %d",
+				step.method, step.path, status, err, body, step.want)
+		}
+	}
+
+	// The token of the delegate still reads the tokens: only a create and
+	// a rotation need a sign-in.
+	checkTokenSignIn(ctx, t, env, own.Secret, http.StatusOK)
+
+	// Without a stored token, the same create succeeds.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"admin"}`,
+		http.StatusCreated,
+	}, nil)
 }

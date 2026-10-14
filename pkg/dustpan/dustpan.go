@@ -55,6 +55,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -436,6 +437,10 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// access keeps the roles and grants (ADR 52), or is nil when the store
+	// keeps none. NewServer sets it after newServices. The installation API
+	// and the escalation check of the token service share it.
+	access *access.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -497,7 +502,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	tokens, err := newTokenService(cfg)
+	grants, tokens, err := newIdentityServices(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -507,7 +512,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc.tokens = tokens
+	svc.tokens, svc.access = tokens, grants
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -901,8 +906,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	}
 
 	stacks, err := stack.NewService(stack.Config{
-		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates, Retention: cfg.softDeleteRetention,
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -931,6 +935,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		secrets:    secrets,
 		workspaces: workspaces,
 		tokens:     nil,
+		access:     nil,
 	}, nil
 }
 
@@ -1466,10 +1471,7 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	grants, err := newAccessService(cfg)
-	if err != nil {
-		return nil, err
-	}
+	grants := deps.services.access
 
 	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
@@ -1649,10 +1651,31 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
+// newIdentityServices builds the role and grant service (ADR 52) and the
+// access token service (ADR 53). The token service takes the role and
+// grant service as its escalation check. Either is nil when the store
+// keeps none.
+func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tokens, err := newTokenService(cfg, grants)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return grants, tokens, nil
+}
+
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
-// no principals. Every SQL adapter keeps both.
-func newTokenService(cfg *settings) (*accesstoken.Service, error) {
+// no principals. Every SQL adapter keeps both. The escalation check of a
+// token for another principal (decision 3) is the grants of grants (ADR
+// 52). With nil grants, a store that keeps none, only an administrator
+// passes it.
+func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1663,8 +1686,14 @@ func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	var check accesstoken.GrantCheck
+	if grants != nil {
+		check = tokengrants.Check{Grants: grants, Principals: principals}
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
+		NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
