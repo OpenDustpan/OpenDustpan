@@ -97,6 +97,7 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -738,14 +739,14 @@ func (p pagingWorkspaces) Upload(
 
 func (p pagingWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 func (p pagingWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 func (p pagingWorkspaces) DiscardJSONRendering(
@@ -801,6 +802,7 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     newPagingWorkspaces(t),

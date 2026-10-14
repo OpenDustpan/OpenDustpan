@@ -121,6 +121,7 @@ func newAuditFixture(t *testing.T, err error) auditFixture {
 	handler, handlerErr := tfe.NewHandler(tfe.Config{
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    allowAll(),
+		AddressGate:   nil,
 		Logger:        logger,
 		Namespaces:    newTestNamespaces(t),
 		Workspaces:    sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},

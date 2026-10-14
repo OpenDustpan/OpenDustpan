@@ -48,6 +48,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -261,31 +262,33 @@ type serveFlags struct {
 	// on its own (ADR 63 decision 10).
 	instanceID string
 
-	config                  string
-	listen                  string
-	consoleDir              string
-	origins                 string
-	tlsCert                 string
-	tlsKey                  string
-	publicURL               string
-	trustedProxies          string
-	trustedProxyHeader      string
-	blobDir                 string
-	blobStore               string
-	s3Endpoint              string
-	s3Region                string
-	backupTarget            string
-	logLevel                string
-	logFormat               string
-	keyFile                 string
-	generateKey             bool
-	maxCheckpointBytes      int64
-	maxSecretBatchBytes     int64
-	maxStateBytes           int64
-	maxBodyBytesInFlight    int64
-	checkpointDeltaCutoff   int64
-	disablePulumiJournaling bool
-	softDeleteRetention     string
+	config                       string
+	listen                       string
+	consoleDir                   string
+	origins                      string
+	tlsCert                      string
+	tlsKey                       string
+	publicURL                    string
+	trustedProxies               string
+	trustedProxyHeader           string
+	ipAllowlists                 bool
+	ipAllowlistsIncludeBootstrap bool
+	blobDir                      string
+	blobStore                    string
+	s3Endpoint                   string
+	s3Region                     string
+	backupTarget                 string
+	logLevel                     string
+	logFormat                    string
+	keyFile                      string
+	generateKey                  bool
+	maxCheckpointBytes           int64
+	maxSecretBatchBytes          int64
+	maxStateBytes                int64
+	maxBodyBytesInFlight         int64
+	checkpointDeltaCutoff        int64
+	disablePulumiJournaling      bool
+	softDeleteRetention          string
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
 	auditSinks []string
@@ -422,6 +425,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
+	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
+	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -1126,6 +1131,9 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithSoftDeleteRetention(f.retention),
+		dustpan.WithIPAllowlists(f.ipAllowlists),
+		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
+		dustpan.WithIPAllowlistStore(st),
 	}, nil
 }
 
@@ -1473,6 +1481,7 @@ type store interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	ipallow.Store
 	audit.ServerStore
 	close()
 }

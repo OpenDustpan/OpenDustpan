@@ -48,6 +48,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 
 	src := newInprocessEnv(ctx, envInput{
 		disableJournaling: false,
+		ipAllowlists:      false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -59,6 +60,7 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 	})
 	dst := newInprocessEnv(ctx, envInput{
 		disableJournaling: false,
+		ipAllowlists:      false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,

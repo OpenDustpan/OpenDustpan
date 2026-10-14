@@ -109,6 +109,7 @@ func newSwitchedHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     svc,
 		Workspaces:     ws,

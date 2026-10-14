@@ -19,6 +19,17 @@ UPDATE namespaces
 SET allow_forced_writes = $1, allow_unlocked_writes = $2
 WHERE name = $3;
 
+-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = $1;
+
+-- name: SetNamespaceIPAllowlist :execrows
+-- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+UPDATE namespaces
+SET ip_allowlist = $1
+WHERE name = $2;
+
 -- name: GetNamespaceForShare :one
 -- Reads the namespace row with a shared lock. A switch change waits for the
 -- transaction that reads it, so the switch it reads is the one that commits.

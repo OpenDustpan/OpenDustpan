@@ -725,6 +725,25 @@ func (s *Updates) Get(ctx context.Context, ref Ref, id UpdateID) (Update, error)
 	return u, nil
 }
 
+// CheckLease reports whether tok is the lease token of the update. It reads
+// the update with Get and matches tok against the stored digest, as the
+// complete retry does. It ignores the expiry and the status: the digest stays
+// after the update ends, so the check only proves that the caller holds the
+// token of this update. It writes nothing. An unknown update returns the same
+// error that Get returns.
+func (s *Updates) CheckLease(ctx context.Context, ref Ref, id UpdateID, tok token.Token) error {
+	u, err := s.Get(ctx, ref, id)
+	if err != nil {
+		return err
+	}
+
+	if !u.Lease.Digest.Matches(tok) {
+		return fmt.Errorf("update %s of %s: %w", id, ref, ErrLeaseInvalid)
+	}
+
+	return nil
+}
+
 // Active returns the stack's running mutating update, or ErrUpdateNotFound.
 func (s *Updates) Active(ctx context.Context, ref Ref) (Update, error) {
 	u, err := s.updates.ActiveUpdate(ctx, ref)
