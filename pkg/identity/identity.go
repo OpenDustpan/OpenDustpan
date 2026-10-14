@@ -117,6 +117,50 @@ const (
 	// and adding and removing their members (ADR 52). Its object is
 	// ServerObject.
 	ActionServerManageGroups Action = "server:manage-groups"
+	// ActionServerManageRoles allows creating, changing and deleting custom
+	// roles (ADR 52, decision 7). Its object is ServerObject.
+	ActionServerManageRoles Action = "server:manage-roles"
+	// ActionServerManageAccess allows granting and revoking roles on the
+	// installation (ADR 52). Its object is ServerObject.
+	ActionServerManageAccess Action = "server:manage-access"
+	// ActionServerCreateNamespace allows creating a namespace. Its object is
+	// ServerObject. The creator gets the namespace-admin role on the new
+	// namespace in the same transaction.
+	ActionServerCreateNamespace Action = "server:create-namespace"
+	// ActionNamespaceManageAccess allows granting and revoking roles on a
+	// namespace. Its object is a namespace.
+	ActionNamespaceManageAccess Action = "namespace:manage-access"
+	// ActionCollectionManageAccess allows granting and revoking roles on a
+	// collection. Its object is a collection.
+	ActionCollectionManageAccess Action = "collection:manage-access"
+	// ActionUnitManageAccess allows granting and revoking roles on a unit.
+	// Its object is a unit.
+	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionRoleRead allows reading the role catalog. Every signed-in
+	// principal holds it, so a person who grants a role can see its
+	// actions. Its object is ServerObject.
+	ActionRoleRead Action = "role:read"
+	// ActionCollectionRead allows reading a collection and listing the
+	// collections of a namespace. Its object is a collection, or the namespace
+	// for a list (ADR 51, decision 11).
+	ActionCollectionRead Action = "collection:read"
+	// ActionCollectionCreate allows making a collection. Its object is the
+	// namespace of the collection.
+	ActionCollectionCreate Action = "collection:create"
+	// ActionCollectionUpdate allows putting a unit into a collection, or
+	// taking one out of it. Its object is the collection (ADR 51, decision 6).
+	ActionCollectionUpdate Action = "collection:update"
+	// ActionCollectionDelete allows deleting an empty collection. Its object is
+	// the collection.
+	ActionCollectionDelete Action = "collection:delete"
+	// ActionCollectionCreateUnit allows making a unit in a collection, or
+	// moving a unit into it. Its object is the collection. A placement rule
+	// never grants it (ADR 61, decision 4).
+	ActionCollectionCreateUnit Action = "collection:create-unit"
+	// ActionUnitMove allows moving a unit to another collection. Its object is
+	// the unit. The caller also needs collection:update on the old and the new
+	// collection (ADR 61, decision 4; RFC 4).
+	ActionUnitMove Action = "unit:move"
 	// ActionServerReadTokens allows reading the access tokens of every
 	// principal, never their secrets (ADR 53). Its object is ServerObject.
 	ActionServerReadTokens Action = "server:read-tokens"
@@ -162,12 +206,28 @@ type Object struct {
 	isUnit   bool
 	isCaller bool
 	isServer bool
+	// isCollection is true for a collection reference. collection holds the
+	// name of the collection as it was written.
+	isCollection bool
+	collection   string
+	// unitID is the stable ID of a unit reference, when the core resolved
+	// it (ADR 19). It is not part of the wire form.
+	unitID string
 }
 
 // NamespaceObject returns the reference to the namespace ns.
 func NamespaceObject(ns namespace.Name) Object {
 	return Object{
-		raw: ns.String(), ns: ns, tool: "", unit: "", isUnit: false, isCaller: false, isServer: false,
+		raw:          ns.String(),
+		ns:           ns,
+		tool:         "",
+		unit:         "",
+		isUnit:       false,
+		isCaller:     false,
+		isServer:     false,
+		isCollection: false,
+		collection:   "",
+		unitID:       "",
 	}
 }
 
@@ -180,7 +240,7 @@ func NamespaceObject(ns namespace.Name) Object {
 func CallerObject() Object {
 	return Object{
 		raw: "@caller", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: true, isServer: false,
+		isUnit: false, isCaller: true, isServer: false, isCollection: false, collection: "", unitID: "",
 	}
 }
 
@@ -192,7 +252,19 @@ func CallerObject() Object {
 func ServerObject() Object {
 	return Object{
 		raw: "@server", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: false, isServer: true,
+		isUnit: false, isCaller: false, isServer: true, isCollection: false, collection: "", unitID: "",
+	}
+}
+
+// CollectionObject returns the reference to the collection called name in the
+// namespace ns. Its wire form is "<namespace>/<name>": a namespace name has no
+// '/' and a unit reference has ':', so the forms never overlap. The name must
+// already be valid: the collection package checks it and keeps ':' out of it
+// (ADR 51).
+func CollectionObject(ns namespace.Name, name string) Object {
+	return Object{
+		raw: ns.String() + "/" + name, ns: ns, tool: "", unit: "",
+		isUnit: false, isCaller: false, isServer: false, isCollection: true, collection: name, unitID: "",
 	}
 }
 
@@ -211,24 +283,73 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 	raw := tool + ":" + ns.String() + "/" + name
 
 	return Object{
-		raw: raw, ns: ns, tool: tool, unit: name, isUnit: true, isCaller: false, isServer: false,
+		raw:          raw,
+		ns:           ns,
+		tool:         tool,
+		unit:         name,
+		isUnit:       true,
+		isCaller:     false,
+		isServer:     false,
+		isCollection: false,
+		collection:   "",
+		unitID:       "",
 	}, nil
 }
 
-// ParseObject parses s as a namespace or unit reference. It rejects the
-// caller and server reference forms: use CallerObject and ServerObject for
-// those.
+// ParseObject parses s as a namespace, collection, unit or server
+// reference. It rejects the caller reference form: use CallerObject for it.
 func ParseObject(s string) (Object, error) {
+	if s == ServerObject().String() {
+		return ServerObject(), nil
+	}
+
+	if !strings.Contains(s, ":") && strings.Contains(s, "/") {
+		return parseCollectionObject(s)
+	}
+
 	if !strings.Contains(s, ":") {
 		ns, err := namespace.ParseName(s)
 		if err != nil {
 			return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 		}
 
-		return Object{raw: s, ns: ns, tool: "", unit: "", isUnit: false, isCaller: false, isServer: false}, nil
+		return Object{
+			raw:          s,
+			ns:           ns,
+			tool:         "",
+			unit:         "",
+			isUnit:       false,
+			isCaller:     false,
+			isServer:     false,
+			isCollection: false,
+			collection:   "",
+			unitID:       "",
+		}, nil
 	}
 
 	return parseUnitObject(s)
+}
+
+// maxCollectionLength bounds the name part of a collection reference. The
+// collection package keeps the stricter rules of ADR 61.
+const maxCollectionLength = 100
+
+// parseCollectionObject parses s as a collection reference of the form
+// <namespace>/<collection>. The name must not be empty, must hold no '/' or
+// ':' and no white space at either end.
+func parseCollectionObject(s string) (Object, error) {
+	nsPart, name, _ := strings.Cut(s, "/")
+
+	ns, err := namespace.ParseName(nsPart)
+	if err != nil {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	if !ident.Valid(name, maxCollectionLength) {
+		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
+	}
+
+	return CollectionObject(ns, name), nil
 }
 
 // parseUnitObject parses s as a unit reference of the form
@@ -258,7 +379,18 @@ func parseUnitObject(s string) (Object, error) {
 		return Object{}, fmt.Errorf("%w: %q", ErrInvalidObject, s)
 	}
 
-	return Object{raw: s, ns: ns, tool: tool, unit: unitPart, isUnit: true, isCaller: false, isServer: false}, nil
+	return Object{
+		raw:          s,
+		ns:           ns,
+		tool:         tool,
+		unit:         unitPart,
+		isUnit:       true,
+		isCaller:     false,
+		isServer:     false,
+		isCollection: false,
+		collection:   "",
+		unitID:       "",
+	}, nil
 }
 
 // validUnitName reports whether name is a usable opaque unit name.
@@ -292,6 +424,17 @@ func (o Object) IsUnit() bool {
 // itself rather than a namespace, a unit or the installation.
 func (o Object) IsCaller() bool {
 	return o.isCaller
+}
+
+// IsCollection reports whether the reference names a collection.
+func (o Object) IsCollection() bool {
+	return o.isCollection
+}
+
+// CollectionName returns the name of the collection that the reference names,
+// or the empty string when it names no collection.
+func (o Object) CollectionName() string {
+	return o.collection
 }
 
 // IsServer reports whether the reference names the installation itself
@@ -506,4 +649,22 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+}
+
+// WithUnitID returns o with the stable ID id of its unit (ADR 19). A grant
+// on a unit follows this ID, not the name, so a new unit with the name of a
+// deleted one does not get its grants. On an object that is not a unit
+// reference, it returns o unchanged.
+func (o Object) WithUnitID(id string) Object {
+	if o.isUnit {
+		o.unitID = id
+	}
+
+	return o
+}
+
+// UnitID returns the stable ID of a unit reference, or "" when the core has
+// not resolved it or o is not a unit.
+func (o Object) UnitID() string {
+	return o.unitID
 }

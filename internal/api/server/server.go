@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -63,6 +64,10 @@ type Config struct {
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
 	Principals *principal.Service
+	// Access keeps the roles and the grants of the installation (ADR 52).
+	// Nil means the store keeps none: the role and grant routes answer 501,
+	// and a namespace create stores no grant. Both SQL adapters keep them.
+	Access *access.Service
 	// Tokens keeps the access tokens of the principals (ADR 53). Nil means
 	// the store keeps none: the token routes answer 501. Both SQL adapters
 	// keep them.
@@ -98,6 +103,7 @@ type Handler struct {
 	version        string
 	schema         SchemaReporter
 	principals     *principal.Service
+	access         *access.Service
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	onAuditFailure func()
@@ -136,6 +142,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		version:        cfg.Version,
 		schema:         cfg.Schema,
 		principals:     cfg.Principals,
+		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
@@ -246,6 +253,16 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
+// classifyIdentity maps the errors of the roles, the grants and the access
+// tokens.
+func classifyIdentity(err error) (int, string, bool) {
+	if status, message, ok := classifyAccess(err); ok {
+		return status, message, true
+	}
+
+	return classifyToken(err)
+}
+
 // classify maps domain errors to an HTTP status and a message safe to show
 // callers. Backup errors map in classifyBackup, namespace errors in
 // classifyNamespace and maintenance errors in classifyMaintenance.
@@ -266,7 +283,7 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
-	if status, message, ok := classifyToken(err); ok {
+	if status, message, ok := classifyIdentity(err); ok {
 		return status, message
 	}
 

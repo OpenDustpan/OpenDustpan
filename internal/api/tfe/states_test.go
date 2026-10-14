@@ -948,7 +948,7 @@ func TestListStateVersionsAddedAttributes(t *testing.T) {
 }
 
 // TestListStateVersionsDeniedHidesExistence proves a caller without
-// unit:read answers 403 for both an existing and an unknown workspace, so
+// unit:read answers the same 404 for an existing and an unknown workspace, so
 // the route never tells whether the filtered workspace exists.
 func TestListStateVersionsDeniedHidesExistence(t *testing.T) {
 	t.Parallel()
@@ -977,7 +977,8 @@ func TestListStateVersionsDeniedHidesExistence(t *testing.T) {
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, stateRequest(t, tc.target))
 
-			checkJSONAPIError(t, rec, http.StatusForbidden)
+			// The existing and the unknown workspace answer the same 404.
+			checkJSONAPIError(t, rec, http.StatusNotFound)
 		})
 	}
 }
