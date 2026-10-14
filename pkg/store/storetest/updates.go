@@ -66,6 +66,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		name string
 	}{
 		{name: "update round trip", test: testUpdateRoundTrip},
+		{name: "update keeps the access token that started it", test: testUpdateTokenIDRoundTrip},
 		{name: "a delete appends its change entry in the same transaction", test: testDeleteAppendsChangeEntry},
 		{name: "a delete with a refused audit entry changes nothing", test: testDeleteRefusedEntryChangesNothing},
 		{name: "a delete whose audit append fails changes nothing", test: testDeleteFailedAppendChangesNothing},
@@ -238,6 +239,7 @@ func (f fixture) create(t *testing.T, ref stack.Ref, id string, plan stack.Plan)
 // and restore source, not yet persisted.
 func newUpdate(ref stack.Ref, id string, plan stack.Plan, createdBy string, restoredFrom int64) stack.Update {
 	return stack.Update{
+		TokenID:         "",
 		JournalVersion:  0,
 		CreatedAt:       now(),
 		StartedAt:       time.Time{},
@@ -470,6 +472,37 @@ func testUpdateRoundTrip(t *testing.T, f fixture) {
 
 	want = f.end(t, want, stack.StatusSucceeded)
 	assertUpdate(t, f, want)
+}
+
+// testUpdateTokenIDRoundTrip checks that the access token ID that a start
+// stores comes back from every read, that a save keeps it, and that an update
+// started with no token keeps an empty ID (ADR 53).
+func testUpdateTokenIDRoundTrip(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := started(t, f.create(t, f.ref, "u1", mutating()))
+	u.TokenID = "tok-1"
+
+	got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+	if err != nil {
+		t.Fatalf("start update with a token: %v", err)
+	}
+
+	if got.TokenID != "tok-1" {
+		t.Fatalf("start answers token %q, want %q", got.TokenID, "tok-1")
+	}
+
+	assertUpdate(t, f, got)
+
+	done := f.end(t, got, stack.StatusSucceeded)
+	assertUpdate(t, f, done)
+
+	bare := f.run(t, f.ref, "u2", preview())
+	assertUpdate(t, f, bare)
+
+	if bare.TokenID != "" {
+		t.Fatalf("update without a token answers token %q, want none", bare.TokenID)
+	}
 }
 
 // testJournalVersionRoundTrip checks that the journal version that a start
@@ -2718,11 +2751,15 @@ func assertUpdate(t *testing.T, f fixture, want stack.Update) {
 }
 
 func sameUpdate(a, b stack.Update) bool {
+	return sameUpdateRecord(a, b) && sameUpdateTimes(a, b)
+}
+
+// sameUpdateRecord compares the fields of an update that are not times.
+func sameUpdateRecord(a, b stack.Update) bool {
 	return a.ID == b.ID && a.Ref == b.Ref && a.Kind == b.Kind && a.Status == b.Status &&
 		a.DryRun == b.DryRun && a.Version == b.Version && a.Revision == b.Revision &&
-		a.CreatedBy == b.CreatedBy && a.RestoredFrom == b.RestoredFrom &&
-		a.CheckpointBytes == b.CheckpointBytes && sameLease(a.Lease, b.Lease) &&
-		sameUpdateTimes(a, b)
+		a.CreatedBy == b.CreatedBy && a.RestoredFrom == b.RestoredFrom && a.TokenID == b.TokenID &&
+		a.CheckpointBytes == b.CheckpointBytes && sameLease(a.Lease, b.Lease)
 }
 
 func sameLease(a, b stack.Lease) bool {

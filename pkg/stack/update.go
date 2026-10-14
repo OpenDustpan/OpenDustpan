@@ -27,6 +27,9 @@ var (
 	ErrWrongUpdateState = errors.New("update does not allow this in its current state")
 	// ErrLeaseInvalid reports a lease token that does not belong to the update.
 	ErrLeaseInvalid = errors.New("invalid update lease token")
+	// ErrAccessTokenUnchecked reports a lease request for an update that an access
+	// token started, when no token checker is wired (fail closed).
+	ErrAccessTokenUnchecked = errors.New("access token of update cannot be checked")
 	// ErrLeaseExpired reports a lease that ran out before it was renewed.
 	ErrLeaseExpired = errors.New("update lease expired")
 	// ErrConcurrentModification reports that the update changed between read and write.
@@ -214,6 +217,11 @@ type Update struct {
 	// is empty when the caller gave none, as with rows from before this
 	// field existed.
 	CreatedBy string
+	// TokenID is the ID of the access token that started the update. It is
+	// empty when no access token started it, as with a bootstrap administrator
+	// token, and for rows from before this field existed. A lease request
+	// checks this token (ADR 53).
+	TokenID string
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.
 	RestoredFrom int64

@@ -111,13 +111,13 @@ FOR NO KEY UPDATE;
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+    created_by, restored_from, token_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
 
 -- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -130,7 +130,7 @@ UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
     started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
-    journal_version = @journal_version
+    journal_version = @journal_version, token_id = @token_id
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -154,7 +154,7 @@ WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -164,7 +164,7 @@ WHERE u.stack_id = $1
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id

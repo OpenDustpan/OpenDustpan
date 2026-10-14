@@ -494,6 +494,7 @@ func newFixtureWith(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            f.updates,
+		Tokens:             nil,
 		Checkpoints:        fakeCheckpoints{},
 		Events:             fakeEvents{},
 		Namespaces:         namespaces,
@@ -575,6 +576,7 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 	})
 
 	f.updates.updates[id] = stack.Update{
+		TokenID:         "",
 		JournalVersion:  0,
 		CreatedAt:       time.Now(),
 		StartedAt:       time.Now(),
@@ -638,6 +640,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            f.updates,
+		Tokens:             nil,
 		Checkpoints:        fakeCheckpoints{},
 		Events:             fakeEvents{},
 		Namespaces:         namespaces,

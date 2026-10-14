@@ -103,6 +103,7 @@ func sqliteStackBackupTables() []sqliteBackupTable {
 				"restored_from",
 				"journal_version",
 				"journal_closed",
+				"token_id",
 			},
 		},
 		{

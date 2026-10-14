@@ -58,6 +58,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
+		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

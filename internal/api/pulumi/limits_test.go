@@ -53,6 +53,7 @@ func newUpdateFixtureWithGate(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
+		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

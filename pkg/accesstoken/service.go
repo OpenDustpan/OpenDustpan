@@ -231,6 +231,35 @@ func (s *Service) Get(ctx context.Context, id string) (Token, error) {
 	return t, nil
 }
 
+// CheckActive answers nil when the access token with the ID id is active now
+// and its principal still exists. Otherwise it answers an error that wraps
+// identity.ErrUnauthenticated, or the store error. It records no use of the
+// token: an update checks its token on each lease request (ADR 53).
+func (s *Service) CheckActive(ctx context.Context, id string) error {
+	t, err := s.store.GetToken(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: access token not found", identity.ErrUnauthenticated)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check access token %q: %w", id, err)
+	}
+
+	if status := t.StatusAt(s.Now()); status != StatusActive {
+		return fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
+	}
+
+	if _, err := s.principals.GetPrincipal(ctx, t.PrincipalID); err != nil {
+		if errors.Is(err, principal.ErrNotFound) {
+			return fmt.Errorf("%w: principal of access token is gone", identity.ErrUnauthenticated)
+		}
+
+		return fmt.Errorf("check principal of access token %q: %w", id, err)
+	}
+
+	return nil
+}
+
 // List returns one page of tokens, newest first.
 func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 	q, limit, err := req.query(s.Now())

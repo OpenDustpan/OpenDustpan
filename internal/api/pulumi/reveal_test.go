@@ -88,6 +88,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
+		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

@@ -14,7 +14,7 @@ import (
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -38,6 +38,7 @@ type ActiveUpdateRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -60,6 +61,7 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 		&i.CreatedBy,
 		&i.RestoredFrom,
 		&i.JournalVersion,
+		&i.TokenID,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -864,8 +866,8 @@ const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_by, restored_from, token_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateUpdateParams struct {
@@ -883,6 +885,7 @@ type CreateUpdateParams struct {
 	EndedAtMs        int64
 	CreatedBy        string
 	RestoredFrom     int64
+	TokenID          string
 }
 
 func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) error {
@@ -901,6 +904,7 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.EndedAtMs,
 		arg.CreatedBy,
 		arg.RestoredFrom,
+		arg.TokenID,
 	)
 	return err
 }
@@ -2122,7 +2126,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2150,6 +2154,7 @@ type GetUpdateRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -2176,6 +2181,7 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.CreatedBy,
 		&i.RestoredFrom,
 		&i.JournalVersion,
+		&i.TokenID,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -4196,7 +4202,7 @@ func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -4228,6 +4234,7 @@ type ListUpdatesRow struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	JournalVersion   int64
+	TokenID          string
 	CheckpointBytes  int64
 }
 
@@ -4256,6 +4263,7 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.CreatedBy,
 			&i.RestoredFrom,
 			&i.JournalVersion,
+			&i.TokenID,
 			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
@@ -5017,9 +5025,9 @@ UPDATE updates
 SET status = ?1, version = ?2, revision = ?3,
     lease_digest = ?4, lease_expires_at_ms = ?5,
     started_at_ms = ?6, ended_at_ms = ?7,
-    journal_version = ?8
-WHERE stack_id = ?9 AND id = ?10
-  AND revision = ?11
+    journal_version = ?8, token_id = ?9
+WHERE stack_id = ?10 AND id = ?11
+  AND revision = ?12
 `
 
 type SaveUpdateParams struct {
@@ -5031,6 +5039,7 @@ type SaveUpdateParams struct {
 	StartedAtMs      int64
 	EndedAtMs        int64
 	JournalVersion   int64
+	TokenID          string
 	StackID          string
 	ID               string
 	ExpectedRevision int64
@@ -5048,6 +5057,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.StartedAtMs,
 		arg.EndedAtMs,
 		arg.JournalVersion,
+		arg.TokenID,
 		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,
