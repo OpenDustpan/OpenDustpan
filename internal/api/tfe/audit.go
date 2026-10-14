@@ -36,7 +36,7 @@ func (h *Handler) appendToolOperationAudit(
 		Namespace:  obj.Namespace(),
 		Subject:    p.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    p.TokenID,
 		Action:     string(identity.ActionUnitReadSecrets),
 		Object:     obj.String(),
 		Version:    version,

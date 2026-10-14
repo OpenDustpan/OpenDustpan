@@ -151,6 +151,7 @@ func newBackupFixture(
 		Version:        "test",
 		Schema:         stores.registry,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -568,6 +569,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

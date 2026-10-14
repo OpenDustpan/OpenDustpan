@@ -116,6 +116,13 @@ _Avoid_: User (when the caller can be a machine), actor
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
 
+**Personal token**:
+An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
+_Avoid_: PAT, user token
+
+**Token rotation**:
+A call that issues a new access token for the same principal and sets an end time for the old one. The old token works until that end time (ADR 53).
+
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
 _Avoid_: API key, robot token, machine token

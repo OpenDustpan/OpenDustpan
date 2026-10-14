@@ -116,6 +116,7 @@ linters:
             - "**/pkg/ipallow/**"
             - "**/pkg/audit/**"
             - "**/pkg/principal/**"
+            - "**/pkg/accesstoken/**"
             - "**/pkg/backup/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
@@ -382,7 +383,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/)
         linters:
           - mnd
           - funlen

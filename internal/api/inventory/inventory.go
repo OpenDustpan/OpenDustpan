@@ -253,6 +253,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 func classify(err error) (int, string) {
 	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):

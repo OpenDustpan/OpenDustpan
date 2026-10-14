@@ -282,6 +282,8 @@ func classify(err error) (int, string) {
 // status. ok is false for any other error.
 func classifyAccess(err error) (int, string, bool) {
 	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
 	case errors.Is(err, identity.ErrDenied):

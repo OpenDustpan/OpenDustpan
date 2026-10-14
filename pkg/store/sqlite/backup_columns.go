@@ -289,6 +289,22 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
 		},
 		{
+			table: "access_tokens",
+			columns: []string{
+				"id",
+				"principal_id",
+				backupColName,
+				backupColKind,
+				"digest",
+				backupColCreatedAtMs,
+				"expires_at_ms",
+				"last_used_at_ms",
+				"revoked_at_ms",
+				"replaced_by",
+				"created_by",
+			},
+		},
+		{
 			table: "backups",
 			columns: []string{
 				"id",
