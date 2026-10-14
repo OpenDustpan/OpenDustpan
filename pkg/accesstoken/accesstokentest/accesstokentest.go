@@ -318,7 +318,10 @@ func testByDigest(t *testing.T, s Store) {
 		t.Fatalf("stored digest = %s, want %s", m.Digest, digest(1))
 	}
 
+	// The latest activity is the creation of tok-2: the principal was made
+	// earlier, and no token was used.
 	want := accesstoken.Owner{
+		ActiveAt:    at(2),
 		DisabledAt:  time.Time{},
 		ID:          "prn-1",
 		Subject:     "ci-deploy",

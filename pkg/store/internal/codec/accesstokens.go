@@ -49,11 +49,13 @@ type AccessTokenOwnerRow struct {
 	DisplayName  string
 	Kind         string
 	DisabledAtMs int64
+	ActiveAtMs   int64
 }
 
 // FromAccessTokenOwnerRow converts a row into the owner of a token.
 func FromAccessTokenOwnerRow(row AccessTokenOwnerRow) accesstoken.Owner {
 	return accesstoken.Owner{
+		ActiveAt:    FromMillis(row.ActiveAtMs),
 		DisabledAt:  FromOptionalMillis(row.DisabledAtMs),
 		ID:          row.ID,
 		Subject:     row.Subject,

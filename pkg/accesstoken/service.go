@@ -536,7 +536,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
-	if err := s.checkActive(ctx, m.Token, now); err != nil {
+	if err := s.checkActive(ctx, m.Token, m.Owner, now); err != nil {
 		return identity.Principal{}, err
 	}
 
@@ -551,11 +551,12 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
-// checkActive refuses the token t when the policy disables it as inactive
-// at now, before the sweep writes the disable: the sweep runs once an hour,
-// and a use would else move the last use forward and keep t alive. A failed
-// read of the policy answers its error, so the caller fails closed.
-func (s *Service) checkActive(ctx context.Context, t Token, now time.Time) error {
+// checkActive refuses the token t of the owner o when the policy disables
+// t, or the user account o, as inactive at now, before the sweep writes the
+// disable: the sweep runs once an hour, and a use would else move the last
+// use forward and keep t, or o, alive. A failed read of the policy answers
+// its error, so the caller fails closed.
+func (s *Service) checkActive(ctx context.Context, t Token, o Owner, now time.Time) error {
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
 		return fmt.Errorf("authenticate access token: %w", err)
@@ -563,6 +564,11 @@ func (s *Service) checkActive(ctx context.Context, t Token, now time.Time) error
 
 	if p.inactiveAt(t, now) {
 		return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
+	}
+
+	if p.accountInactiveAt(o, now) {
+		return fmt.Errorf("%w: the user account of the access token is inactive for %s",
+			identity.ErrUnauthenticated, p.Inactivity)
 	}
 
 	return nil

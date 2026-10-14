@@ -96,7 +96,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		})),
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
-			DisabledAtMs: row.PrincipalDisabledAtMs.Int64,
+			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
 		}),
 		Digest: stored,
 	}, nil
@@ -296,9 +296,15 @@ func setPolicy(ctx context.Context, q *db.Queries, p accesstoken.Policy) error {
 	return nil
 }
 
-// SweepInactive implements accesstoken.Store. The transaction takes the advisory lock of @server first, as every
-// audited change does. The time of the run
-// comes from the database clock.
+// SweepInactive implements accesstoken.Store. The transaction takes the
+// advisory lock of @server first, as every audited change does. The time of
+// the run comes from the database clock.
+//
+// A token create that commits while the sweep runs is not in the snapshot
+// of the account rule, so the sweep can disable a person that just got its
+// first token: the create holds no lock that the sweep takes. This race is
+// accepted. The person shows as disabled, and an administrator can enable
+// it again.
 func (s *Store) SweepInactive(
 	ctx context.Context, sw accesstoken.Sweep, entry accesstoken.SweepEntryFunc,
 ) (accesstoken.SweepResult, error) {

@@ -1273,3 +1273,40 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
 	}
 }
+
+func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	// Only the account disable is on, so the token rule refuses nothing.
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	personTok, personSecret := f.createLong(t, f.person, "laptop")
+	_, serviceSecret := f.createLong(t, f.service, "deploy")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
+
+	_, authErr := f.svc.AuthenticateToken(ctx, personSecret.Reveal())
+	if !errors.Is(authErr, identity.ErrUnauthenticated) {
+		t.Fatalf("token of an inactive person: err = %v, want ErrUnauthenticated", authErr)
+	}
+
+	// The refused request records no use, so it cannot make the account
+	// active again.
+	got, err := f.svc.Get(ctx, personTok.ID)
+	if err != nil || !got.LastUsedAt.IsZero() {
+		t.Fatalf("token after a refused request = %+v, %v; want no last use", got, err)
+	}
+
+	// The account rule covers persons only.
+	if _, err := f.svc.AuthenticateToken(ctx, serviceSecret.Reveal()); err != nil {
+		t.Fatalf("token of a service: %v", err)
+	}
+}

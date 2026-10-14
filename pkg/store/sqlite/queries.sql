@@ -1056,7 +1056,10 @@ FROM access_tokens WHERE id = ?;
 -- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
@@ -1139,7 +1142,8 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
 RETURNING id;
 
 -- name: EnablePrincipal :execrows
--- An enable also sets the activity baseline, so the next sweep does not
--- disable the principal again.
-UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER), last_active_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
+-- An enable also sets the activity baseline from the database clock, the
+-- clock of the sweep, so the next sweep does not disable the principal again.
+UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
+  last_active_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL;

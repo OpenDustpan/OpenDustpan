@@ -187,8 +187,11 @@ func (t Token) DaysLeft(now time.Time) (int64, bool) {
 
 // Owner is the principal of a token, as the Authenticator answers it.
 // DisabledAt is zero for a principal that the inactivity disable did not
-// end.
+// end. ActiveAt is the latest activity of the principal by the account
+// rule of the sweep: the latest of its creation, its activity baseline, and
+// the creation and the last use of each of its tokens.
 type Owner struct {
+	ActiveAt    time.Time
 	DisabledAt  time.Time
 	ID          string
 	Subject     string

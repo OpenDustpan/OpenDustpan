@@ -919,8 +919,11 @@ func (s *Server) Run(ctx context.Context) error {
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
 	// The first run of the inactivity disable ends before the server
-	// serves a request.
-	s.sweepOnce(ctx)
+	// serves a request. A slow database delays the start by firstSweepLimit
+	// at most: the hourly runs try again.
+	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+	s.sweepOnce(firstCtx)
+	stopFirst()
 
 	sweepCtx, stopSweeps := context.WithCancel(ctx)
 
@@ -939,6 +942,10 @@ func (s *Server) Run(ctx context.Context) error {
 // sweepEvery is the period of the inactivity disable. The inactivity period
 // counts in days by default, so one run each hour is ample.
 const sweepEvery = time.Hour
+
+// firstSweepLimit bounds the run of the inactivity disable before the
+// server serves.
+const firstSweepLimit = time.Minute
 
 // sweepInactive runs the inactivity disable of ADR 53 once each
 // sweepEvery, until ctx is done. Run makes the first run before it serves.
@@ -962,7 +969,8 @@ func (s *Server) sweepInactive(ctx context.Context) {
 
 // sweepOnce runs the inactivity disable once and counts the result. A failed
 // run logs no error text, which may hold driver detail (ADR 32 decision 7),
-// and the next run tries again.
+// and the next run tries again. A run that the server stops (ctx canceled)
+// is not a failure. A run past its time limit is.
 func (s *Server) sweepOnce(ctx context.Context) {
 	if s.tokens == nil {
 		return
@@ -971,7 +979,7 @@ func (s *Server) sweepOnce(ctx context.Context) {
 	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
 
 	switch {
-	case err != nil && ctx.Err() == nil:
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
 		s.observed.ObserveSweep(metrics.SweepFailure)
 		s.logger.WarnContext(ctx, "inactivity disable failed")
 	case err != nil:

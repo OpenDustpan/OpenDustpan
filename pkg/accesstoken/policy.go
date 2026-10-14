@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Defaults of the policy (ADR 53).
@@ -106,6 +107,18 @@ func (p Policy) inactiveAt(t Token, now time.Time) bool {
 	}
 
 	return !last.After(now.Add(-p.Inactivity))
+}
+
+// accountInactiveAt reports whether p disables the user account o as
+// inactive at now: the account disable is on, the period is not zero, o is
+// a person, and its latest activity is at or before now minus the period.
+// The sweep applies the same rule with the database clock.
+func (p Policy) accountInactiveAt(o Owner, now time.Time) bool {
+	if p.Inactivity == 0 || !p.DisableAccounts || o.Kind != principal.KindPerson {
+		return false
+	}
+
+	return !o.ActiveAt.After(now.Add(-p.Inactivity))
 }
 
 // Sweep is one run of the inactivity disable as a store writes it. The
