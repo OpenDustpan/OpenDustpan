@@ -133,6 +133,7 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 	return principal.Principal{
 		CreatedAt:   at(0),
 		UpdatedAt:   at(0),
+		DisabledAt:  time.Time{},
 		ID:          id,
 		Subject:     subject,
 		DisplayName: "Name of " + subject,

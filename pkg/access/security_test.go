@@ -450,6 +450,7 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 	server := identity.ServerObject()
 	manage := []identity.Action{
 		identity.ActionServerReadTokens, identity.ActionServerManageTokens, identity.ActionServerManageServiceTokens,
+		identity.ActionServerManageTokenPolicy,
 	}
 
 	for _, a := range manage {

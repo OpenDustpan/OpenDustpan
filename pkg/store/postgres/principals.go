@@ -177,6 +177,31 @@ func (s *Store) DeletePrincipal(ctx context.Context, id string, e audit.Entry) e
 	})
 }
 
+// EnablePrincipal implements principal.Store.
+func (s *Store) EnablePrincipal(ctx context.Context, id string, e audit.Entry) error {
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		n, err := q.EnablePrincipal(ctx, db.EnablePrincipalParams{UpdatedAtMs: codec.Millis(e.At), ID: id})
+		if err != nil {
+			return fmt.Errorf("enable principal: %w", err)
+		}
+
+		if n == 1 {
+			return nil
+		}
+
+		live, err := q.CountLivePrincipal(ctx, id)
+		if err != nil {
+			return fmt.Errorf("select principal: %w", err)
+		}
+
+		if live == 0 {
+			return principal.ErrNotFound
+		}
+
+		return principal.ErrNotDisabled
+	})
+}
+
 // ending ends one record and then its memberships, at the time at.
 type ending struct {
 	record  func(q *db.Queries, at int64) (int64, error)
@@ -459,6 +484,7 @@ func (s *Store) ListMembers(
 				Principal: principalOf(principalFields{
 					id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 					createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
+					disabledAtMs: r.DisabledAtMs.Int64,
 				}),
 			}
 		})
@@ -528,6 +554,8 @@ func (s *Store) ListGroupsOf(
 type principalFields struct {
 	id, subject, displayName, kind, source string
 	createdAtMs, updatedAtMs, groupCount   int64
+	// disabledAtMs is 0 when the column is NULL.
+	disabledAtMs int64
 }
 
 // principalRow maps any generated principal row to its fields. The reads
@@ -538,6 +566,7 @@ func principalRow[T db.GetPrincipalRow | db.GetPrincipalBySubjectRow | db.ListPr
 	return principalFields{
 		id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 		createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
+		disabledAtMs: r.DisabledAtMs.Int64,
 	}
 }
 
@@ -546,6 +575,7 @@ func principalOf(f principalFields) principal.Principal {
 	return principal.Principal{
 		CreatedAt:   codec.FromMillis(f.createdAtMs),
 		UpdatedAt:   codec.FromMillis(f.updatedAtMs),
+		DisabledAt:  codec.FromOptionalMillis(f.disabledAtMs),
 		ID:          f.id,
 		Subject:     f.subject,
 		DisplayName: f.displayName,

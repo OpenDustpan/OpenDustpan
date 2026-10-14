@@ -48,6 +48,10 @@ type RecordStore interface {
 	// of it, at e.At. The rows stay for the history. It returns ErrNotFound
 	// when no such principal exists.
 	DeletePrincipal(ctx context.Context, id string, e audit.Entry) error
+	// EnablePrincipal clears the disable time of the principal with the ID
+	// id and sets its update time to e.At. It returns ErrNotFound when no
+	// such principal exists, and ErrNotDisabled when it is not disabled.
+	EnablePrincipal(ctx context.Context, id string, e audit.Entry) error
 }
 
 // GroupStore keeps the group records.

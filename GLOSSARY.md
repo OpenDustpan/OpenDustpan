@@ -155,6 +155,12 @@ _Avoid_: PAT, user token
 **Token rotation**:
 A call that issues a new access token for the same principal and sets an end time for the old one. The old token works until that end time (ADR 53).
 
+**Token policy**:
+The administrator settings of the access token life cycle for the installation: the maximum lifetime of a token and the inactivity disable (ADR 53).
+
+**Inactivity disable**:
+The job that disables an access token or a user account after a set period with no use. The default period is 90 days. An administrator can change the period or turn the job off (ADR 53).
+
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
 _Avoid_: API key, robot token, machine token

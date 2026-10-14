@@ -125,7 +125,7 @@ func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
 	t.Parallel()
 
 	p := principal.Principal{
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: "prn-1", Subject: "alice",
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "alice",
 		DisplayName: "Ali\u200bce", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 	}
 	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {

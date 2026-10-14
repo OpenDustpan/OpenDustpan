@@ -97,6 +97,9 @@ const (
 	StatusExpired Status = "expired"
 	// StatusRevoked is a token that a revoke ended.
 	StatusRevoked Status = "revoked"
+	// StatusDisabled is a token that the inactivity disable ended (ADR 53,
+	// decision 4).
+	StatusDisabled Status = "disabled"
 )
 
 // Token is the stored record of one access token, without its secret. ID is
@@ -104,7 +107,8 @@ const (
 // Name is a label for people to read. ExpiresAt is the end of the token: a
 // rotation moves it to the end time of the old token. LastUsedAt is zero
 // when no request used the token. RevokedAt is zero for a token that was not
-// revoked. ReplacedBy names the token that a rotation issued for this one.
+// revoked. DisabledAt is zero for a token that the inactivity disable did
+// not end. ReplacedBy names the token that a rotation issued for this one.
 // CreatedBy is the subject of the caller that made the token: by a create,
 // or by the rotation that issued it.
 type Token struct {
@@ -112,6 +116,7 @@ type Token struct {
 	ExpiresAt   time.Time
 	LastUsedAt  time.Time
 	RevokedAt   time.Time
+	DisabledAt  time.Time
 	ID          string
 	PrincipalID string
 	Name        string
@@ -125,6 +130,8 @@ func (t Token) StatusAt(now time.Time) Status {
 	switch {
 	case !t.RevokedAt.IsZero():
 		return StatusRevoked
+	case !t.DisabledAt.IsZero():
+		return StatusDisabled
 	case !now.Before(t.ExpiresAt):
 		return StatusExpired
 	default:
@@ -179,7 +186,13 @@ func (t Token) DaysLeft(now time.Time) (int64, bool) {
 }
 
 // Owner is the principal of a token, as the Authenticator answers it.
+// DisabledAt is zero for a principal that the inactivity disable did not
+// end. ActiveAt is the latest activity of the principal by the account
+// rule of the sweep: the latest of its creation, its activity baseline, and
+// the creation and the last use of each of its tokens.
 type Owner struct {
+	ActiveAt    time.Time
+	DisabledAt  time.Time
 	ID          string
 	Subject     string
 	DisplayName string
@@ -318,6 +331,9 @@ func ValidateName(s string) error {
 
 	return nil
 }
+
+// PolicyRef is the audit object of the token life cycle policy.
+const PolicyRef = "token-policy"
 
 // invalidRef names a malformed ID in an audit object.
 const invalidRef = "invalid"

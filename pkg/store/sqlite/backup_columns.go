@@ -40,17 +40,9 @@ type sqliteBackupTable struct {
 // schema, so a migration that adds a column fails until its author adds the
 // column here (ADR 42, decision 5).
 //
-// The list is split in two functions to keep each one readable.
-func sqliteBackupTables() []sqliteBackupTable {
-	return append(sqliteStackBackupTables(), sqliteWorkspaceBackupTables()...)
-}
-
-// sqliteStackBackupTables lists the tables of backup.Tables from namespaces
-// to blob_purges, in that order.
-//
 //nolint:funlen // A constant table of column names; its length is the schema.
-func sqliteStackBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+func sqliteBackupTables() []sqliteBackupTable {
+	tables := []sqliteBackupTable{
 		{
 			table: "namespaces",
 			columns: []string{
@@ -207,15 +199,6 @@ func sqliteStackBackupTables() []sqliteBackupTable {
 				"purged_at_ms",
 			},
 		},
-	}
-}
-
-// sqliteWorkspaceBackupTables lists the tables of backup.Tables from
-// workspaces to installation, in that order.
-//
-//nolint:funlen // A constant table of column names; its length is the schema.
-func sqliteWorkspaceBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
 		{
 			table: "workspaces",
 			columns: []string{
@@ -288,6 +271,53 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"object_id",
 			},
 		},
+	}
+
+	tables = append(tables, sqliteIdentityBackupTables()...)
+
+	return append(tables, []sqliteBackupTable{
+		{
+			table: "backups",
+			columns: []string{
+				"id",
+				backupColState,
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"target",
+				"error",
+			},
+		},
+		{
+			table: "restores",
+			columns: []string{
+				"id",
+				backupColState,
+				"backup_id",
+				"pre_backup_id",
+				"requested_by",
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"error",
+			},
+		},
+		{
+			table: "installation",
+			columns: []string{
+				"id",
+				backupColState,
+			},
+		},
+	}...)
+}
+
+// sqliteIdentityBackupTables lists the column lists of the identity tables
+// (ADR 52, ADR 53): principals, groups, memberships, access tokens, roles,
+// grants, the audit sink cursors and the token policy, in the order of
+// backup.Tables.
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteIdentityBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: "principals",
 			columns: []string{
@@ -299,6 +329,8 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"disabled_at_ms",
+				"last_active_at_ms",
 			},
 		},
 		{
@@ -332,6 +364,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"revoked_at_ms",
 				"replaced_by",
 				backupColCreatedBy,
+				"disabled_at_ms",
 			},
 		},
 		{
@@ -376,34 +409,15 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "backups",
+			table: "access_token_policy",
 			columns: []string{
 				"id",
-				backupColState,
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"target",
-				"error",
-			},
-		},
-		{
-			table: "restores",
-			columns: []string{
-				"id",
-				backupColState,
-				"backup_id",
-				"pre_backup_id",
-				"requested_by",
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"error",
-			},
-		},
-		{
-			table: "installation",
-			columns: []string{
-				"id",
-				backupColState,
+				"max_lifetime_ms",
+				"inactivity_ms",
+				"disable_tokens",
+				"disable_accounts",
+				"disable_break_glass",
+				backupColUpdatedAtMs,
 			},
 		},
 	}
