@@ -445,8 +445,8 @@ func grantFilters(q *GrantQuery, req PageRequest) error {
 		q.Subject = holder.String()
 	}
 
-	if len(req.Role) > maxRoleFilterLength || !utf8.ValidString(req.Role) || strings.ContainsRune(req.Role, 0) {
-		return fmt.Errorf("%w: role filter", ErrInvalid)
+	if req.Role != "" && !ident.Valid(req.Role, maxRoleFilterLength) {
+		return fmt.Errorf("%w: role filter %q is not a role ID", ErrInvalid, req.Role)
 	}
 
 	q.Role = req.Role

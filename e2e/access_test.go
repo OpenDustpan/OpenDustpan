@@ -347,8 +347,8 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 }
 
 // checkGrantFilters lists the grants on one object kind with the holder and
-// role filters: the grant of k has its holder name and kind, and a filter
-// on another role keeps nothing.
+// role filters: the grant of k has its holder name and kind, a filter
+// on another role keeps nothing, and a bad holder or role answers 400.
 func checkGrantFilters(ctx context.Context, t *testing.T, env *e2e.Env, k grantKind, query string) {
 	t.Helper()
 
@@ -380,9 +380,11 @@ func checkGrantFilters(ctx context.Context, t *testing.T, env *e2e.Env, k grantK
 		t.Fatalf("secret-viewer grants on %s = %+v, want none", k.object, none)
 	}
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, k.path + query + sep + "holder=bob", "", http.StatusBadRequest,
-	}, nil)
+	for _, bad := range []string{"holder=bob", "role=bad%20role"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodGet, k.path + query + sep + bad, "", http.StatusBadRequest,
+		}, nil)
+	}
 }
 
 // checkSubjectDeleteRevokes deletes a principal that holds a grant, and

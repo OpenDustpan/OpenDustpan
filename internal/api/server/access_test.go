@@ -600,7 +600,9 @@ func TestGrantListNamesHoldersAndFilters(t *testing.T) {
 		}
 	}
 
-	for _, query := range []string{"holder=alice", "holder=group:x", "role=" + strings.Repeat("r", 129)} {
+	for _, query := range []string{
+		"holder=alice", "holder=group:x", "role=" + strings.Repeat("r", 129), "role=bad%20role", "role=.viewer",
+	} {
 		f.as(t, "ann", apiCall{
 			http.MethodGet, "/api/server/namespaces/acme/grants?" + query, "", http.StatusBadRequest,
 		}, nil)

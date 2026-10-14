@@ -96,8 +96,8 @@ type grantResponse struct {
 // listedGrantResponse is one grant of a list on the wire, with its holder:
 // HolderName is the display name of a principal (its subject when it has no
 // display name) or the name of a group, and HolderKind is "person",
-// "service" or "group". So a list shows who holds each grant with no read
-// for each holder.
+// "service", "workload" or "group". So a list shows who holds each grant
+// with no read for each holder.
 //
 // Contract: never remove or rename these fields.
 type listedGrantResponse struct {
