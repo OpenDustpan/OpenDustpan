@@ -81,12 +81,14 @@ func TestCrashCommittedWithoutDelete(t *testing.T) {
 
 	f := newCrashFixture(t,
 		[]storefault.Fault{{Method: "FinalizeStateVersion", Call: 1, Kind: storefault.KindFail, Err: nil, Delay: 0}},
-		// The service retries each blob delete three times, so the
-		// superseded delete fails only when all three attempts fault.
+		// The service tries each blob delete four times with a backoff
+		// (blob.DeleteRetried), so the superseded delete fails only when all
+		// four attempts fault.
 		[]blobfault.Fault{
 			{Method: "Delete", Call: 1, Kind: blobfault.KindFail, Err: nil, Delay: 0},
 			{Method: "Delete", Call: 2, Kind: blobfault.KindFail, Err: nil, Delay: 0},
 			{Method: "Delete", Call: 3, Kind: blobfault.KindFail, Err: nil, Delay: 0},
+			{Method: "Delete", Call: 4, Kind: blobfault.KindFail, Err: nil, Delay: 0},
 		},
 	)
 	ctx := t.Context()
@@ -104,8 +106,8 @@ func TestCrashCommittedWithoutDelete(t *testing.T) {
 		t.Fatal("upload with a faulted superseded delete = nil, want an error")
 	}
 
-	if n := f.blobs.Calls("Delete"); n != 3 {
-		t.Fatalf("blob Delete calls = %d, want the 3 retried attempts", n)
+	if n := f.blobs.Calls("Delete"); n != 4 {
+		t.Fatalf("blob Delete calls = %d, want the 4 retried attempts", n)
 	}
 
 	current, err := f.service.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))

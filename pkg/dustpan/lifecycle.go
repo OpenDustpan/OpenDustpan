@@ -28,34 +28,28 @@ const (
 // not stop them halfway.
 const purgeBlobTimeout = 5 * time.Minute
 
-// blobPurger deletes the blobs of one purged unit after its rows are gone,
-// and finishes the blob purge record only when every blob is gone (ADR 47).
-// A record that stays is for the sweep, so no blob of a purged unit outlives
-// it for good.
+// blobPurger deletes the blobs of one purged unit after its rows are gone
+// (ADR 47). It keeps the blob purge record of the unit. A save or an upload
+// that passed its checks before the delete can still write a blob after
+// this delete, and its SQL commit then fails. So only the sweep finishes the
+// record: it deletes the blobs again after a grace period longer than any
+// save, so no blob of a purged unit outlives it for good.
 type blobPurger struct {
-	purges inventory.BlobPurges
 	logger *slog.Logger
 }
 
-// finish deletes the blobs of the unit unitID of tool with deleteBlobs and
-// then finishes its record. It never fails the purge: the rows are already
-// gone, and the record keeps the work for the sweep. No log line names a
-// blob key.
-func (b blobPurger) finish(
-	ctx context.Context, tool, unitID string, deleteBlobs func(context.Context) error,
+// deleteBlobs deletes the blobs of the unit unitID of tool with
+// deleteUnitBlobs, on a context that the request cannot cancel. It never
+// fails the purge: the rows are already gone, and the record keeps the work
+// for the sweep. No log line names a blob key.
+func (b blobPurger) deleteBlobs(
+	ctx context.Context, tool, unitID string, deleteUnitBlobs func(context.Context) error,
 ) {
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), purgeBlobTimeout)
 	defer cancel()
 
-	if err := deleteBlobs(detached); err != nil {
+	if err := deleteUnitBlobs(detached); err != nil {
 		b.logger.WarnContext(ctx, "blobs of a purged unit remain for the sweep",
-			slog.String("tool", tool), slog.String("unit_id", unitID))
-
-		return
-	}
-
-	if err := b.purges.FinishBlobPurge(detached, tool, unitID); err != nil {
-		b.logger.WarnContext(ctx, "finish blob purge record",
 			slog.String("tool", tool), slog.String("unit_id", unitID))
 	}
 }
@@ -69,7 +63,7 @@ type pulumiLifecycle struct {
 }
 
 var _ inventory.Lifecycle = pulumiLifecycle{
-	stacks: nil, updates: nil, blobs: blobPurger{purges: nil, logger: nil},
+	stacks: nil, updates: nil, blobs: blobPurger{logger: nil},
 }
 
 // Restore implements inventory.Lifecycle. name is the stack name: the stack
@@ -104,7 +98,7 @@ func (l pulumiLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID st
 		return lifecycleError(err, stack.ErrNotFound, stack.ErrAlreadyExists)
 	}
 
-	l.blobs.finish(ctx, pulumiTool, unitID, func(c context.Context) error {
+	l.blobs.deleteBlobs(ctx, pulumiTool, unitID, func(c context.Context) error {
 		return l.updates.DeleteStackBlobs(c, id)
 	})
 
@@ -117,7 +111,7 @@ type opentofuLifecycle struct {
 	blobs      blobPurger
 }
 
-var _ inventory.Lifecycle = opentofuLifecycle{workspaces: nil, blobs: blobPurger{purges: nil, logger: nil}}
+var _ inventory.Lifecycle = opentofuLifecycle{workspaces: nil, blobs: blobPurger{logger: nil}}
 
 // Restore implements inventory.Lifecycle.
 func (l opentofuLifecycle) Restore(
@@ -150,7 +144,7 @@ func (l opentofuLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID 
 		return lifecycleError(err, workspace.ErrNotFound, workspace.ErrAlreadyExists)
 	}
 
-	l.blobs.finish(ctx, opentofuTool, unitID, func(c context.Context) error {
+	l.blobs.deleteBlobs(ctx, opentofuTool, unitID, func(c context.Context) error {
 		return l.workspaces.DeletePurgedBlobs(c, id)
 	})
 

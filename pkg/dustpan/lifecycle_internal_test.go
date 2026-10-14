@@ -12,7 +12,6 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -183,79 +182,39 @@ func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	}
 }
 
-// errBlobDelete is the failure of a blob delete in the blob purger tests.
-var errBlobDelete = errors.New("blob delete failed")
-
-// recordedPurges is an inventory.BlobPurges that records each finish.
-type recordedPurges struct {
-	finished []string
-}
-
-func (r *recordedPurges) ListBlobPurges(_ context.Context, _ int) ([]inventory.BlobPurge, error) {
-	return nil, nil
-}
-
-func (r *recordedPurges) FinishBlobPurge(_ context.Context, tool, unitID string) error {
-	r.finished = append(r.finished, tool+"/"+unitID)
-
-	return nil
-}
-
-// TestBlobPurgerFinishesOnlyWhenEveryBlobIsGone proves that the purger
-// finishes the record after a delete that removes every blob, and keeps it
-// for the sweep after a delete that leaves a blob.
-func TestBlobPurgerFinishesOnlyWhenEveryBlobIsGone(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		deleteErr error
-		name      string
-		want      []string
-	}{
-		{deleteErr: nil, name: "every blob gone", want: []string{"opentofu/ws-1"}},
-		{deleteErr: errBlobDelete, name: "a blob remains", want: nil},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			purges := &recordedPurges{finished: nil}
-			purger := blobPurger{purges: purges, logger: slog.New(slog.DiscardHandler)}
-
-			purger.finish(t.Context(), "opentofu", "ws-1", func(context.Context) error { return tc.deleteErr })
-
-			if !slices.Equal(purges.finished, tc.want) {
-				t.Fatalf("finished = %v, want %v", purges.finished, tc.want)
-			}
-		})
-	}
-}
-
-// TestBlobPurgerOutlivesTheRequest proves that the blob deletes run on a
-// context that the request cannot cancel, with a deadline.
+// TestBlobPurgerOutlivesTheRequest proves that the blob deletes of a purge
+// run on a context that the request cannot cancel, with a deadline, and that
+// a failed delete does not fail the purge: the record stays for the sweep.
 func TestBlobPurgerOutlivesTheRequest(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	purges := &recordedPurges{finished: nil}
-	purger := blobPurger{purges: purges, logger: slog.New(slog.DiscardHandler)}
+	purger := blobPurger{logger: slog.New(slog.DiscardHandler)}
 
-	purger.finish(ctx, "pulumi", "stk-1", func(c context.Context) error {
+	var got error
+
+	purger.deleteBlobs(ctx, "pulumi", "stk-1", func(c context.Context) error {
 		if c.Err() != nil {
-			return fmt.Errorf("blob context: %w", c.Err())
+			got = fmt.Errorf("blob context: %w", c.Err())
+
+			return got
 		}
 
 		if _, ok := c.Deadline(); !ok {
-			return errBlobDelete
+			got = errNoDeadline
+
+			return got
 		}
 
-		return nil
+		return errors.New("object store unavailable") //nolint:err113 // A failure the purger only logs.
 	})
 
-	if !slices.Equal(purges.finished, []string{"pulumi/stk-1"}) {
-		t.Fatalf("finished = %v, want the purge of pulumi/stk-1", purges.finished)
+	if got != nil {
+		t.Fatal(got)
 	}
 }
+
+// errNoDeadline reports a blob context without a deadline.
+var errNoDeadline = errors.New("blob context has no deadline")

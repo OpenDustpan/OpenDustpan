@@ -69,8 +69,9 @@ An entry holds these fields:
 - `requestID`: the request ID the server mints. The server returns it in
   the `X-Request-Id` response header and ignores an ID the client sends
   (ADR 32).
-- `objectID`: the stable ID of the unit, for a restore or a purge of a
-  deleted unit (ADR 47). The list omits it when the entry has none.
+- `objectID`: the stable ID of the unit that the entry names (ADR 47). The
+  store sets it for each entry on a unit that exists, and for the delete,
+  restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   When `valueCount` is set, the encoding appends one more field after

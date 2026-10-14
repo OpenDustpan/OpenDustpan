@@ -1228,12 +1228,7 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
-	purges, ok := cfg.inventoryReader.(inventory.BlobPurges)
-	if !ok {
-		return nil, fmt.Errorf("inventory reader keeps no blob purges: %w", ErrMissingOption)
-	}
-
-	blobs := blobPurger{purges: purges, logger: cfg.logger}
+	blobs := blobPurger{logger: cfg.logger}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces: svc.namespaces,
@@ -1247,7 +1242,7 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
-		Now:           nil,
+		Now:           cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)

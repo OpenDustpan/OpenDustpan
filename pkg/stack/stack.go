@@ -251,7 +251,7 @@ type DeletedStore interface {
 	// key and deleted inventory entry, in one fenced transaction with the
 	// audit entry e. It ends the grants on the stack and records the blob
 	// purge (inventory.BlobPurge) in that transaction. The caller removes
-	// its blobs after the commit and then finishes the record. It
+	// its blobs after the commit; the sweep finishes the record. It
 	// returns ErrNotFound if the namespace has no deleted stack id, which
 	// also covers a live stack: a purge acts on deleted stacks only.
 	PurgeStack(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error

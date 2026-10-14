@@ -354,12 +354,16 @@ func (s *Store) purgeUnit(
 	})
 }
 
-// ListBlobPurges implements inventory.BlobPurges.
+// maxBlobPurgeList bounds one list of blob purges.
+const maxBlobPurgeList = 10000
+
+// ListBlobPurges implements inventory.BlobPurges. It reads at most
+// maxBlobPurgeList records.
 func (s *Store) ListBlobPurges(ctx context.Context, limit int) ([]inventory.BlobPurge, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.ListBlobPurges(ctx, int64(limit))
+	rows, err := s.queries.ListBlobPurges(ctx, int64(max(0, min(limit, maxBlobPurgeList))))
 	if err != nil {
 		return nil, fmt.Errorf("list blob purges: %w", err)
 	}

@@ -335,10 +335,6 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 // bytes land.
 const sweepGracePeriod = time.Hour
 
-// checkpointDeleteRetries bounds the blob deletes of one cleanup: a transient
-// object store failure retries instead of orphaning the blob.
-const checkpointDeleteRetries = 3
-
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
 type checkpointSave struct {
@@ -1015,17 +1011,14 @@ func (s *Updates) storedLimit() int64 {
 }
 
 // deleteBlobRetried removes the object under key, retrying a transient
-// failure. Deleting a missing key is not an error.
+// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
+// is not an error.
 func (s *Updates) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	var err error
-
-	for range checkpointDeleteRetries {
-		if err = s.blobs.Delete(ctx, key); err == nil {
-			return nil
-		}
+	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // sweepUpdateBlobs deletes the checkpoint blobs of one update that no

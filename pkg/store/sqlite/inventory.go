@@ -189,6 +189,28 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 		return inventory.TrimDeletedPage([]inventory.DeletedEntry{}, q.PageSize(), 0), nil
 	}
 
+	// One transaction for the count and the page, so the total agrees with
+	// the rows.
+	tx, err := s.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	page, err := queryDeletedPage(ctx, tx, q)
+	if err != nil {
+		return inventory.DeletedPage{}, errors.Join(err, rollback(tx))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return page, nil
+}
+
+// queryDeletedPage counts the deleted units that match q and reads one page
+// of them with tx.
+func queryDeletedPage(ctx context.Context, tx *sql.Tx, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
 	where, args := deletedFilter(q)
 
 	var total int
@@ -196,7 +218,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 	countQuery := "SELECT COUNT(*) FROM inventory_deleted WHERE " + // #nosec G202 // Fixed fragments only.
 		where
 
-	count := s.conn.QueryRowContext(ctx, countQuery, args...)
+	count := tx.QueryRowContext(ctx, countQuery, args...)
 	if err := count.Scan(&total); err != nil {
 		return inventory.DeletedPage{}, fmt.Errorf("count deleted inventory: %w", err)
 	}
@@ -209,7 +231,7 @@ func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery)
 	size := q.PageSize()
 	args = append(args, size+1)
 
-	rows, err := s.conn.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		"SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms FROM inventory_deleted WHERE "+
 			where+ // #nosec G202 // Fixed fragments from deletedFilter; every value is a bound argument.
 			" ORDER BY tool, name, unit_id LIMIT ?", args...)

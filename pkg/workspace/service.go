@@ -95,7 +95,7 @@ type DeletedStore interface {
 	// inventory entry, in one fenced transaction with the audit entry e. It
 	// ends the grants on the workspace and records the blob purge
 	// (inventory.BlobPurge) in that transaction. The caller removes its
-	// blobs after the commit and then finishes the record. It returns
+	// blobs after the commit; the sweep finishes the record. It returns
 	// ErrNotFound if the namespace has no deleted workspace id.
 	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error
 }
@@ -1894,22 +1894,15 @@ func (s *Service) noteAttempt(ctx context.Context, id StateVersionID, key blob.K
 	return nil
 }
 
-// sweepBlobRetries bounds the blob deletes of one cleanup: a transient
-// object store failure retries instead of orphaning the blob.
-const sweepBlobRetries = 3
-
 // deleteBlobRetried removes the object under key, retrying a transient
-// failure. Deleting a missing key is not an error.
+// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
+// is not an error.
 func (s *Service) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	var err error
-
-	for range sweepBlobRetries {
-		if err = s.blobs.Delete(ctx, key); err == nil {
-			return nil
-		}
+	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // stripeSpread widens adjacent keys across the lock stripes.
