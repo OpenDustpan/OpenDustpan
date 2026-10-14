@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -33,6 +34,15 @@ func (h *Handler) writeStateRoutes() []Route {
 // unlocked unit and the unlocked override.
 func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	ctx := r.Context()
+
+	release, ok := bodygate.Hold(h.gate, bodygate.StreamReservation(r))
+	if !ok {
+		h.writeBusy(w)
+
+		return
+	}
+
+	defer release()
 
 	sum, err := contentMD5(r)
 	if err != nil {
@@ -78,6 +88,13 @@ func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// writeBusy answers a state write that arrived while the gate is full. It
+// uses the plain error shape of the other routes.
+func (h *Handler) writeBusy(w http.ResponseWriter) {
+	bodygate.SetRetryAfter(w)
+	http.Error(w, "server is busy: try again in one second", http.StatusServiceUnavailable)
 }
 
 // writeStateRefusal answers a refused POST. A lock held by another principal, or

@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -56,6 +58,17 @@ type Config struct {
 	// means the upgrade check answers 500: every production server wires its
 	// store.
 	Schema SchemaReporter
+	// Principals keeps the principals and the groups of the installation
+	// (ADR 52). Nil means the store keeps none: the principal and group
+	// routes answer 501. Both SQL adapters keep them.
+	Principals *principal.Service
+	// Audit appends the entries of the scope @server: each change of a
+	// principal or a group writes one (ADR 60, decision 7). Nil writes no
+	// entry.
+	Audit audit.ServerStore
+	// OnAuditFailure, when set, runs once for each lost audit entry, so the
+	// wiring can count it on a metric.
+	OnAuditFailure func()
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -69,18 +82,21 @@ type SchemaReporter interface {
 
 // Handler serves the installation API under /api/server/.
 type Handler struct {
-	authn       identity.Authenticator
-	authz       identity.Authorizer
-	logger      *slog.Logger
-	namespaces  *namespace.Service
-	backups     *backup.Service
-	restores    *backup.RestoreService
-	maintenance Maintenance
-	metrics     MetricsWriter
-	version     string
-	schema      SchemaReporter
-	mux         *patternMux
-	routes      []Route
+	authn          identity.Authenticator
+	authz          identity.Authorizer
+	logger         *slog.Logger
+	namespaces     *namespace.Service
+	backups        *backup.Service
+	restores       *backup.RestoreService
+	maintenance    Maintenance
+	metrics        MetricsWriter
+	version        string
+	schema         SchemaReporter
+	principals     *principal.Service
+	audit          audit.ServerStore
+	onAuditFailure func()
+	mux            *patternMux
+	routes         []Route
 }
 
 // NewHandler returns a Handler. Authenticator, Authorizer, Logger,
@@ -103,18 +119,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		authn:       cfg.Authenticator,
-		authz:       cfg.Authorizer,
-		logger:      cfg.Logger,
-		namespaces:  cfg.Namespaces,
-		backups:     cfg.Backups,
-		restores:    cfg.Restores,
-		maintenance: cfg.Maintenance,
-		metrics:     cfg.Metrics,
-		version:     cfg.Version,
-		schema:      cfg.Schema,
-		mux:         newPatternMux(),
-		routes:      nil,
+		authn:          cfg.Authenticator,
+		authz:          cfg.Authorizer,
+		logger:         cfg.Logger,
+		namespaces:     cfg.Namespaces,
+		backups:        cfg.Backups,
+		restores:       cfg.Restores,
+		maintenance:    cfg.Maintenance,
+		metrics:        cfg.Metrics,
+		version:        cfg.Version,
+		schema:         cfg.Schema,
+		principals:     cfg.Principals,
+		audit:          cfg.Audit,
+		onAuditFailure: cfg.OnAuditFailure,
+		mux:            newPatternMux(),
+		routes:         nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -233,6 +252,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifyBackup(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyPrincipal(err); ok {
 		return status, message
 	}
 

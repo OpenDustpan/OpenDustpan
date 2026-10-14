@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -151,6 +152,11 @@ type StateWriter interface {
 		tok token.Token,
 		content io.Reader,
 	) (workspace.StateVersion, error)
+	// CheckUpload reports whether the capability tok may upload state version
+	// id now, without reading any body and without writing anything.
+	CheckUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
+	// CheckJSONRenderingUpload does the same for the JSON rendering upload.
+	CheckJSONRenderingUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
 	// DiscardJSONRendering accepts the JSON rendering uploaded with a state
 	// version and discards it: the server keeps the state itself and the
 	// outputs declared at creation.
@@ -190,6 +196,11 @@ type Config struct {
 	// to the dustpan_audit_append_failures_total counter. Nil means no
 	// counter: the routes still fail closed with a 500 and no value.
 	OnAuditFailure func()
+	// Gate bounds concurrent large bodies by bytes held at once.
+	Gate *bodygate.Gate
+	// MaxStateBytes bounds one OpenTofu state version. Zero means
+	// workspace.DefaultMaxStateBytes.
+	MaxStateBytes int64
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -203,6 +214,8 @@ type Handler struct {
 	baseURL        baseurl.Resolver
 	audit          audit.Store
 	onAuditFailure func()
+	gate           *bodygate.Gate
+	maxState       int64
 	mux            *patternMux
 	routes         []Route
 }
@@ -231,8 +244,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
+		gate:           cfg.Gate,
+		maxState:       cfg.MaxStateBytes,
 		mux:            newPatternMux(),
 		routes:         nil,
+	}
+
+	if h.gate == nil {
+		h.gate = bodygate.New(0)
+	}
+
+	if h.maxState == 0 {
+		h.maxState = workspace.DefaultMaxStateBytes
 	}
 
 	h.routes = h.buildRoutes()

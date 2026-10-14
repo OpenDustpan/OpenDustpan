@@ -48,6 +48,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -57,6 +58,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -494,7 +496,9 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base, observed)
+	gate := bodygate.New(cfg.maxBodyBytesInFlight)
+
+	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -509,12 +513,12 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc)
+	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, gate)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -553,7 +557,7 @@ func newAdapters(
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -566,6 +570,7 @@ func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
 		Workspaces:    svc.workspaces,
 		Namespaces:    svc.namespaces,
 		Audit:         entries,
+		Gate:          gate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -607,7 +612,7 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 // output route fail closed with a 500 when the append fails, so the counter
 // is the alert for lost entries.
 func newTFEHandler(
-	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (*tfe.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -622,6 +627,8 @@ func newTFEHandler(
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
 		Audit:         entries,
+		Gate:          gate,
+		MaxStateBytes: cfg.maxStateBytes,
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
@@ -1065,7 +1072,7 @@ func isLoopbackListenAddr(addr string) bool {
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics,
+	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (http.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -1082,6 +1089,7 @@ func newPulumiHandler(
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Gate:                 gate,
 		Audit:                entries,
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
@@ -1167,11 +1175,17 @@ func newInstallationAPI(
 // namespace service that creates namespaces, the backup service when a
 // backup target is configured, else nil, the restore service when a backup
 // target is configured, else nil, the maintenance service, the registry
-// that the metrics route writes, the server version and the schema store
-// that the upgrade check reads.
+// that the metrics route writes, the server version, the schema store that
+// the upgrade check reads, and the principal service when the store keeps
+// principals (ADR 52).
 func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
+	principals, err := newPrincipalService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1183,12 +1197,48 @@ func newServerHandler(
 		Metrics:       deps.observed,
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Principals:    principals,
+		Audit:         serverAuditOf(cfg.namespaceStore),
+		OnAuditFailure: func() {
+			deps.observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// serverAuditOf returns the audit store of the scope @server, or nil when the
+// namespace store keeps none. Both SQL adapters keep it.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func serverAuditOf(store namespace.Store) audit.ServerStore {
+	entries, ok := store.(audit.ServerStore)
+	if !ok {
+		return nil
+	}
+
+	return entries
+}
+
+// newPrincipalService builds the principal and group service (ADR 52) from
+// the namespace store, or returns nil when the store keeps no principals.
+// Every SQL adapter serves all ports from one database connection, so the
+// namespace store is the principal store too.
+func newPrincipalService(cfg settings) (*principal.Service, error) {
+	store, ok := cfg.namespaceStore.(principal.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
+	}
+
+	svc, err := principal.NewService(principal.Config{Store: store, Now: nil, NewID: nil})
+	if err != nil {
+		return nil, fmt.Errorf("principal service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or
@@ -1424,12 +1474,12 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 		return "", false
 	}
 
-	principal, err := authn.AuthenticateToken(ctx, raw)
-	if err != nil || principal.Subject == "" {
+	caller, err := authn.AuthenticateToken(ctx, raw)
+	if err != nil || caller.Subject == "" {
 		return "", false
 	}
 
-	return principal.Subject, true
+	return caller.Subject, true
 }
 
 // withRequestLog mints a request ID, stores it in the context, records the

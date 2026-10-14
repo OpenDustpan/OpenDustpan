@@ -182,17 +182,11 @@ The owner answered every question of this list. See "Owner direction
 ### Open questions for collections
 
 ADR 51 accepts the collection. These questions stay open after the owner
-direction of 2026-10-13. Each "lead proposal" is a proposed default from the
+direction of 2026-10-13. The project lead decided the rights to move a unit,
+the syntax of a stack-name pattern and the effect of a rule change (see
+Outcome). Each "lead proposal" is a proposed default from the
 project lead for the owner to decide. It is not a decision.
 
-- Which rights does a person need to move a unit to another collection?
-  Lead proposal: a right on the unit, on the old collection and on the
-  target collection. ADR 61 covers the right to make a unit in a
-  collection.
-- What is the syntax of a stack-name pattern in a placement rule? Lead
-  proposal: a glob with `*`, as in the sketch above (`prod*`).
-- What does a change to a placement rule do to the units that exist? Lead
-  proposal: nothing. A rule applies only when the server makes a unit.
 - How does the server give a collection to the units that exist before
   ADR 51? Lead proposal: an upgrade step makes no default collection. The
   server refuses writes to such a unit until an administrator moves it into
@@ -263,5 +257,11 @@ block names the collection, and the TFE-compatible API shows each collection
 as a TFE project. When nothing matches, the server refuses the unit with an
 error that names the fix. The caller needs the right to make a unit in the
 collection.
+
+On 2026-10-13 the project lead accepted three lead proposals of "Open
+questions for collections", under the delegation of the owner. To move a unit,
+a person needs rights on the unit, on the old collection and on the target
+collection. A stack-name pattern of a placement rule is a glob with `*`. A
+change to a placement rule does not change units that exist.
 
 The rest of this RFC has no outcome yet.

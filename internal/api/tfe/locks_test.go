@@ -106,6 +106,8 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -360,6 +362,8 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 		Workspaces:     stores,
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

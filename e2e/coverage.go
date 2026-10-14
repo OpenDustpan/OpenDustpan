@@ -205,6 +205,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		CheckpointDeltaCutoff:   0,
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
+		Gate:                 nil,
 		Audit:                nil,
 		OnAuditFailure:       nil,
 	})
@@ -328,6 +329,8 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
+		Gate:           nil,
+		MaxStateBytes:  0,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -463,6 +466,18 @@ func (coverageWorkspaces) DiscardJSONRendering(
 	return workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
 // coverageInventoryRoutes returns the inventory adapter's route table.
 func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -570,16 +585,19 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    coverageNamespaces(tb),
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   coverageMaintenance{},
-		Metrics:       coverageMetrics{},
-		Version:       "test",
-		Schema:        coverageSchema{},
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     coverageNamespaces(tb),
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    coverageMaintenance{},
+		Metrics:        coverageMetrics{},
+		Version:        "test",
+		Schema:         coverageSchema{},
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -676,7 +694,54 @@ func CoverageAllowlist() []AllowEntry {
 		stateAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
+		principalAllowEntries(),
 	)
+}
+
+// principalCoveringTest names the test that proves the principal and group
+// routes instead of a CLI: no CLI calls them (ADR 52).
+const principalCoveringTest = "TestPrincipalsAndGroups"
+
+// principalAllowEntries returns the operator and console routes of the
+// principals and groups of the installation. The harness steps of
+// principalCoveringTest drive each one through the real binary on each store.
+func principalAllowEntries() []AllowEntry {
+	reason := "Operator and console route (ADR 52): no CLI manages principals or groups. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		principals = "/api/server/principals"
+		principal  = principals + "/{id}"
+		groups     = "/api/server/groups"
+		group      = groups + "/{id}"
+		members    = group + "/members"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, principals},
+		{http.MethodGet, principals},
+		{http.MethodGet, principal},
+		{http.MethodPatch, principal},
+		{http.MethodDelete, principal},
+		{http.MethodGet, principal + "/groups"},
+		{http.MethodPost, groups},
+		{http.MethodGet, groups},
+		{http.MethodGet, group},
+		{http.MethodPatch, group},
+		{http.MethodDelete, group},
+		{http.MethodGet, members},
+		{http.MethodPost, members},
+		{http.MethodDelete, members + "/{principal}"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: principalCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
 }
 
 // journalAllowEntries returns the allowlist row for the journal entry route.

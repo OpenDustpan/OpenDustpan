@@ -105,7 +105,7 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person or the owner of an access token.
+A caller whose identity OpenDustpan checked: a person, a service or a workload. A principal belongs to the whole installation, not to one namespace (ADR 52).
 _Avoid_: User (when the caller can be a machine), actor
 
 **Access token**:

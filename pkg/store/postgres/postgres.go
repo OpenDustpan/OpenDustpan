@@ -694,6 +694,24 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return nil
 }
 
+// inSnapshotTx runs fn in a REPEATABLE READ, read-only transaction, so each
+// read of fn sees one snapshot: a page and its total agree.
+func (s *Store) inSnapshotTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	opts := pgx.TxOptions{
+		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
+		CommitQuery: "",
+	}
+
+	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		return fn(s.queries.WithTx(tx))
+	})
+	if err != nil {
+		return fmt.Errorf("snapshot transaction: %w", err)
+	}
+
+	return nil
+}
+
 // inFencedTx runs fn in a transaction that first checks fence, holding the
 // namespace row FOR SHARE so a promotion waits until the transaction ends.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {
