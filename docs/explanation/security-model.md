@@ -192,7 +192,8 @@ through each API and check that the log and the metrics do not hold them.
 - Large bodies of the Pulumi CLI and of OpenTofu share 128 MiB at the same time. Over that, the server
   answers 503 with `Retry-After`. An upload with large outputs asks for more budget as the outputs grow. It answers 503 with a Retry-After of 1 to 3 seconds when the budget has no room. It answers 413 when the upload can never fit the budget. Raise `--max-body-bytes-in-flight` to fit such an upload.
 - The server waits at most 10 seconds for the request headers.
-- No rate limit exists today. Planned in a new RFC (ADR 32).
+- **Failed token lookups have a limit for each client address.** The server counts the failed lookups of secret-shaped token values for each client address. The address is the resolved client address. An IPv6 address counts by its /64 network. Behind a proxy that is not in `--trusted-proxies`, every client shares the address of the proxy. A request with an unknown address counts in one shared bucket named `unknown`.
+- No other rate limit exists today. Planned in a new RFC (ADR 32).
 
 ## Outbound connections
 
