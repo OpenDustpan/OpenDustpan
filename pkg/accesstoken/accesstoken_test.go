@@ -1,0 +1,581 @@
+package accesstoken_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+)
+
+// clock is a settable test clock.
+type clock struct {
+	now time.Time
+	mu  sync.Mutex
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+func (c *clock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
+}
+
+// fixture is a token service over a fresh SQLite store with two principals:
+// a person and a service. The workload has no token.
+type fixture struct {
+	svc        *accesstoken.Service
+	principals *principal.Service
+	clock      *clock
+	person     principal.Principal
+	service    principal.Principal
+	workload   principal.Principal
+}
+
+func caller() audit.Entry {
+	return audit.Entry{
+		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
+		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
+		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+	}
+}
+
+func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
+	t.Helper()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	c := &clock{now: time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
+
+	principals, err := principal.NewService(principal.Config{Store: st, Now: c.Now, NewID: nil})
+	if err != nil {
+		t.Fatalf("principal service: %v", err)
+	}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, Freshness: fresh, Logger: nil, Now: c.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
+	var none principal.Principal
+
+	f := fixture{svc: svc, principals: principals, clock: c, person: none, service: none, workload: none}
+
+	for _, p := range []struct {
+		dst     *principal.Principal
+		subject string
+		kind    principal.Kind
+	}{
+		{&f.person, "alice@example.com", principal.KindPerson},
+		{&f.service, "ci-deploy", principal.KindService},
+		{&f.workload, "spiffe://example.org/ci", principal.KindWorkload},
+	} {
+		*p.dst, err = principals.CreatePrincipal(t.Context(), caller(),
+			principal.Input{Subject: p.subject, DisplayName: "", Kind: p.kind})
+		if err != nil {
+			t.Fatalf("create principal %q: %v", p.subject, err)
+		}
+	}
+
+	return f
+}
+
+func (f fixture) create(t *testing.T, p principal.Principal, name string) (accesstoken.Token, accesstoken.Secret) {
+	t.Helper()
+
+	tok, secret, err := f.svc.Create(t.Context(), caller(),
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: p.ID, Name: name})
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	return tok, secret
+}
+
+func TestNewServiceNeedsDependencies(t *testing.T) {
+	t.Parallel()
+
+	_, err := accesstoken.NewService(accesstoken.Config{
+		Store: nil, Principals: nil, Freshness: nil, Logger: nil, Now: nil, NewID: nil,
+	})
+	if !errors.Is(err, accesstoken.ErrMissingDependency) {
+		t.Fatalf("err = %v, want ErrMissingDependency", err)
+	}
+}
+
+func TestSecretFormAndRedaction(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	_, secret := f.create(t, f.service, "deploy")
+	raw := secret.Reveal()
+
+	if !strings.HasPrefix(raw, accesstoken.SecretPrefix) || len(raw) != accesstoken.SecretLength {
+		t.Fatalf("secret %q: want the prefix %q and %d bytes", raw, accesstoken.SecretPrefix, accesstoken.SecretLength)
+	}
+
+	if !accesstoken.LooksLikeSecret(raw) {
+		t.Fatalf("LooksLikeSecret(%q) = false", raw)
+	}
+
+	for _, out := range []string{secret.String(), fmt.Sprintf("%v %+v %#v %s", secret, secret, secret, secret)} {
+		if strings.Contains(out, raw) || strings.Contains(out, raw[len(accesstoken.SecretPrefix):]) {
+			t.Fatalf("formatted secret %q holds the plain value", out)
+		}
+	}
+
+	_, other := f.create(t, f.service, "deploy 2")
+	if other.Reveal() == raw {
+		t.Fatal("two creates gave the same secret")
+	}
+}
+
+func TestLooksLikeSecret(t *testing.T) {
+	t.Parallel()
+
+	valid := accesstoken.SecretPrefix + strings.Repeat("A", 43)
+
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{valid, true},
+		{"", false},
+		{strings.Repeat("A", 47), false},
+		{valid + "A", false},
+		{valid[:len(valid)-1], false},
+		{accesstoken.SecretPrefix + strings.Repeat("!", 43), false},
+		{"ODP_" + strings.Repeat("A", 43), false},
+	}
+
+	for _, tc := range cases {
+		if got := accesstoken.LooksLikeSecret(tc.in); got != tc.want {
+			t.Errorf("LooksLikeSecret(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestKindFollowsPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	personal, _ := f.create(t, f.person, "laptop")
+	service, _ := f.create(t, f.service, "deploy")
+
+	if personal.Kind != accesstoken.KindPersonal || service.Kind != accesstoken.KindService {
+		t.Fatalf("kinds = %q, %q; want personal, service", personal.Kind, service.Kind)
+	}
+
+	_, _, err := f.svc.Create(t.Context(), caller(),
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.workload.ID, Name: "x"})
+	if !errors.Is(err, accesstoken.ErrNoTokenForKind) {
+		t.Fatalf("workload token: err = %v, want ErrNoTokenForKind", err)
+	}
+
+	_, _, err = f.svc.Create(t.Context(), caller(),
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "prn-none", Name: "x"})
+	if !errors.Is(err, accesstoken.ErrPrincipalNotFound) {
+		t.Fatalf("token of a missing principal: err = %v, want ErrPrincipalNotFound", err)
+	}
+}
+
+func TestLifetime(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	now := f.clock.Now()
+
+	tok, _ := f.create(t, f.service, "default")
+	if !tok.ExpiresAt.Equal(now.Add(accesstoken.DefaultLifetime)) {
+		t.Fatalf("default expiry = %s, want %s", tok.ExpiresAt, now.Add(accesstoken.DefaultLifetime))
+	}
+
+	cases := []struct {
+		expires time.Time
+		want    error
+	}{
+		{now.Add(time.Hour), nil},
+		{now.Add(accesstoken.MaxLifetime), nil},
+		{now.Add(accesstoken.MaxLifetime + time.Millisecond), accesstoken.ErrInvalid},
+		{now, accesstoken.ErrInvalid},
+		{now.Add(-time.Hour), accesstoken.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		_, _, err := f.svc.Create(t.Context(), caller(),
+			accesstoken.Input{ExpiresAt: tc.expires, PrincipalID: f.service.ID, Name: "x"})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("expiry %s: err = %v, want %v", tc.expires, err, tc.want)
+		}
+	}
+}
+
+func TestValidateName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		want error
+	}{
+		{"deploy", nil},
+		{"CI für prod", nil},
+		{strings.Repeat("a", 100), nil},
+		{"", accesstoken.ErrInvalid},
+		{strings.Repeat("a", 101), accesstoken.ErrInvalid},
+		{" deploy", accesstoken.ErrInvalid},
+		{"de\nploy", accesstoken.ErrInvalid},
+		{"de\u200eploy", accesstoken.ErrInvalid},
+		{"\xff", accesstoken.ErrInvalid},
+	}
+
+	for _, tc := range cases {
+		if err := accesstoken.ValidateName(tc.name); !errors.Is(err, tc.want) {
+			t.Errorf("ValidateName(%q) = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestAuthenticate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	tok, secret := f.create(t, f.service, "deploy")
+
+	got, err := f.svc.AuthenticateToken(ctx, secret.Reveal())
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	want := identity.Principal{Subject: "ci-deploy", DisplayName: "ci-deploy", Admin: false, TokenID: tok.ID}
+	if got != want {
+		t.Fatalf("principal = %+v, want %+v", got, want)
+	}
+
+	stored, err := f.svc.Get(ctx, tok.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if !stored.LastUsedAt.Equal(f.clock.Now()) {
+		t.Fatalf("last used = %s, want %s", stored.LastUsedAt, f.clock.Now())
+	}
+
+	for _, raw := range []string{
+		"",
+		"not-a-token",
+		accesstoken.SecretPrefix + strings.Repeat("A", 43),
+		strings.Repeat("x", 64),
+	} {
+		if _, err := f.svc.AuthenticateToken(ctx, raw); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("authenticate %q: err = %v, want ErrUnauthenticated", raw, err)
+		}
+	}
+}
+
+func TestAuthenticateRefusesEndedTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	revoked, revokedSecret := f.create(t, f.service, "revoked")
+	if err := f.svc.Revoke(ctx, caller(), revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	_, expiredSecret, err := f.svc.Create(ctx, caller(),
+		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, personSecret := f.create(t, f.person, "laptop")
+	if err := f.principals.DeletePrincipal(ctx, caller(), f.person.ID); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	f.clock.Advance(time.Hour)
+
+	for name, raw := range map[string]string{
+		"revoked": revokedSecret.Reveal(), "expired": expiredSecret.Reveal(), "deleted owner": personSecret.Reveal(),
+	} {
+		if _, err := f.svc.AuthenticateToken(ctx, raw); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s token: err = %v, want ErrUnauthenticated", name, err)
+		}
+	}
+}
+
+func TestRotate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	old, oldSecret := f.create(t, f.service, "deploy")
+
+	rot, secret, err := f.svc.Rotate(
+		ctx,
+		caller(),
+		old.ID,
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+	)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	wantEnd := f.clock.Now().Add(accesstoken.DefaultRotationOverlap)
+	if !rot.Old.ExpiresAt.Equal(wantEnd) || rot.Old.ReplacedBy != rot.New.ID {
+		t.Fatalf("old token = %+v, want the end %s and the new ID", rot.Old, wantEnd)
+	}
+
+	if rot.New.Name != "deploy" || rot.New.Kind != accesstoken.KindService || rot.New.PrincipalID != f.service.ID {
+		t.Fatalf("new token = %+v, want the name, the kind and the owner of the old one", rot.New)
+	}
+
+	for _, raw := range []string{oldSecret.Reveal(), secret.Reveal()} {
+		if _, authErr := f.svc.AuthenticateToken(ctx, raw); authErr != nil {
+			t.Fatalf("authenticate during the overlap: %v", authErr)
+		}
+	}
+
+	_, _, err = f.svc.Rotate(ctx, caller(), old.ID, accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}})
+	if !errors.Is(err, accesstoken.ErrEnded) {
+		t.Fatalf("second rotation: err = %v, want ErrEnded", err)
+	}
+
+	f.clock.Advance(accesstoken.DefaultRotationOverlap)
+
+	if _, err := f.svc.AuthenticateToken(ctx, oldSecret.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("old token after its end: err = %v, want ErrUnauthenticated", err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, secret.Reveal()); err != nil {
+		t.Fatalf("new token after the overlap: %v", err)
+	}
+}
+
+func TestRotationEnd(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	now := f.clock.Now()
+
+	short, _, err := f.svc.Create(ctx, caller(),
+		accesstoken.Input{ExpiresAt: now.Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	rot, _, err := f.svc.Rotate(
+		ctx,
+		caller(),
+		short.ID,
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+	)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	if !rot.Old.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("default end = %s, want the old expiry %s", rot.Old.ExpiresAt, now.Add(time.Hour))
+	}
+
+	cases := []struct {
+		end  time.Time
+		want error
+	}{
+		{now.Add(-time.Second), accesstoken.ErrInvalid},
+		{now.Add(accesstoken.DefaultLifetime + time.Hour), accesstoken.ErrInvalid},
+		{now, nil},
+	}
+
+	for _, tc := range cases {
+		tok, _ := f.create(t, f.service, "case")
+
+		end := tc.end
+		_, _, err := f.svc.Rotate(
+			ctx,
+			caller(),
+			tok.ID,
+			accesstoken.RotateInput{OldEndsAt: &end, ExpiresAt: time.Time{}},
+		)
+
+		if !errors.Is(err, tc.want) {
+			t.Errorf("end %s: err = %v, want %v", tc.end, err, tc.want)
+		}
+	}
+}
+
+// listFixture makes three tokens a second apart, two of the service and
+// one of the person, and revokes the first.
+func listFixture(t *testing.T) fixture {
+	t.Helper()
+
+	f := newFixture(t, nil)
+
+	first, _ := f.create(t, f.service, "one")
+	f.clock.Advance(time.Second)
+	f.create(t, f.service, "two")
+	f.clock.Advance(time.Second)
+	f.create(t, f.person, "three")
+
+	if err := f.svc.Revoke(t.Context(), caller(), first.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	return f
+}
+
+func mustList(t *testing.T, f fixture, req accesstoken.PageRequest) accesstoken.Page {
+	t.Helper()
+
+	page, err := f.svc.List(t.Context(), req)
+	if err != nil {
+		t.Fatalf("list %+v: %v", req, err)
+	}
+
+	return page
+}
+
+func TestListPages(t *testing.T) {
+	t.Parallel()
+
+	f := listFixture(t)
+
+	page := mustList(t, f, accesstoken.PageRequest{PrincipalID: "", Cursor: "", Limit: 1, IncludeEnded: false})
+	if len(page.Items) != 1 || page.Items[0].Name != "three" || page.Total != 2 || page.NextCursor == "" {
+		t.Fatalf("page 1 = %+v, want three, total 2 and a cursor", page)
+	}
+
+	page = mustList(t, f, accesstoken.PageRequest{
+		PrincipalID: "", Cursor: page.NextCursor, Limit: 1, IncludeEnded: false,
+	})
+	if len(page.Items) != 1 || page.Items[0].Name != "two" || page.NextCursor != "" {
+		t.Fatalf("page 2 = %+v, want two and no cursor", page)
+	}
+}
+
+func TestListEnded(t *testing.T) {
+	t.Parallel()
+
+	f := listFixture(t)
+
+	page := mustList(t, f, accesstoken.PageRequest{
+		PrincipalID: f.service.ID, Cursor: "", Limit: 0, IncludeEnded: true,
+	})
+	if len(page.Items) != 2 || page.Total != 2 || page.Items[1].StatusAt(f.clock.Now()) != accesstoken.StatusRevoked {
+		t.Fatalf("tokens of the service = %+v, want two with the revoked one last", page)
+	}
+}
+
+func TestListRefusesBadRequests(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	for _, req := range []accesstoken.PageRequest{
+		{PrincipalID: "", Cursor: "", Limit: accesstoken.MaxLimit + 1, IncludeEnded: false},
+		{PrincipalID: "", Cursor: "", Limit: -1, IncludeEnded: false},
+		{PrincipalID: "", Cursor: "@@", Limit: 0, IncludeEnded: false},
+		{PrincipalID: "", Cursor: strings.Repeat("A", accesstoken.MaxCursorLength+1), Limit: 0, IncludeEnded: false},
+		{PrincipalID: "a b", Cursor: "", Limit: 0, IncludeEnded: false},
+	} {
+		if _, err := f.svc.List(t.Context(), req); !errors.Is(err, accesstoken.ErrInvalid) {
+			t.Errorf("list %+v: err = %v, want ErrInvalid", req, err)
+		}
+	}
+}
+
+// staleMFA asks for a new MFA step for every operation.
+type staleMFA struct{}
+
+var errStale = errors.New("mfa step too old")
+
+func (staleMFA) RequireFresh(context.Context, string) error { return errStale }
+
+func TestFreshnessHook(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, staleMFA{})
+
+	_, _, err := f.svc.Create(t.Context(), caller(),
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
+	if !errors.Is(err, errStale) {
+		t.Fatalf("create: err = %v, want the freshness error", err)
+	}
+
+	_, _, err = f.svc.Rotate(
+		t.Context(),
+		caller(),
+		"tok-any",
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+	)
+	if !errors.Is(err, errStale) {
+		t.Fatalf("rotate: err = %v, want the freshness error", err)
+	}
+}
+
+func TestRef(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"tok-abc":    "token:tok-abc",
+		"prn-abc":    "token:invalid",
+		"tok-a b":    "token:invalid",
+		"":           "token:invalid",
+		"tok-../etc": "token:invalid",
+	}
+
+	for in, want := range cases {
+		if got := accesstoken.Ref(in); got != want {
+			t.Errorf("Ref(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDigest(t *testing.T) {
+	t.Parallel()
+
+	d := accesstoken.Digest{1, 2, 3}
+
+	parsed, err := accesstoken.ParseDigest(d.String())
+	if err != nil || !parsed.Equal(d) {
+		t.Fatalf("ParseDigest(String()) = %s, %v; want %s", parsed, err, d)
+	}
+
+	for _, bad := range []string{"", "zz", strings.Repeat("a", 62)} {
+		if _, err := accesstoken.ParseDigest(bad); !errors.Is(err, accesstoken.ErrInvalid) {
+			t.Errorf("ParseDigest(%q) err = %v, want ErrInvalid", bad, err)
+		}
+	}
+}

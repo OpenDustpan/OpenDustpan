@@ -365,8 +365,8 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true}
-	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false}
+	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
+	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false, TokenID: ""}
 
 	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()} {
 		for _, action := range actions {
@@ -576,3 +576,57 @@ func TestStaticTokensWeak(t *testing.T) {
 		t.Fatalf("no token = %v, want ErrWeakToken", err)
 	}
 }
+
+// fixedAuthenticator answers one principal or one error for every token.
+type fixedAuthenticator struct {
+	err       error
+	principal identity.Principal
+}
+
+func (f fixedAuthenticator) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	return f.principal, f.err
+}
+
+func TestChain(t *testing.T) {
+	t.Parallel()
+
+	var none identity.Principal
+
+	alice := identity.Principal{Subject: "alice", DisplayName: "Alice", Admin: false, TokenID: "tok-1"}
+	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
+	unauth := fixedAuthenticator{err: identity.ErrUnauthenticated, principal: none}
+	broken := fixedAuthenticator{err: errStoreDown, principal: none}
+	acceptAdmin := fixedAuthenticator{err: nil, principal: admin}
+	acceptAlice := fixedAuthenticator{err: nil, principal: alice}
+
+	cases := []struct {
+		want    error
+		name    string
+		wantSub string
+		chain   identity.Chain
+	}{
+		{want: nil, name: "first accepts", wantSub: "admin", chain: identity.Chain{acceptAdmin, broken}},
+		{want: nil, name: "second accepts", wantSub: "alice", chain: identity.Chain{unauth, acceptAlice}},
+		{want: identity.ErrUnauthenticated, name: "none accepts", wantSub: "", chain: identity.Chain{unauth, unauth}},
+		{want: identity.ErrUnauthenticated, name: "empty", wantSub: "", chain: identity.Chain{}},
+		{
+			want:    errStoreDown,
+			name:    "a failure stops the chain",
+			wantSub: "",
+			chain:   identity.Chain{unauth, broken, acceptAlice},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, err := tc.chain.AuthenticateToken(t.Context(), "token")
+			if !errors.Is(err, tc.want) || p.Subject != tc.wantSub {
+				t.Fatalf("chain = %+v, %v; want subject %q, err %v", p, err, tc.wantSub, tc.want)
+			}
+		})
+	}
+}
+
+var errStoreDown = errors.New("store down")

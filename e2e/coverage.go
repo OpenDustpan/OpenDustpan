@@ -600,6 +600,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Version:        "test",
 		Schema:         coverageSchema{},
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -699,6 +700,7 @@ func CoverageAllowlist() []AllowEntry {
 		restoreAllowEntries(),
 		journalAllowEntries(),
 		principalAllowEntries(),
+		tokenAllowEntries(),
 	)
 }
 
@@ -742,6 +744,40 @@ func principalAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: principalCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// tokenCoveringTest names the test that proves the access token routes
+// instead of a CLI: no CLI calls them (ADR 53).
+const tokenCoveringTest = "TestAccessTokens"
+
+// tokenAllowEntries returns the operator and console routes of the access
+// tokens. The harness steps of tokenCoveringTest drive each one through the
+// real binary on each store, and sign in with the tokens they issue.
+func tokenAllowEntries() []AllowEntry {
+	reason := "Operator and console route (ADR 53): no CLI manages access tokens. " +
+		"The harness step calls it through the real binary and signs in with the token it issues."
+
+	const (
+		list = "/api/server/tokens"
+		one  = list + "/{id}"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, list},
+		{http.MethodGet, list},
+		{http.MethodGet, one},
+		{http.MethodDelete, one},
+		{http.MethodPost, one + "/rotate"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: tokenCoveringTest, Reason: reason,
 		})
 	}
 

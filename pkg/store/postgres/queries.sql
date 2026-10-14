@@ -914,3 +914,62 @@ WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+
+-- Access tokens (ADR 53).
+
+-- name: CreateAccessToken :execrows
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms)
+SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
+  sqlc.arg('created_at_ms'), sqlc.arg('expires_at_ms')
+FROM principals p
+WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL
+ON CONFLICT DO NOTHING;
+
+-- name: CountLivePrincipal :one
+SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
+
+-- name: CountAccessToken :one
+SELECT COUNT(*) FROM access_tokens WHERE id = $1;
+
+-- name: GetAccessToken :one
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+FROM access_tokens WHERE id = $1;
+
+-- name: GetAccessTokenByDigest :one
+SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
+  t.revoked_at_ms, t.replaced_by, p.subject, p.display_name, p.kind AS principal_kind
+FROM access_tokens t
+JOIN principals p ON p.id = t.principal_id
+WHERE t.digest = $1 AND p.deleted_at_ms IS NULL;
+
+-- name: ListAccessTokens :many
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+FROM access_tokens
+WHERE (sqlc.arg('principal_id')::text = '' OR principal_id = sqlc.arg('principal_id')::text)
+  AND (sqlc.arg('active_at_ms')::bigint = 0
+    OR (revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('active_at_ms')::bigint))
+  AND (NOT sqlc.arg('has_after')::boolean
+    OR created_at_ms < sqlc.arg('after_ms')::bigint
+    OR (created_at_ms = sqlc.arg('after_ms')::bigint AND id COLLATE "C" < sqlc.arg('after_id')::text))
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountAccessTokens :one
+SELECT COUNT(*) FROM access_tokens
+WHERE (sqlc.arg('principal_id')::text = '' OR principal_id = sqlc.arg('principal_id')::text)
+  AND (sqlc.arg('active_at_ms')::bigint = 0
+    OR (revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('active_at_ms')::bigint));
+
+-- name: RevokeAccessToken :execrows
+UPDATE access_tokens SET revoked_at_ms = sqlc.arg('revoked_at_ms')::bigint
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL;
+
+-- name: EndRotatedAccessToken :execrows
+UPDATE access_tokens
+SET expires_at_ms = LEAST(expires_at_ms, sqlc.arg('ends_at_ms')::bigint), replaced_by = sqlc.arg('replaced_by')::text
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
+  AND expires_at_ms > sqlc.arg('now_ms')::bigint;
+
+-- name: TouchAccessToken :exec
+UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
+WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);

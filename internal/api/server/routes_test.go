@@ -15,6 +15,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -52,7 +53,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false}, nil
+	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false, TokenID: ""}, nil
 }
 
 // stubAuthorizer denies every action.
@@ -194,6 +195,7 @@ func newServiceBackedHandler(
 		Version:        "test",
 		Schema:         st,
 		Principals:     seedRoutePrincipals(t, st),
+		Tokens:         seedRouteTokens(t, st),
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -212,7 +214,36 @@ const (
 	testPrincipalID      = "prn-routes0000000000001"
 	testOtherPrincipalID = "prn-routes0000000000002"
 	testGroupID          = "grp-routes0000000000001"
+	testTokenID          = "tok-routes0000000000001"
 )
+
+// seedRouteTokens writes an active token of testOtherPrincipalID, so the
+// token routes with an ID answer their success status, and returns the
+// service over st. seedRoutePrincipals runs first.
+func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
+	t.Helper()
+
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	tok := accesstoken.Token{
+		CreatedAt: at, ExpiresAt: at.Add(48 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
+		ID: testTokenID, PrincipalID: testOtherPrincipalID, Name: "deploy", Kind: accesstoken.KindService,
+		ReplacedBy: "",
+	}
+
+	err := st.CreateToken(t.Context(), tok, accesstoken.Digest{1}, storetest.ServerChange(at, accesstoken.Ref(tok.ID)))
+	if err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, Freshness: nil, Logger: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
+	return svc
+}
 
 // seedRoutePrincipals writes the principals, the group and the membership
 // that the principal and group routes name, and returns the service over st.
@@ -273,6 +304,8 @@ var routeBodies = map[string]string{
 	"POST /api/server/groups":                                  `{"name":"dev"}`,
 	"PATCH /api/server/groups/{id}":                            `{"description":"Runs the platform"}`,
 	"POST /api/server/groups/{id}/members":                     `{"principalID":"` + testOtherPrincipalID + `"}`,
+	"POST /api/server/tokens":                                  `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
+	"POST /api/server/tokens/{id}/rotate":                      `{}`,
 }
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
@@ -546,6 +579,8 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		id = testPrincipalID
 	case strings.HasPrefix(route.Path, "/api/server/groups"):
 		id = testGroupID
+	case strings.HasPrefix(route.Path, "/api/server/tokens"):
+		id = testTokenID
 	default:
 	}
 
@@ -585,7 +620,8 @@ func wantSuccessStatus(route apiserver.Route) int {
 
 	if route.Method == http.MethodPost && (route.Path == "/api/server/namespaces" ||
 		route.Path == "/api/server/principals" || route.Path == "/api/server/groups" ||
-		route.Path == "/api/server/groups/{id}/members") {
+		route.Path == "/api/server/groups/{id}/members" || route.Path == "/api/server/tokens" ||
+		route.Path == "/api/server/tokens/{id}/rotate") {
 		return http.StatusCreated
 	}
 
@@ -835,6 +871,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	}
@@ -964,6 +1001,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -987,6 +1025,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

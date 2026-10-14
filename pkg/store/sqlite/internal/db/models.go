@@ -8,6 +8,19 @@ import (
 	"database/sql"
 )
 
+type AccessToken struct {
+	ID           string
+	PrincipalID  string
+	Name         string
+	Kind         string
+	Digest       string
+	CreatedAtMs  int64
+	ExpiresAtMs  int64
+	LastUsedAtMs sql.NullInt64
+	RevokedAtMs  sql.NullInt64
+	ReplacedBy   sql.NullString
+}
+
 type AuditEntry struct {
 	Namespace  string
 	Sequence   int64

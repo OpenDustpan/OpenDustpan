@@ -52,6 +52,7 @@ const (
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
 	pgColUnitID      = "unit_id"
+	pgColPrincipalID = "principal_id"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -262,8 +263,24 @@ func pgCopyIdentityTables() []pgCopyTable {
 		},
 		{
 			table:   "group_members",
-			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
-			orderBy: []string{"group_id", "principal_id", "added_at_ms"},
+			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
+			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
+		},
+		{
+			table: "access_tokens",
+			columns: []string{
+				"id",
+				pgColPrincipalID,
+				pgColName,
+				pgColKind,
+				"digest",
+				pgColCreatedAtMs,
+				"expires_at_ms",
+				"last_used_at_ms",
+				"revoked_at_ms",
+				"replaced_by",
+			},
+			orderBy: []string{"id"},
 		},
 	}
 }

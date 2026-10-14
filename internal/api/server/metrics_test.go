@@ -23,7 +23,7 @@ func (adminAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "admin", DisplayName: "Admin", Admin: true}, nil
+	return identity.Principal{Subject: "admin", DisplayName: "Admin", Admin: true, TokenID: ""}, nil
 }
 
 // expositionWriter writes one fixed exposition, so the format test proves
@@ -66,6 +66,7 @@ func newMetricsHandler(
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

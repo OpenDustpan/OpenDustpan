@@ -47,10 +47,12 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -357,6 +359,9 @@ type services struct {
 	updates    *stack.Updates
 	secrets    *secret.Service
 	workspaces *workspace.Service
+	// tokens keeps the access tokens of the principals (ADR 53), or is nil
+	// when the store keeps none. NewServer sets it after newServices.
+	tokens *accesstoken.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -410,7 +415,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	svc.tokens, err = newTokenService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	backups, err := newBackupService(cfg, svc)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.authenticator, err = gatedAuthenticator(cfg, svc.tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -768,6 +783,7 @@ func newServices(cfg settings) (services, error) {
 		updates:    updates,
 		secrets:    secrets,
 		workspaces: workspaces,
+		tokens:     nil,
 	}, nil
 }
 
@@ -1198,6 +1214,7 @@ func newServerHandler(
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
 		Principals:    principals,
+		Tokens:        deps.services.tokens,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -1239,6 +1256,53 @@ func newPrincipalService(cfg settings) (*principal.Service, error) {
 	}
 
 	return svc, nil
+}
+
+// newTokenService builds the access token service (ADR 53) from the
+// namespace store, or returns nil when the store keeps no access tokens or
+// no principals. Every SQL adapter keeps both.
+func newTokenService(cfg settings) (*accesstoken.Service, error) {
+	store, ok := cfg.namespaceStore.(accesstoken.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
+	}
+
+	principals, ok := cfg.namespaceStore.(accesstoken.PrincipalReader)
+	if !ok {
+		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
+	}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: store, Principals: principals, Freshness: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// gatedAuthenticator returns the authenticator that every adapter and the
+// request log use: the configured authenticator, then the stored access
+// tokens when the store keeps them, behind a gate that limits the failed
+// lookups of each source and resolves a token once for each request. The
+// bootstrap admin tokens keep working (ADR 6).
+//
+//nolint:ireturn // The adapters take the port.
+func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
+	next := cfg.authenticator
+	if tokens != nil {
+		next = identity.Chain{cfg.authenticator, tokens}
+	}
+
+	gate, err := authgate.New(authgate.Config{
+		Next: next, Logger: cfg.logger, Now: cfg.now, Burst: 0, Refill: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authentication gate: %w", err)
+	}
+
+	return gate, nil
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or
@@ -1453,6 +1517,17 @@ func debugRoute(pattern string) bool {
 	}
 }
 
+// remoteHost returns the remote address of r without the port: the source
+// that the authentication gate counts failures for.
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
 // subjectForRequest returns the subject of the signed-in principal, or false
 // when the request carries no valid access token. Lease and upload requests
 // carry no access token, so they log with no subject.
@@ -1509,6 +1584,7 @@ func withRequestLog(
 		w.Header()[requestIDHeader] = []string{id}
 
 		ctx := requestid.WithContext(r.Context(), id)
+		ctx = authgate.WithRequest(ctx, remoteHost(r))
 
 		r = r.WithContext(ctx)
 

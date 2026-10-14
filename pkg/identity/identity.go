@@ -41,6 +41,10 @@ type Principal struct {
 	DisplayName string
 	// Admin grants every action on every object.
 	Admin bool
+	// TokenID names the stored access token that authenticated the caller
+	// (ADR 53). It is empty for a bootstrap admin token (ADR 6), which has
+	// no stored record.
+	TokenID string
 }
 
 // Action is something a principal wants to do.
@@ -103,6 +107,13 @@ const (
 	// and adding and removing their members (ADR 52). Its object is
 	// ServerObject.
 	ActionServerManageGroups Action = "server:manage-groups"
+	// ActionServerReadTokens allows reading the access tokens of every
+	// principal, never their secrets (ADR 53). Its object is ServerObject.
+	ActionServerReadTokens Action = "server:read-tokens"
+	// ActionServerManageTokens allows creating, revoking and rotating the
+	// access tokens of every principal (ADR 53). Its object is
+	// ServerObject.
+	ActionServerManageTokens Action = "server:manage-tokens"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -311,7 +322,7 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 	}
 
 	return &StaticToken{
-		principal: Principal{Subject: subject, DisplayName: subject, Admin: true},
+		principal: Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: ""},
 		token:     []byte(token),
 	}, nil
 }
@@ -368,7 +379,7 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 			subject = fmt.Sprintf("admin-%d", i+1)
 		}
 
-		principals = append(principals, Principal{Subject: subject, DisplayName: subject, Admin: true})
+		principals = append(principals, Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: ""})
 		hashes = append(hashes, sum)
 	}
 
@@ -398,6 +409,37 @@ func (s *StaticTokens) AuthenticateToken(_ context.Context, token string) (Princ
 	}
 
 	return principal, nil
+}
+
+// Chain authenticates a token with each of its authenticators in order and
+// answers the first principal. It lets the bootstrap admin tokens (ADR 6)
+// keep working next to the stored access tokens (ADR 53).
+type Chain []Authenticator
+
+var _ Authenticator = Chain(nil)
+
+// AuthenticateToken returns the principal of the first authenticator that
+// accepts token. An authenticator that answers ErrUnauthenticated passes the
+// token to the next one. Any other error stops the chain and is returned, so
+// a failed store read fails closed. With no authenticator left, it answers
+// the last ErrUnauthenticated.
+func (c Chain) AuthenticateToken(ctx context.Context, token string) (Principal, error) {
+	last := ErrUnauthenticated
+
+	for _, a := range c {
+		p, err := a.AuthenticateToken(ctx, token)
+		if err == nil {
+			return p, nil
+		}
+
+		if !errors.Is(err, ErrUnauthenticated) {
+			return Principal{}, err
+		}
+
+		last = err
+	}
+
+	return Principal{}, last
 }
 
 // AdminOnly allows administrators and denies everyone else. It is the safe

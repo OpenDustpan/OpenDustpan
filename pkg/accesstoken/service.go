@@ -1,0 +1,431 @@
+package accesstoken
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
+)
+
+// Lifetimes of a token. RFC 20 keeps the defaults open: these follow the
+// lead proposal of a maximum of one year. An administrator setting for the
+// maximum lifetime comes with ADR 53, decision 2.
+const (
+	// DefaultLifetime is the lifetime of a token when a request names no
+	// expiry.
+	DefaultLifetime = 90 * 24 * time.Hour
+	// MaxLifetime is the longest lifetime that a request can name.
+	MaxLifetime = 365 * 24 * time.Hour
+	// DefaultRotationOverlap is how long the old token of a rotation keeps
+	// working when the request names no end time. The expiry of the old
+	// token bounds it.
+	DefaultRotationOverlap = 24 * time.Hour
+	// touchEvery limits the writes of the last-used time: one write for
+	// each token in this period at most (ADR 53, consequences).
+	touchEvery = time.Minute
+)
+
+// PrincipalReader reads the principal records. principal.Store implements
+// it.
+type PrincipalReader interface {
+	// GetPrincipal returns the principal with the ID id, or
+	// principal.ErrNotFound when no such principal exists or it was deleted.
+	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
+}
+
+// Freshness asks for a recent MFA step before an operation that shows a
+// secret (ADR 56). Built-in MFA (ADR 46) does not exist yet, so the server
+// wires no Freshness: with MFA off, ADR 56 adds no step (decision 5).
+type Freshness interface {
+	// RequireFresh returns nil when the caller subject passed an MFA step
+	// inside the freshness window of token creation. Otherwise it returns
+	// an error that asks for a new MFA step. The session of the caller
+	// comes from ctx.
+	RequireFresh(ctx context.Context, subject string) error
+}
+
+// Config holds the dependencies of a Service.
+type Config struct {
+	Store      Store
+	Principals PrincipalReader
+	// Freshness checks the MFA step before a create or a rotation. Nil
+	// adds no step: MFA does not exist yet (ADR 56, decision 5).
+	Freshness Freshness
+	// Logger logs a failed write of a last-used time. Nil discards it.
+	Logger *slog.Logger
+	// Now returns the current time. Nil means time.Now.
+	Now func() time.Time
+	// NewID returns a new opaque ID with the prefix it takes. Nil means
+	// random IDs.
+	NewID func(prefix string) string
+}
+
+// Service implements the access token use cases, and resolves a secret to
+// its principal as an identity.Authenticator.
+//
+// Each change takes the audit entry of the caller: who acted, from where,
+// through which channel, and the action. The Service sets the time from its
+// own clock, the scope, the kind change, the outcome success and the record,
+// and the store appends the entry in the transaction of the change.
+type Service struct {
+	store      Store
+	principals PrincipalReader
+	freshness  Freshness
+	logger     *slog.Logger
+	now        func() time.Time
+	newID      func(prefix string) string
+}
+
+var _ identity.Authenticator = (*Service)(nil)
+
+// NewService returns a Service. Store and Principals are required.
+func NewService(cfg Config) (*Service, error) {
+	switch {
+	case cfg.Store == nil:
+		return nil, fmt.Errorf("%w: access token store", ErrMissingDependency)
+	case cfg.Principals == nil:
+		return nil, fmt.Errorf("%w: principal reader", ErrMissingDependency)
+	}
+
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	newID := cfg.NewID
+	if newID == nil {
+		newID = ident.NewID
+	}
+
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
+	return &Service{
+		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
+		logger: logger, now: now, newID: newID,
+	}, nil
+}
+
+// Now returns the time of the Service clock, in UTC to the millisecond:
+// the time a change and its audit entry carry.
+func (s *Service) Now() time.Time {
+	return s.now().UTC().Truncate(time.Millisecond)
+}
+
+// Input names the fields of a new token. A zero ExpiresAt takes
+// DefaultLifetime.
+type Input struct {
+	ExpiresAt   time.Time
+	PrincipalID string
+	Name        string
+}
+
+// Create issues a new token for the principal in.PrincipalID, with the
+// entry e. It returns the token and its secret: the only time the server
+// shows the secret. The kind of the token follows the kind of the
+// principal.
+func (s *Service) Create(ctx context.Context, e audit.Entry, in Input) (Token, Secret, error) {
+	if err := s.requireFresh(ctx, e.Subject); err != nil {
+		return Token{}, Secret{}, err
+	}
+
+	if err := ValidateName(in.Name); err != nil {
+		return Token{}, Secret{}, err
+	}
+
+	p, err := s.principals.GetPrincipal(ctx, in.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return Token{}, Secret{}, fmt.Errorf("create access token: %w: %q", ErrPrincipalNotFound, in.PrincipalID)
+	}
+
+	if err != nil {
+		return Token{}, Secret{}, fmt.Errorf("create access token: read principal: %w", err)
+	}
+
+	kind, err := KindFor(p.Kind)
+	if err != nil {
+		return Token{}, Secret{}, err
+	}
+
+	at := s.Now()
+
+	expiresAt, err := expiry(at, in.ExpiresAt)
+	if err != nil {
+		return Token{}, Secret{}, err
+	}
+
+	n, err := s.newToken(at, expiresAt, p.ID, in.Name, kind)
+	if err != nil {
+		return Token{}, Secret{}, err
+	}
+
+	if err := s.store.CreateToken(ctx, n.token, n.digest, change(e, at, Ref(n.token.ID))); err != nil {
+		return Token{}, Secret{}, fmt.Errorf("create access token %q: %w", in.Name, err)
+	}
+
+	return n.token, n.secret, nil
+}
+
+// expiry returns the expiry of a token made at the time at: want, or
+// DefaultLifetime when want is zero. It returns ErrInvalid for an expiry
+// that is not after at, or that is more than MaxLifetime after at.
+func expiry(at, want time.Time) (time.Time, error) {
+	if want.IsZero() {
+		return at.Add(DefaultLifetime), nil
+	}
+
+	want = want.UTC().Truncate(time.Millisecond)
+
+	switch {
+	case !want.After(at):
+		return time.Time{}, fmt.Errorf("%w: the expiry %s is not in the future", ErrInvalid, want.Format(time.RFC3339))
+	case want.Sub(at) > MaxLifetime:
+		return time.Time{}, fmt.Errorf("%w: the expiry %s is more than %s away",
+			ErrInvalid, want.Format(time.RFC3339), MaxLifetime)
+	default:
+		return want, nil
+	}
+}
+
+// Get returns the token with the ID id.
+func (s *Service) Get(ctx context.Context, id string) (Token, error) {
+	t, err := s.store.GetToken(ctx, id)
+	if err != nil {
+		return Token{}, fmt.Errorf("get access token %q: %w", id, err)
+	}
+
+	return t, nil
+}
+
+// List returns one page of tokens, newest first.
+func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
+	q, limit, err := req.query(s.Now())
+	if err != nil {
+		return Page{}, err
+	}
+
+	rows, total, err := s.store.ListTokens(ctx, q)
+	if err != nil {
+		return Page{}, fmt.Errorf("list access tokens: %w", err)
+	}
+
+	return pageOf(rows, total, limit), nil
+}
+
+// Revoke ends the token id at once, with the entry e.
+func (s *Service) Revoke(ctx context.Context, e audit.Entry, id string) error {
+	if err := s.store.RevokeToken(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+		return fmt.Errorf("revoke access token %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// RotateInput names the fields of a rotation. A nil OldEndsAt keeps the
+// old token for DefaultRotationOverlap, or until its expiry when that is
+// earlier. A zero ExpiresAt gives the new token DefaultLifetime.
+type RotateInput struct {
+	OldEndsAt *time.Time
+	ExpiresAt time.Time
+}
+
+// Rotation is the result of a rotation: the old token with its new end
+// time, and the new token.
+type Rotation struct {
+	Old Token
+	New Token
+}
+
+// Rotate issues a new token for the owner of the token id and sets an end
+// time for the old token (ADR 53, decision 8), with the entry e. The new
+// token keeps the name and the kind. It returns the secret of the new
+// token: the only time the server shows it.
+func (s *Service) Rotate(ctx context.Context, e audit.Entry, id string, in RotateInput) (Rotation, Secret, error) {
+	if err := s.requireFresh(ctx, e.Subject); err != nil {
+		return Rotation{}, Secret{}, err
+	}
+
+	old, err := s.store.GetToken(ctx, id)
+	if err != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
+	}
+
+	at := s.Now()
+	if old.StatusAt(at) != StatusActive || old.ReplacedBy != "" {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ErrEnded)
+	}
+
+	oldEndsAt, err := rotationEnd(at, old.ExpiresAt, in.OldEndsAt)
+	if err != nil {
+		return Rotation{}, Secret{}, err
+	}
+
+	expiresAt, err := expiry(at, in.ExpiresAt)
+	if err != nil {
+		return Rotation{}, Secret{}, err
+	}
+
+	n, err := s.newToken(at, expiresAt, old.PrincipalID, old.Name, old.Kind)
+	if err != nil {
+		return Rotation{}, Secret{}, err
+	}
+
+	r := Replacement{OldEndsAt: oldEndsAt, OldID: id, Next: n.token, Digest: n.digest}
+	if err := s.store.RotateToken(ctx, r, change(e, at, Ref(id))); err != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
+	}
+
+	old.ExpiresAt = oldEndsAt
+	old.ReplacedBy = n.token.ID
+
+	return Rotation{Old: old, New: n.token}, n.secret, nil
+}
+
+// rotationEnd returns the end time of the old token of a rotation at the
+// time at: want, or DefaultRotationOverlap after at. The old expiry bounds
+// the default. A wanted time before at, or after the old expiry, answers
+// ErrInvalid.
+func rotationEnd(at, oldExpiry time.Time, want *time.Time) (time.Time, error) {
+	if want == nil {
+		return minTime(at.Add(DefaultRotationOverlap), oldExpiry), nil
+	}
+
+	end := want.UTC().Truncate(time.Millisecond)
+
+	switch {
+	case end.Before(at):
+		return time.Time{}, fmt.Errorf("%w: the end time %s of the old token is in the past",
+			ErrInvalid, end.Format(time.RFC3339))
+	case end.After(oldExpiry):
+		return time.Time{}, fmt.Errorf("%w: the end time %s of the old token is after its expiry %s",
+			ErrInvalid, end.Format(time.RFC3339), oldExpiry.Format(time.RFC3339))
+	default:
+		return end, nil
+	}
+}
+
+// minTime returns the earlier of a and b.
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+
+	return b
+}
+
+// AuthenticateToken implements identity.Authenticator. It resolves raw to
+// the principal of its token. A value that does not have the form of a
+// secret, an unknown secret, and a token that expired or was revoked, or
+// whose principal was deleted, answer identity.ErrUnauthenticated. The
+// principal is never an administrator: grants decide what it can do
+// (ADR 52). A failed store read answers its error, so the caller fails
+// closed.
+func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.Principal, error) {
+	if !LooksLikeSecret(raw) {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	digest := digestOfRaw(raw)
+
+	m, err := s.store.GetTokenByDigest(ctx, digest)
+	if errors.Is(err, ErrNotFound) {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	if err != nil {
+		return identity.Principal{}, fmt.Errorf("authenticate access token: %w", err)
+	}
+
+	if !m.Digest.Equal(digest) {
+		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	now := s.Now()
+	if status := m.Token.StatusAt(now); status != StatusActive {
+		return identity.Principal{}, fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
+	}
+
+	s.touch(ctx, m.Token, now)
+
+	return identity.Principal{
+		Subject:     m.Owner.Subject,
+		DisplayName: m.Owner.DisplayName,
+		Admin:       false,
+		TokenID:     m.Token.ID,
+	}, nil
+}
+
+// touch records the use of t at now, at most once for each touchEvery. A
+// failed write does not refuse the request: the server logs it with the
+// token ID only.
+func (s *Service) touch(ctx context.Context, t Token, now time.Time) {
+	if !t.LastUsedAt.IsZero() && now.Sub(t.LastUsedAt) < touchEvery {
+		return
+	}
+
+	if err := s.store.TouchToken(ctx, t.ID, now, touchEvery); err != nil {
+		s.logger.WarnContext(ctx, "record access token use failed", slog.String("token_id", t.ID))
+	}
+}
+
+// requireFresh runs the MFA freshness check when one is wired.
+func (s *Service) requireFresh(ctx context.Context, subject string) error {
+	if s.freshness == nil {
+		return nil
+	}
+
+	if err := s.freshness.RequireFresh(ctx, subject); err != nil {
+		return fmt.Errorf("mfa freshness: %w", err)
+	}
+
+	return nil
+}
+
+// change completes the entry of the caller for one change of the record
+// object at the time at.
+func change(e audit.Entry, at time.Time, object string) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = object
+
+	return e
+}
+
+// issued is a new token with its secret and the digest of the secret.
+type issued struct {
+	token  Token
+	secret Secret
+	digest Digest
+}
+
+// newToken returns a new token record with its secret and digest.
+func (s *Service) newToken(at, expiresAt time.Time, principalID, name string, kind Kind) (issued, error) {
+	secret, err := newSecret()
+	if err != nil {
+		return issued{}, err
+	}
+
+	t := Token{
+		CreatedAt:   at,
+		ExpiresAt:   expiresAt,
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		ID:          s.newID(idPrefix),
+		PrincipalID: principalID,
+		Name:        name,
+		Kind:        kind,
+		ReplacedBy:  "",
+	}
+
+	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
+}

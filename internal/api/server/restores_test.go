@@ -96,6 +96,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Version:        "test",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -534,6 +535,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Version:        "test",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -725,6 +727,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Version:        "test",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
