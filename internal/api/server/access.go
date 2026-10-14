@@ -93,12 +93,27 @@ type grantResponse struct {
 	CreatedBy string `json:"createdBy"`
 }
 
+// listedGrantResponse is one grant of a list on the wire, with its holder:
+// HolderName is the display name of a principal (its subject when it has no
+// display name) or the name of a group, and HolderKind is "person",
+// "service" or "group". So a list shows who holds each grant with no read
+// for each holder.
+//
+// Contract: never remove or rename these fields.
+type listedGrantResponse struct {
+	grantResponse
+
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
+}
+
 // grantListResponse is one page of grants. Total is the count of every
-// current grant on the object. NextCursor is empty on the last page.
+// current grant on the object that matches the filters. NextCursor is empty
+// on the last page.
 type grantListResponse struct {
-	Grants     []grantResponse `json:"grants"`
-	NextCursor string          `json:"nextCursor"`
-	Total      int64           `json:"total"`
+	Grants     []listedGrantResponse `json:"grants"`
+	NextCursor string                `json:"nextCursor"`
+	Total      int64                 `json:"total"`
 }
 
 // roleRequest is the body of a role create, and of a role change, where a
@@ -453,7 +468,10 @@ func deleteRole(
 }
 
 // listGrants serves GET on a grants path: one page of the current grants on
-// the object, ordered by subject, then role.
+// the object, ordered by subject, then role, each with its holder. The
+// query value holder keeps the grants of one subject
+// ("principal:<id>" or "group:<id>#member"), and role keeps the grants of
+// one role.
 func listGrants(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
 ) (principalResult, error) {
@@ -462,16 +480,23 @@ func listGrants(
 		return failed(""), err
 	}
 
-	page, err := svc.ListGrants(r.Context(), c.obj, access.PageRequest{Cursor: req.Cursor, Limit: req.Limit})
+	q := r.URL.Query()
+
+	page, err := svc.ListGrants(r.Context(), c.obj, access.PageRequest{
+		Cursor: req.Cursor, Holder: q.Get("holder"), Role: q.Get("role"), Limit: req.Limit,
+	})
 	if err != nil {
 		return failed(""), err
 	}
 
 	out := grantListResponse{
-		Grants: make([]grantResponse, 0, len(page.Grants)), NextCursor: page.NextCursor, Total: page.Total,
+		Grants: make([]listedGrantResponse, 0, len(page.Grants)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 	for i := range page.Grants {
-		out.Grants = append(out.Grants, grantOf(page.Grants[i]))
+		l := &page.Grants[i]
+		out.Grants = append(out.Grants, listedGrantResponse{
+			grantResponse: grantOf(l.Grant), HolderName: l.Holder.Name, HolderKind: l.Holder.Kind,
+		})
 	}
 
 	return ok(http.StatusOK, out, ""), nil

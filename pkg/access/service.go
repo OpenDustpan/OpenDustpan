@@ -374,16 +374,21 @@ func (s *Service) Revoke(
 // opaque NextCursor of the page before, or empty for the first page, at most
 // principal.MaxCursorLength bytes. Limit is 1 to MaxLimit. 0 means that the
 // request names no limit, and reads DefaultLimit rows: the HTTP adapter
-// refuses a limit of 0 that a request names.
+// refuses a limit of 0 that a request names. Holder, when it is not empty,
+// keeps the grants of one subject (the text form, ErrInvalid otherwise).
+// Role, when it is not empty, keeps the grants of one role.
 type PageRequest struct {
 	Cursor string
+	Holder string
+	Role   string
 	Limit  int
 }
 
-// Page is one page of grants. Total is the count of every current grant on
-// the object. NextCursor is empty on the last page.
+// Page is one page of grants with their holders. Total is the count of
+// every current grant on the object that matches the filters. NextCursor is
+// empty on the last page.
 type Page struct {
-	Grants     []Grant
+	Grants     []ListedGrant
 	NextCursor string
 	Total      int64
 }
@@ -403,29 +408,58 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 		return Page{}, err
 	}
 
-	grants, total, err := s.store.ListGrantsOn(ctx, obj, q)
+	listed, total, err := s.store.ListGrantsOn(ctx, obj, q)
 	if err != nil {
 		return Page{}, fmt.Errorf("list grants on %q: %w", obj.String(), err)
 	}
 
-	if _, err := s.authz.currentUnits(ctx, grants); err != nil {
+	if err := s.currentListedUnits(ctx, listed); err != nil {
 		return Page{}, err
 	}
 
-	out := Page{Grants: grants, NextCursor: "", Total: total}
+	out := Page{Grants: listed, NextCursor: "", Total: total}
 
-	if len(grants) > limit {
-		out.Grants = grants[:limit]
-		last := out.Grants[limit-1]
+	if len(listed) > limit {
+		out.Grants = listed[:limit]
+		last := out.Grants[limit-1].Grant
 		out.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(last.Subject.String() + "\x00" + last.Role))
 	}
 
 	return out, nil
 }
 
+// grantFilters checks the holder and role filters of req and sets them on
+// q.
+func grantFilters(q *GrantQuery, req PageRequest) error {
+	if req.Holder != "" {
+		holder, err := ParseSubject(req.Holder)
+		if err != nil {
+			return err
+		}
+
+		q.Subject = holder.String()
+	}
+
+	if len(req.Role) > maxRoleFilterLength || !utf8.ValidString(req.Role) || strings.ContainsRune(req.Role, 0) {
+		return fmt.Errorf("%w: role filter", ErrInvalid)
+	}
+
+	q.Role = req.Role
+
+	return nil
+}
+
+// maxRoleFilterLength bounds the role filter of a grant list, in bytes. A
+// role ID is far shorter.
+const maxRoleFilterLength = 128
+
 // grantQuery validates req and returns the store query of its page.
 func grantQuery(req PageRequest) (GrantQuery, error) {
-	q := GrantQuery{AfterSubject: "", AfterRole: "", Limit: req.Limit}
+	q := GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: req.Limit}
+
+	if err := grantFilters(&q, req); err != nil {
+		return GrantQuery{}, err
+	}
 
 	switch {
 	case q.Limit == 0:
@@ -784,6 +818,25 @@ func (s *Service) checkSubjectGrants(ctx context.Context, caller identity.Princi
 		if err := s.checkGrantHeld(ctx, caller, grants[i]); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// currentListedUnits puts the current name of each unit in the grants of
+// listed.
+func (s *Service) currentListedUnits(ctx context.Context, listed []ListedGrant) error {
+	grants := make([]Grant, 0, len(listed))
+	for i := range listed {
+		grants = append(grants, listed[i].Grant)
+	}
+
+	if _, err := s.authz.currentUnits(ctx, grants); err != nil {
+		return err
+	}
+
+	for i := range listed {
+		listed[i].Grant.Object = grants[i].Object
 	}
 
 	return nil

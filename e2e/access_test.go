@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"testing"
@@ -27,10 +28,12 @@ type e2eRoleList struct {
 }
 
 type e2eGrant struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-	Role    string `json:"role"`
-	Object  string `json:"object"`
+	ID         string `json:"id"`
+	Subject    string `json:"subject"`
+	Role       string `json:"role"`
+	Object     string `json:"object"`
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
 }
 
 type e2eGrantList struct {
@@ -326,6 +329,8 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 		t.Fatalf("grants on %s = %+v, want %s alone", k.object, list, g.ID)
 	}
 
+	checkGrantFilters(ctx, t, env, k, query)
+
 	if strings.HasPrefix(k.role, "rol-") {
 		// A custom role that a grant holds cannot be deleted.
 		principalCall(ctx, t, env, principalStep{
@@ -338,6 +343,45 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 	}, nil)
 	principalCall(ctx, t, env, principalStep{
 		http.MethodDelete, k.path + "/" + g.ID + query, "", http.StatusNotFound,
+	}, nil)
+}
+
+// checkGrantFilters lists the grants on one object kind with the holder and
+// role filters: the grant of k has its holder name and kind, and a filter
+// on another role keeps nothing.
+func checkGrantFilters(ctx context.Context, t *testing.T, env *e2e.Env, k grantKind, query string) {
+	t.Helper()
+
+	sep := "?"
+	if query != "" {
+		sep = "&"
+	}
+
+	wantKind := map[bool]string{true: "group", false: "person"}[strings.HasPrefix(k.subject, "group:")]
+
+	var held e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, k.path + query + sep + url.Values{"holder": {k.subject}, "role": {k.role}}.Encode(), "",
+		http.StatusOK,
+	}, &held)
+
+	if len(held.Grants) != 1 || held.Total != 1 || held.Grants[0].HolderName == "" ||
+		held.Grants[0].HolderKind != wantKind {
+		t.Fatalf("grants of %s on %s = %+v, want one with its holder name and the kind %s",
+			k.subject, k.object, held, wantKind)
+	}
+
+	var none e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, k.path + query + sep + url.Values{"role": {"secret-viewer"}}.Encode(), "", http.StatusOK,
+	}, &none)
+
+	if len(none.Grants) != 0 || none.Total != 0 {
+		t.Fatalf("secret-viewer grants on %s = %+v, want none", k.object, none)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, k.path + query + sep + "holder=bob", "", http.StatusBadRequest,
 	}, nil)
 }
 
