@@ -25,8 +25,9 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   URL. Each is 32 random bytes, and the server keeps only its SHA-256 hash.
   A running Pulumi update also checks, on each request, the access token that
   started it. When that token is revoked, expired or its principal is deleted,
-  the update's next request answers 401. An update that a bootstrap
-  administrator token started has no such token, so no check runs.
+  each later request answers 401. A request in flight when the revoke commits
+  may finish. An update that a bootstrap administrator token started has no
+  such token, so no check runs.
 
 Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
 single sign-on with directory sync (RFC 21).
