@@ -5,7 +5,10 @@
 package bodygate
 
 import (
+	"crypto/rand"
+	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -23,12 +26,19 @@ const (
 	// state with thousands of resources, or one with a single 24 MiB string,
 	// holds at most 4.4 MiB at once through the TFE upload and the http
 	// backend write, sealed or not, and 3.7 MiB under the race detector.
-	// The cost is twice that peak. A state with a large outputs document is
-	// the exception: the upload buffers the outputs whole, and sealing
-	// buffers them again (a 7.9 MiB document peaks at 14.1 MiB unsealed and
-	// 27.6 MiB sealed), so such an upload can hold more than it reserved.
+	// The cost is twice that peak. StreamCost covers the buffers of a body
+	// that streams; an outputs document, which the server holds whole, is
+	// charged to the same lease as it grows (a Lease), so it does not rely
+	// on this cost. Sealing buffers the outputs again (a 7.9 MiB document
+	// peaks at 14.1 MiB unsealed and 27.6 MiB sealed).
 	StreamCost = 8 << 20
 )
+
+// retryAfterJitterBound bounds the random Retry-After delay: values 1 to 3.
+const retryAfterJitterBound = 3
+
+// retryAfterJitterBase is the lowest random Retry-After delay in seconds.
+const retryAfterJitterBase = 1
 
 // gzipExpansion is the size factor a gzip body reserves over its wire
 // length: JSON checkpoints and secrets compress well, and the decoder holds
@@ -88,6 +98,18 @@ func (g *Gate) InFlight() int64 {
 	defer g.mu.Unlock()
 
 	return g.current
+}
+
+// Max reports the capacity of the gate in bytes. A nil gate reports zero.
+func (g *Gate) Max() int64 {
+	if g == nil {
+		return 0
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.max
 }
 
 // Reservation returns the bytes one body reserves: its declared length when
@@ -196,6 +218,24 @@ func (l *Lease) Held() int64 {
 	return l.held
 }
 
+// Capacity reports the maximum bytes the lease can grow to: the maximum of
+// its gate. A nil lease reports zero.
+func (l *Lease) Capacity() int64 {
+	if l == nil {
+		return 0
+	}
+
+	l.mu.Lock()
+	gate := l.gate
+	l.mu.Unlock()
+
+	if gate == nil {
+		return 0
+	}
+
+	return gate.Max()
+}
+
 // Hold reserves n bytes of the gate. It reports false when they do not fit.
 // On success the caller runs the returned release once the body is served.
 // The release func frees once; a second call does nothing.
@@ -215,4 +255,21 @@ func Hold(g *Gate, n int64) (release func(), ok bool) {
 // its own shape.
 func SetRetryAfter(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", RetryAfterSeconds)
+}
+
+// SetRetryAfterJitter sets the Retry-After header of a 503 that a lease
+// growth refusal answers to a random whole number of seconds from 1 to 3, so
+// a burst of refused uploads does not retry at once. When the random source
+// fails it answers the fixed delay.
+func SetRetryAfterJitter(w http.ResponseWriter) {
+	limit := big.NewInt(retryAfterJitterBound)
+
+	n, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		SetRetryAfter(w)
+
+		return
+	}
+
+	w.Header().Set("Retry-After", strconv.FormatInt(n.Int64()+retryAfterJitterBase, 10))
 }

@@ -283,6 +283,24 @@ type metaResult struct {
 	meta streamedMeta
 }
 
+// noMeta is the empty meta of a refused stream.
+//
+//nolint:gochecknoglobals // One shared empty value for refused streams; callers never mutate it.
+var noMeta = streamedMeta{
+	Lineage:         "",
+	Outputs:         nil,
+	Serial:          0,
+	HasSerial:       false,
+	HasLineage:      false,
+	ClientEncrypted: false,
+}
+
+// refusedByBudget reports whether err refuses the body budget: the budget is
+// full or too small for the upload.
+func refusedByBudget(err error) bool {
+	return errors.Is(err, ErrBusy) || errors.Is(err, ErrBudgetTooSmall)
+}
+
 // metaStream reads the meta of one state while its bytes pass through it. The
 // bytes go to the store, and a copy goes to a decoder that runs beside it, so
 // the document is read once. A failed store write or a failed decode closes
@@ -304,9 +322,9 @@ func newMetaStream(content io.Reader, grow func(int) error) (io.Reader, *metaStr
 		// A busy budget fails fast: the reader closes with the error, so the
 		// store write stops and the client body is not read to the end.
 		meta, err := readStateMeta(pr, grow)
-		if errors.Is(err, ErrBusy) {
+		if refusedByBudget(err) {
 			_ = pr.CloseWithError(err)
-			ms.done <- metaResult{err: err, meta: streamedMeta{Lineage: "", Outputs: nil, Serial: 0, HasSerial: false, HasLineage: false, ClientEncrypted: false}}
+			ms.done <- metaResult{err: err, meta: noMeta}
 
 			return
 		}

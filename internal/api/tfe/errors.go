@@ -77,7 +77,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	case http.StatusUnprocessableEntity:
 		h.writeUnprocessable(ctx, w, class.detail, class.title)
 	case http.StatusServiceUnavailable:
-		bodygate.SetRetryAfter(w)
+		bodygate.SetRetryAfterJitter(w)
 		h.writeJSONAPIError(ctx, w, class.status, class.title, class.detail)
 	default:
 		h.writeJSONAPIError(ctx, w, class.status, class.title, class.detail)
@@ -131,9 +131,23 @@ func (h *Handler) writeJSONAPIError(
 	}
 }
 
+// classifyTooLarge maps an oversized body or a budget that can never fit to
+// 413. ok is false for any other error.
+func classifyTooLarge(err error) (errorClass, bool) {
+	if errors.Is(err, workspace.ErrTooLarge) || errors.Is(err, workspace.ErrBudgetTooSmall) {
+		return errorClass{status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error()}, true
+	}
+
+	return errorClass{status: 0, title: "", detail: ""}, false
+}
+
 // classify maps domain errors to a status, title and detail safe to show
 // callers. Unknown errors map to 500 with a generic detail.
 func classify(err error) errorClass {
+	if class, ok := classifyTooLarge(err); ok {
+		return class
+	}
+
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return errorClass{status: http.StatusUnauthorized, title: "unauthorized", detail: "unauthenticated"}
@@ -158,13 +172,11 @@ func classify(err error) errorClass {
 		errors.Is(err, workspace.ErrTooManyPending),
 		errors.Is(err, namespace.ErrFenced):
 		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
-	case errors.Is(err, workspace.ErrTooLarge):
-		return errorClass{status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error()}
 	case errors.Is(err, workspace.ErrBusy):
 		return errorClass{
 			status: http.StatusServiceUnavailable,
 			title:  "service unavailable",
-			detail: "server is busy: try again in one second",
+			detail: "server is busy: try again after the Retry-After time",
 		}
 	case errors.Is(err, errInvalidBody),
 		errors.Is(err, workspace.ErrInvalidName),

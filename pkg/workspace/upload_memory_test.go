@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"io"
+	"math"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -655,8 +656,9 @@ type memReport struct {
 
 // memBudget records the bytes the upload asks to grow.
 type memBudget struct {
-	mu    sync.Mutex
-	total int64
+	mu       sync.Mutex
+	total    int64
+	capacity int64
 }
 
 // Grow records n and always accepts.
@@ -667,6 +669,22 @@ func (b *memBudget) Grow(n int64) bool {
 	b.total += n
 
 	return true
+}
+
+// Held reports the recorded sum.
+func (b *memBudget) Held() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.total
+}
+
+// Capacity reports the total budget the stub pretends to hold.
+func (b *memBudget) Capacity() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.capacity
 }
 
 // totalBytes returns the recorded sum.
@@ -750,7 +768,7 @@ func runMemTFECase(t *testing.T, variant, sealedName string, svc *workspace.Serv
 		t.Fatalf("begin state: %v", beginErr)
 	}
 
-	budget := &memBudget{mu: sync.Mutex{}, total: 0}
+	budget := &memBudget{mu: sync.Mutex{}, total: 0, capacity: math.MaxInt64}
 	budgetCtx := workspace.WithBudget(ctx, budget)
 
 	used := memMeasure(t, func() (workspace.StateVersion, error) {
@@ -785,7 +803,7 @@ func runMemHTTPCase(t *testing.T, variant, sealedName string, svc *workspace.Ser
 	hexSum, size, sum := memBodyMD5(t, variant, measuredSerial)
 	memCheckSize(t, variant, size)
 
-	budget := &memBudget{mu: sync.Mutex{}, total: 0}
+	budget := &memBudget{mu: sync.Mutex{}, total: 0, capacity: math.MaxInt64}
 	budgetCtx := workspace.WithBudget(ctx, budget)
 
 	used := memMeasure(t, func() (workspace.StateVersion, error) {

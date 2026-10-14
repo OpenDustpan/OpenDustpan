@@ -2,6 +2,8 @@ package workspace_test
 
 import (
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -11,17 +13,22 @@ import (
 
 // stubBudget records the sum of Grow and can refuse after a total.
 type stubBudget struct {
-	mu    sync.Mutex
-	sum   int64
-	limit int64
+	mu       sync.Mutex
+	sum      int64
+	limit    int64
+	capacity int64
 }
 
 func newAcceptBudget() *stubBudget {
-	return &stubBudget{mu: sync.Mutex{}, sum: 0, limit: -1}
+	return &stubBudget{mu: sync.Mutex{}, sum: 0, limit: -1, capacity: math.MaxInt64}
 }
 
 func newRefuseBudget(limit int64) *stubBudget {
-	return &stubBudget{mu: sync.Mutex{}, sum: 0, limit: limit}
+	return &stubBudget{mu: sync.Mutex{}, sum: 0, limit: limit, capacity: math.MaxInt64}
+}
+
+func newTooSmallBudget(limit, capacity int64) *stubBudget {
+	return &stubBudget{mu: sync.Mutex{}, sum: 0, limit: limit, capacity: capacity}
 }
 
 func (b *stubBudget) Grow(n int64) bool {
@@ -35,6 +42,22 @@ func (b *stubBudget) Grow(n int64) bool {
 	b.sum += n
 
 	return true
+}
+
+// Held reports the recorded sum.
+func (b *stubBudget) Held() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.sum
+}
+
+// Capacity reports the total budget the stub pretends to hold.
+func (b *stubBudget) Capacity() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.capacity
 }
 
 func (b *stubBudget) total() int64 {
@@ -195,8 +218,9 @@ func testRefusedBusy(t *testing.T) {
 	}
 }
 
-// testRefusedNoBlob proves a refused upload leaves no blob and stays pending.
-func testRefusedNoBlob(t *testing.T) {
+// testRefusedBudgetLeavesNoBlob proves a refused upload fails with ErrBusy,
+// leaves no blob, and the version is not readable as state.
+func testRefusedBudgetLeavesNoBlob(t *testing.T) {
 	t.Helper()
 
 	base := newMemBase(t)
@@ -226,6 +250,99 @@ func testRefusedNoBlob(t *testing.T) {
 	_, readErr := svc.ReadState(t.Context(), pending.Version.ID)
 	if !errors.Is(readErr, workspace.ErrStateVersionNotFound) {
 		t.Fatalf("read refused version: %v, want ErrStateVersionNotFound", readErr)
+	}
+}
+
+// checkTooSmall proves err is the permanent budget refusal: ErrBudgetTooSmall
+// with the flag name and the byte counts.
+func checkTooSmall(t *testing.T, err error, capacity int64) {
+	t.Helper()
+
+	if !errors.Is(err, workspace.ErrBudgetTooSmall) {
+		t.Fatalf("upload with too-small budget: %v, want ErrBudgetTooSmall", err)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "--max-body-bytes-in-flight") {
+		t.Fatalf("error %q lacks the flag name", msg)
+	}
+
+	if !strings.Contains(msg, strconv.FormatInt(capacity, 10)) {
+		t.Fatalf("error %q lacks the capacity %d", msg, capacity)
+	}
+
+	if !strings.Contains(msg, "bytes") {
+		t.Fatalf("error %q lacks the byte counts", msg)
+	}
+}
+
+// testTooSmallUpload proves an upload that can never fit the budget fails
+// with ErrBudgetTooSmall and leaves no blob.
+func testTooSmallUpload(t *testing.T) {
+	t.Helper()
+
+	base := newMemBase(t)
+	svc, ws := memService(t, base, nil)
+
+	lockOutputsWorkspace(t, svc, ws)
+
+	const serial = 1
+
+	hexSum, _, _ := memBodyMD5(t, "outputs", serial)
+	pending := declareOutputsVersion(t, svc, ws, serial, hexSum)
+
+	const capacity = 1 << 20
+
+	budget := newTooSmallBudget(1<<20, capacity)
+	budgetCtx := workspace.WithBudget(t.Context(), budget)
+
+	gen := newMemStateGen("outputs", serial)
+
+	_, uploadErr := svc.Upload(budgetCtx, pending.Version.ID, pending.Upload, gen)
+	checkTooSmall(t, uploadErr, capacity)
+
+	if got := blobCount(t, base, ws); got != 0 {
+		t.Fatalf("blobs = %d, want none after a too-small upload", got)
+	}
+
+	_, readErr := svc.ReadState(t.Context(), pending.Version.ID)
+	if !errors.Is(readErr, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("read refused version: %v, want ErrStateVersionNotFound", readErr)
+	}
+}
+
+// testTooSmallWriteState proves a WriteState that can never fit the budget
+// fails with ErrBudgetTooSmall and leaves no blob.
+func testTooSmallWriteState(t *testing.T) {
+	t.Helper()
+
+	base := newMemBase(t)
+	svc, ws := memService(t, base, nil)
+
+	if _, lockErr := svc.LockWithID(t.Context(), ws.ID, memHolder, memLockReason, memLockID); lockErr != nil {
+		t.Fatalf("lock: %v", lockErr)
+	}
+
+	const serial = 1
+
+	hexSum, _, _ := memBodyMD5(t, "outputs", serial)
+
+	const capacity = 1 << 20
+
+	budget := newTooSmallBudget(1<<20, capacity)
+	budgetCtx := workspace.WithBudget(t.Context(), budget)
+
+	gen := newMemStateGen("outputs", serial)
+
+	_, writeErr := svc.WriteState(budgetCtx, ws.ID,
+		workspace.StreamInput{Holder: memHolder, LockID: memLockID, MD5: hexSum},
+		streamAuthority(noOverrides(), nil),
+		gen,
+	)
+	checkTooSmall(t, writeErr, capacity)
+
+	if got := blobCount(t, base, ws); got != 0 {
+		t.Fatalf("blobs = %d, want none after a too-small write", got)
 	}
 }
 
@@ -331,12 +448,22 @@ func TestUploadOutputsBudget(t *testing.T) {
 
 	t.Run("refused budget leaves no blob", func(t *testing.T) {
 		t.Parallel()
-		testRefusedNoBlob(t)
+		testRefusedBudgetLeavesNoBlob(t)
+	})
+
+	t.Run("too-small budget fails permanent", func(t *testing.T) {
+		t.Parallel()
+		testTooSmallUpload(t)
 	})
 
 	t.Run("refused WriteState has no blob", func(t *testing.T) {
 		t.Parallel()
 		testRefusedWriteState(t)
+	})
+
+	t.Run("too-small WriteState fails permanent", func(t *testing.T) {
+		t.Parallel()
+		testTooSmallWriteState(t)
 	})
 
 	t.Run("small outputs charge little", func(t *testing.T) {

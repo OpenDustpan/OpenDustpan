@@ -259,7 +259,7 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	}
 
 	if status == http.StatusServiceUnavailable {
-		bodygate.SetRetryAfter(w)
+		bodygate.SetRetryAfterJitter(w)
 	}
 
 	http.Error(w, message, status)
@@ -305,8 +305,10 @@ func classifyAccess(err error) (int, string, bool) {
 // any other error.
 func classifyState(err error) (int, string, bool) {
 	switch {
+	case errors.Is(err, workspace.ErrBudgetTooSmall):
+		return http.StatusRequestEntityTooLarge, err.Error(), true
 	case errors.Is(err, workspace.ErrBusy):
-		return http.StatusServiceUnavailable, "server is busy: try again in one second", true
+		return http.StatusServiceUnavailable, "server is busy: try again after the Retry-After time", true
 	case errors.Is(err, workspace.ErrConcurrentModification), errors.Is(err, workspace.ErrLockMismatch),
 		errors.Is(err, workspace.ErrStaleSerial), errors.Is(err, workspace.ErrLineageMismatch):
 		return http.StatusConflict, "state conflicts with the current state or lock", true
