@@ -85,6 +85,10 @@ func UpgradeCheck(
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := BackupToken()
 	if err != nil {
 		return err
