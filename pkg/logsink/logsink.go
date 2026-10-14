@@ -80,8 +80,9 @@ func (l Level) String() string {
 }
 
 // Attr is one named attribute of a record. Value holds a string, an int64,
-// a bool, a json.RawMessage or nil. A JSON adapter writes a json.RawMessage
-// as it is. An adapter writes any other type with its default text form.
+// a float64, a bool, a json.RawMessage or nil. A JSON adapter writes a
+// json.RawMessage as it is. An adapter writes any other type with its
+// default JSON form.
 type Attr struct {
 	Value any
 	Key   string
