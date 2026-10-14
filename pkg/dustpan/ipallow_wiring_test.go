@@ -147,14 +147,14 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 	return srv
 }
 
-// serveOrgWorkspaces serves one workspace list request from remote.
-func serveOrgWorkspaces(t *testing.T, srv *dustpan.Server, remote string) (int, string) {
+// serveNamespaceRead serves one namespace read request from remote.
+func serveNamespaceRead(t *testing.T, srv *dustpan.Server, remote string) (int, string) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(
 		t.Context(),
 		http.MethodGet,
-		"/api/v2/organizations/acme/workspaces",
+		"/api/server/namespaces/acme/override-switches",
 		nil,
 	)
 	req.RemoteAddr = remote
@@ -176,9 +176,9 @@ func TestIPAllowlistsGateThroughHandler(t *testing.T) {
 
 	included := newIPAllowlistServer(t, true)
 
-	code, body := serveOrgWorkspaces(t, included, "192.0.2.10")
+	code, body := serveNamespaceRead(t, included, "192.0.2.10")
 	if code != http.StatusForbidden {
-		t.Fatalf("outside address status = %d, want %d", code, http.StatusForbidden)
+		t.Fatalf("outside address status = %d, want %d; body %s", code, http.StatusForbidden, body)
 	}
 
 	if strings.Contains(body, "198.51.100.0/24") {
@@ -187,12 +187,12 @@ func TestIPAllowlistsGateThroughHandler(t *testing.T) {
 
 	exempt := newIPAllowlistServer(t, false)
 
-	code, _ = serveOrgWorkspaces(t, exempt, "192.0.2.10")
+	code, _ = serveNamespaceRead(t, exempt, "192.0.2.10")
 	if code != http.StatusOK {
 		t.Fatalf("exempt bootstrap status = %d, want %d", code, http.StatusOK)
 	}
 
-	code, _ = serveOrgWorkspaces(t, included, "198.51.100.7:1234")
+	code, _ = serveNamespaceRead(t, included, "198.51.100.7:1234")
 	if code != http.StatusOK {
 		t.Fatalf("inside address status = %d, want %d", code, http.StatusOK)
 	}

@@ -169,15 +169,22 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{store: cfg.Store, now: now, region: cfg.Region}, nil
 }
 
-// Create creates a namespace homed in the service's region, at failover version 1.
-func (s *Service) Create(ctx context.Context, name Name) (Namespace, error) {
-	ns := Namespace{
+// New returns the namespace that Create stores for name: homed in the
+// service's region, at failover version 1, created now. It stores nothing,
+// so a caller can store it with other rows in one transaction.
+func (s *Service) New(name Name) Namespace {
+	return Namespace{
 		CreatedAt:       s.now().UTC(),
 		Name:            name,
 		HomeRegion:      s.region,
 		FailoverVersion: 1,
 		Overrides:       Overrides{Forced: false, Unlocked: false},
 	}
+}
+
+// Create creates a namespace homed in the service's region, at failover version 1.
+func (s *Service) Create(ctx context.Context, name Name) (Namespace, error) {
+	ns := s.New(name)
 
 	if err := s.store.CreateNamespace(ctx, ns); err != nil {
 		return Namespace{}, fmt.Errorf("create namespace %q: %w", name, err)

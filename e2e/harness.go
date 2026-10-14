@@ -165,8 +165,11 @@ type Env struct {
 	s3Endpoint string
 	token      string
 	tokenB     string
-	home       string
-	project    string
+	// memberToken signs in as MemberSubject, or is empty when the server
+	// knows only the bootstrap admin tokens.
+	memberToken string
+	home        string
+	project     string
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
@@ -299,10 +302,12 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
+	member := newToken(tb)
+
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
-		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB},
+		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB, member: member},
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 	})
@@ -332,6 +337,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		s3Endpoint:    s3EndpointOf(tb),
 		token:         in.token,
 		tokenB:        in.tokenB,
+		memberToken:   member,
 		home:          filepath.Join(in.dir, "home"),
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
@@ -394,6 +400,9 @@ func newToken(tb testing.TB) string {
 type serverTokens struct {
 	tokenA string
 	tokenB string
+	// member signs in as MemberSubject: a principal that is not an
+	// administrator.
+	member string
 }
 
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
@@ -484,7 +493,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithBackupTarget(target, targetName),
 		dustpan.WithInventoryReader(st),
-		dustpan.WithAuthenticator(authn),
+		dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 		dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 	)
@@ -943,6 +952,34 @@ func (e *Env) ServerAPIStatusAs(ctx context.Context, token, method, path, body s
 	return e.serverStatus(ctx, token, method, path, body)
 }
 
+// ServerAPIHeadersAs sends one GET to the installation API with token as a
+// Bearer credential and returns its status, headers and body, for steps
+// that read a response header such as the token expiry warning (ADR 53).
+func (e *Env) ServerAPIHeadersAs(ctx context.Context, token, path string) (APIResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.URL+path, http.NoBody)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("build GET %s: %w", path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("GET %s: %w", path, err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close() //nolint:errcheck // The body was read to completion below where it matters.
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return APIResponse{}, fmt.Errorf("read GET %s: %w", path, err)
+	}
+
+	return APIResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(body)}, nil
+}
+
 // ServerAPIStatusBare sends one installation API request without credentials
 // and returns its status and body, for steps that prove a route needs a
 // token.
@@ -955,7 +992,7 @@ func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int
 // as OpenTofu sends it. It uses the test server's client, which trusts the
 // self-signed certificate OpenTofu gets through SSL_CERT_FILE.
 func (e *Env) TFEStatus(ctx context.Context, token, method, path, body string) (int, string, error) {
-	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: ""})
+	return e.tfeStatusAs(ctx, token, tfeCall{method: method, path: path, body: body, userAgent: "", scheme: ""})
 }
 
 // tfeCall is one TFE API request. An empty userAgent keeps the client default,
@@ -965,6 +1002,9 @@ type tfeCall struct {
 	path      string
 	body      string
 	userAgent string
+	// scheme names the Authorization scheme: "token" for the console scheme, or
+	// empty for "Bearer" (the TFE-compatible and installation scheme).
+	scheme string
 }
 
 // TFEStatusA sends one TFE API request as principal A, the default principal
@@ -1021,6 +1061,14 @@ func (e *Env) TFEStatusB(ctx context.Context, method, path, body string) (int, s
 // so this overrides the default configuration.
 func (e *Env) TofuEnvB() []string {
 	return []string{"TF_CLI_CONFIG_FILE=" + filepath.Join(e.home, "tofurc-b")}
+}
+
+// MemberToken returns the token that signs in as MemberSubject, a principal
+// that is not an administrator, and reports whether the server knows it.
+// The binary server knows only the bootstrap admin tokens until sign-in and
+// access tokens exist (ADR 53).
+func (e *Env) MemberToken() (string, bool) {
+	return e.memberToken, e.memberToken != ""
 }
 
 // TokenA returns the access token of principal A, the principal the CLI
@@ -1107,7 +1155,13 @@ type APIStepSpec struct {
 	Body string
 	// Want is the expected HTTP status.
 	Want int
+	// Scheme is "token" to send the console scheme ("Authorization: token <t>").
+	// Empty sends "Bearer <t>", the scheme of the TFE-compatible API.
+	Scheme string
 }
+
+// authSchemeToken names the console Authorization scheme in APIStepSpec.Scheme.
+const authSchemeToken = "token"
 
 // APIStep runs one TFE API request as a scenario step and records it for the
 // report. It fails the subtest when the status differs from want or when
@@ -1127,6 +1181,7 @@ func (e *Env) APIStep(ctx context.Context, t *testing.T, token string, spec APIS
 			path:      spec.Path,
 			body:      spec.Body,
 			userAgent: spec.UserAgent,
+			scheme:    spec.Scheme,
 		})
 
 		switch {
@@ -2189,7 +2244,11 @@ func (e *Env) tfeStatusAs(ctx context.Context, token string, call tfeCall) (int,
 		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	if call.scheme == authSchemeToken {
+		req.Header.Set("Authorization", "token "+token)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/vnd.api+json")
 	}

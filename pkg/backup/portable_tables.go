@@ -5,6 +5,7 @@ package backup
 const (
 	portColName        = "name"
 	portColCreatedAtMs = "created_at_ms"
+	portColCreatedBy   = "created_by"
 	portColNamespace   = "namespace"
 	portColVersion     = "version"
 	portColStackID     = "stack_id"
@@ -20,6 +21,7 @@ const (
 	portColDeletedAtMs = "deleted_at_ms"
 	portColSource      = "source"
 	portColKind        = "kind"
+	portColSubject     = "subject"
 	portColDeletedName = "deleted_name"
 	portColTool        = "tool"
 	portColUnitID      = "unit_id"
@@ -89,7 +91,7 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColStartedAtMs, Kind: KindTime},
 				{Name: portColEndedAtMs, Kind: KindTime},
-				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
 				{Name: "restored_from", Kind: KindInteger},
 				{Name: "journal_version", Kind: KindInteger},
 				{Name: "journal_closed", Kind: KindBool},
@@ -248,7 +250,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColSequence, Kind: KindInteger},
-				{Name: "subject", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
 				{Name: "idp_subject", Kind: KindText},
 				{Name: "token_id", Kind: KindText},
 				{Name: "action", Kind: KindText},
@@ -272,7 +274,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
-				{Name: "subject", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
 				{Name: "display_name", Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: portColSource, Kind: KindText},
@@ -319,7 +321,41 @@ func portableSpec() []PortableTable {
 				{Name: "last_used_at_ms", Kind: KindTime},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
-				{Name: "created_by", Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
+			},
+		},
+		{
+			Table:   "roles",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: "name_key", Kind: KindText},
+				{Name: "description", Kind: KindText},
+				{Name: "actions", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: portColDeletedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "grants",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
+				{Name: "subject_kind", Kind: KindText},
+				{Name: "subject_id", Kind: KindText},
+				{Name: "role", Kind: KindText},
+				{Name: "object", Kind: KindText},
+				{Name: "target", Kind: KindText},
+				{Name: "object_kind", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "condition", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColCreatedBy, Kind: KindText},
+				{Name: "revoked_at_ms", Kind: KindTime},
+				{Name: "revoked_by", Kind: KindText},
 			},
 		},
 		{

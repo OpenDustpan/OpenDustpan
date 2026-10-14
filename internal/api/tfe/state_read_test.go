@@ -489,8 +489,10 @@ func TestStateResourceDenied(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, stateRequest(t, target))
 
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("GET %s answers %d, want %d", target, rec.Code, http.StatusForbidden)
+		// A caller that cannot read the unit gets the 404 of an unknown
+		// state version.
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s answers %d, want %d", target, rec.Code, http.StatusNotFound)
 		}
 	}
 }

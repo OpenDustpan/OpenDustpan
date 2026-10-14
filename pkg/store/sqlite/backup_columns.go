@@ -4,6 +4,7 @@ package sqlite
 // each one a constant.
 const (
 	backupColCreatedAtMs = "created_at_ms"
+	backupColCreatedBy   = "created_by"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
 	backupColNamespace   = "namespace"
@@ -19,6 +20,7 @@ const (
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
 	backupColKind        = "kind"
+	backupColSubject     = "subject"
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
 	backupColUnitID      = "unit_id"
@@ -90,7 +92,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColStartedAtMs,
 				backupColEndedAtMs,
-				"created_by",
+				backupColCreatedBy,
 				"restored_from",
 				"journal_version",
 				"journal_closed",
@@ -239,7 +241,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespace,
 				backupColSequence,
-				"subject",
+				backupColSubject,
 				"idp_subject",
 				"token_id",
 				"action",
@@ -262,7 +264,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "principals",
 			columns: []string{
 				"id",
-				"subject",
+				backupColSubject,
 				"display_name",
 				backupColKind,
 				backupColSource,
@@ -301,7 +303,39 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
-				"created_by",
+				backupColCreatedBy,
+			},
+		},
+		{
+			table: "roles",
+			columns: []string{
+				"id",
+				backupColName,
+				"name_key",
+				"description",
+				"actions",
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
+			},
+		},
+		{
+			table: "grants",
+			columns: []string{
+				"id",
+				backupColSubject,
+				"subject_kind",
+				"subject_id",
+				"role",
+				"object",
+				"target",
+				"object_kind",
+				backupColNamespace,
+				"condition",
+				backupColCreatedAtMs,
+				backupColCreatedBy,
+				"revoked_at_ms",
+				"revoked_by",
 			},
 		},
 		{

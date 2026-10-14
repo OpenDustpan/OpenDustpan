@@ -142,12 +142,16 @@ func BackupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup again", stderr)
 	if err != nil {
 		return err
 	}
@@ -206,10 +210,12 @@ func BackupToken() (string, error) {
 // newBackupHTTPClient returns the API client of the backup and restore
 // commands: the system store with the PEM bundle in caFile added when set.
 // An empty caFile trusts the system store alone. rerun names the one command
-// that helps, for example "run opendustpan backup again".
-func newBackupHTTPClient(caFile, rerun string) (*http.Client, error) {
+// that helps, for example "run opendustpan backup again". The client prints
+// one warning on stderr when the server says that the access token expires
+// soon (ADR 53, decision 11).
+func newBackupHTTPClient(caFile, rerun string, stderr io.Writer) (*http.Client, error) {
 	if strings.TrimSpace(caFile) == "" {
-		return &http.Client{Timeout: backupRequestTimeout}, nil
+		return warnOnExpiry(&http.Client{Timeout: backupRequestTimeout}, stderr), nil
 	}
 
 	pemData, err := os.ReadFile(strings.TrimSpace(caFile))
@@ -248,7 +254,7 @@ func newBackupHTTPClient(caFile, rerun string) (*http.Client, error) {
 	transport = transport.Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 
-	return &http.Client{Timeout: backupRequestTimeout, Transport: transport}, nil
+	return warnOnExpiry(&http.Client{Timeout: backupRequestTimeout, Transport: transport}, stderr), nil
 }
 
 // backupEndpoint joins the server base URL with path, without a double

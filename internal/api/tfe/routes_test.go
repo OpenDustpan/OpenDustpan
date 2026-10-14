@@ -83,7 +83,13 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false, TokenID: ""}, nil
+	return identity.Principal{
+		Subject:        "tester",
+		DisplayName:    "Tester",
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}, nil
 }
 
 // stubAuthorizer denies every action.
@@ -97,6 +103,44 @@ func (stubAuthorizer) Authorize(
 ) error {
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
+
+// readOnlyAuthorizer allows the read actions of a namespace and a unit and
+// denies the rest: a caller that sees an object but cannot change it.
+type readOnlyAuthorizer struct{}
+
+func (readOnlyAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if action == identity.ActionUnitRead || action == identity.ActionNamespaceRead {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// failingReadAuthorizer denies every action except the read actions, and
+// fails the read actions with a store error, as an Authorizer does when its
+// store is down.
+type failingReadAuthorizer struct{}
+
+func (failingReadAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if action == identity.ActionUnitRead || action == identity.ActionNamespaceRead {
+		return errStoreDown
+	}
+
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// errStoreDown is the store error of failingReadAuthorizer.
+var errStoreDown = errors.New("store down")
 
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
@@ -1289,11 +1333,13 @@ func checkRouteAuthenticationDenied(t *testing.T, route tfe.Route) {
 		rec := httptest.NewRecorder()
 		denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("denied request answers %d, want %d", rec.Code, http.StatusForbidden)
+		// 403 when the caller can still read the object, and the 404 of an
+		// unknown object when the denied actions include its read.
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Fatalf("denied request answers %d, want %d or %d", rec.Code, http.StatusForbidden, http.StatusNotFound)
 		}
 
-		checkJSONAPIError(t, rec, http.StatusForbidden)
+		checkJSONAPIError(t, rec, rec.Code)
 	})
 }
 
@@ -1432,7 +1478,7 @@ func TestErrorDocuments(t *testing.T) {
 		deny   bool
 	}{
 		{name: "unauthorized", target: "/api/v2/test-by-name/acme/web", want: http.StatusUnauthorized, deny: false},
-		{name: "forbidden", target: "/api/v2/test-by-name/acme/web", want: http.StatusForbidden, deny: true},
+		{name: "hidden", target: "/api/v2/test-by-name/acme/web", want: http.StatusNotFound, deny: true},
 		{name: "not found", target: "/api/v2/test-by-id/ws-missing", want: http.StatusNotFound, deny: false},
 		{name: "conflict", target: "/api/v2/test-by-id/ws-locked", want: http.StatusConflict, deny: false},
 		{
@@ -1459,6 +1505,9 @@ func TestErrorDocuments(t *testing.T) {
 					strings.NewReader(`{"data":{}}`),
 				))
 			case tc.deny:
+				// A caller that cannot read the workspace gets the 404 of an
+				// unknown workspace. TestUnknownAndHiddenIDsAnswerTheSame
+				// covers the 403 of a caller that reads but cannot write.
 				denied := newEnforcingHandler(t, stubAuthorizer{})
 				req := httptest.NewRequestWithContext(
 					t.Context(),
@@ -1808,8 +1857,10 @@ func checkAuthorizedRouteObject(t *testing.T, route tfe.Route) {
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusForbidden)
+	// The Authorizer denies every action on the object, reads included, so
+	// the route answers the 404 of an object that does not exist.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("request denied on %q answers %d, want %d", expected, rec.Code, http.StatusNotFound)
 	}
 }
 

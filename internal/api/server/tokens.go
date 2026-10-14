@@ -86,6 +86,10 @@ type tokenResponse struct {
 	// CreatedBy is the subject of the caller that made the token: by a
 	// create, or by the rotation that issued it.
 	CreatedBy string `json:"createdBy"`
+	// ExpiryWarning is none, soon (14 days or less before the expiry) or
+	// imminent (3 days or less), at the time of the answer (ADR 53,
+	// decision 11).
+	ExpiryWarning string `json:"expiryWarning"`
 }
 
 // newTokenResponse is the answer of a create: the token and its secret,
@@ -173,6 +177,7 @@ func tokenOf(t accesstoken.Token, now time.Time) tokenResponse {
 		ExpiresAt:     wireTime(t.ExpiresAt),
 		ReplacedBy:    t.ReplacedBy,
 		CreatedBy:     t.CreatedBy,
+		ExpiryWarning: string(t.ExpiryWarningAt(now)),
 	}
 }
 

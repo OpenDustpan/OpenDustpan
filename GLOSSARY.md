@@ -64,6 +64,18 @@ _Avoid_: Origin, legacy backend
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
+**Setting**:
+One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
+_Avoid_: Option, parameter, config value
+
+**Layer**:
+A source of the value of a setting: `flag`, `env`, `file` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
+_Avoid_: Level, tier
+
+**Sensitive setting**:
+A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
+_Avoid_: Secret setting, private setting
+
 **Client address**:
 The address of the client that sent a request, as the server records it in the request log and in audit entries. Without trusted proxies it is the address of the TCP peer. With `--trusted-proxies` it is the address that a trusted proxy forwarded.
 _Avoid_: Remote address, source IP (except for the audit field name `SourceIP` and the wire name `source`)
@@ -136,11 +148,15 @@ A named set of principals of the whole installation. A principal can be a member
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
-A named set of actions (ADR 52).
+A named set of actions (ADR 52). A built-in role has a fixed name. An administrator makes a custom role from actions.
 _Avoid_: Permission set, policy
 
+**Action family**:
+One of three sets of actions that do not overlap: operator, administration and data. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only (RFC 19).
+_Avoid_: Permission category, scope
+
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52).
+A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
 
 **No access**:

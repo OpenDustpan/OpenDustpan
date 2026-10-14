@@ -74,7 +74,7 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 
 	c := &clock{now: time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Now: c.Now, NewID: nil})
+	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -112,7 +112,13 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 // admin is the bootstrap administrator: it passes the escalation check
 // with no GrantCheck wired.
 func admin() identity.Principal {
-	return identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
+	return identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 }
 
 // scopeFor returns the administrator scope of the tokens of the principal
@@ -315,7 +321,13 @@ func TestAuthenticate(t *testing.T) {
 		t.Fatalf("authenticate: %v", err)
 	}
 
-	want := identity.Principal{Subject: "ci-deploy", DisplayName: "ci-deploy", Admin: false, TokenID: tok.ID}
+	want := identity.Principal{
+		Subject:        "ci-deploy",
+		DisplayName:    "ci-deploy",
+		Admin:          false,
+		TokenID:        tok.ID,
+		TokenExpiresAt: tok.ExpiresAt,
+	}
 	if got != want {
 		t.Fatalf("principal = %+v, want %+v", got, want)
 	}
@@ -359,7 +371,8 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 
 	_, personSecret := f.create(t, f.person, "laptop")
-	if err := f.principals.DeletePrincipal(ctx, caller(), f.person.ID); err != nil {
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
+	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
 
@@ -626,7 +639,13 @@ func TestDigest(t *testing.T) {
 
 // as returns the caller with the subject of p, not an administrator.
 func as(p principal.Principal) identity.Principal {
-	return identity.Principal{Subject: p.Subject, DisplayName: p.DisplayName, Admin: false, TokenID: ""}
+	return identity.Principal{
+		Subject:        p.Subject,
+		DisplayName:    p.DisplayName,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 }
 
 func TestOwnTokens(t *testing.T) {
@@ -876,5 +895,63 @@ func TestCreatedByAndDaysLeft(t *testing.T) {
 
 	if _, active := tok.DaysLeft(f.clock.Now()); active {
 		t.Fatal("an expired token has days left")
+	}
+}
+
+func TestWarningFor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+
+	cases := []struct {
+		left time.Duration
+		want accesstoken.ExpiryWarning
+	}{
+		{30 * day, accesstoken.WarningNone},
+		{14*day + time.Second, accesstoken.WarningNone},
+		{14 * day, accesstoken.WarningSoon},
+		{3*day + time.Second, accesstoken.WarningSoon},
+		{3 * day, accesstoken.WarningImminent},
+		{time.Second, accesstoken.WarningImminent},
+		{0, accesstoken.WarningNone},
+		{-day, accesstoken.WarningNone},
+	}
+
+	for _, tc := range cases {
+		if got := accesstoken.WarningFor(now.Add(tc.left), now); got != tc.want {
+			t.Errorf("WarningFor(%s left) = %q, want %q", tc.left, got, tc.want)
+		}
+	}
+}
+
+func TestExpiryWarningOfAnEndedToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	tok, _, err := f.createIn(ctx, accesstoken.Input{
+		ExpiresAt: f.clock.Now().Add(24 * time.Hour), PrincipalID: f.service.ID, Name: "short",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if got := tok.ExpiryWarningAt(f.clock.Now()); got != accesstoken.WarningImminent {
+		t.Fatalf("warning = %q, want imminent", got)
+	}
+
+	if revokeErr := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, tok.ID); revokeErr != nil {
+		t.Fatalf("revoke: %v", revokeErr)
+	}
+
+	revoked, err := f.svc.Get(ctx, tok.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got := revoked.ExpiryWarningAt(f.clock.Now()); got != accesstoken.WarningNone {
+		t.Fatalf("warning of a revoked token = %q, want none", got)
 	}
 }

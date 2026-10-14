@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -68,12 +69,24 @@ func mustList(t *testing.T, items []string) ipallow.List {
 
 // adminPrincipal returns an admin principal with subject.
 func adminPrincipal(subject string) identity.Principal {
-	return identity.Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: ""}
+	return identity.Principal{
+		Subject:        subject,
+		DisplayName:    subject,
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 }
 
 // userPrincipal returns a non-admin principal with subject.
 func userPrincipal(subject string) identity.Principal {
-	return identity.Principal{Subject: subject, DisplayName: subject, Admin: false, TokenID: ""}
+	return identity.Principal{
+		Subject:        subject,
+		DisplayName:    subject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 }
 
 // ctxWithAddr returns a context holding addr.

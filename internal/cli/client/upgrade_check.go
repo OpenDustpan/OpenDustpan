@@ -85,12 +85,16 @@ func UpgradeCheck(
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan upgrade check again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan upgrade check again", stderr)
 	if err != nil {
 		return err
 	}

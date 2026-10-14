@@ -71,6 +71,23 @@ type Checkpoint struct {
 	BlobMd5       []byte
 }
 
+type Grant struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+	RevokedAtMs pgtype.Int8
+	RevokedBy   string
+}
+
 type GroupMember struct {
 	GroupID     string
 	PrincipalID string
@@ -147,6 +164,17 @@ type Restore struct {
 	StartedAtMs int64
 	EndedAtMs   pgtype.Int8
 	Error       string
+}
+
+type Role struct {
+	ID          string
+	Name        string
+	NameKey     string
+	Description string
+	Actions     string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	DeletedAtMs pgtype.Int8
 }
 
 type SecretKey struct {
