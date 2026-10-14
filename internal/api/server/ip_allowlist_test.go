@@ -214,6 +214,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "test",
 		Channel:    audit.ChannelAPI,

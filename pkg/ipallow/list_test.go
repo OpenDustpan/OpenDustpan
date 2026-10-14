@@ -191,6 +191,53 @@ func TestContainsZeroAddr(t *testing.T) {
 	}
 }
 
+// TestContainsOpenRanges checks the open ranges match one family only:
+// 0.0.0.0/0 matches IPv4 clients and never IPv6 clients, ::/0 matches IPv6
+// clients and never IPv4 clients, and a mapped client address reads as its
+// IPv4 address first.
+func TestContainsOpenRanges(t *testing.T) {
+	t.Parallel()
+
+	v4open, err := ipallow.ParseList([]string{"0.0.0.0/0"})
+	if err != nil {
+		t.Fatalf("parse v4 open list: %v", err)
+	}
+
+	v6open, err := ipallow.ParseList([]string{"::/0"})
+	if err != nil {
+		t.Fatalf("parse v6 open list: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		list ipallow.List
+		addr string
+		want bool
+	}{
+		{name: "v4 client in v4 open", list: v4open, addr: "192.0.2.1", want: true},
+		{name: "v6 client outside v4 open", list: v4open, addr: "2001:db8::1", want: false},
+		{name: "v6 client in v6 open", list: v6open, addr: "2001:db8::1", want: true},
+		{name: "v4 client outside v6 open", list: v6open, addr: "192.0.2.1", want: false},
+		{name: "mapped client in v4 open", list: v4open, addr: "::ffff:192.0.2.1", want: true},
+		{name: "mapped client outside v6 open", list: v6open, addr: "::ffff:192.0.2.1", want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr, parseErr := netip.ParseAddr(tc.addr)
+			if parseErr != nil {
+				t.Fatalf("parse address %q: %v", tc.addr, parseErr)
+			}
+
+			if got := tc.list.Contains(addr); got != tc.want {
+				t.Fatalf("contains %q = %v, want %v", tc.addr, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestEncodeDecodeRoundTrip checks Encode and DecodeList invert each other,
 // including the empty list.
 func TestEncodeDecodeRoundTrip(t *testing.T) {

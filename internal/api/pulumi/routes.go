@@ -27,7 +27,8 @@ const (
 	// ScopeUpdateLease needs the update's lease token in the Authorization
 	// header instead of a signed-in principal. The lease stands in for the
 	// declared actions: start granted it after authorizing them, and it
-	// scopes to one update alone. The Authorizer does not run.
+	// scopes to one update alone. The Authorizer does not run, but the
+	// address gate runs when one is configured.
 	ScopeUpdateLease
 )
 
@@ -631,7 +632,8 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 }
 
 // enforceLease serves a lease route: the update lease token stands in for the
-// declared actions, so the Authorizer does not run.
+// declared actions, so the Authorizer does not run. The address gate runs
+// after the object resolves, before the handler.
 func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -647,6 +649,14 @@ func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 			h.writeError(ctx, w, err)
 
 			return
+		}
+
+		if h.addressGate != nil {
+			if gateErr := h.addressGate.CheckAddress(ctx, obj.Namespace()); gateErr != nil {
+				h.writeError(ctx, w, gateErr)
+
+				return
+			}
 		}
 
 		var guest identity.Principal

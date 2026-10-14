@@ -162,7 +162,8 @@ var Settings = []*Setting{
 			"(DUSTPAN_IP_ALLOWLISTS)",
 		"(none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). "+
 			"The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, "+
-			"or every client reads as the address of the proxy.",
+			"or every client reads as the address of the proxy. "+
+			"See Recovery in docs/explanation/security-model.md for the recovery path.",
 	).WithFile("ip-allowlists"),
 	boolSetting(
 		"ip-allowlists-include-bootstrap", "DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP",

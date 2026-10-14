@@ -182,13 +182,30 @@ IP allowlists are off by default.
 The operator turns them on with `--ip-allowlists`.
 Each namespace opts in with its own list through three routes: GET, PUT and DELETE on `/api/server/namespaces/{namespace}/ip-allowlist`.
 These routes need the action `namespace:manage-ip-allowlist` on the namespace.
+The action is in the administration family.
+Only a grant on the installation holds it.
+A namespace admin can not read the list.
+A namespace admin can not change the list.
+The lists apply to requests that act on a namespace, a stack or a workspace.
+Installation-scope routes are not gated by a namespace list.
+Backup, restore, maintenance, the access review export, metrics, and the principals, groups, roles and tokens routes run with no namespace check.
 A request whose client address (see the section about the client address) is outside the list of the namespace of its object gets 403.
-The error names the namespace and never the list.
+The body is the generic text `forbidden`.
+It names neither the list nor the namespace.
 An unknown address is denied.
 The bootstrap admin token is exempt unless `--ip-allowlists-include-bootstrap` is set, so an administrator cannot lock themselves out.
 Every change is audited in the chain of the namespace in the same transaction.
-The check runs in the authorization step of every adapter.
-Requests with a capability URL (the OpenTofu state upload URLs) carry no principal and are not checked.
+The check runs in the authorization step of every route that calls Authorize.
+The Pulumi update-lease routes and the OpenTofu upload-capability routes carry no principal.
+They get an address-only check against the list of the namespace of the stack or workspace.
+The bootstrap exemption does not apply to them.
+For the OpenTofu uploads the check runs after the server checks the capability token and before it reads the body.
+For the Pulumi lease routes it runs before the server checks the lease token.
+A caller outside the list can thus learn that a namespace has a list.
+A caller can not learn the list.
+`::/0` matches IPv6 clients only.
+`0.0.0.0/0` matches IPv4 clients only.
+The server reads an IPv4-mapped IPv6 client address as its IPv4 address first.
 A TFE route that lists units can answer 404 for a namespace that the caller may not see.
 
 ### Recovery
@@ -199,6 +216,10 @@ A rule that holds none of the addresses that the operator uses locks the namespa
 The server refuses the REST calls of that namespace from outside the list, including the DELETE of the rule.
 To recover, restart the server without `--ip-allowlists-include-bootstrap`.
 The bootstrap admin token is exempt again.
+Delete the rule with `DELETE /api/server/namespaces/{namespace}/ip-allowlist`.
+Then start with the flag again if wanted.
+When the server has no bootstrap admin token, the exemption never applies.
+To recover, restart the server without `--ip-allowlists`.
 Delete the rule with `DELETE /api/server/namespaces/{namespace}/ip-allowlist`.
 Then start with the flag again if wanted.
 To stop the whole feature, restart without `--ip-allowlists`.

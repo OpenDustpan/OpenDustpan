@@ -135,7 +135,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
-	proxies              proxySettings
+	proxies              *proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -456,9 +456,10 @@ type services struct {
 	tokens *accesstoken.Service
 }
 
-// NewServer validates the options and wires the server together.
-func NewServer(opts ...Option) (*Server, error) {
-	cfg := settings{
+// defaultSettings returns the settings that NewServer starts from, before
+// the options run.
+func defaultSettings() settings {
+	return settings{
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -480,7 +481,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
-		proxies:                 proxySettings{prefixes: nil, header: ""},
+		proxies:                 &proxySettings{prefixes: nil, header: ""},
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -495,6 +496,11 @@ func NewServer(opts ...Option) (*Server, error) {
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 	}
+}
+
+// NewServer validates the options and wires the server together.
+func NewServer(opts ...Option) (*Server, error) {
+	cfg := defaultSettings()
 
 	for _, opt := range opts {
 		opt(&cfg)
@@ -561,6 +567,26 @@ func allowlistGate(next identity.Authorizer, allow *ipAllowlistSettings) identit
 
 	return ipallow.Gate{
 		Next: next, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
+}
+
+// allowlistAddressGate returns the address-only gate for the capability
+// routes of the tool adapters when the feature is on, else nil. It holds
+// only the list rules: capability routes have no principal, so there is no
+// bootstrap exemption to carry. A nil interface (not a typed nil) reports
+// off, so the adapters skip the check.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistAddressGate(allow *ipAllowlistSettings) interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+} {
+	if allow == nil || !allow.enabled {
+		return nil
+	}
+
+	return ipallow.Gate{
+		Next: nil, Rules: allow.store,
 		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
 	}
 }
@@ -770,6 +796,7 @@ func newTFEHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
@@ -1288,6 +1315,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,

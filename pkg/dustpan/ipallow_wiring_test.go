@@ -104,6 +104,7 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "storetest",
 		Channel:    audit.ChannelAPI,

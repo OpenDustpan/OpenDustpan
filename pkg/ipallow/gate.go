@@ -18,8 +18,9 @@ type Rules interface {
 
 // Gate is an identity.Authorizer decorator that refuses requests from client
 // addresses outside the allowlist of the namespace of the object. It runs in
-// the authorization step of every adapter, after authentication and before
-// the handler, so no route can skip it.
+// the authorization step of every route that calls Authorize, after
+// authentication and before the handler. The routes with a capability token
+// call CheckAddress instead.
 type Gate struct {
 	Next             identity.Authorizer
 	Rules            Rules
@@ -44,7 +45,27 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 		return nil
 	}
 
-	ns := obj.Namespace()
+	return g.checkNamespace(ctx, obj.Namespace())
+}
+
+// CheckAddress refuses the request when the namespace ns holds a list that
+// does not contain the client address in ctx. It is the address-only check
+// for routes with no principal and no authorization object, such as the
+// update-lease and upload-capability routes: there is no bootstrap exemption
+// here because no principal exists on these routes. A store error fails
+// closed, like in Authorize.
+func (g Gate) CheckAddress(ctx context.Context, ns namespace.Name) error {
+	if !g.Enabled {
+		return nil
+	}
+
+	return g.checkNamespace(ctx, ns)
+}
+
+// checkNamespace refuses the request when ns holds a list that does not
+// contain the client address in ctx. An empty namespace or a namespace
+// without a rule allows the request.
+func (g Gate) checkNamespace(ctx context.Context, ns namespace.Name) error {
 	if ns == "" {
 		return nil
 	}

@@ -260,10 +260,19 @@ func (h *Handler) uploadState(
 
 	id := workspace.StateVersionID(r.PathValue("id"))
 
-	if checkErr := h.workspaces.CheckUpload(ctx, id, tok); checkErr != nil {
+	ns, checkErr := h.workspaces.CheckUpload(ctx, id, tok)
+	if checkErr != nil {
 		h.writeError(ctx, w, checkErr)
 
 		return
+	}
+
+	if h.addressGate != nil {
+		if gateErr := h.addressGate.CheckAddress(ctx, ns); gateErr != nil {
+			h.writeError(ctx, w, gateErr)
+
+			return
+		}
 	}
 
 	release, ok := h.holdLease(w, r, bodygate.StreamReservation(r))
@@ -303,10 +312,19 @@ func (h *Handler) uploadJSONState(
 
 	id := workspace.StateVersionID(r.PathValue("id"))
 
-	if checkErr := h.workspaces.CheckJSONRenderingUpload(ctx, id, tok); checkErr != nil {
+	ns, checkErr := h.workspaces.CheckJSONRenderingUpload(ctx, id, tok)
+	if checkErr != nil {
 		h.writeError(ctx, w, checkErr)
 
 		return
+	}
+
+	if h.addressGate != nil {
+		if gateErr := h.addressGate.CheckAddress(ctx, ns); gateErr != nil {
+			h.writeError(ctx, w, gateErr)
+
+			return
+		}
 	}
 
 	release, ok := h.hold(w, r, bodygate.Reservation(r, h.maxState))

@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -32,22 +33,22 @@ type checkGateWorkspaces struct {
 
 func (w checkGateWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, tok token.Token,
-) error {
+) (namespace.Name, error) {
 	if tok.Reveal() != w.valid {
-		return workspace.ErrUploadDenied
+		return "", workspace.ErrUploadDenied
 	}
 
-	return nil
+	return "acme", nil
 }
 
 func (w checkGateWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, tok token.Token,
-) error {
+) (namespace.Name, error) {
 	if tok.Reveal() != w.valid {
-		return workspace.ErrUploadDenied
+		return "", workspace.ErrUploadDenied
 	}
 
-	return nil
+	return "acme", nil
 }
 
 func (w checkGateWorkspaces) Upload(
@@ -94,6 +95,7 @@ func newCheckGateHandler(t *testing.T, ws tfe.WorkspaceService, gate *bodygate.G
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     ws,

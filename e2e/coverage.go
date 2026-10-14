@@ -201,6 +201,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		CheckpointDeltaCutoff:   0,
@@ -326,6 +327,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
@@ -473,14 +475,14 @@ func (coverageWorkspaces) DiscardJSONRendering(
 
 func (coverageWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 func (coverageWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 // coverageInventoryRoutes returns the inventory adapter's route table.

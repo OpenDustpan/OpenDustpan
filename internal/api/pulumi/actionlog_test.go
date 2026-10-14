@@ -82,6 +82,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  logger,
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
