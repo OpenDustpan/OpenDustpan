@@ -431,10 +431,6 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	if retentionErr := checkRetention(cfg.softDeleteRetention); retentionErr != nil {
-		return nil, retentionErr
-	}
-
 	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
 		return nil, authzErr
 	}
@@ -753,7 +749,31 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, nil
+	return base, checkRetention(cfg.softDeleteRetention)
+}
+
+// newWorkspaceService builds the OpenTofu workspace service, which seals
+// state with secrets.
+func newWorkspaceService(
+	cfg settings, namespaces *namespace.Service, secrets *secret.Service,
+) (*workspace.Service, error) {
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         cfg.workspaceStore,
+		States:             cfg.stateStore,
+		Blobs:              cfg.blobStore,
+		Namespaces:         namespaces,
+		Sealer:             secrets,
+		Logger:             cfg.logger,
+		Now:                cfg.now,
+		MaxStateBytes:      cfg.maxStateBytes,
+		MaxPendingVersions: 0,
+		Retention:          cfg.softDeleteRetention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
+	return workspaces, nil
 }
 
 // newServices builds the domain services from validated settings. It reads
@@ -807,20 +827,9 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         cfg.workspaceStore,
-		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
-		Namespaces:         namespaces,
-		Sealer:             secrets,
-		Logger:             cfg.logger,
-		Now:                cfg.now,
-		MaxStateBytes:      cfg.maxStateBytes,
-		MaxPendingVersions: 0,
-		Retention:          cfg.softDeleteRetention,
-	})
+	workspaces, err := newWorkspaceService(cfg, namespaces, secrets)
 	if err != nil {
-		return services{}, fmt.Errorf("workspace service: %w", err)
+		return services{}, err
 	}
 
 	return services{
