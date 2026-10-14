@@ -21,6 +21,7 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 		File:      "",
 		Kind:      KindString,
 		Sensitive: false,
+		URL:       false,
 	}
 }
 
@@ -38,6 +39,7 @@ func boolSetting(flag, env, help, reference string) *Setting {
 		File:      "",
 		Kind:      KindBool,
 		Sensitive: false,
+		URL:       false,
 	}
 }
 
@@ -54,6 +56,7 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 		File:      "",
 		Kind:      KindInt,
 		Sensitive: false,
+		URL:       false,
 	}
 }
 
@@ -71,6 +74,7 @@ func envSetting(env, doc string) *Setting {
 		File:      "",
 		Kind:      KindString,
 		Sensitive: false,
+		URL:       false,
 	}
 }
 
@@ -131,7 +135,7 @@ var Settings = []*Setting{
 		"public-url", "DUSTPAN_PUBLIC_URL", "",
 		"external base URL, for example https://dustpan.example (DUSTPAN_PUBLIC_URL)",
 		referenceNone,
-	).WithFile("public-url").WithSensitive(),
+	).WithFile("public-url").WithURL(),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
@@ -151,12 +155,12 @@ var Settings = []*Setting{
 		"blob-store", "DUSTPAN_BLOB_STORE", "fs",
 		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
 		"`fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]`",
-	).WithFile("blob-store").WithSensitive(),
+	).WithFile("blob-store").WithURL(),
 	stringSetting(
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",
 		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
 		"(none: AWS)",
-	).WithFile("s3-endpoint").WithSensitive(),
+	).WithFile("s3-endpoint").WithURL(),
 	stringSetting(
 		"s3-region", "DUSTPAN_S3_REGION", "",
 		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
@@ -166,7 +170,7 @@ var Settings = []*Setting{
 		"backup-target", "DUSTPAN_BACKUP_TARGET", "",
 		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
 		"(none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]`",
-	).WithFile("backup-target").WithSensitive(),
+	).WithFile("backup-target").WithURL(),
 	stringSetting(
 		"key-encryption-key-file", "DUSTPAN_KEY_ENCRYPTION_KEY_FILE", "",
 		"file holding the base64 key-encryption key, default dustpan.key"+
@@ -223,7 +227,7 @@ var Settings = []*Setting{
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,
-	).WithSensitive(),
+	).WithURL(),
 	stringSetting(
 		"ca-file", "", "",
 		"PEM bundle of extra CA certificates to trust with the system store",

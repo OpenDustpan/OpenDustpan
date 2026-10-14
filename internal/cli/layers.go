@@ -79,6 +79,10 @@ func Resolve(fs *flag.FlagSet, settings []*Setting, lookup LookupFunc, file Conf
 			winner = layers[0]
 		}
 
+		if err := setting.CheckURL(winner.Value); err != nil {
+			return nil, err
+		}
+
 		if setting.Flag != "" && winner.Source != SourceFlag && fs.Lookup(setting.Flag) != nil {
 			if err := fs.Set(setting.Flag, winner.Value); err != nil {
 				return nil, fmt.Errorf("setting %s from %s: %w", setting.Name(), winner.Source, err)

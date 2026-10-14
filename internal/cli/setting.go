@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -37,9 +39,12 @@ const (
 // and generates docs/reference/configuration.md, so the three never drift.
 //
 // File is the key of the setting in the configuration file (ADR 63), empty
-// when the file cannot set it. Sensitive marks a secret, a credential or a
-// URL: a log line shows a sensitive setting only as set or not set, never
-// its value, a part of it or a hash of it (ADR 63 decision 6).
+// when the file cannot set it. Sensitive marks a setting that can hold a
+// credential: a secret or the database URL. A log line shows a sensitive
+// setting only as set or not set, never its value, a part of it or a hash of
+// it (ADR 63 decision 6). URL marks a setting that holds a URL and is not
+// sensitive: CheckURL refuses a value with user information, so its value
+// can go in a log line.
 type Setting struct {
 	Flag      string
 	Env       string
@@ -50,7 +55,17 @@ type Setting struct {
 	File      string
 	Kind      Kind
 	Sensitive bool
+	URL       bool
 }
+
+// The errors of a URL setting. Each error names the setting, never the
+// value, because a refused value can hold a credential.
+var (
+	// ErrURLUserInfo is a URL setting whose value has user information.
+	ErrURLUserInfo = errors.New("the URL has user information")
+	// ErrURLInvalid is a URL setting whose value is not a URL.
+	ErrURLInvalid = errors.New("the value is not a URL")
+)
 
 // ByFlag answers the declaration of the flag name. It panics when the flag
 // has no declaration: every flag in the table must come from here, and the
@@ -91,6 +106,35 @@ func (s *Setting) WithFile(key string) *Setting {
 	s.File = key
 
 	return s
+}
+
+// WithURL marks a setting as a URL that refuses user information and
+// answers it.
+func (s *Setting) WithURL() *Setting {
+	s.URL = true
+
+	return s
+}
+
+// CheckURL answers an error when s is a URL setting and value is not a URL
+// or has user information (ADR 63 decision 6). The error names the setting,
+// never the value. An empty value and a setting that is not a URL setting
+// pass.
+func (s *Setting) CheckURL(value string) error {
+	if !s.URL || strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("%s: %w", s.Name(), ErrURLInvalid)
+	}
+
+	if parsed.User != nil {
+		return fmt.Errorf("%s: %w. Remove the user name and the password from the URL", s.Name(), ErrURLUserInfo)
+	}
+
+	return nil
 }
 
 // WithSensitive marks a setting as sensitive and answers it.

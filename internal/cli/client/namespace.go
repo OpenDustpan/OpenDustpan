@@ -105,6 +105,10 @@ func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := namespaceToken()
 	if err != nil {
 		return err

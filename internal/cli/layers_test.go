@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -370,6 +371,40 @@ func TestSensitiveValuesNeverLogged(t *testing.T) {
 			}
 
 			checkSensitiveLines(t, &jsonBuf, c.sensitive)
+		})
+	}
+}
+
+// TestResolveRefusesUserInfo proves a URL setting with user information
+// stops the resolve in each layer, and the error never holds the value.
+func TestResolveRefusesUserInfo(t *testing.T) {
+	t.Parallel()
+
+	value := "https://user:" + canaryValue + "@dustpan.example"
+
+	cases := []struct {
+		name string
+		args []string
+		env  map[string]string
+		file cli.ConfigFile
+	}{
+		{"flag", []string{"--public-url=" + value}, nil, nil},
+		{"env", nil, map[string]string{"DUSTPAN_S3_ENDPOINT": value}, nil},
+		{"file", nil, nil, cli.ConfigFile{"backup-target": value}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := cli.Resolve(serveFlagSet(t, tc.args...), cli.ServeSettings(), mapLookup(tc.env), tc.file)
+			if !errors.Is(err, cli.ErrURLUserInfo) {
+				t.Fatalf("Resolve = %v, want %v", err, cli.ErrURLUserInfo)
+			}
+
+			if strings.Contains(err.Error(), canaryValue) {
+				t.Errorf("error holds the value: %v", err)
+			}
 		})
 	}
 }

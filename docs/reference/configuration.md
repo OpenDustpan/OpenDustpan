@@ -59,7 +59,8 @@ its value and its layer: `flag`, `env`, `file` or `default`. When more than
 one of `flag`, `env` and `file` sets a key, the server writes one WARN line
 for that key, also when the values are equal. For a sensitive setting, a
 line shows only `set` or `not set`, never the value. The sensitive settings
-are the database URL, each other URL and each secret.
+are the database URL and the secrets. Each other URL setting refuses a URL
+with a user name or a password, so the log can show its value.
 
 This example uses the JSON shape with `#` comments. That text is valid
 YAML.

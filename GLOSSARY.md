@@ -73,7 +73,7 @@ A source of the value of a setting: `flag`, `env`, `file` or `default`, in that 
 _Avoid_: Level, tier
 
 **Sensitive setting**:
-A setting that holds a secret, a credential or a URL, for example the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
+A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
 _Avoid_: Secret setting, private setting
 
 **Backup**:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,5 +143,38 @@ func TestServeAdminTokenFileFromConfig(t *testing.T) {
 
 	if strings.Contains(logs, adminTestToken) {
 		t.Error("logs hold the admin token")
+	}
+}
+
+// TestClientCommandsRefuseServerUserInfo proves each client command refuses
+// a --server URL with user information before it sends anything, and the
+// error never holds the value (ADR 63 decision 6).
+func TestClientCommandsRefuseServerUserInfo(t *testing.T) {
+	t.Parallel()
+
+	const password = "pw-canary-7d21" //nolint:gosec // A test canary, not a credential.
+
+	server := "https://admin:" + password + "@dustpan.example"
+	backupID := "bkp-test00000000000001"
+
+	for _, args := range [][]string{
+		{"backup", "--server", server},
+		{"backup", "check", "--server", server, "--backup", backupID},
+		{"restore", "--server", server, "--backup", backupID},
+		{"upgrade", "check", "--server", server},
+		{"namespace", "create", "--server", server, "acme"},
+	} {
+		t.Run(strings.Join(args[:2], " "), func(t *testing.T) {
+			t.Parallel()
+
+			err := run(t.Context(), args, io.Discard, io.Discard)
+			if !errors.Is(err, cli.ErrURLUserInfo) {
+				t.Fatalf("run %v = %v, want %v", args[:2], err, cli.ErrURLUserInfo)
+			}
+
+			if strings.Contains(err.Error(), password) {
+				t.Errorf("error holds the password: %v", err)
+			}
+		})
 	}
 }

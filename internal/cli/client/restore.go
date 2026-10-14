@@ -211,6 +211,10 @@ func parseRestoreArgs(args []string, stderr io.Writer) (restoreRun, error) {
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return restoreRun{}, err
+	}
+
 	id := strings.TrimSpace(f.backup)
 	if id == "" {
 		return restoreRun{}, fmt.Errorf(
