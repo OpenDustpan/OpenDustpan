@@ -168,9 +168,9 @@ through each API and check that the log and the metrics do not hold them.
 ## Limits
 
 - Each request body has a size limit. The Pulumi CLI checkpoints have a
-  limit of 32 MiB and OpenTofu states a limit of 512 MiB by default. The
+  limit of 32 MiB and OpenTofu states a limit of 32 MiB by default. The
   [configuration reference](../reference/configuration.md) lists each limit.
-- Large Pulumi bodies share 128 MiB at the same time. Over that, the server
+- Large bodies of the Pulumi CLI and of OpenTofu share 128 MiB at the same time. Over that, the server
   answers 503 with `Retry-After`.
 - The server waits at most 10 seconds for the request headers.
 - No rate limit exists today. Planned in a new RFC (ADR 32).

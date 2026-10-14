@@ -205,6 +205,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		CheckpointDeltaCutoff:   0,
 		// The gate is irrelevant here: no request is ever served.
 		MaxBodyBytesInFlight: 0,
+		Gate:                 nil,
 		Audit:                nil,
 		OnAuditFailure:       nil,
 	})
@@ -322,6 +323,8 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
+		Gate:           nil,
+		MaxStateBytes:  0,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -453,6 +456,18 @@ func (coverageWorkspaces) Upload(
 
 func (coverageWorkspaces) DiscardJSONRendering(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
 ) error {
 	return workspace.ErrStateVersionNotFound
 }

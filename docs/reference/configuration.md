@@ -29,8 +29,8 @@ same list.
 | `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
 | `--disable-pulumi-journaling` | `DUSTPAN_DISABLE_PULUMI_JOURNALING` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `0`: 32 MiB, the largest batch of Pulumi secrets |
-| `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `0`: 512 MiB, the largest OpenTofu state |
-| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `0`: 128 MiB of large Pulumi request bodies at the same time |
+| `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `0`: 32 MiB, the largest OpenTofu state |
+| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. |
 
 ## Secrets
 

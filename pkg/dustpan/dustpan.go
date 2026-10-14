@@ -48,6 +48,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -494,7 +495,9 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	api, err := newPulumiHandler(svc, cfg, base, observed)
+	gate := bodygate.New(cfg.maxBodyBytesInFlight)
+
+	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -509,12 +512,12 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc)
+	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, gate)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	tfeAPI, err := newTFEHandler(cfg, svc, base, observed)
+	tfeAPI, err := newTFEHandler(cfg, svc, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -553,7 +556,7 @@ func newAdapters(
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -566,6 +569,7 @@ func newTofuHTTPHandler(cfg settings, svc services) (*tofuhttp.Handler, error) {
 		Workspaces:    svc.workspaces,
 		Namespaces:    svc.namespaces,
 		Audit:         entries,
+		Gate:          gate,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -607,7 +611,7 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 // output route fail closed with a 500 when the append fails, so the counter
 // is the alert for lost entries.
 func newTFEHandler(
-	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics,
+	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (*tfe.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -622,6 +626,8 @@ func newTFEHandler(
 		Workspaces:    svc.workspaces,
 		BaseURL:       base,
 		Audit:         entries,
+		Gate:          gate,
+		MaxStateBytes: cfg.maxStateBytes,
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()
 		},
@@ -1065,7 +1071,7 @@ func isLoopbackListenAddr(addr string) bool {
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics,
+	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (http.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -1082,6 +1088,7 @@ func newPulumiHandler(
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
+		Gate:                 gate,
 		Audit:                entries,
 		OnAuditFailure: func() {
 			observed.IncAuditAppendFailure()

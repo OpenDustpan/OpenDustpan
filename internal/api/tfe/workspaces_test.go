@@ -101,6 +101,8 @@ func newWorkspaceHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -729,6 +731,18 @@ func (p pagingWorkspaces) Upload(
 	return workspace.StateVersion{}, workspace.ErrUploadDenied
 }
 
+func (p pagingWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+func (p pagingWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
 func (p pagingWorkspaces) DiscardJSONRendering(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
 ) error {
@@ -787,6 +801,8 @@ func newPagingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     newPagingWorkspaces(t),
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
