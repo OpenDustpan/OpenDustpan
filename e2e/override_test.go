@@ -66,6 +66,7 @@ func overrideCurrent(t *testing.T, env *e2e.Env, name, path string) (string, int
 
 			return nil
 		},
+		Scheme: "",
 	})
 
 	return lineage, serial
@@ -83,6 +84,7 @@ func overrideSwitchesRejected(t *testing.T, env *e2e.Env, name, path string) {
 		Body:      "",
 		Want:      http.StatusBadRequest,
 		Check:     nil,
+		Scheme:    "",
 	})
 }
 
@@ -117,6 +119,7 @@ func overrideForcedCreate(t *testing.T, env *e2e.Env, c forcedCreate) {
 
 			return nil
 		},
+		Scheme: "",
 	})
 }
 
@@ -193,6 +196,7 @@ func overrideSwitches(t *testing.T, env *e2e.Env, name, path, body string) {
 		Body:      body,
 		Want:      http.StatusOK,
 		Check:     nil,
+		Scheme:    "",
 	})
 }
 
@@ -216,6 +220,7 @@ func overrideReadHolds(t *testing.T, env *e2e.Env, name, path string, fragments 
 
 			return nil
 		},
+		Scheme: "",
 	})
 }
 
@@ -317,6 +322,7 @@ func tofuOverrideSwitchesScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		Check:     nil,
+		Scheme:    "",
 	})
 	overrideForcedCreate(t, env, forcedCreate{
 		name: "forced declare accepted with both switches on", path: createPath,
@@ -331,6 +337,7 @@ func tofuOverrideSwitchesScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		Check:     nil,
+		Scheme:    "",
 	})
 
 	overrideSwitches(t, env, "turn off the unit forced switch", unitSwitches,
