@@ -323,7 +323,7 @@ func checkSweepMetrics(t *testing.T, observed *metrics.ServerMetrics) {
 type plainReader struct{}
 
 func (plainReader) ListUnits(context.Context, namespace.Name) ([]inventory.Entry, error) {
-	return nil, nil
+	return []inventory.Entry{}, nil
 }
 
 // TestRetentionSweepNeedsItsPorts proves that a server whose inventory

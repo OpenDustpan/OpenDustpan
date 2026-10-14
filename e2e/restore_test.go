@@ -160,7 +160,7 @@ const sweepPath = "/api/server/deleted-units/sweep"
 
 // sweepDeleted runs one retention sweep through the installation API.
 func sweepDeleted(ctx context.Context, env *e2e.Env) (sweepDoc, error) {
-	status, body, err := env.APIStatus(ctx, http.MethodPost, sweepPath, "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, sweepPath, "")
 	if err != nil {
 		return sweepDoc{}, fmt.Errorf("post %s: %w", sweepPath, err)
 	}
