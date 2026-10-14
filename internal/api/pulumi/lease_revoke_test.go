@@ -132,7 +132,15 @@ func TestRevokedTokenEndsLeaseRequests(t *testing.T) {
 	}{
 		{name: "renew", req: leaseRequest(http.MethodPost, paths.Renew, lease, `{"duration":60}`)},
 		{name: "events", req: leaseRequest(http.MethodPost, paths.Events, lease, `{"events":[]}`)},
-		{name: "checkpoint", req: leaseRequest(http.MethodPatch, paths.Checkpoint, lease, `{"resources":[]}`)},
+		{
+			name: "checkpoint",
+			req: leaseRequest(
+				http.MethodPatch,
+				paths.Checkpoint,
+				lease,
+				`{"version":3,"deployment":{"resources":[]}}`,
+			),
+		},
 		{name: "complete", req: leaseRequest(http.MethodPost, paths.Complete, lease, `{"status":"succeeded"}`)},
 	}
 

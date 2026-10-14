@@ -339,7 +339,6 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           stubAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              stubAuthorizer{},
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 base,
@@ -393,7 +392,6 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -1480,6 +1478,7 @@ func newDeleteHandlerWithAudit(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
+		Tokens:             nil,
 		Checkpoints:        exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Events:             exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
@@ -1501,7 +1500,6 @@ func newDeleteHandlerWithAudit(
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -1842,6 +1840,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            stores,
+		Tokens:             nil,
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,
@@ -1912,6 +1911,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            stores,
+		Tokens:             nil,
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,

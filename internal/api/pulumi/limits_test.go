@@ -53,6 +53,7 @@ func newUpdateFixtureWithGate(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
+		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,
@@ -74,7 +75,6 @@ func newUpdateFixtureWithGate(
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -149,7 +149,6 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Secrets:                 secrets,
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

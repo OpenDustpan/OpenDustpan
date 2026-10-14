@@ -27,6 +27,9 @@ var (
 	ErrWrongUpdateState = errors.New("update does not allow this in its current state")
 	// ErrLeaseInvalid reports a lease token that does not belong to the update.
 	ErrLeaseInvalid = errors.New("invalid update lease token")
+	// ErrAccessTokenUnchecked reports a lease request for an update that an access
+	// token started, when no token checker is wired (fail closed).
+	ErrAccessTokenUnchecked = errors.New("access token of update cannot be checked")
 	// ErrLeaseExpired reports a lease that ran out before it was renewed.
 	ErrLeaseExpired = errors.New("update lease expired")
 	// ErrConcurrentModification reports that the update changed between read and write.

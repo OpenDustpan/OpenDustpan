@@ -461,31 +461,6 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity
 	})
 }
 
-// checkUpdateToken answers nil when the update was started with no access
-// token, or when its access token still works. Otherwise it answers
-// identity.ErrUnauthenticated, so a revoked, expired or deleted token ends the
-// update's writes at its next request (ADR 53). A failed read fails closed.
-func (h *Handler) checkUpdateToken(ctx context.Context, ref stack.Ref, id stack.UpdateID) error {
-	u, err := h.updates.Get(ctx, ref, id)
-	if err != nil {
-		return err
-	}
-
-	if u.TokenID == "" {
-		return nil
-	}
-
-	if h.accessTokens == nil {
-		return fmt.Errorf("%w: no access token checker for update %s", identity.ErrUnauthenticated, id)
-	}
-
-	if err := h.accessTokens.CheckActive(ctx, u.TokenID); err != nil {
-		return fmt.Errorf("access token of update %s: %w", id, err)
-	}
-
-	return nil
-}
-
 // journalVersionFor answers the journal version of a start. With journaling
 // off, the CLI gets checkpoints whatever it offers, so the gate does not run.
 func (h *Handler) journalVersionFor(userAgent string, offer startUpdateOffer) int {

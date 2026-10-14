@@ -177,7 +177,6 @@ func newUserHandler(
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

@@ -433,7 +433,7 @@ func newUpdateFixtureWithCutoff(
 // authenticator: the checkpoint limit, the delta cutoff, and the check of the
 // access token that started an update.
 type fixtureOptions struct {
-	checker pulumi.AccessTokenChecker
+	checker stack.TokenChecker
 	limit   int
 	cutoff  int
 }
@@ -485,6 +485,7 @@ func newUpdateFixtureWithAuthenticator(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
+		Tokens:             checker,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -497,7 +498,6 @@ func newUpdateFixtureWithAuthenticator(
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           authn,
-		AccessTokens:            checker,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -2692,6 +2692,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Tokens:             nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2704,7 +2705,6 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
-		AccessTokens:            nil,
 		Authorizer:              allowAll(),
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
