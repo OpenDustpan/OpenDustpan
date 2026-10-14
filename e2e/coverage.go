@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -581,6 +582,34 @@ func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigr
 	return nil, nil
 }
 
+// coverageIPAllowlistStore holds no rule: the route table needs an IP
+// allowlist service, and the coverage gate never serves a request.
+type coverageIPAllowlistStore struct{}
+
+func (coverageIPAllowlistStore) NamespaceList(_ context.Context, _ namespace.Name) (ipallow.List, error) {
+	return ipallow.List{}, nil
+}
+
+func (coverageIPAllowlistStore) SetNamespaceList(
+	_ context.Context, _ namespace.Name, _ ipallow.List, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+// coverageIPAllowlists returns the IP allowlist service of the route table.
+func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
+	tb.Helper()
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: coverageIPAllowlistStore{}, Namespaces: coverageNamespaces(tb), Now: nil, Enabled: true,
+	})
+	if err != nil {
+		tb.Fatalf("ip allowlist service: %v", err)
+	}
+
+	return svc
+}
+
 // coverageServerRoutes returns the installation adapter's route table: the
 // namespace route (ADR 39), the backup routes (ADR 30), the restore routes
 // (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
@@ -604,7 +633,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
-		IPAllowlists:   nil,
+		IPAllowlists:   coverageIPAllowlists(tb),
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)

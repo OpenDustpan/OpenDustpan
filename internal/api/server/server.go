@@ -81,7 +81,8 @@ type Config struct {
 	Audit audit.ServerStore
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
-	IPAllowlists *ipallow.Service // OnAuditFailure, when set, runs once for each lost audit entry, so the
+	IPAllowlists *ipallow.Service
+	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
 }
