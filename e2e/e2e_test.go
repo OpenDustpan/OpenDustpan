@@ -4325,6 +4325,126 @@ func tofuRemoteScenario(t *testing.T, env *e2e.Env) {
 	} {
 		env.RemoteStep(ctx, t, s)
 	}
+
+	for _, s := range tofuSoftDeleteSteps(ctx, env) {
+		env.RemoteStep(ctx, t, s)
+	}
+}
+
+// remoteProdName is the full name of the prod workspace of the remote
+// scenario: the prefix and the short name.
+const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
+
+// tofuSoftDeleteSteps returns the steps of a workspace soft delete (ADR 47):
+// the delete goes through the TFE-compatible delete route, the workspace
+// leaves the CLI list, the TFE-compatible lists and the inventory, its old ID
+// answers 404, and its name is free at once for a new workspace with empty
+// state.
+func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
+	var removedID string
+
+	return []e2e.StepSpec{
+		step("workspace select dev again", func(e2e.Result) error {
+			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
+			removedID = id
+
+			return err
+		}, "workspace", "select", e2e.RemoteDev, "-no-color"),
+		step("workspace delete prod", func(e2e.Result) error {
+			path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + remoteProdName
+			if !env.Requested("workspace delete prod", http.MethodDelete, path) {
+				return fmt.Errorf("%w: workspace %s was not delete-requested", errUnexpected, remoteProdName)
+			}
+
+			return nil
+		}, "workspace", "delete", e2e.RemoteProd, "-no-color"),
+		step("workspace list hides the deleted workspace", func(r e2e.Result) error {
+			return checkNoDeletedWorkspace(ctx, env, r, &removedID)
+		}, "workspace", "list", "-no-color"),
+		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
+		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
+	}
+}
+
+// workspaceIDData is the data member of a TFE-compatible workspace document,
+// with only its ID.
+type workspaceIDData struct {
+	ID string `json:"id"`
+}
+
+// workspaceIDDoc is a TFE-compatible workspace document with only its ID.
+type workspaceIDDoc struct {
+	Data workspaceIDData `json:"data"`
+}
+
+// remoteWorkspaceID returns the ID of the workspace name in the e2e
+// namespace, read through the TFE-compatible API.
+func remoteWorkspaceID(ctx context.Context, env *e2e.Env, name string) (string, error) {
+	path := "/api/v2/organizations/" + e2e.Namespace + "/workspaces/" + name
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, path, "")
+	if err != nil {
+		return "", fmt.Errorf("get %s: %w", path, err)
+	}
+
+	if status != http.StatusOK {
+		return "", fmt.Errorf("%w: get %s: status %d", errUnexpected, path, status)
+	}
+
+	var doc workspaceIDDoc
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return "", fmt.Errorf("decode %s: %w", path, err)
+	}
+
+	return doc.Data.ID, nil
+}
+
+// checkNoDeletedWorkspace checks that the CLI list, the TFE-compatible list
+// and the inventory leave out the deleted workspace and never show the stored
+// name of a deleted unit, and that its old ID answers 404.
+func checkNoDeletedWorkspace(ctx context.Context, env *e2e.Env, r e2e.Result, removedID *string) error {
+	if strings.Contains(r.Stdout, e2e.RemoteProd) || strings.Contains(r.Stdout+r.Stderr, tombstonePrefix) {
+		return fmt.Errorf("%w: workspace list still shows the deleted workspace: %s", errUnexpected, r.Stdout)
+	}
+
+	// The TFE-compatible API takes a bearer token and the inventory API the
+	// token scheme, so each path names the call that reads it.
+	reads := []struct {
+		read func(ctx context.Context, method, path, body string) (int, string, error)
+		path string
+	}{
+		{read: env.TFEStatusA, path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces"},
+		{read: env.APIStatus, path: "/api/inventory/units?organization=" + e2e.Namespace},
+	}
+
+	for _, rd := range reads {
+		path := rd.path
+
+		status, body, err := rd.read(ctx, http.MethodGet, path, "")
+		if err != nil {
+			return fmt.Errorf("get %s: %w", path, err)
+		}
+
+		if status != http.StatusOK {
+			return fmt.Errorf("%w: get %s: status %d", errUnexpected, path, status)
+		}
+
+		if strings.Contains(body, tombstonePrefix) || strings.Contains(body, `"`+remoteProdName+`"`) {
+			return fmt.Errorf("%w: %s still shows the deleted workspace: %s", errUnexpected, path, body)
+		}
+	}
+
+	status, _, err := env.TFEStatusA(ctx, http.MethodGet, "/api/v2/workspaces/"+*removedID, "")
+	if err != nil {
+		return fmt.Errorf("get the deleted workspace by ID: %w", err)
+	}
+
+	if status != http.StatusNotFound {
+		return fmt.Errorf("%w: deleted workspace %s by ID answers %d, want 404", errUnexpected, *removedID, status)
+	}
+
+	return nil
 }
 
 // tofuHTTPScenario drives the stdlib http backend in its own directory: init,

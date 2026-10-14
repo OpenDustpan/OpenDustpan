@@ -155,6 +155,7 @@ var embeddedMigrationNames = []string{
 	"0028_principals_and_groups.sql",
 	"0029_audit_server_scope.sql",
 	"0031_soft_delete_stacks.sql",
+	"0032_soft_delete_workspaces.sql",
 	"0041_namespace_ip_allowlist.sql",
 }
 

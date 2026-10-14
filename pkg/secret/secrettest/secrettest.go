@@ -51,7 +51,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "create with a stale fence is ErrFenced", test: testStaleFence},
 		{name: "wrapper IDs are listed", test: testWrapperIDs},
 		{name: "delete of the stack keeps its key", test: testDeleteStackKeepsKey},
-		{name: "delete of the workspace deletes its key", test: testDeleteWorkspaceDeletesKey},
+		{name: "delete of the workspace keeps its key", test: testDeleteWorkspaceKeepsKey},
 		{name: "seal stream round trips across chunk borders", test: testSealStreamRoundTrip},
 		{name: "seal stream binds the scope", test: testSealStreamBindsScope},
 		{name: "tampered sealed streams fail without a leak", test: testSealStreamTamper},
@@ -393,9 +393,10 @@ func testDeleteStackKeepsKey(t *testing.T, s Store) {
 	}
 }
 
-// testDeleteWorkspaceDeletesKey proves the final delete of a workspace
-// removes its data key with its rows (ADR 41 decision 10, ADR 23 decision 5).
-func testDeleteWorkspaceDeletesKey(t *testing.T, s Store) {
+// testDeleteWorkspaceKeepsKey proves a soft delete of a workspace keeps its
+// data key, so a restore can open its sealed state again (ADR 47, decision
+// 3). Only the final delete removes the key (ADR 23, decision 5).
+func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := newNamespace(t, s)
@@ -428,12 +429,13 @@ func testDeleteWorkspaceDeletesKey(t *testing.T, s Store) {
 		t.Fatalf("create key: %v", err)
 	}
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence()); err != nil {
+	at := time.UnixMilli(1_760_000_000_000).UTC()
+	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deleteEntry(ns.Name, at)); err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	if _, err := s.GetKey(t.Context(), scope); !errors.Is(err, secret.ErrKeyNotFound) {
-		t.Fatalf("get key after delete: err = %v, want ErrKeyNotFound", err)
+	if _, err := s.GetKey(t.Context(), scope); err != nil {
+		t.Fatalf("get key after a soft delete: %v", err)
 	}
 
 	if _, err := s.GetWorkspace(t.Context(), w.Ref); !errors.Is(err, workspace.ErrNotFound) {

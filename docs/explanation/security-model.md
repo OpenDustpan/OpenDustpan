@@ -162,10 +162,18 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
 
 The server uses the client address of each request for the request log, the source of each audit entry, and limits.
 By default the address is the address of the TCP peer, and the server reads no forwarding header.
-With `--trusted-proxies` the server reads the `X-Forwarded-For` and `Forwarded` headers of a request from a listed proxy.
-It takes the rightmost address outside the list, so a value that a client prepends never wins over the value of the proxy.
-List a proxy only when it always overwrites or appends the header.
-When it does not, a client can name any address, and the server records that address.
+With `--trusted-proxies` the server reads only the header that `--trusted-proxy-header` names: `x-forwarded-for` (the default) or `forwarded`.
+It ignores the other header, so the proxy needs no step to strip it.
+The proxy must overwrite or append the named header on each request it forwards.
+The server walks the header from the right and takes the first address outside the trusted list.
+A value that a client prepends never wins over the value that the proxy added.
+List proxies narrowly, by address where you can, not by a wide network that clients can use.
+The trusted list is for proxies only: a direct internal client is not a proxy and must not be on the list.
+The server refuses to start with a list that covers every address or that holds host bits: write the network or one address.
+A header that the server cannot read gives an unknown address, never the address of the proxy.
+A trusted peer that sends no forwarding header also gives an unknown address, and the server writes a warning.
+A wrong setup would otherwise make every client read as an internal address.
+Allowlists and limits treat an unknown address as denied.
 A wrong list records wrong audit sources, so review the list when entries name addresses that you do not expect.
 
 ## Logs

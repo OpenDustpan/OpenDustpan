@@ -2,6 +2,7 @@ package dustpan_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -90,15 +91,18 @@ func newClientAddrServer(t *testing.T, buf *bytes.Buffer, extra ...dustpan.Optio
 }
 
 // clientIPCase is one request through the client address server: the
-// options, the peer, the spoofed header, the logged address and a header
-// value that no log field may hold.
+// options, the peer, the forwarding headers, the logged address and a header
+// value that no log field may hold. wantMissing means the request line holds
+// no client_ip field at all.
 type clientIPCase struct {
-	name   string
-	extra  []dustpan.Option
-	remote string
-	xff    string
-	want   string
-	absent string
+	name        string
+	extra       []dustpan.Option
+	remote      string
+	xff         string
+	fwd         string
+	want        string
+	wantMissing bool
+	absent      string
 }
 
 // checkClientIPLog serves one request and proves the client_ip field of its
@@ -117,6 +121,10 @@ func checkClientIPLog(t *testing.T, tc clientIPCase) {
 		req.Header.Set("X-Forwarded-For", tc.xff)
 	}
 
+	if tc.fwd != "" {
+		req.Header.Set("Forwarded", tc.fwd)
+	}
+
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
@@ -131,8 +139,12 @@ func checkClientIPLog(t *testing.T, tc clientIPCase) {
 
 	entry := lines[0]
 
-	got, ok := entry["client_ip"].(string)
-	if !ok || got != tc.want {
+	got, ok := entry["client_ip"]
+	if tc.wantMissing {
+		if ok {
+			t.Fatalf("client_ip = %v, want none", got)
+		}
+	} else if !ok || got != tc.want {
 		t.Fatalf("client_ip = %v, want %q", entry["client_ip"], tc.want)
 	}
 
@@ -161,8 +173,8 @@ func checkNoHeaderLeak(t *testing.T, entry map[string]any, leaked string) {
 
 // TestRequestLogClientIP proves the client_ip field of the request line:
 // an untrusted peer keeps its own address despite a spoofed header, a
-// trusted peer resolves to the forwarded client, and a server without the
-// option ignores headers.
+// trusted peer resolves to the forwarded client, a garbage header logs no
+// address at all, and a server without the option ignores headers.
 func TestRequestLogClientIP(t *testing.T) {
 	t.Parallel()
 
@@ -170,28 +182,57 @@ func TestRequestLogClientIP(t *testing.T) {
 
 	cases := []clientIPCase{
 		{
-			name:   "untrusted peer spoofed header logs peer",
-			extra:  []dustpan.Option{dustpan.WithTrustedProxies(trusted)},
-			remote: "198.51.100.7:1234",
-			xff:    "203.0.113.9",
-			want:   "198.51.100.7",
-			absent: "203.0.113.9",
+			name:        "untrusted peer spoofed header logs peer",
+			extra:       []dustpan.Option{dustpan.WithTrustedProxies(trusted)},
+			remote:      "198.51.100.7:1234",
+			xff:         "203.0.113.9",
+			fwd:         "",
+			want:        "198.51.100.7",
+			wantMissing: false,
+			absent:      "203.0.113.9",
 		},
 		{
-			name:   "trusted peer forwarded client logs client",
-			extra:  []dustpan.Option{dustpan.WithTrustedProxies(trusted)},
-			remote: "10.1.2.3:1234",
-			xff:    "203.0.113.9, 10.9.9.9",
-			want:   "203.0.113.9",
-			absent: "",
+			name:        "trusted peer forwarded client logs client",
+			extra:       []dustpan.Option{dustpan.WithTrustedProxies(trusted)},
+			remote:      "10.1.2.3:1234",
+			xff:         "203.0.113.9, 10.9.9.9",
+			fwd:         "",
+			want:        "203.0.113.9",
+			wantMissing: false,
+			absent:      "",
 		},
 		{
-			name:   "no option ignores header",
-			extra:  nil,
-			remote: "10.1.2.3:1234",
-			xff:    "203.0.113.9",
-			want:   "10.1.2.3",
-			absent: "203.0.113.9",
+			name:        "trusted peer garbage header logs no address",
+			extra:       []dustpan.Option{dustpan.WithTrustedProxies(trusted)},
+			remote:      "10.1.2.3:1234",
+			xff:         "not-an-ip",
+			fwd:         "",
+			want:        "",
+			wantMissing: true,
+			absent:      "10.1.2.3",
+		},
+		{
+			name: "forwarded setting reads forwarded only",
+			extra: []dustpan.Option{
+				dustpan.WithTrustedProxies(trusted),
+				dustpan.WithTrustedProxyHeader("forwarded"),
+			},
+			remote:      "10.1.2.3:1234",
+			xff:         "6.6.6.6",
+			fwd:         "for=203.0.113.9",
+			want:        "203.0.113.9",
+			wantMissing: false,
+			absent:      "6.6.6.6",
+		},
+		{
+			name:        "no option ignores header",
+			extra:       nil,
+			remote:      "10.1.2.3:1234",
+			xff:         "203.0.113.9",
+			fwd:         "",
+			want:        "10.1.2.3",
+			wantMissing: false,
+			absent:      "203.0.113.9",
 		},
 	}
 
@@ -200,6 +241,146 @@ func TestRequestLogClientIP(t *testing.T) {
 			t.Parallel()
 
 			checkClientIPLog(t, tc)
+		})
+	}
+}
+
+// missingHeaderText is the warning the server writes when a trusted peer
+// sends no forwarding header.
+const missingHeaderText = "a trusted proxy sent no forwarding header: " +
+	"check --trusted-proxies and --trusted-proxy-header"
+
+// countMissingHeaderWarns counts the missing-header warnings in raw and
+// proves each one names the peer and the header, never a header value.
+func countMissingHeaderWarns(t *testing.T, raw string) int {
+	t.Helper()
+
+	count := 0
+
+	for line := range strings.Lines(strings.TrimSpace(raw)) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+
+		if entry["msg"] != missingHeaderText {
+			continue
+		}
+
+		count++
+
+		if entry["peer"] != "10.1.2.3" {
+			t.Fatalf("warn peer = %v, want 10.1.2.3", entry["peer"])
+		}
+
+		if entry["header"] != "x-forwarded-for" {
+			t.Fatalf("warn header = %v, want x-forwarded-for", entry["header"])
+		}
+	}
+
+	return count
+}
+
+// serveLiveness serves one liveness probe from remote through srv.
+func serveLiveness(t *testing.T, srv *dustpan.Server, remote string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health/live", nil)
+	req.RemoteAddr = remote
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("liveness status %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
+
+// TestRequestLogMissingHeaderWarnsOnce proves a trusted peer with no
+// forwarding header logs no client_ip and one warning, and a second request
+// inside the minute logs no second warning.
+func TestRequestLogMissingHeaderWarnsOnce(t *testing.T) {
+	t.Parallel()
+
+	trusted := netip.MustParsePrefix("10.0.0.0/8")
+
+	var buf bytes.Buffer
+
+	srv := newClientAddrServer(t, &buf, dustpan.WithTrustedProxies(trusted))
+
+	serveLiveness(t, srv, "10.1.2.3:1234")
+
+	lines := requestLines(t, buf.String())
+	if len(lines) != 1 {
+		t.Fatalf("log lines = %d, want 1", len(lines))
+	}
+
+	if got, ok := lines[0]["client_ip"]; ok {
+		t.Fatalf("client_ip = %v, want none", got)
+	}
+
+	if got := countMissingHeaderWarns(t, buf.String()); got != 1 {
+		t.Fatalf("warnings = %d, want 1", got)
+	}
+
+	serveLiveness(t, srv, "10.1.2.3:1234")
+
+	lines = requestLines(t, buf.String())
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %d, want 2", len(lines))
+	}
+
+	if got := countMissingHeaderWarns(t, buf.String()); got != 1 {
+		t.Fatalf("warnings = %d, want still 1", got)
+	}
+}
+
+// TestNewServerRefusesBadProxySettings proves NewServer fails with a proxy
+// list that covers every address, with host bits, or with an unknown header.
+func TestNewServerRefusesBadProxySettings(t *testing.T) {
+	t.Parallel()
+
+	st, blobs, authn := requireServerPorts(t)
+	full := fullServerOptions(t, st, blobs, authn)
+
+	cases := []struct {
+		name  string
+		extra dustpan.Option
+		want  string
+	}{
+		{
+			name:  "zero prefix",
+			extra: dustpan.WithTrustedProxies(netip.MustParsePrefix("0.0.0.0/0")),
+			want:  "covers every address",
+		},
+		{
+			name:  "host bits",
+			extra: dustpan.WithTrustedProxies(netip.MustParsePrefix("10.0.0.1/8")),
+			want:  "has host bits set",
+		},
+		{
+			name:  "unknown header",
+			extra: dustpan.WithTrustedProxyHeader("x-real-ip"),
+			want:  "is not x-forwarded-for or forwarded",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := append(append([]dustpan.Option(nil), full...), tc.extra)
+
+			if _, err := dustpan.NewServer(opts...); err == nil {
+				t.Fatalf("NewServer with %s succeeded", tc.name)
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NewServer with %s: err = %v, want %q", tc.name, err, tc.want)
+			}
 		})
 	}
 }

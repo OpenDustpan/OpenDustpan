@@ -63,6 +63,34 @@ func (h *Handler) appendToolOperationAudit(
 	return err
 }
 
+// changeEntry returns the audit entry of the kind change for a change of a
+// unit (ADR 60, decision 4). The store appends it in the transaction of the
+// change, so the change and its entry commit together or not at all (fail
+// closed). The service stamps the time of the change on it.
+func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
+		Namespace:  obj.Namespace(),
+		Subject:    p.Subject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(action),
+		Object:     obj.String(),
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   clientip.String(r),
+		UserAgent:  truncateUserAgent(r.UserAgent()),
+		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  requestid.FromContext(r.Context()),
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
 // failAudit records a lost audit entry: one log line with no secret and no
 // value, and one count on the failure metric through the wired callback. It
 // names no error text: the text may hold driver detail (ADR 32 decision 7).

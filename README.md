@@ -156,7 +156,7 @@ of the run.
 | Tool | Tested versions | What works | What does not work yet |
 | --- | --- | --- | --- |
 | Pulumi CLI | 3.200.0, 3.250.0, latest | `login`, `up`, `preview`, `refresh`, `destroy`, `cancel`, `stack export`, `stack import`, config secrets, `stack rename`, `stack rm`, `stack tag set` | Pulumi Cloud features outside the state backend |
-| OpenTofu | 1.11.14, 1.12.7, latest | `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select`, `destroy` | Remote runs, `tofu login`, workspace tags, workspace rename and delete |
+| OpenTofu | 1.11.14, 1.12.7, latest | `init`, `plan`, `apply`, `output`, `state pull`, `state push`, `force-unlock`, `workspace new`, `workspace list`, `workspace select`, `workspace delete` (remote backend), `destroy` | Remote runs, `tofu login`, workspace tags, workspace rename |
 
 The list of tested versions is in [`e2e/tool.go`](e2e/tool.go).
 

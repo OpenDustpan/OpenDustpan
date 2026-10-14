@@ -247,4 +247,6 @@ type Workspace struct {
 	UpdatedAtMs           int64
 	AllowForcedWrites     bool
 	AllowUnlockedWrites   bool
+	DeletedAtMs           sql.NullInt64
+	DeletedName           sql.NullString
 }
