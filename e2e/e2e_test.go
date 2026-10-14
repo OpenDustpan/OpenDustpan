@@ -4408,11 +4408,20 @@ func checkNoDeletedWorkspace(ctx context.Context, env *e2e.Env, r e2e.Result, re
 		return fmt.Errorf("%w: workspace list still shows the deleted workspace: %s", errUnexpected, r.Stdout)
 	}
 
-	for _, path := range []string{
-		"/api/v2/organizations/" + e2e.Namespace + "/workspaces",
-		"/api/inventory/units?organization=" + e2e.Namespace,
-	} {
-		status, body, err := env.TFEStatusA(ctx, http.MethodGet, path, "")
+	// The TFE-compatible API takes a bearer token and the inventory API the
+	// token scheme, so each path names the call that reads it.
+	reads := []struct {
+		read func(ctx context.Context, method, path, body string) (int, string, error)
+		path string
+	}{
+		{read: env.TFEStatusA, path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces"},
+		{read: env.APIStatus, path: "/api/inventory/units?organization=" + e2e.Namespace},
+	}
+
+	for _, rd := range reads {
+		path := rd.path
+
+		status, body, err := rd.read(ctx, http.MethodGet, path, "")
 		if err != nil {
 			return fmt.Errorf("get %s: %w", path, err)
 		}
