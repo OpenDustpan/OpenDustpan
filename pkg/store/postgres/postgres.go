@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -417,9 +418,9 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // it read the stack before the delete committed, its row stays with the
 // deleted stack and never starts, because a start finds the stack by name.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, at time.Time,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, ref)
 		if errors.Is(err, stack.ErrUpdateNotFound) {
 			return stack.ErrNotFound
@@ -437,7 +438,7 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, locked.ID, at)
+		return softDeleteStack(ctx, q, ref, locked.ID, e.At)
 	})
 }
 
@@ -446,9 +447,9 @@ func (s *Store) DeleteStack(
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 func (s *Store) ForceDeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, at time.Time,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		locked, err := lockStack(ctx, q, ref)
 		if errors.Is(err, stack.ErrUpdateNotFound) {
 			return stack.ErrNotFound
@@ -462,7 +463,7 @@ func (s *Store) ForceDeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, locked.ID, at)
+		return softDeleteStack(ctx, q, ref, locked.ID, e.At)
 	})
 }
 

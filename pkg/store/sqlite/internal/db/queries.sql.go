@@ -742,6 +742,7 @@ type DeleteStackParams struct {
 	Name      string
 }
 
+// Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
 	if err != nil {
@@ -1333,7 +1334,7 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 const getStack = `-- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackParams struct {
@@ -1370,7 +1371,7 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 const getStackID = `-- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackIDParams struct {
@@ -1424,7 +1425,7 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 const getStackVersion = `-- name: GetStackVersion :one
 SELECT version
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackVersionParams struct {
@@ -3301,7 +3302,7 @@ func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberPa
 }
 
 const renameStack = `-- name: RenameStack :execrows
-UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?
+UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type RenameStackParams struct {
@@ -3538,7 +3539,7 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 const setStackVersion = `-- name: SetStackVersion :exec
 UPDATE stacks
 SET version = ?, updated_at_ms = ?
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type SetStackVersionParams struct {

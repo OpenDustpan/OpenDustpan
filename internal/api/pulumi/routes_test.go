@@ -112,12 +112,12 @@ func (stubStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	return stack.ErrNotFound
 }
 
-func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -158,6 +158,7 @@ type recordingStackStore struct {
 	renamed   []renamedStack
 	deleted   []stack.Ref
 	forced    []stack.Ref
+	entries   []audit.Entry
 	deleteErr error
 }
 
@@ -194,17 +195,19 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 }
 
 func (s *recordingStackStore) DeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard, _ time.Time,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard, e audit.Entry,
 ) error {
 	s.deleted = append(s.deleted, ref)
+	s.entries = append(s.entries, e)
 
 	return s.deleteErr
 }
 
 func (s *recordingStackStore) ForceDeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence, _ time.Time,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, e audit.Entry,
 ) error {
 	s.forced = append(s.forced, ref)
+	s.entries = append(s.entries, e)
 
 	return s.deleteErr
 }
@@ -359,7 +362,15 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
+	stores := &recordingStackStore{
+		created:   nil,
+		renamed:   nil,
+		tags:      nil,
+		deleted:   nil,
+		forced:    nil,
+		entries:   nil,
+		deleteErr: nil,
+	}
 
 	stacks, err := stack.NewService(
 		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
@@ -1446,6 +1457,7 @@ func newDeleteHandlerWithAudit(
 		tags:      nil,
 		deleted:   nil,
 		forced:    nil,
+		entries:   nil,
 		deleteErr: deleteErr,
 	}
 
@@ -1678,19 +1690,22 @@ func TestDeleteStackKeepsCheckpointBlobs(t *testing.T) {
 	}
 }
 
-// TestDeleteStackWritesChangeEntry proves a stack delete writes one audit
-// entry of the kind change for the unit, and a refused delete writes none.
-func TestDeleteStackWritesChangeEntry(t *testing.T) {
+// TestDeleteStackPassesChangeEntry proves a stack delete hands one audit
+// entry of the kind change for the unit, stamped with the time of the delete,
+// to the store, which appends it in the delete transaction (ADR 60, fail
+// closed). A store that fails the append answers 500, and the handler then
+// appends no entry of its own.
+func TestDeleteStackPassesChangeEntry(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name      string
 		deleteErr error
+		name      string
 		wantCode  int
-		wantCount int
 	}{
-		{name: "delete", deleteErr: nil, wantCode: http.StatusNoContent, wantCount: 1},
-		{name: "refused delete", deleteErr: stack.ErrUpdateConflict, wantCode: http.StatusConflict, wantCount: 0},
+		{name: "delete", deleteErr: nil, wantCode: http.StatusNoContent},
+		{name: "refused delete", deleteErr: stack.ErrUpdateConflict, wantCode: http.StatusConflict},
+		{name: "failed append", deleteErr: errAppendBoom, wantCode: http.StatusInternalServerError},
 	}
 
 	for _, tc := range cases {
@@ -1698,7 +1713,7 @@ func TestDeleteStackWritesChangeEntry(t *testing.T) {
 			t.Parallel()
 
 			auditStore := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
-			handler, _, _ := newDeleteHandlerWithAudit(t, tc.deleteErr, auditStore)
+			handler, stores, _ := newDeleteHandlerWithAudit(t, tc.deleteErr, auditStore)
 
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, deleteRequest(t, "/api/stacks/acme/web/prod"))
@@ -1707,20 +1722,32 @@ func TestDeleteStackWritesChangeEntry(t *testing.T) {
 				t.Fatalf("delete answers %d, want %d (body %s)", rec.Code, tc.wantCode, rec.Body.String())
 			}
 
-			if len(auditStore.entries) != tc.wantCount {
-				t.Fatalf("audit entries = %d, want %d", len(auditStore.entries), tc.wantCount)
+			if len(auditStore.entries) != 0 {
+				t.Fatalf("entries appended by the handler = %d, want 0: the store appends", len(auditStore.entries))
 			}
 
-			if tc.wantCount == 0 {
-				return
-			}
-
-			got := auditStore.entries[0]
-			if got.Kind != audit.KindChange || got.Action != string(identity.ActionUnitManage) ||
-				got.Object != "pulumi:acme/web/prod" || got.Outcome != audit.OutcomeSuccess {
-				t.Fatalf("audit entry = %+v, want a change by unit:manage on pulumi:acme/web/prod", got)
-			}
+			checkPassedChangeEntry(t, stores.entries)
 		})
+	}
+}
+
+// errAppendBoom is the error of a store whose audit append fails.
+var errAppendBoom = errors.New("append audit entry: boom")
+
+// checkPassedChangeEntry checks that the store got exactly one entry: a
+// change by unit:manage on pulumi:acme/web/prod with the time of the delete.
+func checkPassedChangeEntry(t *testing.T, entries []audit.Entry) {
+	t.Helper()
+
+	if len(entries) != 1 {
+		t.Fatalf("entries passed to the store = %d, want 1", len(entries))
+	}
+
+	got := entries[0]
+	if got.Kind != audit.KindChange || got.Action != string(identity.ActionUnitManage) ||
+		got.Object != "pulumi:acme/web/prod" || got.Namespace != "acme" ||
+		got.Outcome != audit.OutcomeSuccess || got.At.IsZero() {
+		t.Fatalf("audit entry = %+v, want a timed change by unit:manage on pulumi:acme/web/prod", got)
 	}
 }
 

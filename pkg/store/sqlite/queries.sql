@@ -32,7 +32,7 @@ ON CONFLICT DO NOTHING;
 -- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?;
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
@@ -73,12 +73,12 @@ SET updated_at_ms = ?
 WHERE id = ?;
 
 -- name: RenameStack :execrows
-UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?;
+UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?;
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: CreateUpdate :exec
 INSERT INTO updates (
@@ -126,12 +126,12 @@ WHERE stack_id = ?
 -- name: GetStackVersion :one
 SELECT version
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?;
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: SetStackVersion :exec
 UPDATE stacks
 SET version = ?, updated_at_ms = ?
-WHERE namespace = ? AND project = ? AND name = ?;
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
@@ -252,6 +252,7 @@ SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: DeleteStack :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 DELETE FROM stacks
 WHERE namespace = ? AND project = ? AND name = ?;
 

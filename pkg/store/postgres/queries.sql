@@ -51,7 +51,7 @@ ON CONFLICT DO NOTHING;
 -- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3;
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
@@ -92,19 +92,19 @@ SET updated_at_ms = $1
 WHERE id = $2;
 
 -- name: RenameStack :execrows
-UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4;
+UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4 AND deleted_at_ms IS NULL;
 
 -- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3;
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
 SELECT id, version
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE;
 
 -- name: CreateUpdate :exec
@@ -149,7 +149,7 @@ WHERE stack_id = $1
 -- name: SetStackVersion :exec
 UPDATE stacks
 SET version = $1, updated_at_ms = $2
-WHERE namespace = $3 AND project = $4 AND name = $5;
+WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
@@ -279,6 +279,7 @@ SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1
 WHERE id = $2 AND deleted_at_ms IS NULL;
 
 -- name: DeleteStack :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 DELETE FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3;
 

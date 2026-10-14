@@ -183,12 +183,12 @@ func (m *mapStackStore) DeleteStack(
 	ref stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	return m.deleteRef(ref)
 }
 
-func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return m.deleteRef(ref)
 }
 
@@ -1151,12 +1151,12 @@ func (m *failingStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
-func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	panic("failingStackStore.ForceDeleteStack is not used")
 }
 

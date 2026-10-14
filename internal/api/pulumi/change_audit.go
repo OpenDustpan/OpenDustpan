@@ -19,24 +19,13 @@ type changeAudit struct {
 	action    identity.Action
 }
 
-// appendChangeEntry writes one audit entry of the kind change after a change
-// committed (ADR 60, decision 4). The change already happened, so a failed
-// append does not change the answer: it writes a log line and counts the
-// failure, as a failed reveal entry does.
-func (h *Handler) appendChangeEntry(ctx context.Context, a changeAudit) {
-	if h.audit == nil {
-		return
-	}
-
-	ns, err := h.namespaces.Get(ctx, a.object.Namespace())
-	if err != nil {
-		h.failAudit(ctx)
-
-		return
-	}
-
-	entry := audit.Entry{
-		At:         time.Now().UTC(),
+// changeEntry returns the audit entry of the kind change for a (ADR 60,
+// decision 4). The store appends it in the transaction of the change, so the
+// change and its entry commit together or not at all (fail closed). The
+// service stamps the time of the change on it.
+func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
 		Namespace:  a.object.Namespace(),
 		Subject:    a.principal.Subject,
 		IDPSubject: "",
@@ -55,9 +44,5 @@ func (h *Handler) appendChangeEntry(ctx context.Context, a changeAudit) {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
-	}
-
-	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
-		h.failAudit(ctx)
 	}
 }

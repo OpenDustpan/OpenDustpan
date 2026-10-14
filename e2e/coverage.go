@@ -235,12 +235,12 @@ func (coverageStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	return stack.ErrNotFound
 }
 
-func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 

@@ -653,7 +653,9 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 // The check runs inside the delete transaction, so an update that finishes
 // between the check and the delete cannot drop resources. A delete while a
 // mutating update runs answers 409. The checkpoint blobs stay, because a
-// restore reads them. Each delete writes an audit entry of the kind change.
+// restore reads them. Each delete writes an audit entry of the kind change in
+// the delete transaction: if the append fails, the delete rolls back and the
+// route answers 500 (ADR 60, fail closed).
 func (h *Handler) deleteStack(
 	w http.ResponseWriter, r *http.Request, principal identity.Principal, obj identity.Object,
 ) {
@@ -666,10 +668,17 @@ func (h *Handler) deleteStack(
 		return
 	}
 
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: principal,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
 	if deleteForce(r) {
-		err = h.stacks.ForceDelete(ctx, ref)
+		err = h.stacks.ForceDelete(ctx, ref, entry)
 	} else {
-		err = h.stacks.Delete(ctx, ref)
+		err = h.stacks.Delete(ctx, ref, entry)
 	}
 
 	if err != nil {
@@ -677,13 +686,6 @@ func (h *Handler) deleteStack(
 
 		return
 	}
-
-	h.appendChangeEntry(ctx, changeAudit{
-		request:   r,
-		principal: principal,
-		object:    obj,
-		action:    identity.ActionUnitManage,
-	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
