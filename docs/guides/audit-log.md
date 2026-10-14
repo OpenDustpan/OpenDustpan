@@ -137,7 +137,9 @@ The server can send a copy of each audit entry to one or more sinks.
 The SQL table stays the record of the audit log.
 No sink is the default.
 
-Set `--audit-sink` (`DUSTPAN_AUDIT_SINK`) to a comma-separated list.
+Give `--audit-sink` once for each sink.
+In `DUSTPAN_AUDIT_SINK`, separate the sinks with spaces or line breaks.
+A sink item can hold a comma, for example in the query of a webhook URL.
 Each item is `[<name>=]<sink>`:
 
 | Sink | Example | What it writes |
@@ -149,7 +151,8 @@ Each item is `[<name>=]<sink>`:
 
 ```sh
 opendustpan serve \
-  --audit-sink 'siem=syslog+tls://logs.example:6514,archive=blob:audit'
+  --audit-sink 'siem=syslog+tls://logs.example:6514' \
+  --audit-sink 'archive=blob:audit'
 ```
 
 The name keys the cursor of the sink in the database.
@@ -173,7 +176,9 @@ The server reads the new entries of each scope in order and writes them to the s
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
 So a sink can receive an entry twice.
+Each instance of the server sends the entries, so with more than one instance a sink receives each entry about once for each instance.
 Drop duplicates by `scope` and `sequence`.
+A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
 
 ### Syslog
@@ -186,6 +191,10 @@ Over `tcp` and `tls` each message starts with its length in bytes (RFC 5425).
 UDP has no acknowledgment, so a message can get lost without an error.
 Use `tls` for an audit log.
 `?ca-file=<path>` names a PEM bundle to trust instead of the system store.
+`?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
+The default is 8192.
+The server does not send an entry above that size.
+It counts the entry in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 
 ### Webhook
 
@@ -200,13 +209,16 @@ Each request carries two headers:
 The receiver computes the signature with the same key and compares it in constant time.
 Refuse a request whose timestamp is more than 5 minutes old.
 A 2xx answer means the receiver holds the batch.
+The server does not follow a redirect: a 3xx answer is a failed batch, and the server sends the batch again to the same URL.
 
 ### Object storage
 
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
 The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
-Each object is `<prefix>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
+Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.
+A key holds the characters `a-z`, `0-9`, `.` and `-` only.
+Each other character of the scope, and `_`, becomes `_` and two hexadecimal digits: `acme` stays `acme`, and `@server` becomes `_40server`.
 To keep objects that nobody can delete, use a bucket with S3 Object Lock.
 
 ### A file and log rotation
@@ -218,7 +230,17 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
 `dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog message above `max-size`.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
+A skipped entry is not in the sink: alert when that count is above zero.
+The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.
+
+### After a restore
+
+A restore resets the cursor of every sink.
+Each sink then receives the restored log again from its first entry.
+The restored log can use a sequence again that a sink already holds for an entry from after the backup.
+Keep the copies of the sink from before the restore apart, for example by the time of the restore.
 
 ```yaml
 groups:

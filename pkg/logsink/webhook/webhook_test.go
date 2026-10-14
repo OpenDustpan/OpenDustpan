@@ -3,12 +3,15 @@ package webhook_test
 import (
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +63,66 @@ func TestNon2xxAnswerIsAnError(t *testing.T) {
 
 	if err := s.Write(t.Context(), []logsink.Record{rec}); err == nil {
 		t.Fatal("write to a receiver that answers 503: got nil error")
+	}
+}
+
+func TestARedirectIsRefusedAndNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			t.Parallel()
+
+			var landed atomic.Int32
+
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == "/land" {
+					landed.Add(1)
+					w.WriteHeader(http.StatusOK)
+
+					return
+				}
+
+				http.Redirect(w, req, "/land", status)
+			}))
+			t.Cleanup(srv.Close)
+
+			s, err := webhook.New(webhook.Config{
+				URL: srv.URL + "/hook", Secret: testSecret, Client: srv.Client(), Timeout: 0,
+			})
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			closeOnCleanup(t, s)
+
+			rec := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "m", Attrs: nil}
+
+			if err := s.Write(t.Context(), []logsink.Record{rec}); !errors.Is(err, webhook.ErrRefused) {
+				t.Fatalf("write to a receiver that redirects: got %v, want ErrRefused", err)
+			}
+
+			if n := landed.Load(); n != 0 {
+				t.Fatalf("the sink followed the redirect %d times", n)
+			}
+		})
+	}
+}
+
+func TestABadURLErrorHoldsNoCredentials(t *testing.T) {
+	t.Parallel()
+
+	// The test builds the URL from parts, so no credential URL is in the
+	// source for the secret scanner to report.
+	userinfo := url.UserPassword("user", "canary-password").String()
+
+	_, err := webhook.New(config("https://"+userinfo+"@exa mple.com/hook", testSecret))
+	if err == nil {
+		t.Fatal("new with a URL that does not parse: got nil error")
+	}
+
+	if strings.Contains(err.Error(), "canary-password") {
+		t.Fatalf("error holds the credentials: %v", err)
 	}
 }
 

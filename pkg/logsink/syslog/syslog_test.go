@@ -9,11 +9,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"io"
 	"math/big"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -113,6 +115,8 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		{name: "address without port", cfg: config(syslog.UDP, "127.0.0.1")},
 		{name: "facility too high", cfg: withFacility(config(syslog.UDP, "127.0.0.1:514"), 24)},
 		{name: "negative facility", cfg: withFacility(config(syslog.UDP, "127.0.0.1:514"), -1)},
+		{name: "message cap too low", cfg: withMaxBytes(config(syslog.UDP, "127.0.0.1:514"), 100)},
+		{name: "message cap too high", cfg: withMaxBytes(config(syslog.UDP, "127.0.0.1:514"), 70000)},
 	}
 
 	for _, tc := range cases {
@@ -123,6 +127,36 @@ func TestNewRejectsBadConfig(t *testing.T) {
 				t.Fatal("new: got nil error")
 			}
 		})
+	}
+}
+
+func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	large := logsink.Record{
+		Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: strings.Repeat("x", 600), Attrs: nil,
+	}
+	small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+	err = s.Write(t.Context(), []logsink.Record{large, small})
+
+	skip, ok := errors.AsType[*logsink.SkipError](err)
+	if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+		t.Fatalf("write: got %v, want a skip of 1 record", err)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
+		t.Fatalf("received %q, want only the small record", msgs)
 	}
 }
 
@@ -180,7 +214,16 @@ func config(network syslog.Network, address string) syslog.Config {
 		AppName:   "",
 		Facility:  0,
 		Timeout:   0,
+
+		MaxMessageBytes: 0,
 	}
+}
+
+// withMaxBytes returns cfg with the message cap set.
+func withMaxBytes(cfg syslog.Config, n int) syslog.Config {
+	cfg.MaxMessageBytes = n
+
+	return cfg
 }
 
 // withFacility returns cfg with facility set.

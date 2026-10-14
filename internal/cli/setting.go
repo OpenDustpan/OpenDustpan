@@ -79,6 +79,43 @@ func (s *Setting) String(fs *flag.FlagSet, target *string) {
 	fs.StringVar(target, s.Flag, Env(s.Env, s.Default), s.Help)
 }
 
+// List registers the declaration as a repeatable string flag: each
+// occurrence adds one item, and no item is split. The environment variable
+// holds the items separated by white space, so an item can hold a comma.
+// The first flag occurrence replaces the items of the variable.
+func (s *Setting) List(fs *flag.FlagSet, target *[]string) {
+	*target = strings.Fields(Env(s.Env, s.Default))
+	fs.Var(&listValue{items: target, set: false}, s.Flag, s.Help)
+}
+
+// listValue is the flag.Value of a List flag.
+type listValue struct {
+	items *[]string
+	set   bool
+}
+
+// String implements flag.Value.
+func (v *listValue) String() string {
+	if v == nil || v.items == nil {
+		return ""
+	}
+
+	return strings.Join(*v.items, " ")
+}
+
+// Set implements flag.Value: the first call replaces the items of the
+// environment, later calls add one item each.
+func (v *listValue) Set(item string) error {
+	if !v.set {
+		*v.items = nil
+		v.set = true
+	}
+
+	*v.items = append(*v.items, item)
+
+	return nil
+}
+
 // Bool registers the declaration as a bool flag with its environment
 // default and help.
 func (s *Setting) Bool(fs *flag.FlagSet, target *bool) {

@@ -11,7 +11,9 @@
 //     shared secret, over the timestamp, a ".", and the body.
 //
 // A 2xx answer means the receiver holds the batch. Any other answer, or no
-// answer, is an error.
+// answer, is an error. The sink never follows a redirect: a 3xx answer is
+// an error too, so a batch never goes to another host, and a redirect that
+// turns the POST into a GET never reads as delivered.
 package webhook
 
 import (
@@ -53,7 +55,8 @@ const maxDrainBytes = 64 << 10
 
 // Config configures a Sink.
 type Config struct {
-	// Client sends the requests. Nil means a client with Timeout.
+	// Client sends the requests. Nil means a client with Timeout. The sink
+	// uses a copy of Client that never follows a redirect.
 	Client *http.Client
 	// URL is the HTTPS endpoint.
 	URL string
@@ -79,6 +82,12 @@ var _ logsink.Sink = (*Sink)(nil)
 func New(cfg Config) (*Sink, error) {
 	u, err := url.Parse(cfg.URL)
 	if err != nil {
+		// A url.Error repeats the URL, which can hold credentials. Keep
+		// only the cause.
+		if urlErr, ok := errors.AsType[*url.Error](err); ok {
+			err = urlErr.Err
+		}
+
 		return nil, fmt.Errorf("%w: webhook URL: %w", logsink.ErrInvalidConfig, err)
 	}
 
@@ -90,24 +99,38 @@ func New(cfg Config) (*Sink, error) {
 		return nil, fmt.Errorf("%w: webhook secret is empty", logsink.ErrInvalidConfig)
 	}
 
-	client := cfg.Client
-	if client == nil {
-		timeout := cfg.Timeout
-		if timeout <= 0 {
-			timeout = defaultTimeout
-		}
-
-		client = &http.Client{Timeout: timeout}
-	}
-
 	return &Sink{
-		client: client,
+		client: noRedirectClient(cfg),
 		now:    time.Now,
 		url:    u.String(),
 		secret: append([]byte(nil), cfg.Secret...),
 		mu:     sync.RWMutex{},
 		closed: false,
 	}, nil
+}
+
+// noRedirectClient returns a copy of the client of cfg, or a new client
+// with the timeout of cfg, that answers the first response and never
+// follows a redirect.
+func noRedirectClient(cfg Config) *http.Client {
+	var client http.Client
+
+	if cfg.Client != nil {
+		client = *cfg.Client
+	} else {
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = defaultTimeout
+		}
+
+		client.Timeout = timeout
+	}
+
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	return &client
 }
 
 // Sign returns the Dustpan-Signature value for a request with timestamp

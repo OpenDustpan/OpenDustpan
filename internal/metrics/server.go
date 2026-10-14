@@ -30,7 +30,7 @@ const (
 	maxBuildCount    = 4
 	// maxSinkSeries caps the series of the audit sink families: one per
 	// configured sink.
-	maxSinkSeries = 16
+	maxSinkSeries = MaxSinkSeries
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -45,6 +45,10 @@ const (
 	// operator sets the name; it never holds an address or a secret.
 	labelSink = "sink"
 )
+
+// MaxSinkSeries is the count of sinks that the audit sink families label.
+// The metrics of a sink past this count go to no series.
+const MaxSinkSeries = 16
 
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
@@ -66,6 +70,7 @@ type ServerMetrics struct {
 	audit    *Counter
 	shipped  *Counter
 	sinkFail *Counter
+	sinkSkip *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -122,6 +127,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		sinkFail: reg.NewCounter(
 			"dustpan_audit_sink_failures_total",
 			"Failed delivery rounds of an audit sink, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
+		sinkSkip: reg.NewCounter(
+			"dustpan_audit_sink_skipped_total",
+			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 			[]string{labelSink},
 			maxSinkSeries,
 		),
@@ -213,6 +224,16 @@ func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
 // that keeps growing means the sink falls behind. Operators alert on it.
 func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
 	m.sinkFail.Inc(sink)
+}
+
+// AddAuditSkipped adds entries to the count of audit entries that the sink
+// named sink skipped because it cannot hold them, for example an entry
+// above the message size cap of a syslog sink. The sink never receives
+// such an entry. Operators alert when it is above zero.
+func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
+	if entries > 0 {
+		m.sinkSkip.Add(uint64(entries), sink)
+	}
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

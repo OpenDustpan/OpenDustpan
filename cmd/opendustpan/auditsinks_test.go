@@ -22,9 +22,9 @@ func envOf(vars map[string]string) func(string) (string, bool) {
 	}
 }
 
-// openTestSinks opens raw against a fresh blob directory and closes the
+// openTestSinks opens items against a fresh blob directory and closes the
 // sinks when the test ends.
-func openTestSinks(t *testing.T, raw string, lookup func(string) (string, bool)) (openedSinks, error) {
+func openTestSinks(t *testing.T, items []string, lookup func(string) (string, bool)) (openedSinks, error) {
 	t.Helper()
 
 	blobs, err := fs.Open(t.TempDir())
@@ -38,7 +38,7 @@ func openTestSinks(t *testing.T, raw string, lookup func(string) (string, bool))
 		}
 	})
 
-	sinks, err := openAuditSinks(raw, blobs, lookup)
+	sinks, err := openAuditSinks(items, blobs, lookup)
 	if err == nil {
 		t.Cleanup(func() {
 			if closeErr := sinks.close(); closeErr != nil {
@@ -53,7 +53,7 @@ func openTestSinks(t *testing.T, raw string, lookup func(string) (string, bool))
 func TestAuditSinksEmptyValueOpensNothing(t *testing.T) {
 	t.Parallel()
 
-	sinks, err := openTestSinks(t, " , ", noEnv)
+	sinks, err := openTestSinks(t, []string{" ", ""}, noEnv)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -67,9 +67,13 @@ func TestAuditSinksNamesKindsAndIntervals(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
-	raw := "file:" + path + ", siem=syslog+tcp://127.0.0.1:6514?facility=16 ,archive=blob:audit"
+	items := []string{
+		"file:" + path,
+		" siem=syslog+tcp://127.0.0.1:6514?facility=16&max-size=2048 ",
+		"archive=blob:audit",
+	}
 
-	sinks, err := openTestSinks(t, raw, noEnv)
+	sinks, err := openTestSinks(t, items, noEnv)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -98,7 +102,7 @@ func TestAuditSinkNameBeforeAnEqualsSignInAPathIsNoName(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "a=b.jsonl")
 
-	sinks, err := openTestSinks(t, "file:"+path, noEnv)
+	sinks, err := openTestSinks(t, []string{"file:" + path}, noEnv)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -119,6 +123,8 @@ func TestAuditSinksRefuseBadItems(t *testing.T) {
 		{name: "syslog over unix", raw: "syslog+unix:///dev/log"},
 		{name: "syslog facility not a number", raw: "syslog+udp://127.0.0.1:514?facility=audit"},
 		{name: "syslog facility out of range", raw: "syslog+udp://127.0.0.1:514?facility=24"},
+		{name: "syslog max-size not a number", raw: "syslog+udp://127.0.0.1:514?max-size=big"},
+		{name: "syslog max-size too low", raw: "syslog+udp://127.0.0.1:514?max-size=100"},
 		{name: "syslog tls with a missing CA file", raw: "syslog+tls://127.0.0.1:6514?ca-file=/nonexistent/ca.pem"},
 		{name: "webhook without a secret", raw: "webhook:https://hooks.example/audit"},
 		{name: "webhook over plain http", raw: "webhook:http://hooks.example/audit"},
@@ -137,7 +143,7 @@ func TestAuditSinksRefuseBadItems(t *testing.T) {
 				lookup = envOf(map[string]string{webhookSecretEnvVar: "s3cret"})
 			}
 
-			_, err := openTestSinks(t, tc.raw, lookup)
+			_, err := openTestSinks(t, []string{tc.raw}, lookup)
 			if err == nil {
 				t.Fatalf("open %q: got nil error", tc.raw)
 			}
@@ -220,7 +226,7 @@ func TestWebhookSecretComesFromTheVariableOrAPrivateFile(t *testing.T) {
 func TestAWebhookSinkOpensWithASecret(t *testing.T) {
 	t.Parallel()
 
-	sinks, err := openTestSinks(t, "webhook:https://hooks.example/audit", envOf(map[string]string{
+	sinks, err := openTestSinks(t, []string{"webhook:https://hooks.example/audit?a=1,2"}, envOf(map[string]string{
 		webhookSecretEnvVar: "s3cret",
 	}))
 	if err != nil {

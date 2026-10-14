@@ -56,15 +56,16 @@ type openedSinks struct {
 	files []*file.Sink
 }
 
-// openAuditSinks opens each sink of the comma-separated --audit-sink value.
-// An item is [<name>=]<spec>. The name keys the cursor of the sink; without
+// openAuditSinks opens the sink of each --audit-sink item. An item is
+// [<name>=]<spec>. The flag repeats, and the variable separates items with
+// white space, so a webhook URL can hold a comma. The name keys the cursor of the sink; without
 // one, the kind is the name (file, syslog, webhook or blob), so two sinks
 // of one kind need names. blobs is the live blob store, which blob: sinks
 // write to. On error it closes every sink it opened.
-func openAuditSinks(raw string, blobs blob.Store, lookup func(string) (string, bool)) (openedSinks, error) {
+func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (string, bool)) (openedSinks, error) {
 	var out openedSinks
 
-	for item := range strings.SplitSeq(raw, ",") {
+	for _, item := range items {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
@@ -149,7 +150,7 @@ func openSink(spec string, blobs blob.Store, lookup func(string) (string, bool))
 			return nil, 0, fmt.Errorf("%w %s: %w", errAuditSink, spec, errReservedPrefix)
 		}
 
-		s, err := objectstore.New(blobs, prefix)
+		s, err := objectstore.New(blobs, prefix, objectstore.WithPartition(audit.RecordScope))
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w %s: %w", errAuditSink, spec, err)
 		}
@@ -162,7 +163,8 @@ func openSink(spec string, blobs blob.Store, lookup func(string) (string, bool))
 }
 
 // openSyslogSink opens a syslog+udp://, syslog+tcp:// or syslog+tls://
-// sink. The query takes facility (0 to 23, default 13, log audit) and, for
+// sink. The query takes facility (0 to 23, default 13, log audit),
+// max-size (the message cap in bytes, 480 to 65507, default 8192) and, for
 // TLS, ca-file: a PEM bundle to trust instead of the system store.
 func openSyslogSink(spec string) (*syslog.Sink, error) {
 	u, err := url.Parse(spec)
@@ -180,6 +182,14 @@ func openSyslogSink(spec string) (*syslog.Sink, error) {
 		}
 	}
 
+	maxBytes := 0
+	if raw := u.Query().Get("max-size"); raw != "" {
+		maxBytes, err = strconv.Atoi(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w %s: max-size: %w", errAuditSink, spec, err)
+		}
+	}
+
 	cfg := syslog.Config{
 		TLSConfig: nil,
 		Network:   network,
@@ -188,6 +198,8 @@ func openSyslogSink(spec string) (*syslog.Sink, error) {
 		AppName:   "",
 		Facility:  facility,
 		Timeout:   0,
+
+		MaxMessageBytes: maxBytes,
 	}
 
 	if network == syslog.TLS {

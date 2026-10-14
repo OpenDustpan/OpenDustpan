@@ -22,7 +22,10 @@ import (
 // it. A restart or another instance goes on from the cursor. A failed
 // write leaves the cursor, so the next round sends the batch again: a sink
 // can receive an entry twice, and the receiver removes duplicates by scope
-// and sequence. The shipper never drops an entry.
+// and sequence. Each instance of the server runs the shipper, so a sink
+// receives each entry about once per instance. The shipper never drops an
+// entry, except one that a sink cannot hold (logsink.ErrSkipped): it
+// counts and logs that skip, and goes on.
 
 // Shipper defaults and limits.
 const (
@@ -41,10 +44,11 @@ const (
 )
 
 // Record attribute keys and the message of a shipped entry. The keys match
-// the JSON names of the audit API, plus "scope" for the namespace.
+// the JSON names of the audit API, plus RecordScope for the namespace.
 const (
 	RecordMessage = "audit entry"
-	attrScope     = "scope"
+	// RecordScope is the attribute key of the scope of a shipped entry.
+	RecordScope = "scope"
 )
 
 // ErrInvalidShipper reports a shipper configuration that fails validation.
@@ -86,16 +90,18 @@ type ShipSink struct {
 	Interval time.Duration
 }
 
-// ShipperConfig configures a Shipper. OnShipped and OnFailure are hooks for
-// metrics and may be nil. OnShipped receives the sink name and the count of
-// entries of one accepted batch. OnFailure receives the sink name after a
-// failed round.
+// ShipperConfig configures a Shipper. OnShipped, OnFailure and OnSkipped
+// are hooks for metrics and may be nil. OnShipped receives the sink name
+// and the count of entries of one accepted batch. OnFailure receives the
+// sink name after a failed round. OnSkipped receives the sink name and the
+// count of entries that the sink skipped (logsink.ErrSkipped).
 type ShipperConfig struct {
 	Feed       Feed
 	Namespaces NamespaceLister
 	Logger     *slog.Logger
 	OnShipped  func(sink string, entries int)
 	OnFailure  func(sink string)
+	OnSkipped  func(sink string, entries int)
 	Sinks      []ShipSink
 }
 
@@ -242,9 +248,22 @@ func (s *Shipper) fail(ctx context.Context, name string, err error) {
 	}
 }
 
+// skip logs the records that sink skipped and calls the skip hook. The log
+// line holds the sink name, the count and the reason, never an entry.
+func (s *Shipper) skip(ctx context.Context, name string, skip *logsink.SkipError) {
+	s.cfg.Logger.ErrorContext(ctx, "audit sink skipped entries that it cannot hold",
+		slog.String("sink", name), slog.Int("entries", skip.Skipped), slog.String("reason", skip.Reason))
+
+	if s.cfg.OnSkipped != nil {
+		s.cfg.OnSkipped(name, skip.Skipped)
+	}
+}
+
 // round copies the entries above the cursors of sink in every namespace
-// and in ServerScope. It stops at the first failure, so the cursors keep
-// the order of the entries.
+// and in ServerScope. Each scope ships on its own: a failure in one scope
+// stops that scope, which keeps the order of its entries, and the round
+// goes on with the next scope. The answer joins the errors of every scope
+// that failed.
 func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
@@ -253,13 +272,19 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 
 	namespaces = append(namespaces, serverScope())
 
+	var errs []error
+
 	for _, ns := range namespaces {
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+
 		if err := s.shipNamespace(ctx, sink, ns); err != nil {
-			return fmt.Errorf("namespace %s: %w", ns.Name, err)
+			errs = append(errs, fmt.Errorf("namespace %s: %w", ns.Name, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // shipNamespace copies the entries of ns above the cursor of sink, one
@@ -300,8 +325,17 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 		records = append(records, ToRecord(entries[i]))
 	}
 
+	delivered := len(entries)
+
 	if err := sink.Sink.Write(ctx, records); err != nil {
-		return fmt.Errorf("write: %w", err)
+		skip, ok := errors.AsType[*logsink.SkipError](err)
+		if !ok {
+			return fmt.Errorf("write: %w", err)
+		}
+
+		s.skip(ctx, sink.Name, skip)
+
+		delivered -= skip.Skipped
 	}
 
 	last := entries[len(entries)-1].Sequence
@@ -310,8 +344,8 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 		return fmt.Errorf("advance cursor: %w", err)
 	}
 
-	if s.cfg.OnShipped != nil {
-		s.cfg.OnShipped(sink.Name, len(entries))
+	if s.cfg.OnShipped != nil && delivered > 0 {
+		s.cfg.OnShipped(sink.Name, delivered)
 	}
 
 	return nil
@@ -323,7 +357,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 // carries prevHash and hash when the entry has them.
 func ToRecord(e Entry) logsink.Record {
 	attrs := []logsink.Attr{
-		logsink.String(attrScope, e.Namespace.String()),
+		logsink.String(RecordScope, e.Namespace.String()),
 		logsink.Int64("sequence", e.Sequence),
 		logsink.Int64("atMs", e.AtMs()),
 		logsink.String("subject", e.Subject),

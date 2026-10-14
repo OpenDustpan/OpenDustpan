@@ -24,7 +24,30 @@ var (
 	ErrClosed = errors.New("log sink closed")
 	// ErrInvalidConfig reports a sink configuration that an adapter refuses.
 	ErrInvalidConfig = errors.New("invalid log sink configuration")
+	// ErrSkipped reports a Write that delivered the batch except the records
+	// that the target cannot hold, for example a record above the size cap
+	// of the target. A SkipError carries it.
+	ErrSkipped = errors.New("log sink skipped records")
 )
+
+// SkipError reports the count of records that a Write skipped, and why. A
+// Write that answers a SkipError delivered every other record of the batch,
+// so the caller counts the batch as delivered and never sends the skipped
+// records again: a retry cannot deliver them.
+type SkipError struct {
+	Reason  string
+	Skipped int
+}
+
+// Error implements error.
+func (e *SkipError) Error() string {
+	return fmt.Sprintf("%s: %d records: %s", ErrSkipped, e.Skipped, e.Reason)
+}
+
+// Is reports whether target is ErrSkipped.
+func (e *SkipError) Is(target error) bool {
+	return target == ErrSkipped
+}
 
 // Level is the severity of a record. The values follow log/slog, so an
 // adapter can compare them, but the port does not import log/slog.
@@ -93,7 +116,8 @@ type Record struct {
 type Sink interface {
 	// Write delivers records in order. An empty batch is not an error and
 	// delivers nothing. It returns ErrClosed after Close, and ctx.Err() when
-	// ctx is done before the delivery ends.
+	// ctx is done before the delivery ends. It returns a *SkipError when it
+	// delivered every record except the ones the target cannot hold.
 	Write(ctx context.Context, records []Record) error
 	// Close releases the resources of the sink. A second Close is not an
 	// error.

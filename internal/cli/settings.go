@@ -198,10 +198,10 @@ var Settings = []*Setting{
 	),
 	stringSetting(
 		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
-		"comma-separated sinks that get a copy of each audit entry, each [<name>=]file:<path>, "+
-			"syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, webhook:<https URL> "+
-			"or blob:<prefix> (DUSTPAN_AUDIT_SINK)",
-		"(none: no sink). For example `siem=syslog+tls://logs.example:6514,blob:audit`",
+		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
+			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
+			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
+		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	),
 	stringSetting(
 		"server", "DUSTPAN_SERVER", "",

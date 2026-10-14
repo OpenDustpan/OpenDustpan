@@ -100,7 +100,9 @@ func (f *memFeed) acmeCursor(sink string) int64 {
 }
 
 // memSink keeps each batch it accepts. While down, it refuses every batch.
+// It refuses every batch of the scope refuse.
 type memSink struct {
+	refuse  string
 	batches [][]logsink.Record
 	mu      sync.Mutex
 	down    bool
@@ -110,7 +112,7 @@ func (s *memSink) Write(_ context.Context, records []logsink.Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.down {
+	if s.down || (len(records) > 0 && fmt.Sprint(records[0].Attrs[0].Value) == s.refuse) {
 		return errSinkDown
 	}
 
@@ -190,6 +192,7 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 		Logger:     nil,
 		OnShipped:  nil,
 		OnFailure:  nil,
+		OnSkipped:  nil,
 		Sinks:      sinks,
 	})
 	if err != nil {
@@ -207,7 +210,7 @@ func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors(t *testing.T) {
 	t.Parallel()
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 3, "globex": 2})
-	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
 	shipper := newShipper(t, feed, shipSink("siem", sink))
 
 	if err := shipper.ShipOnce(t.Context()); err != nil {
@@ -236,7 +239,7 @@ func TestAFailedWriteKeepsTheCursorAndTheNextRoundSendsTheBatchAgain(t *testing.
 	t.Parallel()
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 2})
-	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: true}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: true}
 	shipper := newShipper(t, feed, shipSink("siem", sink))
 
 	if err := shipper.ShipOnce(t.Context()); !errors.Is(err, errSinkDown) {
@@ -258,12 +261,79 @@ func TestAFailedWriteKeepsTheCursorAndTheNextRoundSendsTheBatchAgain(t *testing.
 	}
 }
 
+func TestAFailedScopeDoesNotStopTheLaterScopes(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 2, "globex": 2})
+	sink := &memSink{refuse: "acme", batches: nil, mu: sync.Mutex{}, down: false}
+	shipper := newShipper(t, feed, shipSink("siem", sink))
+
+	if err := shipper.ShipOnce(t.Context()); !errors.Is(err, errSinkDown) {
+		t.Fatalf("ship with a refused scope: got %v, want errSinkDown", err)
+	}
+
+	if got := sink.sequences(); fmt.Sprint(got) != "[globex/1 globex/2]" {
+		t.Fatalf("shipped %v, want [globex/1 globex/2]", got)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 0 {
+		t.Fatalf("acme cursor after a refused batch: got %d, want 0", got)
+	}
+}
+
+// skipSink accepts every batch and skips its first record.
+type skipSink struct{ inner *memSink }
+
+func (s skipSink) Write(ctx context.Context, records []logsink.Record) error {
+	if err := s.inner.Write(ctx, records[1:]); err != nil {
+		return err
+	}
+
+	return &logsink.SkipError{Reason: "too large", Skipped: 1}
+}
+
+func (s skipSink) Close() error { return nil }
+
+func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 3})
+	sink := skipSink{inner: &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}}
+
+	var shipped, skipped int
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:       feed,
+		Namespaces: feed,
+		Logger:     nil,
+		OnShipped:  func(_ string, n int) { shipped += n },
+		OnFailure:  nil,
+		OnSkipped:  func(_ string, n int) { skipped += n },
+		Sinks:      []audit.ShipSink{shipSink("siem", sink)},
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	if err := s.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("ship once: %v", err)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 3 {
+		t.Fatalf("cursor after a skip: got %d, want 3", got)
+	}
+
+	if shipped != 2 || skipped != 1 {
+		t.Fatalf("counts: shipped %d, skipped %d, want 2 and 1", shipped, skipped)
+	}
+}
+
 func TestEachSinkKeepsItsOwnCursor(t *testing.T) {
 	t.Parallel()
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 2})
-	up := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
-	down := &memSink{batches: nil, mu: sync.Mutex{}, down: true}
+	up := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+	down := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: true}
 	shipper := newShipper(t, feed, shipSink("archive", down), shipSink("siem", up))
 
 	if err := shipper.ShipOnce(t.Context()); !errors.Is(err, errSinkDown) {
@@ -284,7 +354,7 @@ func TestALargeBacklogShipsInBatches(t *testing.T) {
 
 	total := 2*audit.ShipBatchSize + 7
 	feed := newMemFeed(map[namespace.Name]int{"acme": total})
-	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
 	shipper := newShipper(t, feed, shipSink("siem", sink))
 
 	if err := shipper.ShipOnce(t.Context()); err != nil {
@@ -305,7 +375,7 @@ func TestRunShipsOnItsIntervalAndStopsWithTheContext(t *testing.T) {
 	t.Parallel()
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
-	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
 	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Interval: time.Millisecond})
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -338,7 +408,7 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 	t.Parallel()
 
 	feed := newMemFeed(nil)
-	sink := &memSink{batches: nil, mu: sync.Mutex{}, down: false}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
 
 	cases := []struct {
 		name  string
@@ -355,7 +425,13 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 			t.Parallel()
 
 			_, err := audit.NewShipper(audit.ShipperConfig{
-				Feed: feed, Namespaces: feed, Logger: nil, OnShipped: nil, OnFailure: nil, Sinks: tc.sinks,
+				Feed:       feed,
+				Namespaces: feed,
+				Logger:     nil,
+				OnShipped:  nil,
+				OnFailure:  nil,
+				OnSkipped:  nil,
+				Sinks:      tc.sinks,
 			})
 			if !errors.Is(err, audit.ErrInvalidShipper) {
 				t.Fatalf("new shipper: got %v, want ErrInvalidShipper", err)

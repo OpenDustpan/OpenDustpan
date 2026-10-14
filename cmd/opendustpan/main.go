@@ -252,7 +252,7 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
-	auditSinks              string
+	auditSinks              []string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -279,7 +279,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
-	cli.ByFlag("audit-sink").String(fs, &f.auditSinks)
+	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 }
 
 // registerNet registers the network and console flags.

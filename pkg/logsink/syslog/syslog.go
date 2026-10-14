@@ -58,6 +58,15 @@ const maxFacility = 23
 // defaultTimeout bounds one dial and one batch write when Config sets none.
 const defaultTimeout = 10 * time.Second
 
+// Message size limits. RFC 5424 section 6.1 makes every receiver accept
+// 480 octets and advises 2048. Common receivers accept 8192.
+const (
+	DefaultMaxMessageBytes = 8192
+	MinMaxMessageBytes     = 480
+	// MaxMaxMessageBytes is the largest UDP payload over IPv4.
+	MaxMaxMessageBytes = 65507
+)
+
 // defaultAppName is the APP-NAME of a message when Config sets none.
 const defaultAppName = "opendustpan"
 
@@ -94,6 +103,11 @@ type Config struct {
 	Facility int
 	// Timeout bounds one dial and one batch write. Zero means 10 seconds.
 	Timeout time.Duration
+	// MaxMessageBytes caps one message, header included. Write skips a
+	// record above the cap and answers a *logsink.SkipError, so a record
+	// that the receiver cannot hold never blocks the records after it. Zero
+	// means 8192. The value must be from 480 to 65507.
+	MaxMessageBytes int
 }
 
 // Sink sends records to one syslog receiver. It dials on the first Write
@@ -135,6 +149,13 @@ func New(cfg Config) (*Sink, error) {
 		cfg.Timeout = defaultTimeout
 	}
 
+	maxBytes, err := messageCap(cfg.MaxMessageBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.MaxMessageBytes = maxBytes
+
 	host := cfg.Hostname
 	if host == "" {
 		// A machine without a host name sends the nil value "-".
@@ -156,6 +177,21 @@ func New(cfg Config) (*Sink, error) {
 		closed:   false,
 		facility: cfg.Facility,
 	}, nil
+}
+
+// messageCap answers the message cap for the configured value n: 8192 for
+// zero, n when it is from 480 to 65507, else an error.
+func messageCap(n int) (int, error) {
+	if n == 0 {
+		return DefaultMaxMessageBytes, nil
+	}
+
+	if n < MinMaxMessageBytes || n > MaxMaxMessageBytes {
+		return 0, fmt.Errorf("%w: syslog message cap %d: want %d to %d",
+			logsink.ErrInvalidConfig, n, MinMaxMessageBytes, MaxMaxMessageBytes)
+	}
+
+	return n, nil
 }
 
 // headerField returns s as an RFC 5424 header field: printable US-ASCII
@@ -224,6 +260,7 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 	}
 
 	msgs := make([][]byte, 0, len(records))
+	skipped := 0
 
 	for i := range records {
 		m, err := s.Format(records[i])
@@ -231,9 +268,54 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 			return err
 		}
 
+		if len(m) > s.cfg.MaxMessageBytes {
+			skipped++
+
+			continue
+		}
+
 		msgs = append(msgs, m)
 	}
 
+	if err := s.deliver(ctx, msgs); err != nil {
+		return err
+	}
+
+	if skipped > 0 {
+		return &logsink.SkipError{
+			Reason:  fmt.Sprintf("syslog message above %d bytes", s.cfg.MaxMessageBytes),
+			Skipped: skipped,
+		}
+	}
+
+	return nil
+}
+
+// Close implements logsink.Sink.
+func (s *Sink) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closed = true
+
+	if s.conn == nil {
+		return nil
+	}
+
+	err := s.conn.Close()
+	s.conn = nil
+
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("close syslog connection: %w", err)
+	}
+
+	return nil
+}
+
+// deliver sends msgs over the connection, and dials first when it has
+// none. After a failed send it closes the connection, so the next Write
+// dials again.
+func (s *Sink) deliver(ctx context.Context, msgs [][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -258,27 +340,6 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 		}
 
 		return err
-	}
-
-	return nil
-}
-
-// Close implements logsink.Sink.
-func (s *Sink) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.closed = true
-
-	if s.conn == nil {
-		return nil
-	}
-
-	err := s.conn.Close()
-	s.conn = nil
-
-	if err != nil && !errors.Is(err, net.ErrClosed) {
-		return fmt.Errorf("close syslog connection: %w", err)
 	}
 
 	return nil

@@ -51,10 +51,8 @@ func TestPrincipalConformance(t *testing.T) {
 	})
 }
 
-// TestAuditConformance runs the audit store suite: append, list order,
-// paging, fencing, isolation, concurrent appends and the chain check. The
-// tamper hooks change or remove a row through SQL: the port has no update
-// or delete path, so only SQL plants a changed field or a deleted entry.
+// TestAuditFeedConformance runs the audit.Feed suite: entries after a
+// sequence and the fenced sink cursors.
 func TestAuditFeedConformance(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +74,10 @@ func TestAuditFeedConformance(t *testing.T) {
 	})
 }
 
+// TestAuditConformance runs the audit store suite: append, list order,
+// paging, fencing, isolation, concurrent appends and the chain check. The
+// tamper hooks change or remove a row through SQL: the port has no update
+// or delete path, so only SQL plants a changed field or a deleted entry.
 func TestAuditConformance(t *testing.T) {
 	t.Parallel()
 

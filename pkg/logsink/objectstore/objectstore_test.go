@@ -5,6 +5,8 @@ import (
 	"compress/gzip"
 	"io"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +75,50 @@ func TestKeyHoldsTheDateAndTheTimeRange(t *testing.T) {
 	want := regexp.MustCompile(`^logs/app/2026-10-13/1791935999000-1791936001000-[0-9a-f]{16}\.jsonl\.gz$`)
 	if !want.MatchString(objs[0].Key.String()) {
 		t.Fatalf("key %q does not match %s", objs[0].Key, want)
+	}
+}
+
+func TestAPartitionSplitsTheBatchByScope(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t)
+
+	s, err := objectstore.New(store, "audit", objectstore.WithPartition("scope"))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+	rec := func(scope string) logsink.Record {
+		return logsink.Record{
+			Time: at, Level: logsink.LevelInfo, Message: "audit entry",
+			Attrs: []logsink.Attr{logsink.String("scope", scope)},
+		}
+	}
+
+	recs := []logsink.Record{rec("acme"), rec("@server"), rec("acme"), rec("My_ns")}
+	if writeErr := s.Write(t.Context(), recs); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
+	}
+
+	objs, err := store.List(t.Context(), "audit")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	got := make([]string, 0, len(objs))
+	for _, o := range objs {
+		got = append(got, strings.SplitN(o.Key.String(), "/", 3)[1])
+	}
+
+	if want := []string{"_40server", "_4dy_5fns", "acme"}; !slices.Equal(got, want) {
+		t.Fatalf("partitions: got %v, want %v", got, want)
+	}
+
+	if lines := readAll(t, store, "audit/acme"); len(lines) != 2 {
+		t.Fatalf("acme lines: got %d, want 2", len(lines))
 	}
 }
 

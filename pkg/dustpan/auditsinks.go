@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"opendustpan.org/opendustpan/internal/metrics"
@@ -34,12 +35,18 @@ func newAuditShipper(cfg settings, observed *metrics.ServerMetrics) (*audit.Ship
 		return nil, fmt.Errorf("namespace store keeps no audit sink cursors: %w", ErrMissingOption)
 	}
 
+	if len(cfg.auditSinks) > metrics.MaxSinkSeries {
+		cfg.logger.Warn("more audit sinks than metric series: the metrics of the later sinks are not counted",
+			slog.Int("sinks", len(cfg.auditSinks)), slog.Int("series", metrics.MaxSinkSeries))
+	}
+
 	shipper, err := audit.NewShipper(audit.ShipperConfig{
 		Feed:       feed,
 		Namespaces: cfg.namespaceStore,
 		Logger:     cfg.logger,
 		OnShipped:  observed.AddAuditShipped,
 		OnFailure:  observed.IncAuditSinkFailure,
+		OnSkipped:  observed.AddAuditSkipped,
 		Sinks:      cfg.auditSinks,
 	})
 	if err != nil {
