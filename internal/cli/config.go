@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -42,6 +45,9 @@ var (
 	ErrConfigUnknown = errors.New("config file key has no setting")
 	// ErrConfigType is a value of the wrong type for its setting.
 	ErrConfigType = errors.New("config file value has the wrong type")
+	// ErrConfigPassword is a URL with a password for a setting that refuses
+	// one in the file (ADR 63 decision 4).
+	ErrConfigPassword = errors.New("config file value holds a password")
 
 	errWantBool   = errors.New("want true or false")
 	errWantInt    = errors.New("want a decimal integer of 0 or more")
@@ -100,7 +106,7 @@ func ParseConfig(data []byte) (ConfigFile, error) {
 			return ConfigFile{}, nil
 		}
 
-		return nil, fmt.Errorf("%w: %w", ErrConfigSyntax, err)
+		return nil, syntaxError(err)
 	}
 
 	var extra yaml.Node
@@ -123,6 +129,35 @@ func ParseConfig(data []byte) (ConfigFile, error) {
 	}
 
 	return decodeMapping(root)
+}
+
+// maxKeyInError is the most characters of a key that an error shows, so an
+// error never echoes a long text of the file.
+const maxKeyInError = 32
+
+// yamlLine finds the line number in an error of the YAML library.
+var yamlLine = regexp.MustCompile(`line (\d+)`)
+
+// syntaxError answers ErrConfigSyntax with the line number of err when it
+// has one. It never holds the message of the library: a message such as
+// "unknown anchor" can echo text of the file.
+func syntaxError(err error) error {
+	if match := yamlLine.FindStringSubmatch(err.Error()); match != nil {
+		return fmt.Errorf("%w: line %s", ErrConfigSyntax, match[1])
+	}
+
+	return ErrConfigSyntax
+}
+
+// errorKey answers key for an error: quoted, and cut to maxKeyInError
+// characters.
+func errorKey(key string) string {
+	runes := []rune(key)
+	if len(runes) > maxKeyInError {
+		return strconv.Quote(string(runes[:maxKeyInError])) + " (cut)"
+	}
+
+	return strconv.Quote(key)
 }
 
 // refuseAliases answers ErrConfigAlias when a node of the tree has an anchor
@@ -157,23 +192,44 @@ func decodeMapping(root *yaml.Node) (ConfigFile, error) {
 		key := keyNode.Value
 
 		if _, seen := out[key]; seen {
-			return nil, fmt.Errorf("%w: %q at line %d", ErrConfigDuplicate, key, keyNode.Line)
+			return nil, fmt.Errorf("%w: %s at line %d", ErrConfigDuplicate, errorKey(key), keyNode.Line)
 		}
 
 		setting := ByFile(key)
 		if setting == nil {
-			return nil, fmt.Errorf("%w: %q at line %d", ErrConfigUnknown, key, keyNode.Line)
+			return nil, fmt.Errorf("%w: %s at line %d", ErrConfigUnknown, errorKey(key), keyNode.Line)
 		}
 
 		value, err := decodeValue(setting, valueNode)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %q at line %d: %w", ErrConfigType, key, valueNode.Line, err)
+			return nil, fmt.Errorf("%w: %s at line %d: %w", ErrConfigType, errorKey(key), valueNode.Line, err)
+		}
+
+		if setting.NoPasswordInFile && hasPassword(value) {
+			return nil, fmt.Errorf(
+				"%w: %s at line %d: set a database URL with a password in %s, never in the file",
+				ErrConfigPassword, errorKey(key), valueNode.Line, setting.Env,
+			)
 		}
 
 		out[key] = value
 	}
 
 	return out, nil
+}
+
+// hasPassword reports whether value is a URL with a password. A value that
+// does not parse as a URL counts as one: the parser fails on many passwords
+// that are not escaped, and the error must not let such a value pass.
+func hasPassword(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return true
+	}
+
+	_, set := parsed.User.Password()
+
+	return set
 }
 
 // decodeValue answers the value of node in the text form of the flag of
@@ -204,10 +260,18 @@ func decodeBool(node *yaml.Node) (string, error) {
 	return node.Value, nil
 }
 
+// decimalForm is the only text of an int value: 0, or a digit 1 to 9 and
+// more digits. No sign, no leading zero, no underscore.
+var decimalForm = regexp.MustCompile(`^(0|[1-9]\d*)$`)
+
 // decodeInt answers an int value: only a decimal integer of 0 or more that
-// fits in an int64.
+// fits in an int64, with no sign and no leading zero.
 func decodeInt(node *yaml.Node) (string, error) {
 	if node.Kind != yaml.ScalarNode || node.ShortTag() != tagInt {
+		return "", errWantInt
+	}
+
+	if !decimalForm.MatchString(node.Value) {
 		return "", errWantInt
 	}
 

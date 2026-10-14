@@ -2,8 +2,9 @@
 
 `opendustpan serve` reads each setting from a flag, from an environment
 variable or from the configuration file. A flag wins over its variable, and
-a variable wins over the file. `opendustpan serve --help` prints the same
-list.
+a variable wins over the file. A variable that is empty or holds only
+spaces is not set, so the next layer wins. `opendustpan serve --help` prints
+the same list.
 
 ## Server settings
 
@@ -54,6 +55,15 @@ A bool is only `true` or `false`. A string setting takes only a string, so
 0 or more. A refused file stops the start. The error names the key and the
 rule, never the value.
 
+A string value that YAML reads as a number, a bool or a date needs quotes,
+for example `"8080"`, `"true"` or `"2026-10-14"`. The JSON shape of
+the example below quotes each string.
+
+The file refuses a `database` URL with a password. Set such a URL in
+`DUSTPAN_DATABASE`, because a secret comes only from a variable or from a
+file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag
+still takes a URL with a password, as before. Issue #511 deprecates that.
+
 At start, the server writes one INFO line for each setting, with its key,
 its value and its layer: `flag`, `env`, `file` or `default`. When more than
 one of `flag`, `env` and `file` sets a key, the server writes one WARN line
@@ -61,6 +71,9 @@ for that key, also when the values are equal. For a sensitive setting, a
 line shows only `set` or `not set`, never the value. The sensitive settings
 are the database URL and the secrets. Each other URL setting refuses a URL
 with a user name or a password, so the log can show its value.
+
+At the log level `warn` or `error`, the server does not write these INFO
+lines: the level that the operator sets wins.
 
 This example uses the JSON shape with `#` comments. That text is valid
 YAML.

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -68,10 +70,31 @@ func TestServeConfigFile(t *testing.T) {
 	}
 
 	for _, secret := range []string{database, adminTestToken, testKeyBase64()} {
-		if strings.Contains(logs, secret) {
-			t.Errorf("logs hold a sensitive value %q", secret)
+		if form := leak(logs, secret); form != "" {
+			t.Errorf("logs hold %s of a sensitive value", form)
 		}
 	}
+}
+
+// leak answers the form of value that text holds: the value, its last 8
+// characters or the hex SHA-256 of the value. It answers "" when text holds
+// none of them.
+func leak(text, value string) string {
+	sum := sha256.Sum256([]byte(value))
+
+	forms := map[string]string{
+		"the value":             value,
+		"its last 8 characters": value[max(0, len(value)-8):],
+		"its SHA-256":           hex.EncodeToString(sum[:]),
+	}
+
+	for name, form := range forms {
+		if strings.Contains(text, form) {
+			return name
+		}
+	}
+
+	return ""
 }
 
 // TestServeRefusesBadConfigFile proves a refused file stops the start, and
@@ -99,7 +122,7 @@ func TestServeRefusesBadConfigFile(t *testing.T) {
 				t.Fatalf("serve = %v, want %v", err, tc.want)
 			}
 
-			if strings.Contains(err.Error(), adminTestToken) {
+			if leak(err.Error(), adminTestToken) != "" {
 				t.Errorf("error holds the value: %v", err)
 			}
 		})
@@ -141,7 +164,7 @@ func TestServeAdminTokenFileFromConfig(t *testing.T) {
 		t.Errorf("logs do not name the token file from the file:\n%s", logs)
 	}
 
-	if strings.Contains(logs, adminTestToken) {
+	if leak(logs, adminTestToken) != "" {
 		t.Error("logs hold the admin token")
 	}
 }
@@ -172,7 +195,7 @@ func TestClientCommandsRefuseServerUserInfo(t *testing.T) {
 				t.Fatalf("run %v = %v, want %v", args[:2], err, cli.ErrURLUserInfo)
 			}
 
-			if strings.Contains(err.Error(), password) {
+			if leak(err.Error(), password) != "" {
 				t.Errorf("error holds the password: %v", err)
 			}
 		})

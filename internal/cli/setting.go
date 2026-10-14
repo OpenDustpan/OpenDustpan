@@ -56,6 +56,10 @@ type Setting struct {
 	Kind      Kind
 	Sensitive bool
 	URL       bool
+	// NoPasswordInFile refuses a URL with a password in the configuration
+	// file: a secret comes from a variable or a *_FILE key only (ADR 63
+	// decision 4).
+	NoPasswordInFile bool
 }
 
 // The errors of a URL setting. Each error names the setting, never the
@@ -135,6 +139,14 @@ func (s *Setting) CheckURL(value string) error {
 	}
 
 	return nil
+}
+
+// WithNoPasswordInFile refuses a URL with a password for the setting in the
+// configuration file and answers it.
+func (s *Setting) WithNoPasswordInFile() *Setting {
+	s.NoPasswordInFile = true
+
+	return s
 }
 
 // WithSensitive marks a setting as sensitive and answers it.

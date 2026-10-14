@@ -27,8 +27,9 @@ func writeServeSettings(out *strings.Builder) {
 	out.WriteString("\n")
 	out.WriteString("`opendustpan serve` reads each setting from a flag, from an environment\n")
 	out.WriteString("variable or from the configuration file. A flag wins over its variable, and\n")
-	out.WriteString("a variable wins over the file. `opendustpan serve --help` prints the same\n")
-	out.WriteString("list.\n")
+	out.WriteString("a variable wins over the file. A variable that is empty or holds only\n")
+	out.WriteString("spaces is not set, so the next layer wins. `opendustpan serve --help` prints\n")
+	out.WriteString("the same list.\n")
 	out.WriteString("\n")
 	out.WriteString("## Server settings\n")
 	out.WriteString("\n")
@@ -92,6 +93,8 @@ func writeConfigFile(out *strings.Builder) {
 	out.WriteString("0 or more. A refused file stops the start. The error names the key and the\n")
 	out.WriteString("rule, never the value.\n")
 	out.WriteString("\n")
+	writeConfigValues(out)
+
 	out.WriteString("At start, the server writes one INFO line for each setting, with its key,\n")
 	out.WriteString("its value and its layer: `flag`, `env`, `file` or `default`. When more than\n")
 	out.WriteString("one of `flag`, `env` and `file` sets a key, the server writes one WARN line\n")
@@ -100,12 +103,29 @@ func writeConfigFile(out *strings.Builder) {
 	out.WriteString("are the database URL and the secrets. Each other URL setting refuses a URL\n")
 	out.WriteString("with a user name or a password, so the log can show its value.\n")
 	out.WriteString("\n")
+	out.WriteString("At the log level `warn` or `error`, the server does not write these INFO\n")
+	out.WriteString("lines: the level that the operator sets wins.\n")
+	out.WriteString("\n")
 	out.WriteString("This example uses the JSON shape with `#` comments. That text is valid\n")
 	out.WriteString("YAML.\n")
 	out.WriteString("\n")
 	out.WriteString("```yaml\n")
 	out.WriteString(ConfigExample)
 	out.WriteString("```\n")
+	out.WriteString("\n")
+}
+
+// writeConfigValues writes the rules for quoted strings and for a database
+// URL with a password.
+func writeConfigValues(out *strings.Builder) {
+	out.WriteString("A string value that YAML reads as a number, a bool or a date needs quotes,\n")
+	out.WriteString("for example `\"8080\"`, `\"true\"` or `\"2026-10-14\"`. The JSON shape of\n")
+	out.WriteString("the example below quotes each string.\n")
+	out.WriteString("\n")
+	out.WriteString("The file refuses a `database` URL with a password. Set such a URL in\n")
+	out.WriteString("`DUSTPAN_DATABASE`, because a secret comes only from a variable or from a\n")
+	out.WriteString("file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag\n")
+	out.WriteString("still takes a URL with a password, as before. Issue #511 deprecates that.\n")
 	out.WriteString("\n")
 }
 

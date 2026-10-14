@@ -61,9 +61,10 @@ type Layer struct {
 // the environment and file holds the decoded configuration file, nil when
 // there is none.
 //
-// The value of an environment variable keeps the rules of Env, EnvBool and
-// EnvInt: a bool is true for true or 1, and a bad int is -1, so the caller
-// refuses it with the flag name.
+// A variable that is empty or holds only whitespace is not set, for every
+// type, so the next layer wins. The value of any other variable keeps the
+// rules of Env, EnvBool and EnvInt: a bool is true for true or 1, and a bad
+// int is -1, so the caller refuses it with the flag name.
 func Resolve(fs *flag.FlagSet, settings []*Setting, lookup LookupFunc, file ConfigFile) ([]Resolved, error) {
 	visited := map[string]bool{}
 
@@ -110,7 +111,7 @@ func collectLayers(
 		layers = append(layers, Layer{Source: SourceFlag, Value: f.Value.String()})
 	}
 
-	if raw, ok := lookup(setting.Env); setting.Env != "" && ok {
+	if raw, ok := lookupSet(lookup, setting.Env); setting.Env != "" && ok {
 		layers = append(layers, Layer{Source: SourceEnv, Value: envValue(setting, raw)})
 	}
 
@@ -155,13 +156,26 @@ func envValue(setting *Setting, raw string) string {
 	return raw
 }
 
+// lookupSet answers the value of the variable key, and false when it is
+// unset, empty or holds only whitespace: such a variable is not a layer, so
+// the next layer wins (the lead's review of ADR 63 part 1).
+func lookupSet(lookup LookupFunc, key string) (string, bool) {
+	value, ok := lookup(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+
+	return value, true
+}
+
 // LayeredLookup answers a lookup that reads the environment first and then
-// the configuration file, for the variables that the server reads by name
+// the configuration file. A variable that is empty or holds only whitespace
+// is not set, so the file wins, for the variables that the server reads by name
 // (for example DUSTPAN_ADMIN_TOKEN_FILE). A variable whose declaration has
 // no file key reads only the environment.
 func LayeredLookup(lookup LookupFunc, file ConfigFile) LookupFunc {
 	return func(key string) (string, bool) {
-		if value, ok := lookup(key); ok {
+		if value, ok := lookupSet(lookup, key); ok {
 			return value, true
 		}
 

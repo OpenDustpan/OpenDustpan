@@ -22,6 +22,8 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+
+		NoPasswordInFile: false,
 	}
 }
 
@@ -40,6 +42,8 @@ func boolSetting(flag, env, help, reference string) *Setting {
 		Kind:      KindBool,
 		Sensitive: false,
 		URL:       false,
+
+		NoPasswordInFile: false,
 	}
 }
 
@@ -57,6 +61,8 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 		Kind:      KindInt,
 		Sensitive: false,
 		URL:       false,
+
+		NoPasswordInFile: false,
 	}
 }
 
@@ -75,6 +81,8 @@ func envSetting(env, doc string) *Setting {
 		Kind:      KindString,
 		Sensitive: false,
 		URL:       false,
+
+		NoPasswordInFile: false,
 	}
 }
 
@@ -99,7 +107,7 @@ var Settings = []*Setting{
 		"database", "DUSTPAN_DATABASE", "sqlite:dustpan.db",
 		"sqlite:<path> or postgres://... (DUSTPAN_DATABASE)",
 		"`sqlite:dustpan.db` (or `postgres://...`)",
-	).WithFile("database").WithSensitive(),
+	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"region", "DUSTPAN_REGION", "local",
 		"region this server is authoritative for (DUSTPAN_REGION)",

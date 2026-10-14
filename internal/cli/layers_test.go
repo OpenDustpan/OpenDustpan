@@ -97,10 +97,40 @@ func TestResolvePrecedence(t *testing.T) {
 			"x", cli.SourceFlag, 3,
 		},
 		{
-			"empty env still wins", "region", nil,
+			"empty env is not set", "region", nil,
 			map[string]string{"DUSTPAN_REGION": ""},
 			cli.ConfigFile{"region": "f"},
-			"", cli.SourceEnv, 2,
+			"f", cli.SourceFile, 1,
+		},
+		{
+			"blank env is not set", "region", nil,
+			map[string]string{"DUSTPAN_REGION": " \t "},
+			nil,
+			"local", cli.SourceDefault, 0,
+		},
+		{
+			"empty int env is not set", "max-state-bytes", nil,
+			map[string]string{"DUSTPAN_MAX_STATE_BYTES": ""},
+			cli.ConfigFile{"max-state-bytes": "7"},
+			"7", cli.SourceFile, 1,
+		},
+		{
+			"blank bool env is not set", "disable-pulumi-journaling", nil,
+			map[string]string{"DUSTPAN_DISABLE_PULUMI_JOURNALING": "  "},
+			cli.ConfigFile{"disable-pulumi-journaling": "true"},
+			"true", cli.SourceFile, 1,
+		},
+		{
+			"blank secret is not set", "DUSTPAN_ADMIN_TOKEN", nil,
+			map[string]string{"DUSTPAN_ADMIN_TOKEN": "  "},
+			nil,
+			"not set", cli.SourceDefault, 0,
+		},
+		{
+			"empty variable of a file key is not set", "admin-token-file", nil,
+			map[string]string{"DUSTPAN_ADMIN_TOKEN_FILE": ""},
+			cli.ConfigFile{"admin-token-file": "/t"},
+			"/t", cli.SourceFile, 1,
 		},
 		{
 			"bool file", "disable-pulumi-journaling", nil, nil,
@@ -283,7 +313,7 @@ func canaryLayers(t *testing.T) canary {
 		}
 
 		sensitive = append(sensitive, s)
-		value := canaryValue + "-" + s.Name()
+		value := s.Name() + "-" + canaryValue
 
 		if s.Flag != "" {
 			args = append(args, "--"+s.Flag+"="+value)
@@ -322,6 +352,19 @@ func checkSensitiveLines(t *testing.T, buf *bytes.Buffer, sensitive []*cli.Setti
 
 		if line["value"] != want {
 			t.Errorf("INFO %s = %v, want value %s", s.Name(), line, want)
+		}
+	}
+}
+
+// checkNoLeak proves text holds no form of the canary value of each
+// sensitive setting: not the value, not its last 8 characters, not its
+// SHA-256.
+func checkNoLeak(t *testing.T, name, text string, sensitive []*cli.Setting) {
+	t.Helper()
+
+	for _, s := range sensitive {
+		if form := leak(text, s.Name()+"-"+canaryValue); form != "" {
+			t.Errorf("%s holds %s of the value of %s:\n%s", name, form, s.Name(), text)
 		}
 	}
 }
@@ -365,9 +408,7 @@ func TestSensitiveValuesNeverLogged(t *testing.T) {
 				"JSON log": jsonBuf.String(), "text log": textBuf.String(),
 				"resolved values": fmt.Sprintf("%+v", resolved),
 			} {
-				if strings.Contains(text, canaryValue) {
-					t.Errorf("%s holds a sensitive value:\n%s", name, text)
-				}
+				checkNoLeak(t, name, text, c.sensitive)
 			}
 
 			checkSensitiveLines(t, &jsonBuf, c.sensitive)

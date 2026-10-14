@@ -1,7 +1,10 @@
 package cli_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +37,12 @@ func TestParseConfigAccepts(t *testing.T) {
 		{"bool false", "disable-pulumi-journaling: false\n", cli.ConfigFile{"disable-pulumi-journaling": "false"}},
 		{"int", "max-state-bytes: 1048576\n", cli.ConfigFile{"max-state-bytes": "1048576"}},
 		{"int zero", "max-state-bytes: 0\n", cli.ConfigFile{"max-state-bytes": "0"}},
+		{"database without a password", "database: postgres://dustpan@db.example/dustpan\n", cli.ConfigFile{
+			"database": "postgres://dustpan@db.example/dustpan",
+		}},
+		{"database SQLite path", "database: \"sqlite:/var/lib/dustpan.db\"\n", cli.ConfigFile{
+			"database": "sqlite:/var/lib/dustpan.db",
+		}},
 		{
 			"JSON shape with comments",
 			"{\n  # the region\n  \"region\": \"eu-west\",\n  \"max-state-bytes\": 0,\n" +
@@ -69,6 +78,27 @@ func TestParseConfigAccepts(t *testing.T) {
 
 // canaryValue is a value that no error message and no log line may hold.
 const canaryValue = "canary-3f9a7c"
+
+// leak answers the form of value that text holds: the value, its last 8
+// characters or the hex SHA-256 of the value. It answers "" when text holds
+// none of them.
+func leak(text, value string) string {
+	sum := sha256.Sum256([]byte(value))
+
+	forms := map[string]string{
+		"the value":             value,
+		"its last 8 characters": value[max(0, len(value)-8):],
+		"its SHA-256":           hex.EncodeToString(sum[:]),
+	}
+
+	for name, form := range forms {
+		if strings.Contains(text, form) {
+			return name
+		}
+	}
+
+	return ""
+}
 
 // TestParseConfigRefuses proves each rule of ADR 63 decision 3 and that no
 // error holds the refused value.
@@ -130,6 +160,22 @@ func TestParseConfigRefuses(t *testing.T) {
 		{"string binary tag", "region: !!binary Y2FuYXJ5\n", cli.ErrConfigType},
 		{"string custom tag", "region: !secret " + canaryValue + "\n", cli.ErrConfigType},
 		{"sensitive value of the wrong type", "database: [" + canaryValue + "]\n", cli.ErrConfigType},
+		{"database with a password", "database: postgres://u:" + canaryValue + "@db/d\n", cli.ErrConfigPassword},
+		{
+			"database that is not a URL",
+			"database: \"postgres://u:" + canaryValue + "@d b:x/d\"\n",
+			cli.ErrConfigPassword,
+		},
+		{"int leading zero", "max-state-bytes: 07\n", cli.ErrConfigType},
+		{"int two zeros", "max-state-bytes: 00\n", cli.ErrConfigType},
+		{"int leading plus", "max-state-bytes: +7\n", cli.ErrConfigType},
+		{"int minus zero", "max-state-bytes: -0\n", cli.ErrConfigType},
+		{"int underscore", "max-state-bytes: 1_000\n", cli.ErrConfigType},
+		{"unknown anchor", "region: *" + canaryValue + "\n", cli.ErrConfigSyntax},
+		{"syntax error after a value", "region: \"" + canaryValue + "\" x: [\n", cli.ErrConfigSyntax},
+		{"tab in indentation", "region: x\n\t" + canaryValue + ": y\n", cli.ErrConfigSyntax},
+		{"long unknown key", strings.Repeat("k", 32) + canaryValue + ": x\n", cli.ErrConfigUnknown},
+		{"date for a string", "region: 2026-10-14\n", cli.ErrConfigType},
 	}
 
 	for _, tc := range cases {
@@ -141,8 +187,8 @@ func TestParseConfigRefuses(t *testing.T) {
 				t.Fatalf("ParseConfig = %v, %v; want %v", got, err, tc.want)
 			}
 
-			if strings.Contains(err.Error(), canaryValue) {
-				t.Errorf("error holds the value: %v", err)
+			if form := leak(err.Error(), canaryValue); form != "" {
+				t.Errorf("error holds %s of the value: %v", form, err)
 			}
 		})
 	}
@@ -162,6 +208,76 @@ func TestParseConfigTypeErrorNamesKeyAndRule(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not hold %q", err, want)
 		}
+	}
+}
+
+// TestDecoderErrorsNeverHoldTheValue is the canary for decoder errors: for
+// each setting that the file can set, it puts a canary value in each form of
+// refused file, and proves that no error holds the value, its last 8
+// characters or its SHA-256.
+func TestDecoderErrorsNeverHoldTheValue(t *testing.T) {
+	t.Parallel()
+
+	templates := []string{
+		"%s: [%s]\n",            // a sequence for a scalar
+		"%s: {v: %s}\n",         // a mapping for a scalar
+		"%s: &a %s\n",           // an anchor
+		"%s: *%s\n",             // an unknown alias
+		"%s: !custom %s\n",      // a custom tag
+		"%s: \"%s\" trailing\n", // a syntax error after the value
+		"%s: \"%s\n",            // a string that does not end
+		"%s: x\n%[1]s: %s\n",    // a duplicate key
+	}
+
+	for _, s := range cli.Settings {
+		if s.File == "" {
+			continue
+		}
+
+		for _, tmpl := range templates {
+			value := "postgres://u:" + canaryValue + "@db/d"
+			text := fmt.Sprintf(tmpl, s.File, value)
+
+			_, err := cli.ParseConfig([]byte(text))
+			if err == nil {
+				// A string setting takes some of these texts as a valid
+				// string. Then no error exists that can leak.
+				continue
+			}
+
+			if form := leak(err.Error(), value); form != "" {
+				t.Errorf("%s: error %q holds %s of the value", s.File, err, form)
+			}
+		}
+	}
+}
+
+// TestParseConfigErrorShape proves a syntax error answers the line and a
+// fixed rule, never the message of the YAML library, and that an error cuts
+// a long key to 32 characters.
+func TestParseConfigErrorShape(t *testing.T) {
+	t.Parallel()
+
+	_, err := cli.ParseConfig([]byte("region: a\nlisten: *unknownAnchorName\n"))
+	if err == nil || err.Error() != "config file is not valid YAML" && !strings.HasPrefix(err.Error(),
+		"config file is not valid YAML: line ") {
+		t.Fatalf("syntax error = %v, want the fixed rule text", err)
+	}
+
+	if strings.Contains(err.Error(), "unknownAnchorName") || strings.Contains(err.Error(), "anchor") {
+		t.Fatalf("syntax error %q echoes the file", err)
+	}
+
+	_, err = cli.ParseConfig([]byte(strings.Repeat("a", 40) + ": x\n"))
+	if err == nil || !strings.Contains(err.Error(), `"`+strings.Repeat("a", 32)+`" (cut)`) ||
+		strings.Contains(err.Error(), strings.Repeat("a", 33)) {
+		t.Fatalf("unknown key error = %v, want the key cut to 32 characters", err)
+	}
+
+	_, err = cli.ParseConfig([]byte("database: postgres://u:" + canaryValue + "@db/d\n"))
+	if err == nil || !strings.Contains(err.Error(), "DUSTPAN_DATABASE") ||
+		!strings.Contains(err.Error(), `"database"`) {
+		t.Fatalf("password error = %v, want the key and DUSTPAN_DATABASE", err)
 	}
 }
 
