@@ -114,7 +114,7 @@ func (h *Handler) appendOverrideAudit(
 		Namespace:  obj.Namespace(),
 		Subject:    p.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    p.TokenID,
 		Action:     string(action),
 		Object:     obj.String(),
 		Version:    version,

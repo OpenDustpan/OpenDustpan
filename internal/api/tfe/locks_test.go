@@ -196,9 +196,9 @@ func (concurrentAuthenticator) AuthenticateToken(
 ) (identity.Principal, error) {
 	switch raw {
 	case "test-token-a":
-		return identity.Principal{Subject: "alice", DisplayName: "Alice", Admin: false}, nil
+		return identity.Principal{Subject: "alice", DisplayName: "Alice", Admin: false, TokenID: ""}, nil
 	case "test-token-b":
-		return identity.Principal{Subject: "bob", DisplayName: "Bob", Admin: false}, nil
+		return identity.Principal{Subject: "bob", DisplayName: "Bob", Admin: false, TokenID: ""}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}

@@ -936,6 +936,13 @@ func (e *Env) ServerAPIStatus(ctx context.Context, method, path, body string) (i
 	return e.serverStatus(ctx, e.token, method, path, body)
 }
 
+// ServerAPIStatusAs sends one installation API request with token as a
+// Bearer credential and returns its status and body, for steps that use an
+// access token that the server issued (ADR 53).
+func (e *Env) ServerAPIStatusAs(ctx context.Context, token, method, path, body string) (int, string, error) {
+	return e.serverStatus(ctx, token, method, path, body)
+}
+
 // ServerAPIStatusBare sends one installation API request without credentials
 // and returns its status and body, for steps that prove a route needs a
 // token.
