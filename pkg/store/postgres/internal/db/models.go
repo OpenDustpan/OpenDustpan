@@ -45,6 +45,13 @@ type AuditEntry struct {
 	Changes    pgtype.Text
 }
 
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string

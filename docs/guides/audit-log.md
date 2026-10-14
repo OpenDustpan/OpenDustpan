@@ -1,8 +1,8 @@
 # Audit log
 
-This guide shows how to read the audit entries of a namespace and check their chain.
-It follows ADR 41 decisions 5 and 13.
-Retention, export to a SIEM and the full catalog of events are RFC 22.
+This guide shows how to read the audit entries of a namespace, check their chain and send a copy of each entry to a sink.
+It follows ADR 41 decisions 5 and 13 and ADR 60 decisions 11 to 13.
+Retention and the full catalog of events are RFC 22.
 
 ## What the log records
 
@@ -176,10 +176,142 @@ groups:
           summary: OpenDustpan lost audit entries
 ```
 
+## Send a copy to a sink
+
+The server can send a copy of each audit entry to one or more sinks.
+The SQL table stays the record of the audit log.
+No sink is the default.
+
+Give `--audit-sink` once for each sink.
+In `DUSTPAN_AUDIT_SINK` and in the key `audit-sink` of the configuration file, separate the sinks with spaces or line breaks.
+The start log shows only whether `audit-sink` is set, because a webhook URL can hold a token.
+A sink item can hold a comma, for example in the query of a webhook URL.
+Each item is `[<name>=]<sink>`:
+
+| Sink | Example | What it writes |
+| --- | --- | --- |
+| A file | `file:/var/log/dustpan/audit.jsonl` | One JSON line for each entry. The server syncs the file after each batch. |
+| Syslog | `syslog+tls://logs.example:6514` | One RFC 5424 message for each entry, over `udp`, `tcp` or `tls`. |
+| A webhook | `webhook:https://siem.example/hooks/dustpan` | One HTTPS POST for each batch, with a JSON array of entries. |
+| Object storage | `blob:audit` | One gzip file of JSON lines for each batch, in the blob store of the server. |
+
+```sh
+opendustpan serve \
+  --audit-sink 'siem=syslog+tls://logs.example:6514' \
+  --audit-sink 'archive=blob:audit'
+```
+
+The name keys the cursor of the sink in the database.
+Without a name, the kind is the name: `file`, `syslog`, `webhook` or `blob`.
+Two sinks of one kind need names.
+Keep the name when you change the address of a sink.
+A new name starts from the first entry and sends every entry again.
+
+### What a sink receives
+
+Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry`) and the fields of the audit API.
+`scope` names the namespace.
+`sequence` numbers the entries of the scope.
+`valueCount` and `changes` are present only when the entry has them.
+`changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
+`prevHash` and `hash` hold the chain of the entry.
+
+```json
+{"time":"2026-10-13T12:00:00.000Z","level":"info","msg":"audit entry","scope":"acme","sequence":7,"atMs":1791892800000,"subject":"admin","action":"unit:read-secrets","object":"opentofu:acme/prod","kind":"reveal","outcome":"success","prevHash":"9f2c...","hash":"41ab..."}
+```
+
+The server reads the new entries of each scope in order and writes them to the sink in one batch.
+It moves the cursor of the sink only after the sink accepted the batch.
+A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
+So a sink can receive an entry twice.
+Each instance of the server sends the entries, so with more than one instance a sink receives each entry about once for each instance.
+Drop duplicates by `scope` and `sequence`.
+A batch in one scope that fails does not stop the other scopes.
+The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
+
+### Syslog
+
+Each message has the facility `log audit` (13) and the severity `info`.
+Set another facility with `?facility=<0 to 23>`, for example `syslog+udp://logs.example:514?facility=16`.
+The message part is the JSON object above.
+STRUCTURED-DATA and MSGID are `-`.
+Over `tcp` and `tls` each message starts with its length in bytes (RFC 5425).
+UDP has no acknowledgment, so a message can get lost without an error.
+Use `tls` for an audit log.
+`?ca-file=<path>` names a PEM bundle to trust instead of the system store.
+`?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
+The default is 8192.
+The server does not send an entry above that size.
+It counts the entry in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
+
+### Webhook
+
+The URL must use HTTPS.
+The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
+Only the operator sets the URL.
+Check it as you check any outbound address of the server.
+If you can, block the metadata endpoints in your network.
+Set the signing key in `DUSTPAN_AUDIT_WEBHOOK_SECRET`, or in a file that `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` names.
+Only the owner of the file can read it.
+Each request carries two headers:
+
+- `Dustpan-Timestamp`: the time of the request in Unix seconds.
+- `Dustpan-Signature`: `v1=` and the hex HMAC-SHA256 of the timestamp, a `.`, and the body.
+
+The receiver computes the signature with the same key and compares it in constant time.
+Refuse a request whose timestamp is more than 5 minutes old.
+A 2xx answer means the receiver holds the batch.
+The server does not follow a redirect: a 3xx answer is a failed batch, and the server sends the batch again to the same URL.
+
+### Object storage
+
+`blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
+The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
+Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
+The two times are the first and the last entry of the file in Unix milliseconds.
+A key holds the characters `a-z`, `0-9`, `.` and `-` only.
+Each other character of the scope, and `_`, becomes `_` and two hexadecimal digits: `acme` stays `acme`, and `@server` becomes `_40server`.
+To keep objects that nobody can delete, use a bucket with S3 Object Lock.
+
+### A file and log rotation
+
+The server opens the file again on `SIGHUP`.
+A rotation tool moves the file away and sends `SIGHUP` to the server.
+
+### Alert on a sink that falls behind
+
+`dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
+`dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog message above `max-size`.
+A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
+A skipped entry is not in the sink: alert when that count is above zero.
+The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.
+
+### After a restore
+
+A restore resets the cursor of every sink.
+Each sink then receives the restored log again from its first entry.
+The restored log can use a sequence again that a sink already holds for an entry from after the backup.
+Keep the copies of the sink from before the restore apart, for example by the time of the restore.
+
+```yaml
+groups:
+  - name: dustpan
+    rules:
+      - alert: DustpanAuditSinkFailing
+        expr: increase(dustpan_audit_sink_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: An OpenDustpan audit sink refuses entries
+```
+
+OpenTelemetry logs are not a sink yet.
+
 ## What this guide does not cover
 
 These items are RFC 22.
 
 - Retention.
-- Export to a SIEM.
 - The full catalog of events.
+- Export through the API in JSON and CEF (ADR 60 decision 9).

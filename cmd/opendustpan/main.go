@@ -276,6 +276,7 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
+	auditSinks              []string
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -384,6 +385,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 }
 
 // registerNet registers the network and console flags.
@@ -908,12 +910,26 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := sinks.close(); closeErr != nil {
+			logger.WarnContext(ctx, "close audit sinks", slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	stopHangup := sinks.reopenOnHangup(ctx, logger)
+	defer stopHangup()
+
 	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
 	if optErr != nil {
 		return optErr
 	}
-
 	opts = append(opts, f.backupOptions(backupTarget)...)
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
