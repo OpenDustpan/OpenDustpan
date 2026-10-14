@@ -10,8 +10,8 @@ import (
 const (
 	// RoleViewer reads namespaces, collections and units.
 	RoleViewer = "viewer"
-	// RoleAuditor reads like a viewer, and reads the audit log of a
-	// namespace.
+	// RoleAuditor reads like a viewer, and reads the audit log and the
+	// access-review export of its object.
 	RoleAuditor = "auditor"
 	// RoleSecretViewer reads like a viewer, and reveals secret values
 	// (ADR 41, decision 4).
@@ -49,7 +49,7 @@ var builtInDescriptions = []struct {
 	description string
 }{
 	{RoleViewer, "Reads namespaces, collections and units, and their state with secret values masked."},
-	{RoleAuditor, "Reads like a viewer, and reads the audit log of a namespace."},
+	{RoleAuditor, "Reads like a viewer, and reads the audit log and the access review."},
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
 	{RoleWriter, "Reads, and runs updates, plans and applies."},
 	{RoleMaintainer, "Writes, and makes, renames, deletes, unlocks and moves units, and manages collections."},
@@ -98,7 +98,12 @@ func builtInActions(id string) []identity.Action {
 	case RoleViewer:
 		return viewerActions()
 	case RoleAuditor:
-		return append(viewerActions(), identity.ActionNamespaceReadAudit)
+		return append(viewerActions(),
+			identity.ActionNamespaceReadAudit,
+			identity.ActionNamespaceReadAccess,
+			identity.ActionCollectionReadAccess,
+			identity.ActionUnitReadAccess,
+		)
 	case RoleSecretViewer:
 		return append(viewerActions(), identity.ActionUnitReadSecrets)
 	case RoleWriter:

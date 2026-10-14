@@ -38,6 +38,14 @@ secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
 answering 204 when the append fails.
 
+Each request for an access-review export (ADR 52, decision 13) writes one
+entry with the kind `read-access`, the read-access action of the object and
+the object `access-review <object> <mode>`. The mode is `snapshot
+asOf=<time>`, or `history <from>-<to>`, in Unix milliseconds, followed by
+the subject filter and `expand=members` when the request has them. The export of a namespace or
+a unit writes its entry in that namespace, and the export of the
+installation in `@server`. A failed append answers 500 with no rows.
+
 An entry holds these fields:
 
 - Who: `subject`, `idpSubject` (empty until an identity provider exists),
@@ -49,8 +57,9 @@ An entry holds these fields:
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
   declares it in the `Dustpan-Channel` header). Unknown values are `api`.
-- Kind: `tool-operation` or `reveal`, never anything else, so a reader never
-  confuses a tool that needed secrets with a person who asked to see one.
+- Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
+  never anything else, so a reader never confuses a tool that needed secrets
+  with a person who asked to see one.
 - Outcome: `success`, `failure` or `denied`.
 - `requestID`: the request ID the server mints. The server returns it in
   the `X-Request-Id` response header and ignores an ID the client sends

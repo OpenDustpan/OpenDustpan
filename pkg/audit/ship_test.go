@@ -564,6 +564,23 @@ func TestToRecordCarriesTheChainOnlyWhenTheEntryHasIt(t *testing.T) {
 	}
 }
 
+// TestToRecordCarriesAReadAccessEntry proves that an entry of the kind
+// read-access (ADR 52 decision 13) reaches a sink with its kind and its
+// value path, in a namespace and in @server.
+func TestToRecordCarriesAReadAccessEntry(t *testing.T) {
+	t.Parallel()
+
+	for _, scope := range []namespace.Name{"acme", audit.ServerScope} {
+		e := entryAt(scope, 7)
+		e.Kind, e.ValuePath = audit.KindReadAccess, "/history"
+
+		rec := audit.ToRecord(e)
+		if !hasAttr(rec, "kind", "read-access") || !hasAttr(rec, "valuePath", "/history") {
+			t.Fatalf("read-access entry in %s: record lacks its kind or value path: %+v", scope, rec.Attrs)
+		}
+	}
+}
+
 func hasKey(r logsink.Record, key string) bool {
 	for _, a := range r.Attrs {
 		if a.Key == key {

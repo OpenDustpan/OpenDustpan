@@ -225,6 +225,53 @@ Lead decisions under owner delegation, 2026-10-13:
   a custom role ends the role. A delete of a principal or a group revokes
   its grants in the same transaction. Each grant and role change writes its
   audit entry in the transaction of the change.
+- Access-review export. The read-access actions are `server:read-access`
+  (administration), and `namespace:read-access`, `collection:read-access` and
+  `unit:read-access` (data). The `auditor` and `admin` roles hold the data
+  ones. The lead decided the details below on 2026-10-14, by the delegation
+  of the owner, after the review of the export change:
+  - Scope. The export of an object holds the grants on the object and inside
+    it, and the grants on each object that contains it with a role that gives
+    a data action or manages access, with `inheritedFrom`. So an
+    `installation-operator` grant is not in the export of a namespace. A row
+    whose role can change who has access has `canGrantAccess`, because its
+    holder can give itself access: `server:manage-access`,
+    `server:manage-roles`, `server:manage-groups` and the three manage-access
+    actions of a namespace, a collection and a unit.
+    `server:manage-service-tokens` does not count, because a service token
+    gets no access without a grant. The export starts with one row for each
+    bootstrap admin token, which holds every action with no grant, inside the
+    limit of its pages.
+  - The export of a collection must hold the grants on its units. Until
+    collections are wired (#478), it answers 501, not an incomplete answer.
+  - Snapshot or history. With no window, the export is a snapshot at the time
+    of its first page (`asOfMs`), and the cursor keeps that time. A cursor
+    holds a binding of its export (the object, the mode, the window, the
+    subject and expand), and a cursor of another export answers 400. With `from`
+    and `to`, it is a history of the grants whose life overlaps the window. A
+    history keeps a grant on a container with any custom role, a deleted one
+    included, because the actions of a role at the time of a grant are not
+    kept.
+  - Rows. A principal filter also holds the grants of its groups, for the
+    time that it was a member (`via`). `expand=members` puts each member of
+    a group in its own row. Each row has `effectiveFromMs` and
+    `effectiveUntilMs`. A grant on a unit that is not live shows
+    `objectState` `deleted`, with its name at the delete, or `purged`. A
+    history leaves out the member count.
+  - Last access. The server records no sign-in and no token use yet, so a
+    principal row has `lastAccessTracked: false` and no `lastAccessAtMs`.
+    The field comes when the tracking exists (#498 records token use). A
+    group row has neither field.
+  - Audit. Each export request writes one audit entry of the kind
+    `read-access`, with the object, the mode, the time of a snapshot and the
+    filters (ADR 52, decision 13), because an export of the authorization map
+    is compliance evidence. The installation API needs an audit store when it
+    serves the export.
+  - Count. The first page answers the total, and the next pages do not.
+- The access of the caller. `GET /api/server/caller/access` needs
+  `caller:read` only. It answers the actions and grants on one object, or
+  the objects of one type where an action is held, with paging. A question
+  about another principal waits for a later change.
 - No escalation through a role, a membership or a revoke. The lead decided
   these on 2026-10-14, by the delegation of the owner, after the security
   review of the roles and grants change:
