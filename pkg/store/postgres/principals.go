@@ -72,7 +72,7 @@ func (s *Store) GetPrincipalBySubject(ctx context.Context, subject string) (prin
 }
 
 // ListPrincipals implements principal.Store. It reads the page and the
-// total in one transaction.
+// total in one REPEATABLE READ snapshot.
 func (s *Store) ListPrincipals(ctx context.Context, pq principal.Query) ([]principal.Principal, int64, error) {
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
 		list: listPrincipalRows, count: countPrincipalRows, conv: principalFromList,
@@ -102,14 +102,14 @@ type pageReads[R, T any] struct {
 	conv  func(R) T
 }
 
-// listPage reads one page and its total with r in one transaction.
+// listPage reads one page and its total with r in one snapshot.
 func listPage[R, T any](ctx context.Context, s *Store, pq principal.Query, r pageReads[R, T]) ([]T, int64, error) {
 	var (
 		out   []T
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
 		rows, err := r.list(ctx, q, pq)
 		if err != nil {
 			return fmt.Errorf("select page: %w", err)
@@ -231,7 +231,7 @@ func (s *Store) GetGroup(ctx context.Context, id string) (principal.Group, error
 }
 
 // ListGroups implements principal.Store. It reads the page and the total
-// in one transaction.
+// in one REPEATABLE READ snapshot.
 func (s *Store) ListGroups(ctx context.Context, pq principal.Query) ([]principal.Group, int64, error) {
 	return listPage(ctx, s, pq, pageReads[db.ListGroupsRow, principal.Group]{
 		list: listGroupRows, count: countGroupRows, conv: groupFromList,
@@ -398,7 +398,7 @@ func (s *Store) RemoveMember(ctx context.Context, groupID, principalID string, e
 }
 
 // ListMembers implements principal.Store. It reads the group, the page and
-// the total in one transaction.
+// the total in one REPEATABLE READ snapshot.
 func (s *Store) ListMembers(
 	ctx context.Context,
 	groupID string,
@@ -409,7 +409,7 @@ func (s *Store) ListMembers(
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
 		_, err := q.GroupSource(ctx, groupID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return principal.ErrNotFound
@@ -451,7 +451,7 @@ func (s *Store) ListMembers(
 }
 
 // ListGroupsOf implements principal.Store. It reads the principal, the
-// page and the total in one transaction.
+// page and the total in one REPEATABLE READ snapshot.
 func (s *Store) ListGroupsOf(
 	ctx context.Context,
 	principalID string,
@@ -462,7 +462,7 @@ func (s *Store) ListGroupsOf(
 		total int64
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
 		principals, err := q.PrincipalExists(ctx, principalID)
 		if err != nil {
 			return fmt.Errorf("count principals: %w", err)

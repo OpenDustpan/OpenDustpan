@@ -22,36 +22,46 @@ func TestValidateSubject(t *testing.T) {
 	}{
 		{"alice", nil},
 		{"alice@example.com", nil},
-		{"Ünïcode Name", nil},
-		{"admin-team", nil},
-		{"admin-", nil},
+		{"a.b+tag@example.com", nil},
+		{"spiffe://example.org/ns/ci/sa/deploy", nil},
+		{"ci-deploy_2", nil},
 		{"administrator", nil},
+		{"Admins", nil},
 		{strings.Repeat("a", 255), nil},
 		{"", principal.ErrInvalid},
 		{strings.Repeat("a", 256), principal.ErrInvalid},
 		{" alice", principal.ErrInvalid},
 		{"alice\n", principal.ErrInvalid},
-		{"al\tice", principal.ErrInvalid},
+		{"al ice", principal.ErrInvalid},
+		{"-alice", principal.ErrInvalid},
+		{".alice", principal.ErrInvalid},
 		{"\xff", principal.ErrInvalid},
+		{"Ünïcode", principal.ErrInvalid},
+		{"\u738b\u5c0f\u660e", principal.ErrInvalid},
 		{"admin", principal.ErrReservedSubject},
-		{"admin-2", principal.ErrReservedSubject},
-		{"admin-17", principal.ErrReservedSubject},
 		{"Admin", principal.ErrReservedSubject},
 		{"ADMIN", principal.ErrReservedSubject},
-		{"ADMIN-3", principal.ErrReservedSubject},
-		{"\u0430dmin", principal.ErrReservedSubject},                     // Cyrillic a
-		{"adm\u0456n", principal.ErrReservedSubject},                     // Cyrillic i
-		{"\uff41\uff44\uff4d\uff49\uff4e", principal.ErrReservedSubject}, // full width
-		{"\uff21\uff24\uff2d\uff29\uff2e\uff0d\uff13", principal.ErrReservedSubject},
-		{"admin-\u0663", principal.ErrReservedSubject},      // Arabic-Indic three
-		{"admin\u2010\u0663", principal.ErrReservedSubject}, // hyphen and Arabic-Indic three
-		{"ad\u200bmin", principal.ErrInvalid},               // zero-width space
-		{"ad\u00admin", principal.ErrInvalid},               // soft hyphen
-		{"admin\u2060", principal.ErrInvalid},               // word joiner
-		{"\ufeffadmin", principal.ErrInvalid},               // byte order mark
-		{"\u738b\u5c0f\u660e\u5148\u751f", nil},             // five CJK letters
-		{"Admins", nil},
-		{"admin-x", nil},
+		{"admin-2", principal.ErrReservedSubject},
+		{"admin-17", principal.ErrReservedSubject},
+		{"admin-", principal.ErrReservedSubject},
+		{"admin-team", principal.ErrReservedSubject},
+		{"admin1", principal.ErrReservedSubject},
+		{"admin.", principal.ErrReservedSubject},
+		{"admin_1", principal.ErrReservedSubject},
+		{"admin@example.com", principal.ErrReservedSubject},
+		// Look-alikes are not ASCII, so the pattern refuses them.
+		{"\u0430dmin", principal.ErrInvalid},                                         // Cyrillic a
+		{"\uff41\uff44\uff4d\uff49\uff4e", principal.ErrInvalid},                     // full width
+		{"admin\u3164", principal.ErrInvalid},                                        // Hangul filler
+		{"admin\u115f", principal.ErrInvalid},                                        // Hangul choseong filler
+		{"admin\u2800", principal.ErrInvalid},                                        // Braille blank
+		{"a\u0301dmin", principal.ErrInvalid},                                        // combining acute accent
+		{"admin\u034f", principal.ErrInvalid},                                        // combining grapheme joiner
+		{"\u0430\u0501\u217f\u0456\u0578", principal.ErrInvalid},                     // all look-alikes
+		{"\U0001d68a\U0001d68d\U0001d696\U0001d692\U0001d697", principal.ErrInvalid}, // mathematical monospace
+		{"\u1d00\u1d05\u1d0d\u026a\u0274", principal.ErrInvalid},                     // small capitals
+		{"ad\u200bmin", principal.ErrInvalid},                                        // zero-width space
+		{"admin-\u0663", principal.ErrInvalid},                                       // Arabic-Indic three
 	}
 
 	for _, tc := range cases {
@@ -111,13 +121,30 @@ func TestNewServiceNeedsStore(t *testing.T) {
 	}
 }
 
+func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
+	t.Parallel()
+
+	p := principal.Principal{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: "prn-1", Subject: "alice",
+		DisplayName: "Ali\u200bce", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+	}
+	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {
+		t.Fatalf("display name with a zero-width space = %v, want ErrInvalid", err)
+	}
+
+	p.DisplayName = "Ünïcode Name 王"
+	if err := p.Validate(); err != nil {
+		t.Fatalf("display name in Unicode = %v, want nil", err)
+	}
+}
+
 func TestPaging(t *testing.T) {
 	t.Parallel()
 
 	svc := newServiceOverStore(t)
 	e := testEntry()
 
-	for _, subject := range []string{"a1", "a2", "a3", "a\U0010FFFF", "b1"} {
+	for _, subject := range []string{"a1", "a2", "a3", "az", "b1"} {
 		in := principal.Input{Subject: subject, DisplayName: "", Kind: principal.KindPerson}
 		if _, err := svc.CreatePrincipal(t.Context(), e, in); err != nil {
 			t.Fatalf("create %q: %v", subject, err)
@@ -145,7 +172,7 @@ func TestPaging(t *testing.T) {
 		req.Cursor = page.NextCursor
 	}
 
-	if want := []string{"a1", "a2", "a3", "a\U0010FFFF"}; !slices.Equal(got, want) {
+	if want := []string{"a1", "a2", "a3", "az"}; !slices.Equal(got, want) {
 		t.Fatalf("pages = %q, want %q", got, want)
 	}
 
@@ -154,6 +181,9 @@ func TestPaging(t *testing.T) {
 		{Prefix: "", Cursor: "", Limit: principal.MaxLimit + 1},
 		{Prefix: "", Cursor: "not base64!", Limit: 0},
 		{Prefix: "\xff", Cursor: "", Limit: 0},
+		{Prefix: "a\x00", Cursor: "", Limit: 0},
+		{Prefix: "", Cursor: "YQA", Limit: 0}, // "a" and a NUL
+		{Prefix: "", Cursor: strings.Repeat("YW", principal.MaxCursorLength), Limit: 0},
 	} {
 		if _, err := svc.ListPrincipals(t.Context(), bad); !errors.Is(err, principal.ErrInvalid) {
 			t.Errorf("list %+v = %v, want ErrInvalid", bad, err)

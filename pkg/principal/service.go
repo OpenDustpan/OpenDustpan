@@ -2,6 +2,7 @@ package principal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -273,6 +274,11 @@ func (s *Service) AddMember(ctx context.Context, e audit.Entry, groupID, princip
 	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
 
 	err := s.store.AddMember(ctx, m, change(e, m.AddedAt, MemberRef(groupID, principalID)))
+	if errors.Is(err, ErrAlreadyExists) {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: the principal is a member of the group, "+
+			"or it left the group in this millisecond. If it is not a member, try again", principalID, groupID, err)
+	}
+
 	if err != nil {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}

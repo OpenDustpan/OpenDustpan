@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"slices"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -18,8 +19,10 @@ const (
 // PageRequest asks for one page of a list. Prefix keeps the records whose
 // sort key starts with it: the subject of a principal or a member, the name
 // of a group without regard to case. Cursor is the opaque NextCursor of the
-// page before, or empty for the first page. Limit is 1 to MaxLimit, and 0
-// means DefaultLimit.
+// page before, or empty for the first page, at most MaxCursorLength bytes.
+// Limit is 1 to MaxLimit. 0 means that the request names no limit, and reads
+// DefaultLimit rows: the HTTP adapter refuses a limit of 0 that a request
+// names.
 type PageRequest struct {
 	Prefix string
 	Cursor string
@@ -60,7 +63,7 @@ func (req PageRequest) query(key func(string) string) (Query, int, error) {
 	default:
 	}
 
-	if !utf8.ValidString(req.Prefix) || len(req.Prefix) > maxSubjectLength {
+	if !validKey(req.Prefix) || len(req.Prefix) > maxSubjectLength {
 		return Query{}, 0, fmt.Errorf("%w: prefix", ErrInvalid)
 	}
 
@@ -118,16 +121,29 @@ func encodeCursor(key string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(key))
 }
 
+// MaxCursorLength bounds a cursor, in bytes.
+const MaxCursorLength = 512
+
 // decodeCursor reads a cursor of encodeCursor. An empty cursor is the start.
 func decodeCursor(cursor string) (string, error) {
 	if cursor == "" {
 		return "", nil
 	}
 
+	if len(cursor) > MaxCursorLength {
+		return "", fmt.Errorf("%w: cursor longer than %d bytes", ErrInvalid, MaxCursorLength)
+	}
+
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil || !utf8.Valid(raw) {
+	if err != nil || !validKey(string(raw)) {
 		return "", fmt.Errorf("%w: cursor", ErrInvalid)
 	}
 
 	return string(raw), nil
+}
+
+// validKey reports whether s can be a bound of a key range: valid UTF-8
+// with no NUL, which a PostgreSQL text cannot hold.
+func validKey(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }

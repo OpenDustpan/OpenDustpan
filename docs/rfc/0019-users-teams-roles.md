@@ -76,7 +76,7 @@ decide. It is not a decision.
 
   | Action | Object | Operation |
   | --- | --- | --- |
-  | `server:manage-principals` | installation | create, disable and remove principals |
+  | `server:manage-principals` | installation | create, change and remove principals |
   | `group:read` | group | read a group and its members |
   | `group:manage` | group | create, rename and delete a group |
   | `group:manage-members` | group | add and remove members |

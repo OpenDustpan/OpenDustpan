@@ -173,7 +173,7 @@ type principalListDoc struct {
 }
 
 // TestPrincipalLifeCycle creates a person and a service, puts both in a
-// group, changes and disables one, takes it out and deletes the group, then
+// group, changes one, takes it out and deletes the group, then
 // the principal.
 func TestPrincipalLifeCycle(t *testing.T) {
 	t.Parallel()
@@ -792,7 +792,9 @@ func TestPrincipalPaging(t *testing.T) {
 		t.Fatalf("prefix ca = %+v, want carol", prefixed.Principals)
 	}
 
-	for _, bad := range []string{"limit=x", "limit=0x10", "limit=1001", "limit=-1", "cursor=%21%21"} {
+	for _, bad := range []string{
+		"limit=x", "limit=0x10", "limit=1001", "limit=-1", "limit=0", "cursor=%21%21", "prefix=a%00", "cursor=YQA",
+	} {
 		mustCall(t, h, apiCall{http.MethodGet, "/api/server/principals?" + bad, "", http.StatusBadRequest}, nil)
 	}
 }

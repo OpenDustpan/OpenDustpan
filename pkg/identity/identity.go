@@ -96,7 +96,7 @@ const (
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.
 	ActionServerReadPrincipals Action = "server:read-principals"
-	// ActionServerManagePrincipals allows creating, changing, disabling and
+	// ActionServerManagePrincipals allows creating, changing and
 	// deleting principals (ADR 52). Its object is ServerObject.
 	ActionServerManagePrincipals Action = "server:manage-principals"
 	// ActionServerManageGroups allows creating, changing and deleting groups,

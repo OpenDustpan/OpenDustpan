@@ -182,9 +182,19 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 		t.Fatalf("prefix ci- = %+v, want ci-deploy", prefixed)
 	}
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/principals?limit=1001", "", http.StatusBadRequest,
-	}, nil)
+	checkPageRefusals(ctx, t, env)
+}
+
+// checkPageRefusals reads pages with a bad limit, prefix or cursor: each
+// answers 400, on PostgreSQL too, where a text cannot hold a NUL.
+func checkPageRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	for _, bad := range []string{"limit=1001", "limit=0", "prefix=a%00", "cursor=YQA"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodGet, "/api/server/principals?" + bad, "", http.StatusBadRequest,
+		}, nil)
+	}
 }
 
 // principalStep is one installation API request of the principal steps and

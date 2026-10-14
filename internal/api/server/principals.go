@@ -14,9 +14,10 @@ package server
 // the store does not change. A refused change writes a failure entry after
 // the fact, best effort: a lost failure entry is logged and counted.
 //
-// The list routes answer one page: the query parameters limit (1 to 1000,
-// default 100), cursor (the nextCursor of the page before) and prefix (the
-// start of the subject, or of the group name without regard to case).
+// The list routes answer one page: the query parameters limit (1 to 1000;
+// 100 when the request names none, and 0 answers 400), cursor (the
+// nextCursor of the page before, at most 512 bytes) and prefix (the start of
+// the subject, or of the group name without regard to case).
 
 import (
 	"bytes"
@@ -442,7 +443,7 @@ func pageRequest(r *http.Request) (principal.PageRequest, error) {
 
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil {
+		if err != nil || n < 1 {
 			return principal.PageRequest{}, errPageQuery
 		}
 
@@ -705,8 +706,9 @@ func listMembers(
 
 // addMember serves POST /api/server/groups/{id}/members: it puts the
 // principal of the body in the group and answers 201 with the member. A
-// principal that is a member answers 409. An unknown group or principal
-// answers 404.
+// principal that is a member answers 409, and so does a rejoin in the same
+// millisecond as a removal: the message says to try again. An unknown group
+// or principal answers 404.
 func addMember(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
 ) (principalResult, error) {

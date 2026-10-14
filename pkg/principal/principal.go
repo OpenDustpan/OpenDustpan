@@ -21,6 +21,7 @@ package principal
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -41,7 +42,8 @@ var (
 	// validation.
 	ErrInvalid = errors.New("invalid principal or group")
 	// ErrReservedSubject reports a subject that the bootstrap admin tokens
-	// use, or that can look like one: admin, or admin- and a number (ADR 6).
+	// use, or that can look like one: admin, or admin and a character that is
+	// not a letter (ADR 6).
 	ErrReservedSubject = errors.New("reserved subject")
 	// ErrManagedByDirectory reports a membership change through the API of
 	// a group that a directory sync keeps (ADR 55). The error names the
@@ -148,19 +150,16 @@ type Membership struct {
 	PrincipalID string
 }
 
-// ValidateSubject reports whether s is a usable subject: 1 to 255 bytes of
-// UTF-8 with no control or format character, no white space at either end,
-// and not a subject that a bootstrap admin token uses or that can look like
-// one.
+// ValidateSubject reports whether s is a usable subject for a principal
+// made through the API: 1 to 255 ASCII characters that match
+// ^[A-Za-z0-9][A-Za-z0-9._@+:/-]{0,254}$, which covers emails, SPIFFE IDs
+// and user names, and not a subject that a bootstrap admin token uses or can
+// look like. Subjects from an identity provider do not come through this
+// check.
 func ValidateSubject(s string) error {
-	if err := validateText("subject", s, maxSubjectLength, true); err != nil {
-		return err
-	}
-
-	for _, c := range s {
-		if unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: subject holds the format character %U", ErrInvalid, c)
-		}
+	if !subjectPattern.MatchString(s) {
+		return fmt.Errorf("%w: subject %q: use 1 to 255 ASCII letters, digits and . _ @ + : / -, "+
+			"starting with a letter or a digit", ErrInvalid, s)
 	}
 
 	if reservedSubject(s) {
@@ -170,84 +169,30 @@ func ValidateSubject(s string) error {
 	return nil
 }
 
-// reservedSubject reports whether s can be read as "admin", or "admin-" and
-// one or more digits: the subjects of the bootstrap admin tokens
-// (identity.NewStaticTokens). The check ignores case and reads a full-width
-// form as its ASCII character. Any other non-ASCII character can stand for
-// any character, so a Cyrillic lookalike or a non-ASCII digit is reserved
-// too, when at least one letter of "admin" is ASCII. The project has no
-// Unicode normalization library (golang.org/x/text is not a direct
-// dependency), so this rule refuses more than a normalized check would.
-func reservedSubject(s string) bool {
-	runes := foldFullWidth([]rune(strings.ToLower(s)))
+// subjectPattern is the form of a subject made through the API.
+var subjectPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+:/-]{0,254}$`)
 
+// reservedSubject reports whether s, without regard to case, is "admin" or
+// "admin" and a character that is not a letter: the subjects of the
+// bootstrap admin tokens are admin and admin-N (identity.NewStaticTokens),
+// and admin1, admin. or admin_x can look like them. "administrator" is not
+// reserved.
+func reservedSubject(s string) bool {
 	const word = "admin"
-	if len(runes) < len(word) || !readsAs(runes[:len(word)], word) {
+
+	folded := strings.ToLower(s)
+	if !strings.HasPrefix(folded, word) {
 		return false
 	}
 
-	rest := runes[len(word):]
-	if len(rest) == 0 {
-		return true
-	}
+	rest := folded[len(word):]
 
-	return len(rest) > 1 && matches(rest[0], '-') && digitsOnly(rest[1:])
+	return rest == "" || !isASCIILetter(rest[0])
 }
 
-// foldFullWidth replaces each full-width form in runes with its ASCII
-// character, in lower case.
-func foldFullWidth(runes []rune) []rune {
-	for i, c := range runes {
-		if c >= fullWidthFirst && c <= fullWidthLast {
-			runes[i] = unicode.ToLower(c - fullWidthOffset)
-		}
-	}
-
-	return runes
-}
-
-// readsAs reports whether runes can be read as word: each rune matches its
-// letter, and at least one of them is that ASCII letter.
-func readsAs(runes []rune, word string) bool {
-	ascii := 0
-
-	for i, want := range []rune(word) {
-		if !matches(runes[i], want) {
-			return false
-		}
-
-		if runes[i] == want {
-			ascii++
-		}
-	}
-
-	return ascii > 0
-}
-
-// digitsOnly reports whether each rune can be read as a digit: an ASCII
-// digit, or a character that is not ASCII.
-func digitsOnly(runes []rune) bool {
-	for _, c := range runes {
-		if c < utf8.RuneSelf && !unicode.IsDigit(c) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// The full-width forms of the ASCII characters '!' to '~' (U+FF01 to
-// U+FF5E). A full-width form minus the offset is its ASCII character.
-const (
-	fullWidthFirst  = 0xFF01
-	fullWidthLast   = 0xFF5E
-	fullWidthOffset = 0xFEE0
-)
-
-// matches reports whether c can be read as the ASCII character want: it is
-// want, or it is not ASCII.
-func matches(c, want rune) bool {
-	return c == want || c >= utf8.RuneSelf
+// isASCIILetter reports whether c is an ASCII letter.
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // ValidateGroupName reports whether s is a usable group name: 1 to 100
@@ -276,6 +221,10 @@ func validateText(field, s string, maxLen int, required bool) error {
 	for _, c := range s {
 		if unicode.IsControl(c) {
 			return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
+		}
+
+		if unicode.Is(unicode.Cf, c) {
+			return fmt.Errorf("%w: %s holds the format character %U", ErrInvalid, field, c)
 		}
 	}
 
