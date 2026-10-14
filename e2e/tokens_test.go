@@ -416,11 +416,19 @@ func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		{&delegate, `{"subject":"delegate@example.com","kind":"person"}`},
 		{&plain, `{"subject":"ci-plain","kind":"service"}`},
 	} {
-		principalCall(ctx, t, env, principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated}, p.dst)
+		principalCall(
+			ctx,
+			t,
+			env,
+			principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated},
+			p.dst,
+		)
 	}
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/grants", `{"subject":"principal:` + delegate.ID + `","role":"account-administrator"}`,
+		http.MethodPost,
+		"/api/server/grants",
+		`{"subject":"principal:` + delegate.ID + `","role":"account-administrator"}`,
 		http.StatusCreated,
 	}, nil)
 

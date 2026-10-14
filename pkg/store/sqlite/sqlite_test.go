@@ -76,6 +76,29 @@ func TestPrincipalConformance(t *testing.T) {
 	})
 }
 
+// TestAuditFeedConformance runs the audit.Feed suite: entries after a
+// sequence and the fenced sink cursors.
+func TestAuditFeedConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
+		t.Helper()
+
+		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return s
+	})
+}
+
 // TestAuditConformance runs the audit store suite: append, list order,
 // paging, fencing, isolation, concurrent appends and the chain check. The
 // tamper hooks change or remove a row through SQL: the port has no update
@@ -116,10 +139,10 @@ var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the five whitelisted columns.
+// names one of the six whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind":
+	case "subject", "action", "object", "outcome", "kind", "changes":
 		return field, true
 	default:
 		return "", false

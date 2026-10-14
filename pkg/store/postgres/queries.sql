@@ -678,7 +678,7 @@ ORDER BY content_key;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -687,14 +687,14 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -711,7 +711,7 @@ WHERE namespace = $1;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -1177,3 +1177,18 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
 -- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
 WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);
+-- name: GetAuditSinkCursor :one
+-- The highest sequence of a namespace that a log sink holds (ADR 60
+-- decision 13). A sink with no row holds no entry of the namespace.
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = $1 AND namespace = $2;
+
+-- name: AdvanceAuditSinkCursor :exec
+-- Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+-- is already at the sequence or higher stays, so two instances that ship
+-- the same batch never move it back.
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = EXCLUDED.sequence, updated_at_ms = EXCLUDED.updated_at_ms
+WHERE EXCLUDED.sequence > audit_sink_cursors.sequence;

@@ -257,6 +257,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"prev_hash",
 				"hash",
 				"value_count",
+				"changes",
 			},
 		},
 		{
@@ -335,6 +336,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedBy,
 				"revoked_at_ms",
 				"revoked_by",
+			},
+		},
+		{
+			table: "audit_sink_cursors",
+			columns: []string{
+				"sink",
+				backupColNamespace,
+				backupColSequence,
+				backupColUpdatedAtMs,
 			},
 		},
 		{

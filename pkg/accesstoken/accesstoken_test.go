@@ -53,7 +53,7 @@ func caller() audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
-		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
+		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 	}
 }

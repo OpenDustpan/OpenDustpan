@@ -274,8 +274,10 @@ func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
 
 // testRestoreRoundTrip restores a portable export and exports the restored
 // store again: every table holds the rows it held, and every table file except
-// the namespaces file is byte-identical. The namespaces file changes, because
-// the apply moves every namespace to a new failover version.
+// the namespaces file and the audit sink cursors is byte-identical. The
+// namespaces file changes, because the apply moves every namespace to a new
+// failover version. The apply resets the audit sink cursors, so the restored
+// store holds none (ADR 60 decision 13).
 func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -295,14 +297,19 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 
 	again, sum2, _ := exportPortable(t, ps.dst)
 
-	if !maps.Equal(sum2.RowCounts, sum.RowCounts) || !slices.EqualFunc(sum2.Blobs, sum.Blobs, sameBlobRef) {
-		t.Fatalf("restored summary rows = %v, want %v", sum2.RowCounts, sum.RowCounts)
+	wantRows := maps.Clone(sum.RowCounts)
+	if _, ok := wantRows[sinkCursorTable]; ok {
+		wantRows[sinkCursorTable] = 0
+	}
+
+	if !maps.Equal(sum2.RowCounts, wantRows) || !slices.EqualFunc(sum2.Blobs, sum.Blobs, sameBlobRef) {
+		t.Fatalf("restored summary rows = %v, want %v", sum2.RowCounts, wantRows)
 	}
 
 	for _, table := range backup.Tables {
 		path := backup.PortablePath(table)
 
-		if table == "namespaces" {
+		if table == "namespaces" || table == sinkCursorTable {
 			continue
 		}
 
@@ -315,6 +322,10 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		}
 	}
 }
+
+// sinkCursorTable is the table of the audit sink cursors, which the apply
+// of a restore empties.
+const sinkCursorTable = "audit_sink_cursors"
 
 // writeBackupStacksTask adds total stacks for one writer, calling signal after
 // the first stack, so the caller can start the export while the remaining
