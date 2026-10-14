@@ -33,6 +33,9 @@ const (
 	maxSinkSeries = MaxSinkSeries
 	// maxReloadSeries holds one series for each reload result.
 	maxReloadSeries = 2
+	// maxSweepResults holds one series for each result of the inactivity
+	// disable.
+	maxSweepResults = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -68,7 +71,8 @@ const MaxSinkSeries = 16
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
-// families of the reload of the configuration file (ADR 63 decision 5).
+// families of the reload of the configuration file (ADR 63 decision 5),
+// and counts the runs of the inactivity disable by result (ADR 53).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -81,6 +85,7 @@ type ServerMetrics struct {
 	sinks    sinkFamilies
 	reloads  *Counter
 	reloadOK *Gauge
+	sweeps   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -141,6 +146,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
+		sweeps: newSweepCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -269,6 +275,34 @@ func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	if entries > 0 {
 		m.sinks.sinkSkip.Add(uint64(entries), sink)
 	}
+}
+
+// newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
+func newSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_inactivity_sweeps_total",
+		"Runs of the inactivity disable by result.",
+		[]string{labelResult},
+		maxSweepResults,
+	)
+}
+
+// Results of a run of the inactivity disable.
+const (
+	SweepSuccess = "success"
+	SweepFailure = "failure"
+)
+
+// ObserveSweep adds one to the inactivity disable counter for result:
+// SweepSuccess or SweepFailure. Any other value counts as SweepFailure. The
+// server calls it after each run (ADR 53). Operators alert when the failure
+// series grows: a failed run disables nothing.
+func (m *ServerMetrics) ObserveSweep(result string) {
+	if result != SweepSuccess {
+		result = SweepFailure
+	}
+
+	m.sweeps.Inc(result)
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63

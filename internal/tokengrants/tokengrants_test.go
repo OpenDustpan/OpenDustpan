@@ -38,6 +38,7 @@ func (f fakePrincipals) GetPrincipal(_ context.Context, id string) (principal.Pr
 	return principal.Principal{
 		CreatedAt:   time.Time{},
 		UpdatedAt:   time.Time{},
+		DisabledAt:  time.Time{},
 		ID:          id,
 		Subject:     "ci",
 		DisplayName: "",

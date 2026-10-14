@@ -171,6 +171,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
+		Tokens:             nil,
 		Checkpoints:        coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Events:             coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
@@ -704,6 +705,7 @@ func CoverageAllowlist() []AllowEntry {
 		accessAllowEntries(),
 		reviewAllowEntries(),
 		tokenAllowEntries(),
+		tokenPolicyAllowEntries(),
 	)
 }
 
@@ -841,6 +843,30 @@ func tokenAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: tokenCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// tokenPolicyAllowEntries returns the operator and console routes of the
+// token policy and the principal enable (ADR 53). The harness steps of
+// TestTokenPolicy drive each one through the real binary on each store.
+func tokenPolicyAllowEntries() []AllowEntry {
+	reason := "Operator and console route (ADR 53): no CLI changes the token policy or enables a principal. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/token-policy"},
+		{http.MethodPatch, "/api/server/token-policy"},
+		{http.MethodPost, "/api/server/token-policy/sweep"},
+		{http.MethodPost, "/api/server/principals/{id}/enable"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestTokenPolicy", Reason: reason,
 		})
 	}
 

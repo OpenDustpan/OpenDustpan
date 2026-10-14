@@ -84,8 +84,8 @@ WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    created_by, restored_from, token_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetUpdate :one
 -- The checkpoint size is the stored uncompressed size, or the byte length of
@@ -94,7 +94,7 @@ INSERT INTO updates (
 -- finds at most one row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -107,7 +107,7 @@ UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
     started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
-    journal_version = @journal_version
+    journal_version = @journal_version, token_id = @token_id
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -136,7 +136,7 @@ WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -146,7 +146,7 @@ WHERE u.stack_id = ?
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version,
+       u.created_by, u.restored_from, u.journal_version, u.token_id,
        CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -695,17 +695,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject = sqlc.arg('subject') AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -793,7 +793,7 @@ UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -1050,24 +1050,28 @@ SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 SELECT COUNT(*) FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessToken :one
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
-  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
+  t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
 
 -- name: ListAccessTokens :many
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens
 WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
   AND (CAST(sqlc.arg('status') AS INTEGER) = 0
-    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
       AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
-    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))))
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))))
   AND (CAST(sqlc.arg('has_after') AS INTEGER) = 0
     OR created_at_ms < sqlc.arg('after_ms')
     OR (created_at_ms = sqlc.arg('after_ms') AND id < sqlc.arg('after_id')))
@@ -1078,9 +1082,9 @@ LIMIT sqlc.arg('row_limit');
 SELECT COUNT(*) FROM access_tokens
 WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
   AND (CAST(sqlc.arg('status') AS INTEGER) = 0
-    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
       AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
-    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))));
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR disabled_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))));
 
 -- name: RevokeAccessToken :execrows
 UPDATE access_tokens SET revoked_at_ms = CAST(sqlc.arg('revoked_at_ms') AS INTEGER)
@@ -1090,7 +1094,7 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL;
 UPDATE access_tokens
 SET expires_at_ms = MIN(expires_at_ms, CAST(sqlc.arg('ends_at_ms') AS INTEGER)),
   replaced_by = CAST(sqlc.arg('replaced_by') AS TEXT)
-WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND replaced_by IS NULL
   AND expires_at_ms > sqlc.arg('now_ms');
 
 -- name: TouchAccessToken :exec
@@ -1112,3 +1116,49 @@ VALUES (?, ?, ?, ?)
 ON CONFLICT (sink, namespace) DO UPDATE
 SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
 WHERE excluded.sequence > audit_sink_cursors.sequence;
+
+-- Token policy and the inactivity disable (ADR 53).
+
+-- name: GetAccessTokenPolicy :one
+SELECT max_lifetime_ms, inactivity_ms, disable_tokens, disable_accounts, disable_break_glass, updated_at_ms
+FROM access_token_policy WHERE id = 1;
+
+-- name: SetAccessTokenPolicy :execrows
+UPDATE access_token_policy
+SET max_lifetime_ms = CAST(sqlc.arg('max_lifetime_ms') AS INTEGER), inactivity_ms = CAST(sqlc.arg('inactivity_ms') AS INTEGER),
+  disable_tokens = sqlc.arg('disable_tokens'), disable_accounts = sqlc.arg('disable_accounts'),
+  disable_break_glass = sqlc.arg('disable_break_glass'), updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
+WHERE id = 1;
+
+-- name: DatabaseNowMs :one
+-- The time of the database clock in Unix milliseconds. The sweep uses it, so
+-- a wrong clock on one instance cannot disable every record.
+SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) AS now_ms;
+
+-- name: DisableInactiveAccessTokens :many
+UPDATE access_tokens SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+  AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+RETURNING id, principal_id;
+
+-- name: DisableInactivePrincipals :many
+-- A person is inactive when its creation, its activity baseline, and the
+-- creation and the last use of each of its tokens are all at or before the
+-- cutoff.
+UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND last_active_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER) OR t.last_used_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER))
+  )
+RETURNING id;
+
+-- name: EnablePrincipal :execrows
+-- An enable also sets the activity baseline from the database clock, the
+-- clock of the sweep, so the next sweep does not disable the principal again.
+UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
+  last_active_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL;
