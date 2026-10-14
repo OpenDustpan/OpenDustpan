@@ -172,10 +172,6 @@ A delete is a soft delete (ADR 47). The unit leaves every list and its name
 is free at once, but OpenDustpan keeps its state, its history and its secrets
 until the retention period ends.
 
-A delete is a soft delete (ADR 47). The stack leaves every list and its name
-is free at once, but OpenDustpan keeps its state, its history and its secrets
-until the retention period ends.
-
 ## Guides from other vendors
 
 Other backends publish their own import guides. Read the guide of your
