@@ -65,7 +65,9 @@ An entry holds these fields:
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   After `prevHash`, the encoding appends each optional field that the entry
   sets, in this fixed order: `value_count=` with the decimal count, then
-  `changes=` with the canonical JSON of the changes (sorted by key). An
+  `object_id=` (ADR 47, which its own change adds), then `changes=` with
+  the canonical JSON of the changes (sorted by key), as the store holds
+  it. An
   optional field that the entry does not set adds nothing, so an entry
   written before the field keeps its hash.
   The first entry of a namespace has an empty `prevHash`.
@@ -91,6 +93,9 @@ The action is `server:manage-settings`, and the kind is `change`.
   No setting applies while the server runs yet, so `takesEffect` is
   `next start`: the entry records a change, and the new value applies at
   the next start.
+
+No route of the API reads the scope `@server` yet (ADR 60 decision 7).
+These entries become readable through the API when that route lands.
 
 A sensitive setting (the database URL and each secret) shows only `set` or
 `not set`, never the value. When the server cannot write the start entry,

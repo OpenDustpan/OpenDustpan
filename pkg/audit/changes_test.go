@@ -47,7 +47,7 @@ func TestEncodeChangesIsCanonical(t *testing.T) {
 	}
 }
 
-func TestDecodeChangesRoundTripAndRefusesOtherText(t *testing.T) {
+func TestDecodeChangesIsLenient(t *testing.T) {
 	t.Parallel()
 
 	decoded, err := audit.DecodeChanges(canonicalFixture)
@@ -64,12 +64,35 @@ func TestDecodeChangesRoundTripAndRefusesOtherText(t *testing.T) {
 	}
 
 	reordered := `[{"key":"region","new":"eu-west","layer":"file"},{"key":"database","new":"set","layer":"env"}]`
-	if _, err := audit.DecodeChanges(reordered); !errors.Is(err, audit.ErrChangesNotCanonical) {
-		t.Fatalf("DecodeChanges of another order = %v, want %v", err, audit.ErrChangesNotCanonical)
+	if got, err := audit.DecodeChanges(reordered); err != nil || len(got) != 2 {
+		t.Fatalf("DecodeChanges of another order = %v, %v; want 2 changes", got, err)
 	}
 
 	if _, err := audit.DecodeChanges(`{`); err == nil {
 		t.Fatal("DecodeChanges accepted a text that is not JSON")
+	}
+}
+
+// TestComputeStoredHashHashesTheStoredText proves the stored hash covers the
+// changes text as the store holds it: the canonical text gives the hash of
+// ComputeHash, and the same changes in another order give another hash.
+func TestComputeStoredHashHashesTheStoredText(t *testing.T) {
+	t.Parallel()
+
+	e := testEntry()
+	e.Changes = changesFixture()
+
+	want := audit.ComputeHash(e, "")
+
+	if got := audit.ComputeStoredHash(e, "", canonicalFixture); got != want {
+		t.Fatalf("stored hash of the canonical text = %s, want %s", got, want)
+	}
+
+	reordered := `[{"key":"region","new":"eu-west","layer":"file"},` +
+		`{"key":"database","new":"set","layer":"env"},` +
+		`{"key":"log-level","old":"info","new":"debug","layer":"file"}]`
+	if got := audit.ComputeStoredHash(e, "", reordered); got == want {
+		t.Fatal("the same changes in another order gave the same stored hash")
 	}
 }
 

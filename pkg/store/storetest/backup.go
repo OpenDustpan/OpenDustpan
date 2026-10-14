@@ -503,20 +503,38 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 }
 
-// seedBackupAudit appends a reveal entry and a decrypt entry with a value
-// count to acme, so the round trip compares the audit table row by row,
-// carries the nullable value count both ways, and proves the chain survives
+// backupChanges answers changes whose text JSON escapes: <, & and > (which
+// encoding/json writes as \u003c, \u0026 and \u003e), U+2028, quotes and a
+// backslash, so the round trip proves the changes column keeps the exact
+// text that the hash covers.
+func backupChanges() []audit.Change {
+	old := `say "hi" <&> \ end`
+
+	return []audit.Change{
+		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
+	}
+}
+
+// seedBackupAudit appends a reveal entry, a decrypt entry with a value
+// count and a change entry with the changes of backupChanges to acme, so the
+// round trip compares the audit table row by row, carries the nullable value
+// count and the nullable changes both ways, and proves the chain survives
 // it.
 func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
 	t.Helper()
 
-	out := make([]audit.Entry, 0, 2)
+	out := make([]audit.Entry, 0, 3)
 
-	for i := 1; i <= 2; i++ {
-		kind, count := audit.KindReveal, (*int64)(nil)
+	for i := 1; i <= 3; i++ {
+		kind, count, changes := audit.KindReveal, (*int64)(nil), []audit.Change(nil)
 		if i == 2 {
 			n := int64(3)
 			kind, count = audit.KindToolOperation, &n
+		}
+
+		if i == 3 {
+			kind, changes = audit.KindChange, backupChanges()
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
@@ -530,7 +548,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Version:    "",
 			ValuePath:  "",
 			ValueCount: count,
-			Changes:    nil,
+			Changes:    changes,
 			SourceIP:   "192.0.2.1",
 			UserAgent:  "test",
 			Channel:    audit.ChannelAPI,

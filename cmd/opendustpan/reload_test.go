@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // reloadCanary is a sensitive value that no log line and no audit entry of
@@ -117,15 +119,19 @@ func newReloadFixture(t *testing.T, text string, env map[string]string, args ...
 		t.Fatalf("parse: %v", err)
 	}
 
-	f.args = args
-	f.lookup = func(key string) (string, bool) {
+	// As serve does: the start resolves against the variables, each
+	// reload against the snapshot.
+	vars := func(key string) (string, bool) {
 		value, ok := env[key]
 
 		return value, ok
 	}
+
+	f.args = args
+	f.lookup = cli.SnapshotEnv(vars, cli.DeclaredEnvs())
 	f.instanceID = "ins-aaaaaaaaaaaaaaaaaaaa"
 
-	if err := f.resolveLayers(fs, f.lookup); err != nil {
+	if err := f.resolveLayers(fs, vars); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
@@ -217,7 +223,7 @@ func checkRegionEntry(t *testing.T, entries []audit.Entry) {
 
 	e := entries[0]
 	if e.Channel != audit.ChannelConfigFile || e.Subject != "ins-aaaaaaaaaaaaaaaaaaaa" ||
-		e.Action != audit.ActionManageSettings || e.Namespace != audit.ServerScope {
+		e.Action != string(identity.ActionServerManageSettings) || e.Namespace != audit.ServerScope {
 		t.Fatalf("entry = %+v", e)
 	}
 
@@ -491,5 +497,112 @@ func TestResolveReloadKeepsTheStartFlags(t *testing.T) {
 
 	if changes := cli.Changes(fx.r.current, resolved); len(changes) != 0 {
 		t.Fatalf("changes = %+v, want none", changes)
+	}
+}
+
+// TestReloadOfAnUnchangedSecretVariableIsNoChange proves a sensitive
+// variable that did not change gives no change at a reload: the snapshot
+// keeps only its fingerprint, and the fingerprint matches the start.
+func TestReloadOfAnUnchangedSecretVariableIsNoChange(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"DUSTPAN_DATABASE":    "sqlite:/var/lib/dustpan.db",
+		"DUSTPAN_ADMIN_TOKEN": "admin-" + reloadCanary,
+	}
+
+	fx := newReloadFixture(t, `{"region": "eu-west"}`, env)
+
+	fx.write(t, `{"region": "us-east"}`)
+	fx.r.reload(t.Context(), triggerPoll)
+
+	checkRegionEntry(t, fx.store.appended())
+}
+
+// TestReloadSeesASymlinkSwap proves the poll sees the update of a Kubernetes
+// ConfigMap volume: the kubelet points the ..data link at a new directory,
+// and the file path reads through the links.
+func TestReloadSeesASymlinkSwap(t *testing.T) {
+	t.Parallel()
+
+	fx := newReloadFixture(t, `{"region": "eu-west"}`, nil)
+
+	volume := t.TempDir()
+	first := filepath.Join(volume, "..2026_10_14_12_00_00.1")
+	second := filepath.Join(volume, "..2026_10_14_12_05_00.2")
+
+	for dir, text := range map[string]string{first: `{"region": "eu-west"}`, second: `{"region": "us-east"}`} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(text), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	data := filepath.Join(volume, "..data")
+	if err := os.Symlink(filepath.Base(first), data); err != nil {
+		t.Fatalf("link ..data: %v", err)
+	}
+
+	path := filepath.Join(volume, "config.yaml")
+	if err := os.Symlink(filepath.Join("..data", "config.yaml"), path); err != nil {
+		t.Fatalf("link config.yaml: %v", err)
+	}
+
+	fx.r.flags.config = path
+
+	fx.r.reload(t.Context(), triggerPoll)
+
+	if got := fx.store.appended(); len(got) != 0 {
+		t.Fatalf("the same content wrote %d entries", len(got))
+	}
+
+	// The atomic swap of the kubelet: a new link, renamed over ..data.
+	tmp := filepath.Join(volume, "..data_tmp")
+	if err := os.Symlink(filepath.Base(second), tmp); err != nil {
+		t.Fatalf("link ..data_tmp: %v", err)
+	}
+
+	if err := os.Rename(tmp, data); err != nil {
+		t.Fatalf("swap ..data: %v", err)
+	}
+
+	fx.r.reload(t.Context(), triggerPoll)
+
+	checkRegionEntry(t, fx.store.appended())
+}
+
+// TestCatchHangupQueuesTheSignal proves serve catches SIGHUP as soon as it
+// knows the configuration file: the signal waits in the channel and does
+// not stop the process (the review of ADR 63 part 2, item 8). Without
+// --config, nothing is caught.
+//
+//nolint:paralleltest // The test sends SIGHUP to its own process; no other test may stop the handler meanwhile.
+func TestCatchHangupQueuesTheSignal(t *testing.T) {
+	var none serveFlags
+
+	none.catchHangup()()
+
+	if none.hup != nil {
+		t.Fatal("catchHangup without --config made a channel")
+	}
+
+	var f serveFlags
+
+	f.config = "/etc/opendustpan/config.yaml"
+
+	stop := f.catchHangup()
+	defer stop()
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("send SIGHUP: %v", err)
+	}
+
+	select {
+	case <-f.hup:
+	case <-time.After(time.Second):
+		t.Fatal("SIGHUP did not reach the channel")
 	}
 }

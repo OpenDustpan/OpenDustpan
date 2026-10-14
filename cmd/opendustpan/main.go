@@ -205,13 +205,17 @@ func serveWithIO(
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	// A variable changes only at a restart, and the server clears the
-	// secret variables after it reads them: the start and each reload
-	// resolve against one snapshot (ADR 63 decision 5).
+	stopHangup := f.catchHangup()
+	defer stopHangup()
+
+	// The start resolves against the real variables. A variable changes
+	// only at a restart, and the server clears the secret variables after
+	// it reads them: each reload resolves against a snapshot that keeps no
+	// sensitive value, only its fingerprint (ADR 63 decision 5).
 	f.args = args
 	f.lookup = cli.SnapshotEnv(os.LookupEnv, cli.DeclaredEnvs())
 
-	if err := f.resolveLayers(fs, f.lookup); err != nil {
+	if err := f.resolveLayers(fs, os.LookupEnv); err != nil {
 		return err
 	}
 
@@ -238,6 +242,10 @@ type serveFlags struct {
 	args    []string
 	lookup  cli.LookupFunc
 	fileSum [sha256.Size]byte
+
+	// hup receives SIGHUP from the parse of the flags on, when --config
+	// names a file. The reloader reads it.
+	hup chan os.Signal
 
 	// instanceID names this process in the audit entries that it writes
 	// on its own (ADR 63 decision 10).
@@ -442,10 +450,6 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	opened, storeErr := open()
 	if storeErr != nil {
 		return storeErr
-	}
-
-	if err := f.writeStartEntry(ctx, opened); err != nil {
-		return err
 	}
 
 	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
@@ -880,13 +884,31 @@ func (f *serveFlags) serveWithStores(
 	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
 	opts = append(opts, f.backupOptions(backupTarget)...)
 
+	// After the start-up checks and before serving, write the start entry
+	// and only then start the reloader: a start that fails its checks
+	// writes no entry, and no reload entry comes before the start entry
+	// (ADR 63 decision 10).
+	reloads := &reloadMetrics{observe: nil}
+	started := &startedReloader{stop: nil}
+
+	opts = append(opts, dustpan.WithBeforeServe(func(hookCtx context.Context) error {
+		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
+			return startErr
+		}
+
+		started.stop = f.startReloader(ctx, st, reloads.record, logger)
+
+		return nil
+	}))
+
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
 	}
 
-	stopReload := f.startReloader(ctx, st, srv.Metrics().ObserveConfigReload, logger)
-	defer stopReload()
+	reloads.observe = srv.Metrics().ObserveConfigReload
+
+	defer started.Stop()
 
 	// Run runs the start-up checks, including the key-encryption key check
 	// (ADR 23), before it serves.

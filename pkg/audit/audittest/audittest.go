@@ -834,7 +834,7 @@ func newChangesEntry(requestID string) audit.Entry {
 	old := "info"
 
 	e := newEntry(audit.ServerScope, "ins-aaaaaaaaaaaaaaaaaaaa", requestID, now())
-	e.Action = audit.ActionManageSettings
+	e.Action = "server:manage-settings"
 	e.Object = audit.ServerScope.String()
 	e.Kind = audit.KindChange
 	e.Channel = audit.ChannelConfigFile
@@ -912,7 +912,8 @@ func checkChangesFixture(t *testing.T, got []audit.Change) {
 }
 
 // testCheckChangedChanges answers a test that proves Check finds the
-// changes of an entry changed to tampered behind the back of the store.
+// changes of an entry changed to tampered behind the back of the store, and
+// that List still answers the entry.
 func testCheckChangedChanges(tampered string) func(t *testing.T, ts TestStore) {
 	return func(t *testing.T, ts TestStore) {
 		t.Helper()
@@ -930,7 +931,7 @@ func testCheckChangedChanges(tampered string) func(t *testing.T, ts TestStore) {
 
 		tamperErr := ts.TamperEntry(t.Context(), audit.ServerScope, stored.Sequence, "changes", tampered)
 		if tamperErr != nil {
-			t.Fatalf("tamper settings: %v", tamperErr)
+			t.Fatalf("tamper changes: %v", tamperErr)
 		}
 
 		check, err := s.Check(t.Context(), audit.ServerScope)
@@ -941,5 +942,22 @@ func testCheckChangedChanges(tampered string) func(t *testing.T, ts TestStore) {
 		if check.Valid || check.BadSequence != stored.Sequence {
 			t.Fatalf("check = %+v, want bad sequence %d", check, stored.Sequence)
 		}
+
+		checkListAnswers(t, s, stored.Sequence)
+	}
+}
+
+// checkListAnswers proves a list of the server scope still answers the one
+// entry with seq after a tamper: only the check reports it.
+func checkListAnswers(t *testing.T, s Store, seq int64) {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list after the tamper: %v", err)
+	}
+
+	if len(listing.Entries) != 1 || listing.Entries[0].Sequence != seq {
+		t.Fatalf("list after the tamper = %+v, want the entry", listing)
 	}
 }

@@ -3,7 +3,6 @@ package audit
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"unicode/utf8"
@@ -30,10 +29,6 @@ type Change struct {
 	TakesEffect string  `json:"takesEffect,omitempty"`
 }
 
-// ErrChangesNotCanonical reports a stored changes text that EncodeChanges
-// does not write.
-var ErrChangesNotCanonical = errors.New("audit changes are not in canonical form")
-
 // MaxChanges caps the changes of one entry, so an entry never grows without
 // a bound.
 const MaxChanges = 256
@@ -58,10 +53,11 @@ func EncodeChanges(changes []Change) string {
 	return string(data)
 }
 
-// DecodeChanges reads the text of EncodeChanges. An empty text reads as nil.
-// It answers ErrChangesNotCanonical for a text that EncodeChanges does not
-// write, for example the same changes in another order: the text changed
-// after the append, so a chain check counts the entry as changed.
+// DecodeChanges reads a stored changes text for display. It is lenient: it
+// takes the changes in any order, and it answers nil and an error for a text
+// that is not a JSON list of changes. A reader always gets the entry: only
+// the chain check, which hashes the stored text as it is (ComputeStoredHash),
+// reports a changed text. An empty text reads as nil.
 func DecodeChanges(text string) ([]Change, error) {
 	if text == "" {
 		return nil, nil
@@ -71,10 +67,6 @@ func DecodeChanges(text string) ([]Change, error) {
 
 	if err := json.Unmarshal([]byte(text), &changes); err != nil {
 		return nil, fmt.Errorf("decode audit changes: %w", err)
-	}
-
-	if EncodeChanges(changes) != text {
-		return nil, ErrChangesNotCanonical
 	}
 
 	return changes, nil

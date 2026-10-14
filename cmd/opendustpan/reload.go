@@ -34,6 +34,32 @@ const (
 	triggerSignal
 )
 
+// reloadMetrics records the reload results in the metrics of the server.
+// serve sets observe once the server exists; a nil observe records nothing.
+type reloadMetrics struct {
+	observe func(result string)
+}
+
+// record passes result to observe.
+func (m *reloadMetrics) record(result string) {
+	if m.observe != nil {
+		m.observe(result)
+	}
+}
+
+// startedReloader holds the stop function of a reloader that the start
+// started, or nil when none started.
+type startedReloader struct {
+	stop func()
+}
+
+// Stop stops the reloader and waits for it, when one started.
+func (s *startedReloader) Stop() {
+	if s.stop != nil {
+		s.stop()
+	}
+}
+
 // errReloadAudit wraps a failed audit entry of a reload: the server keeps the
 // old configuration (ADR 63 decision 11), and the next poll tries again.
 var errReloadAudit = errors.New("write the config-file audit entry")
@@ -57,6 +83,24 @@ type reloader struct {
 	readFailed bool
 }
 
+// catchHangup catches SIGHUP in f.hup when --config names a file, and
+// answers the function that stops it. serve calls it right after the parse
+// of the flags: a signal during the start waits in the buffered channel for
+// the reloader and never stops the process, which is the default action of
+// SIGHUP. Without --config, SIGHUP keeps its default action.
+func (f *serveFlags) catchHangup() func() {
+	if strings.TrimSpace(f.config) == "" {
+		return func() {}
+	}
+
+	f.hup = make(chan os.Signal, 1)
+	signal.Notify(f.hup, syscall.SIGHUP)
+
+	hup := f.hup
+
+	return func() { signal.Stop(hup) }
+}
+
 // startReloader starts the reloader of the configuration file when --config
 // names one, and answers the function that stops it and waits for it.
 // Without --config, nothing reloads.
@@ -78,8 +122,17 @@ func (f *serveFlags) startReloader(
 		readFailed: false,
 	}
 
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
+	// serve catches SIGHUP from the parse of the flags on (f.hup). A caller
+	// without that channel gets one here.
+	hup := f.hup
+	stopSignal := func() {}
+
+	if hup == nil {
+		hup = make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+
+		stopSignal = func() { signal.Stop(hup) }
+	}
 
 	ticker := time.NewTicker(reloadPoll)
 	runCtx, cancel := context.WithCancel(ctx)
@@ -95,7 +148,7 @@ func (f *serveFlags) startReloader(
 		cancel()
 		<-done
 		ticker.Stop()
-		signal.Stop(hup)
+		stopSignal()
 	}
 }
 
@@ -196,6 +249,17 @@ func (r *reloader) fail(ctx context.Context, err error) {
 	r.observe(metrics.ReloadFailure)
 }
 
+// databaseSource answers the layer of the database setting in resolved.
+func databaseSource(resolved []cli.Resolved) cli.Source {
+	for _, r := range resolved {
+		if r.Setting.Name() == "database" {
+			return r.Source
+		}
+	}
+
+	return cli.SourceDefault
+}
+
 // resolveReload decodes data and resolves every serve setting against the
 // command line and the environment snapshot of the start, with the checks
 // of the start. It never changes f: it resolves into a new flag set.
@@ -224,8 +288,13 @@ func (f *serveFlags) resolveReload(data []byte) ([]cli.Resolved, error) {
 		return nil, checkErr
 	}
 
-	if dbErr := checkDatabaseFlag(scratch.database); dbErr != nil {
-		return nil, dbErr
+	// A database URL from a variable reads as a fingerprint token in the
+	// snapshot. It did not change since the start, which checked it, so
+	// only a value from the flag or the file gets the check again.
+	if databaseSource(resolved) != cli.SourceEnv {
+		if dbErr := checkDatabaseFlag(scratch.database); dbErr != nil {
+			return nil, dbErr
+		}
 	}
 
 	return resolved, nil

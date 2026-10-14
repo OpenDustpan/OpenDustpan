@@ -121,9 +121,11 @@ func writeConfigReload(out *strings.Builder) {
 	out.WriteString("A flag and a variable change only at a restart. A reload checks the whole\n")
 	out.WriteString("file with the rules of the start. When the file fails a rule, the server\n")
 	out.WriteString("keeps the old configuration and writes one ERROR line that names the key\n")
-	out.WriteString("and the rule. For each changed value, the server writes one INFO line and\n")
-	out.WriteString("one audit entry with the channel `config-file`. A changed setting takes\n")
-	out.WriteString("effect at the next start. The metrics `dustpan_config_reloads_total` and\n")
+	out.WriteString("and the rule. The server writes one INFO line for each changed value, and\n")
+	out.WriteString("one audit entry with the channel `config-file` for the reload, with each\n")
+	out.WriteString(
+		"changed key. A changed setting takes effect at the next start. The metrics `dustpan_config_reloads_total` and\n",
+	)
 	out.WriteString("`dustpan_config_last_reload_success` count the reloads.\n")
 	out.WriteString("\n")
 	out.WriteString("A ConfigMap volume mounted with `subPath` never updates. Mount the whole\n")

@@ -83,9 +83,9 @@ reads the file every 10 seconds and compares the SHA-256 of the content.
 A flag and a variable change only at a restart. A reload checks the whole
 file with the rules of the start. When the file fails a rule, the server
 keeps the old configuration and writes one ERROR line that names the key
-and the rule. For each changed value, the server writes one INFO line and
-one audit entry with the channel `config-file`. A changed setting takes
-effect at the next start. The metrics `dustpan_config_reloads_total` and
+and the rule. The server writes one INFO line for each changed value, and
+one audit entry with the channel `config-file` for the reload, with each
+changed key. A changed setting takes effect at the next start. The metrics `dustpan_config_reloads_total` and
 `dustpan_config_last_reload_success` count the reloads.
 
 A ConfigMap volume mounted with `subPath` never updates. Mount the whole

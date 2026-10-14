@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -51,13 +52,33 @@ type LookupFunc func(key string) (string, bool)
 // The fingerprint is an HMAC of the effective value under a random key of
 // this process. It lets Changes see that a sensitive value changed without
 // keeping the value. It never leaves the process: no log line and no audit
-// entry holds it.
+// entry holds it, and %v and %+v print no part of it.
 type Resolved struct {
 	Setting     *Setting
 	Source      Source
 	Value       string
 	Layers      []Layer
-	fingerprint [sha256.Size]byte
+	fingerprint *fingerprintValue
+}
+
+// fingerprintValue is an HMAC of a setting value under fingerprintKey. Its
+// String and Format methods print nothing, and Resolved holds it behind a
+// pointer, so fmt prints at most an address and never its bytes.
+type fingerprintValue [sha256.Size]byte
+
+// String answers "": a fingerprint never shows in text.
+func (*fingerprintValue) String() string { return "" }
+
+// Format prints nothing for every verb: a fingerprint never shows in text.
+func (*fingerprintValue) Format(fmt.State, rune) {}
+
+// sameFingerprint reports whether a and b hold the same fingerprint.
+func sameFingerprint(a, b *fingerprintValue) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return *a == *b
 }
 
 // Layer is one layer that holds a value for a setting.
@@ -152,16 +173,32 @@ var fingerprintKey = func() []byte {
 	return key
 }()
 
-// fingerprint answers the HMAC of value under fingerprintKey.
-func fingerprint(value string) [sha256.Size]byte {
+// fingerprintToken starts a value that SnapshotEnv put in place of a
+// sensitive variable: the token holds the fingerprint of the value in hex,
+// never the value. The NUL character cannot start a value from the
+// environment, so no real value reads as a token.
+const fingerprintToken = "\x00fingerprint:"
+
+// fingerprint answers the HMAC of value under fingerprintKey. For a token of
+// SnapshotEnv it answers the fingerprint that the token holds, so a reload
+// against the snapshot sees the same fingerprint as the start against the
+// real variable.
+func fingerprint(value string) *fingerprintValue {
+	var out fingerprintValue
+
+	if hexText, ok := strings.CutPrefix(value, fingerprintToken); ok {
+		if raw, err := hex.DecodeString(hexText); err == nil && len(raw) == len(out) {
+			copy(out[:], raw)
+
+			return &out
+		}
+	}
+
 	mac := hmac.New(sha256.New, fingerprintKey)
 	mac.Write([]byte(value))
-
-	var out [sha256.Size]byte
-
 	copy(out[:], mac.Sum(nil))
 
-	return out
+	return &out
 }
 
 // TakesEffectNextStart is when a changed setting applies. No setting is
@@ -184,7 +221,7 @@ func Changes(old, current []Resolved) []audit.Change {
 
 	for _, r := range current {
 		prev, ok := before[r.Setting.Name()]
-		if !ok || prev.fingerprint == r.fingerprint {
+		if !ok || sameFingerprint(prev.fingerprint, r.fingerprint) {
 			continue
 		}
 
@@ -339,16 +376,27 @@ func LogOverrides(ctx context.Context, logger *slog.Logger, resolved []Resolved)
 }
 
 // SnapshotEnv answers a lookup over the values that lookup gives for keys
-// now. The server resolves the start and each reload against one snapshot:
-// a variable changes only at a restart (ADR 63 decision 5), and the server
-// clears the secret variables after it reads them.
+// now, for the reloads of the configuration file: a variable changes only at
+// a restart (ADR 63 decision 5), and the server clears the secret variables
+// after it reads them. The snapshot keeps the value of a setting that is not
+// sensitive. For a sensitive setting it keeps only a token with the
+// fingerprint of the value, so the process never holds a secret for its
+// whole life. The start resolves against the real variables; a reload
+// resolves against the snapshot and sees the same fingerprints.
 func SnapshotEnv(lookup LookupFunc, keys []string) LookupFunc {
 	values := make(map[string]string, len(keys))
 
 	for _, key := range keys {
-		if value, ok := lookup(key); ok {
-			values[key] = value
+		value, ok := lookup(key)
+		if !ok {
+			continue
 		}
+
+		if setting := ByEnv(key); setting != nil && setting.Sensitive && strings.TrimSpace(value) != "" {
+			value = fingerprintToken + hex.EncodeToString(fingerprint(value)[:])
+		}
+
+		values[key] = value
 	}
 
 	return func(key string) (string, bool) {

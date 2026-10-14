@@ -75,11 +75,6 @@ const (
 	ChannelConfigFile Channel = "config-file"
 )
 
-// ActionManageSettings is the action of the entries of ChannelStartup and
-// ChannelConfigFile (ADR 63). RFC 68 can rename it when it decides the
-// settings API.
-const ActionManageSettings = "server:manage-settings"
-
 // Outcome names how the recorded action ended.
 type Outcome string
 
@@ -257,14 +252,29 @@ const hashFieldSeparator = 0x1F
 // channel, kind, outcome, request ID, previous hash. Numeric fields use
 // decimal text. After the previous hash, the encoding appends the optional
 // fields that e sets, each as "<name>=<value>" with the same separator, in
-// this fixed order: value_count (the decimal count), then changes (the
-// canonical JSON of EncodeChanges). An optional field that e does not set
-// adds nothing, so an entry written before the field keeps its hash. The separator never appears in a validated field
-// except the
-// user agent and free-form names, where it is kept as is: the encoding is
-// fixed and documented, not ambiguous-free, and its only use is the chain
-// check of the same code.
+// this fixed order: value_count (the decimal count), then object_id (ADR 47,
+// which its own change adds), then changes (the canonical JSON of
+// EncodeChanges). An optional field that e does not set adds nothing, so an
+// entry written before the field keeps its hash. The separator never
+// appears in a validated field except the user agent and free-form names,
+// where it is kept as is: the encoding is fixed and documented, not
+// ambiguous-free, and its only use is the chain check of the same code.
 func ComputeHash(e Entry, prevHash string) string {
+	return hashWithChanges(e, prevHash, EncodeChanges(e.Changes))
+}
+
+// ComputeStoredHash answers the hash of a stored entry: the encoding of
+// ComputeHash with changesText, the changes text as the store holds it,
+// in place of the encoding of e.Changes. The chain check uses it, so a
+// changed text breaks the hash, also when it decodes to the same changes or
+// does not decode at all.
+func ComputeStoredHash(e Entry, prevHash, changesText string) string {
+	return hashWithChanges(e, prevHash, changesText)
+}
+
+// hashWithChanges answers the hash of e and prevHash with changesText as
+// the value of the optional field changes.
+func hashWithChanges(e Entry, prevHash, changesText string) string {
 	var sb strings.Builder
 
 	write := func(s string) {
@@ -294,8 +304,8 @@ func ComputeHash(e Entry, prevHash string) string {
 		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
 	}
 
-	if len(e.Changes) > 0 {
-		write("changes=" + EncodeChanges(e.Changes))
+	if changesText != "" {
+		write("changes=" + changesText)
 	}
 
 	sum := sha256.Sum256([]byte(sb.String()))

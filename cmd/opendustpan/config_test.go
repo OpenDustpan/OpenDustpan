@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -118,7 +119,7 @@ func checkStartEntry(t *testing.T, path, logs string, secrets ...string) {
 
 	entry := listing.Entries[0]
 	if entry.Channel != audit.ChannelStartup || entry.Subject != match[1] ||
-		entry.Action != audit.ActionManageSettings || entry.Kind != audit.KindChange {
+		entry.Action != string(identity.ActionServerManageSettings) || entry.Kind != audit.KindChange {
 		t.Fatalf("start entry = %+v, want channel startup and subject %s", entry, match[1])
 	}
 

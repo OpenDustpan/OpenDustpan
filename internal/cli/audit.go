@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // AuditSettings answers the changes of a start entry (ADR 63 decision 10):
@@ -25,7 +26,7 @@ func AuditSettings(resolved []Resolved) []audit.Change {
 }
 
 // SettingsEntry answers an audit entry of the settings of this instance in
-// the server scope: the kind change, the action audit.ActionManageSettings,
+// the server scope: the kind change, the action identity.ActionServerManageSettings,
 // the instance ID as the subject and channel as the channel (ADR 63
 // decisions 9 and 10).
 func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, changes []audit.Change) audit.Entry {
@@ -35,7 +36,7 @@ func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, chang
 		Subject:    instanceID,
 		IDPSubject: "",
 		TokenID:    "",
-		Action:     audit.ActionManageSettings,
+		Action:     string(identity.ActionServerManageSettings),
 		Object:     audit.ServerScope.String(),
 		Version:    "",
 		ValuePath:  "",
