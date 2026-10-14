@@ -88,6 +88,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
+	identity.ActionServerReadAudit:   FamilyOperator,
 
 	identity.ActionServerReadPrincipals:   FamilyAdministration,
 	identity.ActionServerManagePrincipals: FamilyAdministration,

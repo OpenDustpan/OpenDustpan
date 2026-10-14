@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -48,6 +49,9 @@ type Route struct {
 	// Actions lists the actions the route needs. Only authorized routes set
 	// it, and the wrapper authorizes every entry on the resolved object.
 	Actions []identity.Action
+	// ServerActions lists the actions the route needs when the resolved object
+	// is the installation (@server). When it is empty, Actions applies.
+	ServerActions []identity.Action
 	// Resolve returns the object that Actions apply to. Only authorized
 	// routes set it.
 	Resolve ObjectResolver
@@ -65,20 +69,24 @@ func (h *Handler) buildRoutes() []Route {
 		{
 			Method: http.MethodGet,
 			Path:   "/api/audit/entries",
-			// The object is the namespace in the organization query value.
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceReadAudit},
-			Resolve: resolveAuditNamespace,
-			Serve:   h.listEntries,
+			// The object is the namespace in the organization query value, or
+			// the installation for the value @server.
+			Scope:         ScopeAuthorized,
+			Actions:       []identity.Action{identity.ActionNamespaceReadAudit},
+			ServerActions: []identity.Action{identity.ActionServerReadAudit},
+			Resolve:       resolveAuditObject,
+			Serve:         h.listEntries,
 		},
 		{
 			Method: http.MethodGet,
 			Path:   "/api/audit/check",
-			// The object is the namespace in the organization query value.
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceReadAudit},
-			Resolve: resolveAuditNamespace,
-			Serve:   h.checkChain,
+			// The object is the namespace in the organization query value, or
+			// the installation for the value @server.
+			Scope:         ScopeAuthorized,
+			Actions:       []identity.Action{identity.ActionNamespaceReadAudit},
+			ServerActions: []identity.Action{identity.ActionServerReadAudit},
+			Resolve:       resolveAuditObject,
+			Serve:         h.checkChain,
 		},
 	}
 }
@@ -142,15 +150,20 @@ func (m *patternMux) Patterns() []string {
 	return append([]string(nil), m.patterns...)
 }
 
-// resolveAuditNamespace returns the namespace in the organization query
-// value. The value is required: without it the request names no object, so
-// the request fails with a 400 before authorization. It validates the name
-// the way the namespace service does, so an invalid value fails closed
-// before authorization.
-func resolveAuditNamespace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+// resolveAuditObject returns the object in the organization query value: the
+// installation for the scope @server, else the namespace of the value. The
+// value is required: without it the request names no object, so the request
+// fails with a 400 before authorization. A namespace name is validated the way
+// the namespace service does, so an invalid value fails closed before
+// authorization.
+func resolveAuditObject(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	org := r.URL.Query().Get("organization")
 	if org == "" {
 		return identity.Object{}, errMissingOrganization
+	}
+
+	if org == audit.ServerScope.String() {
+		return identity.ServerObject(), nil
 	}
 
 	ns, err := namespace.ParseName(org)
@@ -206,7 +219,12 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 			return
 		}
 
-		for _, action := range route.Actions {
+		actions := route.Actions
+		if obj.IsServer() && len(route.ServerActions) > 0 {
+			actions = route.ServerActions
+		}
+
+		for _, action := range actions {
 			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
 				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
 
