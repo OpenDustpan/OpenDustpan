@@ -117,7 +117,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
-				pgColCreatedBy, "restored_from", "journal_version", "journal_closed",
+				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -190,6 +190,11 @@ func pgCopyScopeTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColUnitID},
 		},
+		{
+			table:   "blob_purges",
+			columns: []string{pgColTool, pgColUnitID, pgColNamespace, "purged_at_ms"},
+			orderBy: []string{pgColTool, pgColUnitID},
+		},
 	}
 }
 
@@ -223,8 +228,14 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"changes", "object_id",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
+		},
+		{
+			table:   "audit_sink_cursors",
+			columns: []string{"sink", pgColNamespace, pgColSequence, pgColUpdatedAtMs},
+			orderBy: []string{"sink", pgColNamespace},
 		},
 		{
 			table:   "backups",
@@ -255,7 +266,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "principals",
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -286,6 +297,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				"revoked_at_ms",
 				"replaced_by",
 				pgColCreatedBy,
+				"disabled_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -302,6 +314,14 @@ func pgCopyIdentityTables() []pgCopyTable {
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "access_token_policy",
+			columns: []string{
+				"id", "max_lifetime_ms", "inactivity_ms", "disable_tokens", "disable_accounts",
+				"disable_break_glass", pgColUpdatedAtMs,
 			},
 			orderBy: []string{"id"},
 		},

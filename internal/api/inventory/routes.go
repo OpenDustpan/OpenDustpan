@@ -61,23 +61,55 @@ type Route struct {
 // Contract: never remove or rename these endpoints or status codes. The
 // console reads only this API, and it ships on its own schedule.
 func (h *Handler) buildRoutes() []Route {
-	units := Route{
-		Method: http.MethodGet,
-		Path:   "/api/inventory/units",
-		// The object is the namespace in the organization query value.
-		// The handler then removes every entry whose unit the caller
-		// may not read (unit:read on the reference).
-		Scope:   ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionNamespaceRead},
-		Resolve: resolveListUnits,
-		Serve:   h.listUnits,
+	//nolint:prealloc // The table is one literal; the collection rows are appended only when a collection service is set.
+	routes := []Route{
+		{
+			Method: http.MethodGet,
+			Path:   "/api/inventory/units",
+			// The object is the namespace in the organization query value.
+			// The handler then removes every entry whose unit the caller
+			// may not read (unit:read on the reference).
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveListUnits,
+			Serve:   h.listUnits,
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/inventory/deleted-units",
+			// The object is the namespace in the organization query value.
+			// The handler then removes every entry whose unit the caller
+			// may not read (unit:read on the reference with its ID).
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveListUnits,
+			Serve:   h.listDeletedUnits,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/inventory/deleted-units/{tool}/{unitID}/restore",
+			// The object is the deleted unit: its reference under the name
+			// before the delete, with its stable ID.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRestore},
+			Resolve: h.resolveDeletedUnit,
+			Serve:   h.restoreUnit,
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/api/inventory/deleted-units/{tool}/{unitID}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitPurge},
+			Resolve: h.resolveDeletedUnit,
+			Serve:   h.purgeUnit,
+		},
 	}
 
 	if h.collections == nil {
-		return []Route{units}
+		return routes
 	}
 
-	return append([]Route{units}, h.collectionRoutes()...)
+	return append(routes, h.collectionRoutes()...)
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied

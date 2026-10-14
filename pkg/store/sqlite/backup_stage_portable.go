@@ -121,6 +121,11 @@ func loadPortableTables(
 		return fmt.Errorf("clear staged installation state: %w", backup.ErrExportRead)
 	}
 
+	// The migration seeds the token policy row too (ADR 53).
+	if _, err := conn.ExecContext(ctx, `DELETE FROM access_token_policy`); err != nil {
+		return fmt.Errorf("clear staged token policy: %w", backup.ErrExportRead)
+	}
+
 	for _, table := range backup.PortableTables() {
 		if loadErr := loadPortableTable(ctx, conn, open, index[table.Table], table); loadErr != nil {
 			return loadErr

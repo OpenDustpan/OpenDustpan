@@ -18,10 +18,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// channelHeader names the request header that a client uses to declare where
-// the request came from (ADR 60).
-const channelHeader = "Dustpan-Channel"
-
 // maxCollectionBodyBytes bounds the body of a collection change. The body holds
 // one name or one collection name, so this is ample.
 const maxCollectionBodyBytes = 1024
@@ -408,6 +404,8 @@ func auditEntry(
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+		Changes:    nil,
+		ObjectID:   "",
 	}
 }
 
@@ -487,19 +485,6 @@ func collectionOf(c collection.Collection) collectionEntry {
 
 // truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
 // boundary, so a multi-byte rune is never split.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
-}
-
 // sourceIP returns the remote address that the server sees, without the port.
 func sourceIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

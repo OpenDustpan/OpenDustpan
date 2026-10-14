@@ -83,9 +83,13 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -110,9 +114,13 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -267,9 +275,15 @@ func probeRoute(t *testing.T, handler *apiinventory.Handler, route apiinventory.
 func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Request {
 	t.Helper()
 
-	target := route.Path + "?organization=acme"
+	path := strings.NewReplacer("{tool}", "pulumi", "{unitID}", seededUnitID).Replace(route.Path)
+	target := path + "?organization=acme"
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
+
+	if strings.Contains(route.Path, "{unitID}") {
+		req.SetPathValue("tool", "pulumi")
+		req.SetPathValue("unitID", seededUnitID)
+	}
 
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
@@ -278,9 +292,20 @@ func routeRequest(t *testing.T, route apiinventory.Route, token string) *http.Re
 	return req
 }
 
+// expectedObject is the object wire form that route resolves for
+// routeRequest, and whether it is a unit: the deleted unit for the routes
+// with a unit ID in the path, else the namespace.
+func expectedObject(route apiinventory.Route) (string, bool) {
+	if strings.Contains(route.Path, "{unitID}") {
+		return "pulumi:acme/web/prod", true
+	}
+
+	return "acme", false
+}
+
 // TestRoutesEnforceAuthorization proves the table is enforced: with an
 // Authorizer that denies a declared action the route answers 403, and it
-// answers 200 when allowed. Table-driven over all routes.
+// answers 200 or 204 when allowed. Table-driven over all routes.
 func TestRoutesEnforceAuthorization(t *testing.T) {
 	t.Parallel()
 
@@ -299,7 +324,7 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 }
 
 // checkRouteEnforcement proves one route enforces its row: it answers 200
-// when allowed, and an authorized route answers 403 when its actions are
+// or 204 when allowed, and an authorized route answers 403 when its actions are
 // denied.
 func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 	t.Helper()
@@ -322,8 +347,9 @@ func checkRouteEnforcement(t *testing.T, route apiinventory.Route) {
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("allowed request answers %d, want %d or %d (%s)",
+			rec.Code, http.StatusOK, http.StatusNoContent, rec.Body.String())
 	}
 
 	deny := map[identity.Action]bool{}
@@ -489,15 +515,15 @@ func checkPublicRouteObject(t *testing.T, route apiinventory.Route) {
 func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 	t.Helper()
 
-	const expected = "acme"
+	expected, unit := expectedObject(route)
 
 	obj, err := route.Resolve(httptest.NewRecorder(), routeRequest(t, route, "test-token"))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 
-	if obj.String() != expected || obj.IsUnit() {
-		t.Fatalf("object = %q (unit %v), want namespace %q", obj.String(), obj.IsUnit(), expected)
+	if obj.String() != expected || obj.IsUnit() != unit {
+		t.Fatalf("object = %q (unit %v), want %q (unit %v)", obj.String(), obj.IsUnit(), expected, unit)
 	}
 
 	recorder := &recordingAuthorizer{calls: nil}
@@ -506,8 +532,9 @@ func checkAuthorizedRouteObject(t *testing.T, route apiinventory.Route) {
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNoContent {
+		t.Fatalf("allowed request answers %d, want %d or %d (%s)",
+			rec.Code, http.StatusOK, http.StatusNoContent, rec.Body.String())
 	}
 
 	for _, action := range route.Actions {

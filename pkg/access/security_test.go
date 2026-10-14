@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -255,7 +256,14 @@ func TestUnitGrantsFollowTheStableID(t *testing.T) {
 	gone.At, gone.Namespace, gone.Action = time.Unix(1, 0), "acme", "unit:manage"
 	gone.Object, gone.Kind, gone.Outcome = web.String(), audit.KindChange, audit.OutcomeSuccess
 
-	if deleteErr := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), gone); deleteErr != nil {
+	deleteErr := f.store.DeleteStack(
+		ctx,
+		ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(inventory.DeletedRetention)},
+	)
+	if deleteErr != nil {
 		t.Fatalf("delete stack: %v", deleteErr)
 	}
 
@@ -442,6 +450,7 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 	server := identity.ServerObject()
 	manage := []identity.Action{
 		identity.ActionServerReadTokens, identity.ActionServerManageTokens, identity.ActionServerManageServiceTokens,
+		identity.ActionServerManageTokenPolicy,
 	}
 
 	for _, a := range manage {

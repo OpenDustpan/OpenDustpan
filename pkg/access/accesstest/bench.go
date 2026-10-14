@@ -183,6 +183,7 @@ func seedBenchPrincipals(b *testing.B, s BenchStore) {
 		p := principal.Principal{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: fmt.Sprintf("user-%05d", i), DisplayName: "",
 			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			DisabledAt: time.Time{},
 		}
 		if err := s.CreatePrincipal(ctx, p, entry()); err != nil {
 			b.Fatalf("seed principal: %v", err)

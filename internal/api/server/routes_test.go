@@ -250,7 +250,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
 	caller := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: testCallerID, Subject: "tester",
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testCallerID, Subject: "tester",
 		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 	}
 	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
@@ -267,10 +267,11 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 	for i, seed := range seeds {
 		tok := accesstoken.Token{
-			CreatedAt:   at,
+			CreatedAt:   at.Add(-2 * time.Hour),
 			ExpiresAt:   at.Add(48 * time.Hour),
 			LastUsedAt:  time.Time{},
 			RevokedAt:   time.Time{},
+			DisabledAt:  time.Time{},
 			ID:          seed.id,
 			PrincipalID: seed.principalID,
 			Name:        "seed",
@@ -283,6 +284,13 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 		if err := st.CreateToken(ctx, tok, d, storetest.ServerChange(at, accesstoken.Ref(seed.id))); err != nil {
 			t.Fatalf("seed token %s: %v", seed.id, err)
 		}
+	}
+
+	// Disable the person testPrincipalID, so the enable route answers 200:
+	// it and its token were made more than one hour before the sweep.
+	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: false, Accounts: true}
+	if _, sweepErr := st.SweepInactive(ctx, sweep, storetest.ServerChange); sweepErr != nil {
+		t.Fatalf("seed sweep: %v", sweepErr)
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
@@ -415,11 +423,11 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seeds := []principal.Principal{
 		{
-			CreatedAt: at, UpdatedAt: at, ID: testPrincipalID, Subject: "alice",
+			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testPrincipalID, Subject: "alice",
 			DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
-			CreatedAt: at, UpdatedAt: at, ID: testOtherPrincipalID, Subject: "ci-deploy",
+			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testOtherPrincipalID, Subject: "ci-deploy",
 			DisplayName: "CI deploy", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
 		},
 	}
@@ -478,6 +486,7 @@ var routeBodies = map[string]string{
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
 	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
+	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded

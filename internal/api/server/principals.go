@@ -59,19 +59,22 @@ var errNoPrincipalStore = errors.New("the store of this server keeps no principa
 // principalResponse is one principal on the wire. Times are UTC in RFC 3339
 // with nanoseconds, the wire form of the other installation routes. Source
 // is local, ldap or scim (ADR 55). GroupCount is the count of its current
-// memberships: its groups come from their own paged route.
+// memberships: its groups come from their own paged route. A null
+// disabledAt means that the inactivity disable did not end the principal
+// (ADR 53); POST /api/server/principals/{id}/enable clears it.
 //
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
 type principalResponse struct {
-	ID          string `json:"id"`
-	Subject     string `json:"subject"`
-	DisplayName string `json:"displayName"`
-	Kind        string `json:"kind"`
-	Source      string `json:"source"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
-	GroupCount  int64  `json:"groupCount"`
+	ID          string  `json:"id"`
+	Subject     string  `json:"subject"`
+	DisplayName string  `json:"displayName"`
+	Kind        string  `json:"kind"`
+	Source      string  `json:"source"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
+	DisabledAt  *string `json:"disabledAt"`
+	GroupCount  int64   `json:"groupCount"`
 }
 
 // groupResponse is one group on the wire. A group whose source is not local
@@ -163,6 +166,7 @@ func principalOf(p principal.Principal) principalResponse {
 		Source:      string(p.Source),
 		CreatedAt:   wireTime(p.CreatedAt),
 		UpdatedAt:   wireTime(p.UpdatedAt),
+		DisabledAt:  optionalWireTime(p.DisabledAt),
 		GroupCount:  p.GroupCount,
 	}
 }
@@ -221,7 +225,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: none}); ok {
+		if res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -232,7 +236,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 // change writes one failure entry here, best effort.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
 		if !ok && res.object != "" && h.principals != nil {
 			h.appendServerChange(r, p, serverChange{
@@ -249,7 +253,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 // runPrincipalOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
 func (h *Handler) runPrincipalOp(
-	w http.ResponseWriter, r *http.Request, op principalOp, c call,
+	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
 ) (principalResult, bool) {
 	ctx := r.Context()
 
@@ -331,6 +335,14 @@ func (h *Handler) principalRoutes() []Route {
 		{
 			Method: http.MethodGet, Path: principalPath + "/groups", Scope: ScopeAuthorized,
 			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(listGroupsOfPrincipal),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    principalPath + "/enable",
+			Scope:   ScopeAuthorized,
+			Actions: manage,
+			Resolve: resolveServer,
+			Serve:   h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal),
 		},
 	}
 }
@@ -564,6 +576,28 @@ func deletePrincipal(
 	return ok(http.StatusNoContent, nil, object), nil
 }
 
+// enablePrincipal serves POST /api/server/principals/{id}/enable: it
+// enables a principal again after an inactivity disable (ADR 53) and
+// answers 200 with the principal. A principal that is not disabled answers
+// 409.
+func enablePrincipal(
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+) (principalResult, error) {
+	id := r.PathValue("id")
+	object := principal.Ref(id)
+
+	if err := svc.EnablePrincipal(r.Context(), e, id); err != nil {
+		return failed(object), err
+	}
+
+	p, err := svc.GetPrincipal(r.Context(), id)
+	if err != nil {
+		return failed(object), err
+	}
+
+	return ok(http.StatusOK, principalOf(p), object), nil
+}
+
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
 // page, ordered by name.
 func listGroupsOfPrincipal(
@@ -769,7 +803,8 @@ func classifyPrincipal(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errBodyTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error(), true
-	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory):
+	case errors.Is(err, principal.ErrAlreadyExists), errors.Is(err, principal.ErrManagedByDirectory),
+		errors.Is(err, principal.ErrNotDisabled):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, principal.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true

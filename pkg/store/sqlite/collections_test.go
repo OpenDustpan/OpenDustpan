@@ -88,6 +88,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			Action: action, Object: "acme/payments", Version: "", ValuePath: "", ValueCount: nil,
 			SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 			Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+			Changes: nil, ObjectID: "",
 		}
 	}
 

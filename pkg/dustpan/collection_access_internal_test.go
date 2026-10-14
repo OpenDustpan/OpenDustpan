@@ -146,7 +146,7 @@ func createPrincipals(t *testing.T, st *sqlite.Store, at time.Time, subjects ...
 	for _, subject := range subjects {
 		p := principal.Principal{
 			CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject, DisplayName: "",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0, DisabledAt: time.Time{},
 		}
 		if err := st.CreatePrincipal(t.Context(), p, storetest.ServerChange(at, "principal:"+p.ID)); err != nil {
 			t.Fatalf("create principal %q: %v", subject, err)
@@ -170,7 +170,7 @@ func moveUnit(t *testing.T, svc *collection.Service, to collection.Ref, at time.
 
 // wireAccess builds the authorizer and the grant service of the server from
 // cfg, as the server does, and returns both.
-func wireAccess(t *testing.T, cfg settings) *access.Service {
+func wireAccess(t *testing.T, cfg *settings) *access.Service {
 	t.Helper()
 
 	authz, err := defaultAuthorizer(cfg)

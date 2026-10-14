@@ -125,7 +125,7 @@ func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
 	t.Parallel()
 
 	p := principal.Principal{
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, ID: "prn-1", Subject: "alice",
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "alice",
 		DisplayName: "Ali\u200bce", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 	}
 	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {
@@ -292,7 +292,9 @@ func testEntry() audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
 		Action: "server:manage-principals", Object: "", Version: "", ValuePath: "", ValueCount: nil,
+		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		ObjectID: "",
 	}
 }

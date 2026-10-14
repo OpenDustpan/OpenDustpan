@@ -601,7 +601,9 @@ func testDeletedUnitMembership(t *testing.T, s Store) {
 	}
 
 	ref := workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, unitName)}
-	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), auditFor(ns.Fence())); err != nil {
+	d := auditFor(ns.Fence())
+	deletion := inventory.Deletion{Entry: d, PurgeAfter: d.At.Add(time.Hour)}
+	if err := s.DeleteWorkspace(t.Context(), ref, ns.Fence(), deletion); err != nil {
 		t.Fatalf("DeleteWorkspace: %v", err)
 	}
 
@@ -674,6 +676,8 @@ func auditFor(fence namespace.Fence) audit.Entry {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+		Changes:    nil,
+		ObjectID:   "",
 	}
 }
 

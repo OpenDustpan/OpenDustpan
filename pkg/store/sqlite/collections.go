@@ -23,7 +23,7 @@ func (s *Store) CreateCollection(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.CreateCollection(ctx, db.CreateCollectionParams{
 			ID:          c.ID,
 			Namespace:   c.Ref.Namespace.String(),
@@ -91,7 +91,7 @@ func (s *Store) DeleteCollection(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		live, err := q.CountLiveCollectionMembers(ctx, db.CountLiveCollectionMembersParams{
 			Namespace:     ref.Namespace.String(),
 			CollectionKey: ref.Name.Key(),
@@ -137,7 +137,7 @@ func (s *Store) SetUnitCollection(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return setUnitCollection(ctx, q, m, e)
 	})
 }

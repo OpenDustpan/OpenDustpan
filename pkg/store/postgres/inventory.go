@@ -2,9 +2,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -15,7 +19,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-var _ inventory.Reader = (*Store)(nil)
+var (
+	_ inventory.Reader     = (*Store)(nil)
+	_ inventory.BlobPurges = (*Store)(nil)
+)
 
 // inventoryTool names the Pulumi CLI in inventory entries.
 const inventoryTool = "pulumi"
@@ -159,23 +166,192 @@ func publishWorkspaceInventory(
 
 // moveStackInventoryToDeleted moves the inventory entry of the stack ref with
 // stackID to the deleted units, in the transaction of the delete (ADR 13, ADR
-// 47). The retention period ends DeletedRetention after at.
+// 47). The retention period ends at purgeAfter.
 func moveStackInventoryToDeleted(
-	ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time,
+	ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, d inventory.Deletion,
 ) error {
 	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
 		Namespace:    ref.Namespace.String(),
 		Tool:         inventoryTool,
 		UnitID:       stackID,
 		Name:         stackUnitName(ref),
-		DeletedAtMs:  at.UnixMilli(),
-		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+		DeletedAtMs:  d.Entry.At.UnixMilli(),
+		PurgeAfterMs: d.PurgeAfter.UnixMilli(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert deleted inventory entry: %w", err)
 	}
 
 	return removeStackInventory(ctx, q, ref)
+}
+
+// QueryDeletedUnits implements inventory.DeletedReader with one count and one
+// page query, built from the filters that q sets. The order and the cursor
+// compare with the "C" collation, the byte order that every store and
+// inventory.PageDeleted share. The page query reads one row more than the
+// page size, so it knows whether a next page exists.
+func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	if q.MatchesNothing() {
+		return inventory.TrimDeletedPage([]inventory.DeletedEntry{}, q.PageSize(), 0), nil
+	}
+
+	var page inventory.DeletedPage
+
+	// One REPEATABLE READ snapshot for the count and the page, so the total
+	// agrees with the rows.
+	opts := pgx.TxOptions{
+		IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly, DeferrableMode: pgx.NotDeferrable, BeginQuery: "",
+		CommitQuery: "",
+	}
+
+	err := pgx.BeginTxFunc(ctx, s.pool, opts, func(tx pgx.Tx) error {
+		var readErr error
+
+		page, readErr = queryDeletedPage(ctx, tx, q)
+
+		return readErr
+	})
+	if err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("deleted inventory snapshot: %w", err)
+	}
+
+	return page, nil
+}
+
+// queryDeletedPage counts the deleted units that match q and reads one page
+// of them with tx.
+func queryDeletedPage(ctx context.Context, tx pgx.Tx, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	where, args := deletedFilter(q)
+
+	var total int
+
+	count := tx.QueryRow(ctx, "SELECT COUNT(*) FROM inventory_deleted WHERE "+where, args...)
+	if err := count.Scan(&total); err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("count deleted inventory: %w", err)
+	}
+
+	if q.After != nil {
+		cursor := []any{q.After.Tool, q.After.Name, q.After.UnitID}
+		where += ` AND (tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C") > (` +
+			placeholders(len(args)+1, len(cursor)) + ")"
+		args = append(args, cursor...)
+	}
+
+	size := q.PageSize()
+	args = append(args, size+1)
+
+	rows, err := tx.Query(ctx,
+		"SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms FROM inventory_deleted WHERE "+
+			where+fmt.Sprintf(` ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C" LIMIT $%d`, len(args)),
+		args...)
+	if err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("select deleted inventory: %w", err)
+	}
+
+	entries, err := scanDeletedRows(rows)
+	if err != nil {
+		return inventory.DeletedPage{}, err
+	}
+
+	return inventory.TrimDeletedPage(entries, size, total), nil
+}
+
+// placeholders returns n numbered placeholders from $first, joined by commas.
+func placeholders(first, n int) string {
+	out := make([]string, 0, n)
+	for i := range n {
+		out = append(out, fmt.Sprintf("$%d", first+i))
+	}
+
+	return strings.Join(out, ", ")
+}
+
+// deletedFilter returns the WHERE clause and its arguments for the filters
+// of q, without the cursor. The name prefix compares characters exactly.
+func deletedFilter(q inventory.DeletedQuery) (string, []any) {
+	where := "namespace = $1"
+	args := []any{q.Namespace.String()}
+
+	if q.Tool != "" {
+		args = append(args, q.Tool)
+		where += fmt.Sprintf(" AND tool = $%d", len(args))
+	}
+
+	if q.NamePrefix != "" {
+		args = append(args, utf8.RuneCountInString(q.NamePrefix), q.NamePrefix)
+		where += fmt.Sprintf(" AND left(name, $%d) = $%d", len(args)-1, len(args))
+	}
+
+	if !q.PurgeBefore.IsZero() {
+		args = append(args, q.PurgeBefore.UnixMilli())
+		where += fmt.Sprintf(" AND purge_after_ms <= $%d", len(args))
+	}
+
+	if q.Restricted {
+		args = append(args, q.UnitIDs)
+		where += fmt.Sprintf(" AND unit_id = ANY($%d::text[])", len(args))
+	}
+
+	return where, args
+}
+
+// scanDeletedRows reads every row of a deleted inventory query and closes
+// rows.
+func scanDeletedRows(rows pgx.Rows) ([]inventory.DeletedEntry, error) {
+	defer rows.Close()
+
+	out := []inventory.DeletedEntry{}
+
+	for rows.Next() {
+		var (
+			ns, tool, unitID, name string
+			deletedMs, purgeMs     int64
+		)
+
+		if err := rows.Scan(&ns, &tool, &unitID, &name, &deletedMs, &purgeMs); err != nil {
+			return nil, fmt.Errorf("scan deleted inventory: %w", err)
+		}
+
+		out = append(out, inventory.DeletedEntry{
+			DeletedAt:  time.UnixMilli(deletedMs).UTC(),
+			PurgeAfter: time.UnixMilli(purgeMs).UTC(),
+			Namespace:  namespace.Name(ns),
+			Tool:       tool,
+			UnitID:     unitID,
+			Name:       name,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read deleted inventory: %w", err)
+	}
+
+	return out, nil
+}
+
+// GetDeletedUnit implements inventory.DeletedReader.
+func (s *Store) GetDeletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
+	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+		Namespace: ns.String(), Tool: tool, UnitID: unitID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return inventory.DeletedEntry{}, inventory.ErrNotFound
+	}
+
+	if err != nil {
+		return inventory.DeletedEntry{}, fmt.Errorf("select deleted inventory entry: %w", err)
+	}
+
+	return inventory.DeletedEntry{
+		DeletedAt:  time.UnixMilli(row.DeletedAtMs).UTC(),
+		PurgeAfter: time.UnixMilli(row.PurgeAfterMs).UTC(),
+		Namespace:  namespace.Name(row.Namespace),
+		Tool:       row.Tool,
+		UnitID:     row.UnitID,
+		Name:       row.Name,
+	}, nil
 }
 
 // ListDeletedUnits implements inventory.DeletedReader: the deleted units of

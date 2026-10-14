@@ -21,7 +21,7 @@ var _ collection.Store = (*Store)(nil)
 func (s *Store) CreateCollection(
 	ctx context.Context, c collection.Collection, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.CreateCollection(ctx, db.CreateCollectionParams{
 			ID:          c.ID,
 			Namespace:   c.Ref.Namespace.String(),
@@ -80,7 +80,7 @@ func (s *Store) ListCollections(ctx context.Context, ns namespace.Name) ([]colle
 func (s *Store) DeleteCollection(
 	ctx context.Context, ref collection.Ref, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		live, err := q.CountLiveCollectionMembers(ctx, db.CountLiveCollectionMembersParams{
 			Namespace:     ref.Namespace.String(),
 			CollectionKey: ref.Name.Key(),
@@ -127,7 +127,7 @@ func (s *Store) DeleteCollection(
 func (s *Store) SetUnitCollection(
 	ctx context.Context, m collection.Move, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		return setUnitCollection(ctx, q, m, e)
 	})
 }

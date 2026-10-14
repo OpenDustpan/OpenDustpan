@@ -14,6 +14,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a change appends its audit entry in @server", test: testChangeAppendsEntry},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
 		{name: "concurrent rotations of one token: one wins", test: testConcurrentRotations},
+		{name: "the policy starts at the defaults and keeps a change", test: testPolicy},
+		{name: "the sweep disables inactive tokens", test: testSweepTokens},
+		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
+		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
+		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
+		{name: "concurrent policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
 	}
 
 	for _, tc := range cases {
@@ -87,12 +94,14 @@ func entry(id string) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "accesstokentest",
 		Channel:    audit.ChannelAPI,
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -128,6 +137,7 @@ func newToken(id, principalID string, created int) accesstoken.Token {
 		ExpiresAt:   at(created).Add(24 * time.Hour),
 		LastUsedAt:  time.Time{},
 		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
 		ID:          id,
 		PrincipalID: principalID,
 		Name:        "token " + id,
@@ -142,8 +152,17 @@ func mustPrincipal(t *testing.T, s Store, id, subject string, kind principal.Kin
 	t.Helper()
 
 	p := principal.Principal{
-		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "Name of " + subject,
-		Kind: kind, Source: principal.SourceLocal, GroupCount: 0,
+		CreatedAt: at(
+			0,
+		),
+		UpdatedAt:   at(0),
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     subject,
+		DisplayName: "Name of " + subject,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		GroupCount:  0,
 	}
 
 	e := entry("tok-x")
@@ -176,6 +195,7 @@ func equalToken(t *testing.T, got, want accesstoken.Token) {
 
 	same := got.CreatedAt.Equal(want.CreatedAt) && got.ExpiresAt.Equal(want.ExpiresAt) &&
 		got.LastUsedAt.Equal(want.LastUsedAt) && got.RevokedAt.Equal(want.RevokedAt) &&
+		got.DisabledAt.Equal(want.DisabledAt) &&
 		got.ID == want.ID && got.PrincipalID == want.PrincipalID && got.Name == want.Name &&
 		got.Kind == want.Kind && got.ReplacedBy == want.ReplacedBy && got.CreatedBy == want.CreatedBy
 
@@ -300,8 +320,15 @@ func testByDigest(t *testing.T, s Store) {
 		t.Fatalf("stored digest = %s, want %s", m.Digest, digest(1))
 	}
 
+	// The latest activity is the creation of tok-2: the principal was made
+	// earlier, and no token was used.
 	want := accesstoken.Owner{
-		ID: "prn-1", Subject: "ci-deploy", DisplayName: "Name of ci-deploy", Kind: principal.KindService,
+		ActiveAt:    at(2),
+		DisabledAt:  time.Time{},
+		ID:          "prn-1",
+		Subject:     "ci-deploy",
+		DisplayName: "Name of ci-deploy",
+		Kind:        principal.KindService,
 	}
 	if m.Owner != want {
 		t.Fatalf("owner = %+v, want %+v", m.Owner, want)
@@ -713,5 +740,385 @@ func testConcurrentRotations(t *testing.T, s Store) {
 
 	if won != 1 {
 		t.Fatalf("%d rotations won, want 1", won)
+	}
+}
+
+func testPolicy(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	got, err := s.GetPolicy(ctx)
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+
+	if got != accesstoken.DefaultPolicy() {
+		t.Fatalf("seeded policy = %+v, want %+v", got, accesstoken.DefaultPolicy())
+	}
+
+	want := accesstoken.Policy{
+		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: 0,
+		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: true,
+	}
+
+	stored, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		if old != accesstoken.DefaultPolicy() {
+			t.Errorf("update read %+v, want the seeded policy", old)
+		}
+
+		return want, entry("tok-x"), nil
+	})
+	if err != nil || stored != want {
+		t.Fatalf("update policy = %+v, %v; want %+v", stored, err, want)
+	}
+
+	changed := want
+	changed.Inactivity = time.Hour
+
+	_, err = s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		return changed, refused("tok-x"), nil
+	})
+	wantErr(t, "update with a refused entry", err, audit.ErrInvalidEntry)
+
+	_, err = s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		return changed, entry("tok-x"), accesstoken.ErrInvalid
+	})
+	wantErr(t, "update that refuses the change", err, accesstoken.ErrInvalid)
+
+	got, err = s.GetPolicy(ctx)
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("policy = %+v, want %+v", got, want)
+	}
+}
+
+func testConcurrentPolicyUpdates(t *testing.T, s Store) {
+	t.Helper()
+
+	const updates = 8
+
+	var wg sync.WaitGroup
+
+	errs := make(chan error, updates)
+
+	for range updates {
+		wg.Go(func() {
+			_, err := s.UpdatePolicy(
+				t.Context(),
+				func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+					old.MaxLifetime += time.Hour
+
+					return old, entry("tok-x"), nil
+				},
+			)
+			errs <- err
+		})
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	got, err := s.GetPolicy(t.Context())
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+
+	if want := accesstoken.DefaultMaxLifetime + updates*time.Hour; got.MaxLifetime != want {
+		t.Fatalf("maximum lifetime = %s, want %s: an update did not see the one before it", got.MaxLifetime, want)
+	}
+}
+
+// The sweep reads the time of the database clock, so its cases place each
+// record relative to the time of the test, with an inactivity period of
+// one hour: "old" is before the cutoff and "recent" is after it.
+const sweepPeriod = time.Hour
+
+// clockSkew bounds the difference between the clock of the test and the
+// database clock.
+const clockSkew = time.Minute
+
+// testNow returns the time of the test to the millisecond.
+func testNow() time.Time {
+	return time.Now().UTC().Truncate(time.Millisecond)
+}
+
+// sweepTimes is the time of a sweep test, a time well before the cutoff and
+// a time well after it.
+type sweepTimes struct {
+	now, old, recent time.Time
+}
+
+func newSweepTimes() sweepTimes {
+	now := testNow()
+
+	return sweepTimes{now: now, old: now.Add(-3 * sweepPeriod), recent: now.Add(-sweepPeriod / 4)}
+}
+
+// relToken returns a service token of principalID made at created, that
+// expires a day after the test.
+func relToken(id, principalID string, created time.Time, ts sweepTimes) accesstoken.Token {
+	tok := newToken(id, principalID, 0)
+	tok.CreatedAt, tok.ExpiresAt = created, ts.now.Add(24*time.Hour)
+
+	return tok
+}
+
+// mustPrincipalAt creates the principal id, made at created.
+func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, created time.Time) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
+		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, GroupCount: 0,
+	}
+
+	e := entryAt("tok-x", created)
+	e.Object = principal.Ref(id)
+
+	if err := s.CreatePrincipal(t.Context(), p, e); err != nil {
+		t.Fatalf("create principal %q: %v", id, err)
+	}
+}
+
+func sweep(tokens, accounts bool) accesstoken.Sweep {
+	return accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: tokens, Accounts: accounts}
+}
+
+// sweepEntry is the entry function of a sweep.
+func sweepEntry(at time.Time, object string) audit.Entry {
+	e := entryAt("tok-x", at)
+	e.Object = object
+
+	return e
+}
+
+func mustSweep(t *testing.T, s Store, sw accesstoken.Sweep) accesstoken.SweepResult {
+	t.Helper()
+
+	res, err := s.SweepInactive(t.Context(), sw, sweepEntry)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	slices.SortFunc(res.Tokens, func(a, b accesstoken.SweptToken) int { return strings.Compare(a.ID, b.ID) })
+	slices.Sort(res.Principals)
+
+	return res
+}
+
+func sweptIDs(res accesstoken.SweepResult) []string {
+	out := make([]string, 0, len(res.Tokens))
+	for _, tok := range res.Tokens {
+		out = append(out, tok.ID)
+	}
+
+	return out
+}
+
+// wantNear fails when got is not within clockSkew of want.
+func wantNear(t *testing.T, what string, got, want time.Time) {
+	t.Helper()
+
+	if d := got.Sub(want); d < -clockSkew || d > clockSkew {
+		t.Fatalf("%s = %s, want the time of the database clock, near %s", what, got, want)
+	}
+}
+
+func testSweepTokens(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	mustPrincipalAt(t, s, "prn-1", principal.KindService, ts.old)
+
+	mustToken(t, s, relToken("tok-unused", "prn-1", ts.old, ts), digest(1))
+	mustToken(t, s, relToken("tok-old-use", "prn-1", ts.old, ts), digest(2))
+	mustToken(t, s, relToken("tok-new-use", "prn-1", ts.old, ts), digest(3))
+	mustToken(t, s, relToken("tok-revoked", "prn-1", ts.old, ts), digest(4))
+	mustToken(t, s, relToken("tok-young", "prn-1", ts.recent, ts), digest(5))
+
+	expired := relToken("tok-expired", "prn-1", ts.old, ts)
+	expired.ExpiresAt = ts.old.Add(time.Hour)
+	mustToken(t, s, expired, digest(6))
+
+	for id, used := range map[string]time.Time{"tok-old-use": ts.old.Add(time.Minute), "tok-new-use": ts.recent} {
+		if err := s.TouchToken(ctx, id, used, time.Minute); err != nil {
+			t.Fatalf("touch %s: %v", id, err)
+		}
+	}
+
+	if err := s.RevokeToken(ctx, "tok-revoked", entryAt("tok-revoked", ts.old.Add(time.Minute))); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	res := mustSweep(t, s, sweep(true, false))
+
+	want := []string{"tok-old-use", "tok-unused"}
+	if !slices.Equal(sweptIDs(res), want) || len(res.Principals) != 0 {
+		t.Fatalf("sweep = %+v, want the tokens %q and no principal", res, want)
+	}
+
+	if res.Tokens[0].PrincipalID != "prn-1" {
+		t.Fatalf("swept token = %+v, want its principal prn-1", res.Tokens[0])
+	}
+
+	wantNear(t, "sweep time", res.At, ts.now)
+
+	if got := mustGet(t, s, "tok-unused"); !got.DisabledAt.Equal(res.At) {
+		t.Fatalf("disabled at = %s, want the sweep time %s", got.DisabledAt, res.At)
+	}
+
+	active := listQuery("prn-1")
+	active.At, active.Filter = res.At, accesstoken.FilterActive
+	wantList(t, s, active, []string{"tok-young", "tok-new-use"}, 2)
+
+	// A disabled token counts as ended.
+	ended := listQuery("prn-1")
+	ended.At, ended.Filter = res.At, accesstoken.FilterEnded
+	wantList(t, s, ended, []string{"tok-unused", "tok-revoked", "tok-old-use", "tok-expired"}, 4)
+
+	r := accesstoken.Replacement{
+		OldEndsAt: res.At.Add(time.Hour),
+		OldID:     "tok-unused",
+		Next:      relToken("tok-n", "prn-1", res.At, ts),
+		Digest:    digest(9),
+	}
+	wantErr(t, "rotate a disabled token", s.RotateToken(ctx, r, entryAt("tok-unused", res.At)), accesstoken.ErrEnded)
+
+	again := mustSweep(t, s, sweep(true, false))
+	if len(again.Tokens) != 0 {
+		t.Fatalf("second sweep disabled %+v, want nothing", again.Tokens)
+	}
+}
+
+func testSweepAccounts(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	for _, id := range []string{"prn-idle", "prn-busy", "prn-new-token", "prn-gone"} {
+		mustPrincipalAt(t, s, id, principal.KindPerson, ts.old)
+	}
+
+	mustPrincipalAt(t, s, "prn-young", principal.KindPerson, ts.recent)
+	mustPrincipalAt(t, s, "prn-svc", principal.KindService, ts.old)
+
+	mustToken(t, s, relToken("tok-busy", "prn-busy", ts.old, ts), digest(1))
+	mustToken(t, s, relToken("tok-idle", "prn-idle", ts.old, ts), digest(2))
+	// A token made after the cutoff and never used counts as activity.
+	mustToken(t, s, relToken("tok-new", "prn-new-token", ts.recent, ts), digest(3))
+
+	if err := s.TouchToken(ctx, "tok-busy", ts.recent, time.Minute); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	if err := s.TouchToken(ctx, "tok-idle", ts.old.Add(time.Minute), time.Minute); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	if err := s.DeletePrincipal(ctx, "prn-gone", entry("tok-x")); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	res := mustSweep(t, s, sweep(false, true))
+	if !slices.Equal(res.Principals, []string{"prn-idle"}) || len(res.Tokens) != 0 {
+		t.Fatalf("sweep = %+v, want only the principal prn-idle", res)
+	}
+
+	got, err := s.GetPrincipal(ctx, "prn-idle")
+	if err != nil {
+		t.Fatalf("get principal: %v", err)
+	}
+
+	if !got.DisabledAt.Equal(res.At) {
+		t.Fatalf("principal disabled at = %s, want the sweep time %s", got.DisabledAt, res.At)
+	}
+
+	m, err := s.GetTokenByDigest(ctx, digest(2))
+	if err != nil {
+		t.Fatalf("get by digest: %v", err)
+	}
+
+	if !m.Owner.DisabledAt.Equal(res.At) || !m.Token.DisabledAt.IsZero() {
+		t.Fatalf("lookup = %+v, want a disabled owner and a token that the account sweep did not disable", m)
+	}
+}
+
+func testSweepRefused(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	mustPrincipalAt(t, s, "prn-1", principal.KindPerson, ts.old)
+	tok := relToken("tok-1", "prn-1", ts.old, ts)
+	mustToken(t, s, tok, digest(1))
+
+	refuse := func(_ time.Time, object string) audit.Entry {
+		e := refused("tok-x")
+		e.Object = object
+
+		return e
+	}
+
+	_, err := s.SweepInactive(ctx, sweep(true, true), refuse)
+	wantErr(t, "sweep with a refused entry", err, audit.ErrInvalidEntry)
+
+	equalToken(t, mustGet(t, s, "tok-1"), tok)
+
+	p, err := s.GetPrincipal(ctx, "prn-1")
+	if err != nil || !p.DisabledAt.IsZero() {
+		t.Fatalf("principal after a refused sweep = %+v, %v; want it enabled", p, err)
+	}
+}
+
+func testEnablePrincipal(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	mustPrincipalAt(t, s, "prn-1", principal.KindPerson, ts.old)
+
+	wantErr(t, "enable of an enabled principal", s.EnablePrincipal(ctx, "prn-1", entry("tok-x")),
+		principal.ErrNotDisabled)
+	wantErr(t, "enable of a missing principal", s.EnablePrincipal(ctx, "prn-none", entry("tok-x")),
+		principal.ErrNotFound)
+
+	if res := mustSweep(t, s, sweep(false, true)); !slices.Equal(res.Principals, []string{"prn-1"}) {
+		t.Fatalf("sweep = %+v, want the principal prn-1", res)
+	}
+
+	enabledAt := testNow()
+	if err := s.EnablePrincipal(ctx, "prn-1", entryAt("tok-x", enabledAt)); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	p, err := s.GetPrincipal(ctx, "prn-1")
+	if err != nil || !p.DisabledAt.IsZero() || !p.UpdatedAt.Equal(enabledAt) {
+		t.Fatalf("enabled principal = %+v, %v; want no disable time and the update time %s", p, err, enabledAt)
+	}
+
+	// The enable sets the activity baseline, so the next sweep keeps the
+	// principal enabled.
+	if res := mustSweep(t, s, sweep(false, true)); len(res.Principals) != 0 {
+		t.Fatalf("sweep after the enable disabled %q, want nothing", res.Principals)
+	}
+
+	p, err = s.GetPrincipal(ctx, "prn-1")
+	if err != nil || !p.DisabledAt.IsZero() {
+		t.Fatalf("principal after the enable and a sweep = %+v, %v; want it enabled", p, err)
 	}
 }

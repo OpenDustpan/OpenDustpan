@@ -11,8 +11,12 @@ package inventory
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -68,9 +72,20 @@ type Reader interface {
 	ListUnits(ctx context.Context, ns namespace.Name) ([]Entry, error)
 }
 
-// DeletedRetention is the time that the server keeps a deleted unit before
-// the final delete, until the retention setting exists (ADR 47, decision 2).
+// DeletedRetention is the default time that the server keeps a deleted unit
+// before the final delete (ADR 47, decision 2). The setting
+// --soft-delete-retention changes it.
 const DeletedRetention = 30 * 24 * time.Hour
+
+// Deletion holds what a soft delete of a unit records with it: the audit
+// entry of the delete, whose time is the delete time, and the end of the
+// retention period (ADR 47). The store writes both in the delete
+// transaction, so the entry commits only with the delete (ADR 60, fail
+// closed).
+type Deletion struct {
+	PurgeAfter time.Time
+	Entry      audit.Entry
+}
 
 // DeletedEntry is one deleted unit in a namespace (ADR 47). The delete of a
 // unit moves its entry from the live inventory to the deleted units, in the
@@ -92,4 +107,206 @@ type DeletedReader interface {
 	// ListDeletedUnits returns the deleted units of ns, ordered by tool, then
 	// name, then unit ID.
 	ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]DeletedEntry, error)
+	// QueryDeletedUnits returns one page of the deleted units that match q,
+	// in the order of ListDeletedUnits, with the total count of every match.
+	// PageDeleted defines the result for a list of entries.
+	QueryDeletedUnits(ctx context.Context, q DeletedQuery) (DeletedPage, error)
+	// GetDeletedUnit returns the deleted unit of ns with the tool and the unit
+	// ID, or ErrNotFound. A live unit is not a deleted unit.
+	GetDeletedUnit(ctx context.Context, ns namespace.Name, tool, unitID string) (DeletedEntry, error)
+}
+
+// ErrNotFound reports that a namespace has no deleted unit with the tool and
+// the unit ID that a call names.
+var ErrNotFound = errors.New("deleted unit not found")
+
+// ErrNameTaken reports a restore under a name that a live unit of the same
+// tool holds. The caller can send a new name.
+var ErrNameTaken = errors.New("a live unit holds the name")
+
+// ErrInvalidName reports a restore with a new name that the tool refuses.
+var ErrInvalidName = errors.New("invalid unit name")
+
+// Lifecycle restores and purges the deleted units of one tool (ADR 47). Each
+// tool implements it with its own model, so shared code acts on a deleted
+// unit by tool and unit ID only (ADR 12, ADR 13). Each call writes its audit
+// entry e in the transaction of the change (ADR 60, fail closed); the tool
+// stamps the time.
+type Lifecycle interface {
+	// Restore brings back the deleted unit unitID of ns under name, or under
+	// its name before the delete when name is empty, and returns the tool's
+	// own name of the live unit. name follows the tool's own name rules. It
+	// returns ErrNotFound if ns has no deleted unit unitID, ErrNameTaken if a
+	// live unit holds the name, and ErrInvalidName if the tool refuses name.
+	Restore(ctx context.Context, ns namespace.Name, unitID, name string, e audit.Entry) (string, error)
+	// Purge removes the deleted unit unitID of ns for good, with its state,
+	// history and data key, and ends every current grant on the unit. It
+	// returns ErrNotFound if ns has no deleted unit unitID.
+	//
+	// Open work for collections (#478, not merged yet): the purge must also
+	// delete the membership row of the unit, and a restore of a unit whose
+	// collection is gone must take a collection (409 without one, then the
+	// checks of a move). Add both, with their conformance cases, after #478
+	// lands.
+	Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error
+}
+
+// BlobPurge is a purged unit whose blobs may still exist (ADR 47). A purge
+// records it in its own transaction, and the caller deletes the blobs of the
+// unit after the commit. A save that passed its checks before the purge can
+// still write a blob after that delete, so only the sweep finishes the
+// record: it deletes the blobs again after a grace period longer than any
+// save.
+type BlobPurge struct {
+	PurgedAt  time.Time
+	Namespace namespace.Name
+	Tool      string
+	UnitID    string
+}
+
+// BlobPurges reads and finishes the records of purged units whose blobs may
+// still exist.
+type BlobPurges interface {
+	// ListBlobPurges returns at most limit records, the oldest first.
+	ListBlobPurges(ctx context.Context, limit int) ([]BlobPurge, error)
+	// FinishBlobPurge removes the record of the unit unitID of tool. A
+	// missing record is not an error.
+	FinishBlobPurge(ctx context.Context, tool, unitID string) error
+}
+
+// DefaultDeletedPageSize is the page size of a query that asks for none.
+const DefaultDeletedPageSize = 50
+
+// MaxDeletedPageSize is the largest page that a query gets.
+const MaxDeletedPageSize = 500
+
+// DeletedCursor is the position after which a page of deleted units starts:
+// the order key of the last entry of the page before.
+type DeletedCursor struct {
+	Tool   string
+	Name   string
+	UnitID string
+}
+
+// DeletedQuery selects deleted units of one namespace. An empty Tool or
+// NamePrefix and a zero PurgeBefore match every unit. PurgeBefore keeps the
+// units whose retention ends at or before it, so that a client can ask which
+// retention periods end in the next days. After starts the page after a
+// cursor. Limit is the page size: zero means DefaultDeletedPageSize, and a
+// value above MaxDeletedPageSize means MaxDeletedPageSize.
+//
+// When Restricted is true, only the units whose ID is in UnitIDs match, so
+// the page, the cursor and the total cover only the units that a caller may
+// read. An empty UnitIDs then matches nothing.
+type DeletedQuery struct {
+	PurgeBefore time.Time
+	After       *DeletedCursor
+	Namespace   namespace.Name
+	Tool        string
+	NamePrefix  string
+	UnitIDs     []string
+	Limit       int
+	Restricted  bool
+}
+
+// PageSize returns the page size of q after the default and the cap.
+func (q DeletedQuery) PageSize() int {
+	switch {
+	case q.Limit <= 0:
+		return DefaultDeletedPageSize
+	case q.Limit > MaxDeletedPageSize:
+		return MaxDeletedPageSize
+	default:
+		return q.Limit
+	}
+}
+
+// Matches reports whether e passes the filters of q. It ignores the cursor.
+func (q DeletedQuery) Matches(e DeletedEntry) bool {
+	return e.Namespace == q.Namespace &&
+		(q.Tool == "" || e.Tool == q.Tool) &&
+		strings.HasPrefix(e.Name, q.NamePrefix) &&
+		(q.PurgeBefore.IsZero() || !e.PurgeAfter.After(q.PurgeBefore)) &&
+		(!q.Restricted || slices.Contains(q.UnitIDs, e.UnitID))
+}
+
+// MatchesNothing reports whether q is restricted to no unit. A store can
+// answer an empty page for it without a query.
+func (q DeletedQuery) MatchesNothing() bool {
+	return q.Restricted && len(q.UnitIDs) == 0
+}
+
+// DeletedPage is one page of deleted units. Total counts every unit that
+// matches the filters, on every page. Next is the cursor of the next page, or
+// nil on the last page.
+type DeletedPage struct {
+	Next    *DeletedCursor
+	Entries []DeletedEntry
+	Total   int
+}
+
+// cursorOf returns the order key of e.
+func cursorOf(e DeletedEntry) DeletedCursor {
+	return DeletedCursor{Tool: e.Tool, Name: e.Name, UnitID: e.UnitID}
+}
+
+// after reports whether e comes after c in the order tool, name, unit ID.
+func after(e DeletedEntry, c DeletedCursor) bool {
+	if e.Tool != c.Tool {
+		return e.Tool > c.Tool
+	}
+
+	if e.Name != c.Name {
+		return e.Name > c.Name
+	}
+
+	return e.UnitID > c.UnitID
+}
+
+// TrimDeletedPage builds a page from rows that a store read with a limit of
+// size plus one: the extra row, if any, only shows that a next page exists.
+func TrimDeletedPage(rows []DeletedEntry, size, total int) DeletedPage {
+	page := DeletedPage{Next: nil, Entries: rows, Total: total}
+
+	if len(rows) > size {
+		page.Entries = rows[:size]
+		c := cursorOf(rows[size-1])
+		page.Next = &c
+	}
+
+	return page
+}
+
+// PageDeleted returns the page of q from entries, which must be in the order
+// tool, name, unit ID. It defines what QueryDeletedUnits answers, so a store
+// that holds its entries in memory can use it.
+func PageDeleted(entries []DeletedEntry, q DeletedQuery) DeletedPage {
+	page := DeletedPage{Next: nil, Entries: []DeletedEntry{}, Total: 0}
+	size := q.PageSize()
+
+	for i := range entries {
+		e := entries[i]
+		if !q.Matches(e) {
+			continue
+		}
+
+		page.Total++
+
+		if q.After != nil && !after(e, *q.After) {
+			continue
+		}
+
+		if len(page.Entries) < size {
+			page.Entries = append(page.Entries, e)
+
+			continue
+		}
+
+		if page.Next == nil {
+			c := cursorOf(page.Entries[len(page.Entries)-1])
+			page.Next = &c
+		}
+	}
+
+	return page
 }

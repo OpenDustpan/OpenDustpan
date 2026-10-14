@@ -2856,7 +2856,7 @@ func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
 func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
 
-	return []e2e.StepSpec{
+	steps := []e2e.StepSpec{
 		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
 		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
 		{
@@ -2884,6 +2884,13 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 
 			return nil
 		}, "stack", "init", qualified, "--no-select"),
+	}
+
+	// While the new stack holds the old name, the restore steps prove the
+	// 409, the restore under a new name and the purge.
+	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID)...)
+
+	return append(steps,
 		step("stack history of new stack", func(r e2e.Result) error {
 			if got := strings.TrimSpace(r.Stdout); got != "[]" {
 				return fmt.Errorf("%w: new stack has history of the removed stack: %s", errUnexpected, got)
@@ -2892,7 +2899,7 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 			return nil
 		}, "stack", "history", "--json", "--stack", qualified),
 		step("stack rm new", nil, "stack", "rm", "--yes", "--stack", qualified),
-	}
+	)
 }
 
 // tombstonePrefix starts the stored name of a deleted unit. No response may
@@ -3440,7 +3447,38 @@ type auditListItem struct {
 	Kind       string `json:"kind"`
 	Outcome    string `json:"outcome"`
 	RequestID  string `json:"requestID"`
+	ObjectID   string `json:"objectID"`
 	Hash       string `json:"hash"`
+}
+
+// checkUnitObjectIDs fails the test unless each successful entry on a unit
+// carries the stable ID of the unit (ADR 47). The store fills it in the
+// append transaction, so this covers each adapter that wrote an entry.
+func checkUnitObjectIDs(t *testing.T, entries []auditListItem) {
+	t.Helper()
+
+	actions := map[string]int{}
+
+	for i := range entries {
+		e := &entries[i]
+		onUnit := strings.HasPrefix(e.Object, "pulumi:") || strings.HasPrefix(e.Object, "opentofu:")
+
+		if e.Outcome != "success" || !onUnit {
+			continue
+		}
+
+		if e.ObjectID == "" {
+			t.Fatalf("audit entry %s %s on %s holds no object ID", e.Kind, e.Action, e.Object)
+		}
+
+		actions[e.Kind+" "+e.Action]++
+	}
+
+	if len(actions) == 0 {
+		t.Fatal("no successful audit entry on a unit")
+	}
+
+	t.Logf("unit audit entries with an object ID: %v", actions)
 }
 
 // fetchAuditEntries lists every audit entry of org through the API, one page
@@ -3529,6 +3567,7 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
 	checkRevealFields(t, findRevealEntry(t, entries))
+	checkUnitObjectIDs(t, entries)
 
 	// Each decrypt audit call writes exactly one reveal entry, and nothing
 	// else writes one for the secrets stack.
@@ -4141,6 +4180,7 @@ func tofuAuditScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: true,
 	})
+	checkUnitObjectIDs(t, readAuditEntries(ctx, t, env, e2e.Namespace))
 	checkAuditChain(ctx, t, env, e2e.Namespace)
 }
 
@@ -4348,7 +4388,9 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 	var removedID string
 
-	return []e2e.StepSpec{
+	// While the new workspace holds the old name, the restore steps prove the
+	// 409, the restore under a new name and the purge.
+	return append([]e2e.StepSpec{
 		step("workspace select dev again", func(e2e.Result) error {
 			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
 			removedID = id
@@ -4368,7 +4410,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}
+	}, tofuRestoreSteps(ctx, env, &removedID)...)
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,

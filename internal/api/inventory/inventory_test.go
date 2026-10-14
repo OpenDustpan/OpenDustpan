@@ -193,9 +193,13 @@ func newBehaviorHandler(
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -855,9 +859,13 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	}
 
 	cases := []struct {
@@ -866,6 +874,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}{
 		{name: "namespace service", drop: func(c *apiinventory.Config) { c.Namespaces = nil }},
 		{name: "inventory reader", drop: func(c *apiinventory.Config) { c.Units = nil }},
+		{name: "deleted unit reader", drop: func(c *apiinventory.Config) { c.Deleted = nil }},
+		{name: "unit lifecycles", drop: func(c *apiinventory.Config) { c.Lifecycles = nil }},
 		{name: "authenticator", drop: func(c *apiinventory.Config) { c.Authenticator = nil }},
 		{name: "authorizer", drop: func(c *apiinventory.Config) { c.Authorizer = nil }},
 		{name: "logger", drop: func(c *apiinventory.Config) { c.Logger = nil }},
