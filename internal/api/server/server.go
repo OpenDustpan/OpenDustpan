@@ -81,6 +81,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// DeletedUnits runs the retention sweep of the deleted units (ADR 47).
+	// Nil means the store keeps no deleted units: the sweep route answers
+	// 501. Both SQL adapters keep them.
+	DeletedUnits DeletedUnitSweeper
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -109,6 +113,7 @@ type Handler struct {
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	onAuditFailure func()
+	deletedUnits   DeletedUnitSweeper
 	mux            *patternMux
 	routes         []Route
 }
@@ -150,6 +155,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		principals:     cfg.Principals,
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
+		deletedUnits:   cfg.DeletedUnits,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),

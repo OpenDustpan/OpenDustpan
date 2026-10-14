@@ -150,9 +150,9 @@ type Lifecycle interface {
 // BlobPurge is a purged unit whose blobs may still exist (ADR 47). A purge
 // records it in its own transaction, and the caller deletes the blobs of the
 // unit after the commit. A save that passed its checks before the purge can
-// still write a blob after that delete, so only the sweep finishes the
-// record: it deletes the blobs again after a grace period longer than any
-// save.
+// still write a blob after that delete, so only the retention sweep
+// (Sweeper) finishes the record: it deletes the blobs again after
+// BlobPurgeGrace, which is longer than any save.
 type BlobPurge struct {
 	PurgedAt  time.Time
 	Namespace namespace.Name

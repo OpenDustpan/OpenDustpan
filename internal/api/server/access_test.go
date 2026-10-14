@@ -148,6 +148,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Access:         grants,
 		Audit:          entries(st),
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

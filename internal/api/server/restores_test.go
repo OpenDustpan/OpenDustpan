@@ -100,6 +100,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -547,6 +548,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -740,6 +742,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

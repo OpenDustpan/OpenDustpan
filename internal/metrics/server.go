@@ -36,6 +36,9 @@ const (
 	// maxSweepResults holds one series for each result of the inactivity
 	// disable.
 	maxSweepResults = 2
+	// maxDeletedSweepResults holds one series for each outcome of the
+	// retention sweep.
+	maxDeletedSweepResults = 4
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -86,6 +89,7 @@ type ServerMetrics struct {
 	reloads  *Counter
 	reloadOK *Gauge
 	sweeps   *Counter
+	deleted  *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -146,7 +150,8 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps: newSweepCounter(reg),
+		sweeps:  newSweepCounter(reg),
+		deleted: newDeletedSweepCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -303,6 +308,47 @@ func (m *ServerMetrics) ObserveSweep(result string) {
 	}
 
 	m.sweeps.Inc(result)
+}
+
+// newDeletedSweepCounter creates dustpan_deleted_unit_sweep_total in reg.
+func newDeletedSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_deleted_unit_sweep_total",
+		"Outcomes of the retention sweep of deleted units by result.",
+		[]string{labelResult},
+		maxDeletedSweepResults,
+	)
+}
+
+// Outcomes of the retention sweep (ADR 47).
+const (
+	// DeletedSweepPurged counts the deleted units that the sweep purged.
+	DeletedSweepPurged = "purged"
+	// DeletedSweepSkipped counts the expired units that the sweep left to
+	// another installation or that a restore took first.
+	DeletedSweepSkipped = "skipped"
+	// DeletedSweepFailed counts the failed purges, blob deletes and record
+	// finishes, and the runs that could not read the store.
+	DeletedSweepFailed = "failed"
+	// DeletedSweepFinished counts the blob purge records that the sweep
+	// finished.
+	DeletedSweepFinished = "finished"
+)
+
+// ObserveDeletedSweep adds n to the retention sweep counter for result: one
+// of the DeletedSweep outcomes. Any other value counts as
+// DeletedSweepFailed, so the label set stays fixed. Operators alert when the
+// failed series grows: a failed purge keeps the unit until the next run.
+func (m *ServerMetrics) ObserveDeletedSweep(result string, n int) {
+	switch result {
+	case DeletedSweepPurged, DeletedSweepSkipped, DeletedSweepFinished:
+	default:
+		result = DeletedSweepFailed
+	}
+
+	if n > 0 {
+		m.deleted.Add(uint64(n), result)
+	}
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63

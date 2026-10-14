@@ -77,6 +77,7 @@ func newMetricsHandler(
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

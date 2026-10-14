@@ -8,10 +8,8 @@ take the unit out of every list and free its name at once. OpenDustpan keeps
 the state, the history and the secrets of the unit until its retention
 period ends.
 
-The server does not purge a unit on its own yet. The automatic purge at the
-end of the retention period comes in a later change (ADR 47). Until then, a
-deleted unit stays until an admin purges it through the API, also after its
-retention period ends.
+When the retention period of a unit ends, the retention sweep purges the
+unit. An admin can also purge a unit through the API before that time.
 
 ## Set the retention period
 
@@ -92,3 +90,42 @@ nothing.
 
 Each restore and each purge writes one audit entry with the kind `change`.
 See [Audit log](audit-log.md).
+
+## The retention sweep
+
+The server runs the retention sweep when it starts, and then one time each
+hour. The sweep does two things:
+
+1. It purges each deleted unit whose retention period ended, in every
+   namespace that has its home in this region. Each purge runs in its own
+   fenced transaction and writes one audit entry with the subject `@server`
+   and the action `unit:purge`.
+2. It finishes the blob purge records. A purge deletes the blobs of the unit
+   after its rows, and keeps a blob purge record. A checkpoint save or a
+   state upload that started before the purge can still write a blob after
+   that delete. So the sweep deletes the blobs of a record again when the
+   record is older than 24 hours, and finishes the record only when no blob
+   remains.
+
+A restore and a sweep purge of the same unit can run at the same time. One
+of them wins, and the sweep counts the other unit as skipped. A failed purge
+does not stop the sweep. The server logs a warning with the unit reference
+and the error kind, and the next sweep tries again.
+
+`POST /api/server/deleted-units/sweep` runs one sweep now. It needs the action
+`server:maintenance` on the installation. Each purge writes its audit entry
+with you as the subject. The answer names each purged unit and counts the
+other outcomes:
+
+```json
+{
+  "purged": [{"tool": "pulumi", "namespace": "acme", "unitID": "stk-1", "reference": "pulumi:acme/web/prod"}],
+  "failed": 0,
+  "skipped": 0,
+  "finishedBlobPurges": 1,
+  "pendingBlobPurges": 2
+}
+```
+
+The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
+sweep. See [Observe](observe.md).

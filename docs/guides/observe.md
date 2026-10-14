@@ -82,6 +82,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
 | `dustpan_inactivity_sweeps_total` | `result` |
+| `dustpan_deleted_unit_sweep_total` | `result` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -103,6 +104,13 @@ names the key and the rule.
 `dustpan_inactivity_sweeps_total` counts the runs of the inactivity disable.
 The `result` label is `success` or `failure`.
 Alert when the `failure` series grows: a failed run disables nothing.
+`dustpan_deleted_unit_sweep_total` counts the outcomes of the retention
+sweep (ADR 47). The `result` label is `purged`, `skipped`, `finished` or
+`failed`. `finished` counts the blob purge records that the sweep finished.
+`failed` counts the failed purges, blob deletes and record finishes, and the
+sweeps that could not read the store.
+Alert when the `failed` series grows: a failed purge keeps the unit until the
+next sweep. The log line of each failure names the unit and the error kind.
 
 ## Request log
 

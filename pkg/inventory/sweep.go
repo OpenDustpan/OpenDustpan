@@ -66,7 +66,8 @@ func (e DeletedEntry) Reference() string {
 }
 
 // SweepResult is the outcome of one sweep. Purged holds the units that the
-// sweep purged. Failed counts the purges and the blob deletes that failed.
+// sweep purged. Failed counts the purges, the blob deletes and the record
+// finishes that failed.
 // Skipped counts the expired units that the sweep left to another
 // installation or that a restore took first. FinishedBlobPurges counts the
 // blob purge records that the sweep finished, and PendingBlobPurges the
@@ -213,7 +214,14 @@ func (s *Sweeper) finishBlobPurges(ctx context.Context, now time.Time, res *Swee
 	}
 
 	for _, r := range records {
-		if now.Sub(r.PurgedAt) < BlobPurgeGrace || !s.deletePurgedBlobs(ctx, r) {
+		if now.Sub(r.PurgedAt) < BlobPurgeGrace {
+			res.PendingBlobPurges++
+
+			continue
+		}
+
+		if !s.deletePurgedBlobs(ctx, r) {
+			res.Failed++
 			res.PendingBlobPurges++
 
 			continue
@@ -236,8 +244,8 @@ func (s *Sweeper) finishBlobPurges(ctx context.Context, now time.Time, res *Swee
 }
 
 // deletePurgedBlobs deletes the blobs of the unit of r and reports whether
-// no blob remains. A failure logs a warning without a blob key and counts in
-// no result field: the record stays pending.
+// no blob remains. A failure logs a warning without a blob key, and the
+// record stays pending.
 func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 	blobs, ok := s.cfg.Blobs[r.Tool]
 	if !ok {

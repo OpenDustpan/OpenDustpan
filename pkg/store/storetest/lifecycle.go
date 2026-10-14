@@ -816,7 +816,13 @@ func testListExpiredDeleted(t *testing.T, s Store) {
 
 // checkExpiredPages walks the expired units at now in pages of limit and
 // checks each page against inventory.PageExpired over all.
-func checkExpiredPages(t *testing.T, s inventory.ExpiredDeleted, all []inventory.DeletedEntry, now time.Time, limit int) {
+func checkExpiredPages(
+	t *testing.T,
+	s inventory.ExpiredDeleted,
+	all []inventory.DeletedEntry,
+	now time.Time,
+	limit int,
+) {
 	t.Helper()
 
 	var (

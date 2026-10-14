@@ -258,7 +258,7 @@ func TestSweepSkipsAndCountsFailures(t *testing.T) {
 // TestSweepFinishesOnlyOldRecords proves the grace rule of the blob purge
 // records: a record younger than BlobPurgeGrace stays and its blobs are not
 // deleted again, an older record whose blobs are gone is finished, and an
-// older record whose delete fails stays pending.
+// older record whose delete fails stays pending and counts as a failure.
 func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 	t.Parallel()
 
@@ -276,8 +276,9 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	if res.FinishedBlobPurges != 1 || res.PendingBlobPurges != 2 {
-		t.Fatalf("sweep = %d finished, %d pending, want 1 and 2", res.FinishedBlobPurges, res.PendingBlobPurges)
+	if res.FinishedBlobPurges != 1 || res.PendingBlobPurges != 2 || res.Failed != 1 {
+		t.Fatalf("sweep = %d finished, %d pending, %d failed, want 1, 2 and 1",
+			res.FinishedBlobPurges, res.PendingBlobPurges, res.Failed)
 	}
 
 	if len(f.records.finished) != 1 || f.records.finished[0] != "pulumi/stk-gone" {
@@ -323,7 +324,8 @@ func TestSweepCountsAFailedFinish(t *testing.T) {
 }
 
 // TestSweepUnknownTool proves that a unit or a record of a tool without a
-// port counts as failed or pending, and that the sweep goes on.
+// port counts as a failure, that the record stays pending, and that the
+// sweep goes on.
 func TestSweepUnknownTool(t *testing.T) {
 	t.Parallel()
 
@@ -341,8 +343,8 @@ func TestSweepUnknownTool(t *testing.T) {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	if res.Failed != 1 || res.PendingBlobPurges != 1 || len(res.Purged) != 0 {
-		t.Fatalf("sweep = %+v, want one failure and one pending record", res)
+	if res.Failed != 2 || res.PendingBlobPurges != 1 || len(res.Purged) != 0 {
+		t.Fatalf("sweep = %+v, want two failures and one pending record", res)
 	}
 }
 
