@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
@@ -365,8 +366,20 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true}
-	viewer := identity.Principal{Subject: "viewer", DisplayName: "viewer", Admin: false}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	viewer := identity.Principal{
+		Subject:        "viewer",
+		DisplayName:    "viewer",
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()} {
 		for _, action := range actions {
@@ -574,5 +587,103 @@ func TestStaticTokensWeak(t *testing.T) {
 
 	if _, err := identity.NewStaticTokens(); !errors.Is(err, identity.ErrWeakToken) {
 		t.Fatalf("no token = %v, want ErrWeakToken", err)
+	}
+}
+
+// fixedAuthenticator answers one principal or one error for every token.
+type fixedAuthenticator struct {
+	err       error
+	principal identity.Principal
+}
+
+func (f fixedAuthenticator) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	return f.principal, f.err
+}
+
+func TestChain(t *testing.T) {
+	t.Parallel()
+
+	var none identity.Principal
+
+	alice := identity.Principal{
+		Subject:        "alice",
+		DisplayName:    "Alice",
+		Admin:          false,
+		TokenID:        "tok-1",
+		TokenExpiresAt: time.Time{},
+	}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	unauth := fixedAuthenticator{err: identity.ErrUnauthenticated, principal: none}
+	broken := fixedAuthenticator{err: errStoreDown, principal: none}
+	acceptAdmin := fixedAuthenticator{err: nil, principal: admin}
+	acceptAlice := fixedAuthenticator{err: nil, principal: alice}
+
+	cases := []struct {
+		want    error
+		name    string
+		wantSub string
+		chain   identity.Chain
+	}{
+		{want: nil, name: "first accepts", wantSub: "admin", chain: identity.Chain{acceptAdmin, broken}},
+		{want: nil, name: "second accepts", wantSub: "alice", chain: identity.Chain{unauth, acceptAlice}},
+		{want: identity.ErrUnauthenticated, name: "none accepts", wantSub: "", chain: identity.Chain{unauth, unauth}},
+		{want: identity.ErrUnauthenticated, name: "empty", wantSub: "", chain: identity.Chain{}},
+		{
+			want:    errStoreDown,
+			name:    "a failure stops the chain",
+			wantSub: "",
+			chain:   identity.Chain{unauth, broken, acceptAlice},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, err := tc.chain.AuthenticateToken(t.Context(), "token")
+			if !errors.Is(err, tc.want) || p.Subject != tc.wantSub {
+				t.Fatalf("chain = %+v, %v; want subject %q, err %v", p, err, tc.wantSub, tc.want)
+			}
+		})
+	}
+}
+
+var errStoreDown = errors.New("store down")
+
+func TestSelfAllowed(t *testing.T) {
+	t.Parallel()
+
+	authz := identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}}
+	person := identity.Principal{
+		Subject:        "bob",
+		DisplayName:    "Bob",
+		Admin:          false,
+		TokenID:        "tok-1",
+		TokenExpiresAt: time.Time{},
+	}
+	ns, err := identity.ParseObject("acme")
+	if err != nil {
+		t.Fatalf("parse object: %v", err)
+	}
+
+	caller := identity.CallerObject()
+	if authErr := authz.Authorize(t.Context(), person, identity.ActionTokenManageOwn, caller); authErr != nil {
+		t.Fatalf("self action on the caller: %v", authErr)
+	}
+
+	err = authz.Authorize(t.Context(), person, identity.ActionTokenManageOwn, ns)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("self action on a namespace: err = %v, want ErrDenied", err)
+	}
+
+	err = authz.Authorize(t.Context(), person, identity.ActionCallerRead, identity.CallerObject())
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("another action on the caller: err = %v, want ErrDenied", err)
 	}
 }

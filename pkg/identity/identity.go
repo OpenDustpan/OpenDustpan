@@ -12,7 +12,9 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -22,6 +24,10 @@ import (
 var (
 	// ErrUnauthenticated reports a missing, malformed or unknown credential.
 	ErrUnauthenticated = errors.New("unauthenticated")
+	// ErrRateLimited reports a request that the server refuses before any
+	// credential check, because its source failed too many sign-ins. The
+	// client can try again later. Adapters answer 429.
+	ErrRateLimited = errors.New("too many failed sign-ins from this address")
 	// ErrDenied reports an authenticated principal without permission.
 	ErrDenied = errors.New("permission denied")
 	// ErrWeakToken reports a configured token that is too short to be safe.
@@ -41,6 +47,14 @@ type Principal struct {
 	DisplayName string
 	// Admin grants every action on every object.
 	Admin bool
+	// TokenID names the stored access token that authenticated the caller
+	// (ADR 53). It is empty for a bootstrap admin token (ADR 6), which has
+	// no stored record.
+	TokenID string
+	// TokenExpiresAt is the expiry of the stored access token that
+	// authenticated the caller, so a response can warn before it (ADR 53,
+	// decision 11). It is the zero time for a bootstrap admin token.
+	TokenExpiresAt time.Time
 }
 
 // Action is something a principal wants to do.
@@ -103,6 +117,24 @@ const (
 	// and adding and removing their members (ADR 52). Its object is
 	// ServerObject.
 	ActionServerManageGroups Action = "server:manage-groups"
+	// ActionServerReadTokens allows reading the access tokens of every
+	// principal, never their secrets (ADR 53). Its object is ServerObject.
+	ActionServerReadTokens Action = "server:read-tokens"
+	// ActionServerManageTokens allows creating and rotating the personal
+	// tokens of other persons, and revoking any access token (ADR 53,
+	// decision 3). Its object is ServerObject. A create or a rotation also
+	// runs the escalation check against the grants of the person.
+	ActionServerManageTokens Action = "server:manage-tokens"
+	// ActionServerManageServiceTokens allows creating and rotating service
+	// tokens (ADR 53, decisions 3 and 7). Its object is ServerObject. A
+	// create or a rotation also runs the escalation check against the
+	// grants of the service principal.
+	ActionServerManageServiceTokens Action = "server:manage-service-tokens"
+	// ActionTokenManageOwn allows a person to list, create, rotate and
+	// revoke its own personal tokens (ADR 53, decisions 3 and 10). Its
+	// object is CallerObject. Every authenticated person holds it with no
+	// grant.
+	ActionTokenManageOwn Action = "token:manage-own"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -311,8 +343,14 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 	}
 
 	return &StaticToken{
-		principal: Principal{Subject: subject, DisplayName: subject, Admin: true},
-		token:     []byte(token),
+		principal: Principal{
+			Subject:        subject,
+			DisplayName:    subject,
+			Admin:          true,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		},
+		token: []byte(token),
 	}, nil
 }
 
@@ -368,7 +406,10 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 			subject = fmt.Sprintf("admin-%d", i+1)
 		}
 
-		principals = append(principals, Principal{Subject: subject, DisplayName: subject, Admin: true})
+		principals = append(
+			principals,
+			Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: "", TokenExpiresAt: time.Time{}},
+		)
 		hashes = append(hashes, sum)
 	}
 
@@ -398,6 +439,58 @@ func (s *StaticTokens) AuthenticateToken(_ context.Context, token string) (Princ
 	}
 
 	return principal, nil
+}
+
+// Chain authenticates a token with each of its authenticators in order and
+// answers the first principal. It lets the bootstrap admin tokens (ADR 6)
+// keep working next to the stored access tokens (ADR 53).
+type Chain []Authenticator
+
+var _ Authenticator = Chain(nil)
+
+// AuthenticateToken returns the principal of the first authenticator that
+// accepts token. An authenticator that answers ErrUnauthenticated passes the
+// token to the next one. Any other error stops the chain and is returned, so
+// a failed store read fails closed. With no authenticator left, it answers
+// the last ErrUnauthenticated.
+func (c Chain) AuthenticateToken(ctx context.Context, token string) (Principal, error) {
+	last := ErrUnauthenticated
+
+	for _, a := range c {
+		p, err := a.AuthenticateToken(ctx, token)
+		if err == nil {
+			return p, nil
+		}
+
+		if !errors.Is(err, ErrUnauthenticated) {
+			return Principal{}, err
+		}
+
+		last = err
+	}
+
+	return Principal{}, last
+}
+
+// SelfAllowed allows each of Actions on CallerObject to every authenticated
+// principal, with no grant, and asks Next for every other check. It carries
+// the self actions until the grants of ADR 52 can, for example
+// token:manage-own (ADR 53). The domain service of each action checks
+// whether the caller can use it, such as the kind of the principal.
+type SelfAllowed struct {
+	Next    Authorizer
+	Actions []Action
+}
+
+var _ Authorizer = SelfAllowed{Next: nil, Actions: nil}
+
+// Authorize allows a self action on the caller, and asks Next otherwise.
+func (s SelfAllowed) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
+	if obj.IsCaller() && slices.Contains(s.Actions, action) {
+		return nil
+	}
+
+	return s.Next.Authorize(ctx, p, action, obj)
 }
 
 // AdminOnly allows administrators and denies everyone else. It is the safe

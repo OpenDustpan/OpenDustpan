@@ -201,6 +201,10 @@ func serveWithIO(
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if err := f.resolveLayers(fs, os.LookupEnv); err != nil {
+		return err
+	}
+
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
 		return err
 	}
@@ -231,6 +235,13 @@ func serveWithIO(
 type serveFlags struct {
 	common
 
+	// file holds the decoded configuration file, nil without --config.
+	// resolved holds the effective value and the source of each setting
+	// for the start log (ADR 63 decision 7).
+	file     cli.ConfigFile
+	resolved []cli.Resolved
+
+	config                  string
 	listen                  string
 	consoleDir              string
 	origins                 string
@@ -256,11 +267,35 @@ type serveFlags struct {
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
+	cli.ByFlag("config").String(fs, &f.config)
 	f.common.register(fs)
 	f.registerNet(fs)
 	f.registerLimits(fs)
 	f.registerStorage(fs)
 	f.registerKey(fs)
+}
+
+// resolveLayers reads the configuration file that --config names and
+// applies the precedence flag > env > file > default to each serve setting
+// (ADR 63 decision 1). A refused file stops the start.
+func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) error {
+	if strings.TrimSpace(f.config) != "" {
+		file, err := cli.ReadConfigFile(strings.TrimSpace(f.config))
+		if err != nil {
+			return err
+		}
+
+		f.file = file
+	}
+
+	resolved, err := cli.Resolve(fs, cli.ServeSettings(), lookup, f.file)
+	if err != nil {
+		return fmt.Errorf("resolve settings: %w", err)
+	}
+
+	f.resolved = resolved
+
+	return nil
 }
 
 // registerKey registers the key-encryption key file flags. The key itself
@@ -317,11 +352,13 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 		return err
 	}
 
+	cli.LogResolved(ctx, logger, f.resolved)
+
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
 	}
 
-	authn, authErr := adminAuthenticator()
+	authn, authErr := adminAuthenticator(cli.LayeredLookup(os.LookupEnv, f.file))
 	if authErr != nil {
 		return authErr
 	}

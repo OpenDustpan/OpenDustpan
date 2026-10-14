@@ -431,7 +431,7 @@ func (h *Handler) newAuditEntry(
 		Namespace:  obj.Namespace(),
 		Subject:    p.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    p.TokenID,
 		Action:     detail.action,
 		Object:     obj.String(),
 		Version:    detail.version,

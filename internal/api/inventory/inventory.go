@@ -29,6 +29,10 @@ var errMissingOrganization = errors.New("missing organization query parameter")
 
 const tokenScheme = "token "
 
+// bearerScheme is the scheme of the TFE-compatible API and the installation API.
+// The inventory API accepts it too, so one client can read every API.
+const bearerScheme = "Bearer "
+
 // Config holds the dependencies of a Handler.
 type Config struct {
 	Namespaces    *namespace.Service
@@ -222,9 +226,16 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 	return identity.UnitObject(e.Tool, e.Namespace, e.Name)
 }
 
-// authenticate resolves the "Authorization: token <t>" header to a principal.
+// authenticate resolves the "Authorization: token <t>" or the
+// "Authorization: Bearer <t>" header to a principal.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	header := r.Header.Get("Authorization")
+
+	raw, ok := strings.CutPrefix(header, tokenScheme)
+	if !ok {
+		raw, ok = strings.CutPrefix(header, bearerScheme)
+	}
+
 	if !ok || raw == "" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
@@ -253,6 +264,8 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 func classify(err error) (int, string) {
 	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):

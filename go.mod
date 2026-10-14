@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	github.com/jackc/pgx/v5 v5.11.0
 	go.uber.org/goleak v1.3.0
+	go.yaml.in/yaml/v3 v3.0.5
 	modernc.org/sqlite v1.60.1
 )
 

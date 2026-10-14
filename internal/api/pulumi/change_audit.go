@@ -29,7 +29,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Namespace:  a.object.Namespace(),
 		Subject:    a.principal.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    a.principal.TokenID,
 		Action:     string(a.action),
 		Object:     a.object.String(),
 		Version:    "",

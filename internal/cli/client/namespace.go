@@ -105,12 +105,16 @@ func CreateNamespace(ctx context.Context, args []string, stdout, stderr io.Write
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := namespaceToken()
 	if err != nil {
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan namespace create again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan namespace create again", stderr)
 	if err != nil {
 		return err
 	}

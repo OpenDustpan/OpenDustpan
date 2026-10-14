@@ -110,8 +110,8 @@ var (
 // Sequence order the entries of one namespace: the first entry of a
 // namespace has sequence 1. Subject names the principal that acted.
 // IDPSubject names the subject at the identity provider and stays empty
-// until an identity provider exists. TokenID names the access token and
-// stays empty until tokens have IDs. Action is the tool-neutral action, for
+// until an identity provider exists. TokenID names the stored access token
+// that acted (ADR 53), and stays empty for a bootstrap admin token. Action is the tool-neutral action, for
 // example "unit:decrypt". Object is a unit reference
 // ("<tool>:<namespace>/<name>") or a namespace. Version and ValuePath name
 // the state version and the value path of a state read and stay empty

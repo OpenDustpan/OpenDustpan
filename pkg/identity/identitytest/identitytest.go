@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -221,7 +222,13 @@ func testActions() []identity.Action {
 func testAdminPasses(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
-	admin := identity.Principal{Subject: adminSubject, DisplayName: adminSubject, Admin: true}
+	admin := identity.Principal{
+		Subject:        adminSubject,
+		DisplayName:    adminSubject,
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range testObjects(t) {
 		for _, action := range testActions() {
@@ -237,7 +244,13 @@ func testAdminPasses(t *testing.T, authz identity.Authorizer) {
 func testDenied(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
-	viewer := identity.Principal{Subject: viewerSubject, DisplayName: viewerSubject, Admin: false}
+	viewer := identity.Principal{
+		Subject:        viewerSubject,
+		DisplayName:    viewerSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range testObjects(t) {
 		for _, action := range testActions() {
@@ -253,7 +266,13 @@ func testDenied(t *testing.T, authz identity.Authorizer) {
 func testDenialNamesObject(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
-	viewer := identity.Principal{Subject: viewerSubject, DisplayName: viewerSubject, Admin: false}
+	viewer := identity.Principal{
+		Subject:        viewerSubject,
+		DisplayName:    viewerSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range testObjects(t) {
 		err := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, obj)
@@ -281,7 +300,13 @@ func testUnitsDistinct(t *testing.T, authz identity.Authorizer) {
 		t.Fatalf("unit A %q equals unit B", unitA.String())
 	}
 
-	viewer := identity.Principal{Subject: viewerSubject, DisplayName: viewerSubject, Admin: false}
+	viewer := identity.Principal{
+		Subject:        viewerSubject,
+		DisplayName:    viewerSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	errA := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, unitA)
 	errB := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, unitB)
@@ -353,7 +378,13 @@ func testUnitGrant(t *testing.T) {
 	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
 		identity.ActionUnitRead: {unitA.String()},
 	})
-	alice := identity.Principal{Subject: aliceSubject, DisplayName: aliceSubject, Admin: false}
+	alice := identity.Principal{
+		Subject:        aliceSubject,
+		DisplayName:    aliceSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	if err := authz.Authorize(t.Context(), alice, identity.ActionUnitRead, unitA); err != nil {
 		t.Fatalf("alice unit:read on unit A: %v", err)
@@ -405,7 +436,13 @@ func testNamespaceGrant(t *testing.T) {
 	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
 		identity.ActionUnitRead: {identity.NamespaceObject(acme).String()},
 	})
-	alice := identity.Principal{Subject: aliceSubject, DisplayName: aliceSubject, Admin: false}
+	alice := identity.Principal{
+		Subject:        aliceSubject,
+		DisplayName:    aliceSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	for _, obj := range []identity.Object{insideA, insideB} {
 		if err := authz.Authorize(t.Context(), alice, identity.ActionUnitRead, obj); err != nil {
@@ -436,7 +473,13 @@ func testAdminDespiteGrants(t *testing.T) {
 	}
 
 	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{})
-	admin := identity.Principal{Subject: adminSubject, DisplayName: adminSubject, Admin: true}
+	admin := identity.Principal{
+		Subject:        adminSubject,
+		DisplayName:    adminSubject,
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	if err := authz.Authorize(t.Context(), admin, identity.ActionUnitRead, unitB); err != nil {
 		t.Fatalf("admin unit:read on unit B: %v", err)

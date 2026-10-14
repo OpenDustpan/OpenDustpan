@@ -828,6 +828,71 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
+
+-- Access tokens (ADR 53).
+
+-- name: CreateAccessToken :execrows
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
+SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
+  sqlc.arg('created_at_ms'), sqlc.arg('expires_at_ms'), sqlc.arg('created_by')
+FROM principals p
+WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL
+ON CONFLICT DO NOTHING;
+
+-- name: CountLivePrincipal :one
+SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: CountAccessToken :one
+SELECT COUNT(*) FROM access_tokens WHERE id = ?;
+
+-- name: GetAccessToken :one
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+FROM access_tokens WHERE id = ?;
+
+-- name: GetAccessTokenByDigest :one
+SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
+  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
+FROM access_tokens t
+JOIN principals p ON p.id = t.principal_id
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
+
+-- name: ListAccessTokens :many
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+FROM access_tokens
+WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
+  AND (CAST(sqlc.arg('status') AS INTEGER) = 0
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+      AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))))
+  AND (CAST(sqlc.arg('has_after') AS INTEGER) = 0
+    OR created_at_ms < sqlc.arg('after_ms')
+    OR (created_at_ms = sqlc.arg('after_ms') AND id < sqlc.arg('after_id')))
+ORDER BY created_at_ms DESC, id DESC
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountAccessTokens :one
+SELECT COUNT(*) FROM access_tokens
+WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
+  AND (CAST(sqlc.arg('status') AS INTEGER) = 0
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+      AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))));
+
+-- name: RevokeAccessToken :execrows
+UPDATE access_tokens SET revoked_at_ms = CAST(sqlc.arg('revoked_at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL;
+
+-- name: EndRotatedAccessToken :execrows
+UPDATE access_tokens
+SET expires_at_ms = MIN(expires_at_ms, CAST(sqlc.arg('ends_at_ms') AS INTEGER)),
+  replaced_by = CAST(sqlc.arg('replaced_by') AS TEXT)
+WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
+  AND expires_at_ms > sqlc.arg('now_ms');
+
+-- name: TouchAccessToken :exec
+UPDATE access_tokens SET last_used_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id')
+  AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.

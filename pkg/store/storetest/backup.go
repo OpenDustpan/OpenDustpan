@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -233,6 +234,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	backedUp := seedBackupRecord(t, s)
 	entries := seedBackupAudit(t, s, acme)
 	seedBackupPrincipals(t, s)
+	seedBackupTokens(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -316,6 +318,58 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 
 	if err := ps.DeletePrincipal(ctx, "prn-gone", ServerChange(later, "principal:prn-gone")); err != nil {
 		t.Fatalf("delete principal: %v", err)
+	}
+}
+
+// seedBackupTokens writes a used token, a revoked token and a rotation when
+// s keeps access tokens, so the round trip compares the token table row by
+// row, nullable times and replaced_by included (ADR 53). It needs the
+// principals of seedBackupPrincipals.
+func seedBackupTokens(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ts, ok := s.(accesstoken.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	tokens := []accesstoken.Token{
+		backupToken("tok-used", "prn-deploy", accesstoken.KindService),
+		backupToken("tok-revoked", "prn-alice", accesstoken.KindPersonal),
+		backupToken("tok-old", "prn-deploy", accesstoken.KindService),
+	}
+	for i, d := range []accesstoken.Digest{{1}, {2}, {3}} {
+		if err := ts.CreateToken(ctx, tokens[i], d, ServerChange(now(), "token:"+tokens[i].ID)); err != nil {
+			t.Fatalf("create token %q: %v", tokens[i].ID, err)
+		}
+	}
+
+	if err := ts.TouchToken(ctx, "tok-used", now().Add(time.Hour), time.Minute); err != nil {
+		t.Fatalf("touch token: %v", err)
+	}
+
+	if err := ts.RevokeToken(ctx, "tok-revoked", ServerChange(now().Add(time.Hour), "token:tok-revoked")); err != nil {
+		t.Fatalf("revoke token: %v", err)
+	}
+
+	r := accesstoken.Replacement{
+		OldEndsAt: now().Add(2 * time.Hour), OldID: "tok-old",
+		Next: backupToken("tok-new", "prn-deploy", accesstoken.KindService), Digest: accesstoken.Digest{9},
+	}
+	rotation := ServerChange(now().Add(time.Hour), "token:tok-old")
+
+	if err := ts.RotateToken(ctx, r, rotation); err != nil {
+		t.Fatalf("rotate token: %v", err)
+	}
+}
+
+// backupToken returns a token of the seed that expires a day after now.
+func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Token {
+	return accesstoken.Token{
+		CreatedAt: now(), ExpiresAt: now().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
+		ID: id, PrincipalID: principalID, Name: "seed " + id, Kind: kind, ReplacedBy: "", CreatedBy: "admin",
 	}
 }
 

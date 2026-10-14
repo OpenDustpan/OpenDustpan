@@ -223,11 +223,29 @@ type tokenAuth struct{}
 func (tokenAuth) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
 	switch token {
 	case adminToken:
-		return identity.Principal{Subject: "alice", DisplayName: "", Admin: true}, nil
+		return identity.Principal{
+			Subject:        "alice",
+			DisplayName:    "",
+			Admin:          true,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, nil
 	case userToken:
-		return identity.Principal{Subject: "bob", DisplayName: "", Admin: false}, nil
+		return identity.Principal{
+			Subject:        "bob",
+			DisplayName:    "",
+			Admin:          false,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, nil
 	default:
-		return identity.Principal{Subject: "", DisplayName: "", Admin: false}, identity.ErrUnauthenticated
+		return identity.Principal{
+			Subject:        "",
+			DisplayName:    "",
+			Admin:          false,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, identity.ErrUnauthenticated
 	}
 }
 

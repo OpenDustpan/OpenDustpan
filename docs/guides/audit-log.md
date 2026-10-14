@@ -138,7 +138,8 @@ The SQL table stays the record of the audit log.
 No sink is the default.
 
 Give `--audit-sink` once for each sink.
-In `DUSTPAN_AUDIT_SINK`, separate the sinks with spaces or line breaks.
+In `DUSTPAN_AUDIT_SINK` and in the key `audit-sink` of the configuration file, separate the sinks with spaces or line breaks.
+The start log shows only whether `audit-sink` is set, because a webhook URL can hold a token.
 A sink item can hold a comma, for example in the query of a webhook URL.
 Each item is `[<name>=]<sink>`:
 
