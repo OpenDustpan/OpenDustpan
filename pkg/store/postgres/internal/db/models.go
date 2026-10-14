@@ -42,6 +42,7 @@ type AuditEntry struct {
 	PrevHash   string
 	Hash       string
 	ValueCount pgtype.Int8
+	Changes    pgtype.Text
 }
 
 type AuditSinkCursor struct {

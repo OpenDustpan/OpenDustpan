@@ -19,6 +19,8 @@ the same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
+| `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
+| `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
 | `--log-sink` | `DUSTPAN_LOG_SINK` | `log-sink` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
@@ -75,7 +77,27 @@ are the database URL and the secrets. Each other URL setting refuses a URL
 with a user name or a password, so the log can show its value.
 
 At the log level `warn` or `error`, the server does not write these INFO
-lines: the level that the operator sets wins.
+lines: the level that the operator sets wins. The start audit entry (see
+"Reload") records the whole configuration at each level.
+
+### Reload
+
+The server reloads the file on SIGHUP, and when its content changes. It
+reads the file every 10 seconds and compares the SHA-256 of the content.
+A flag and a variable change only at a restart. A reload checks the whole
+file with the rules of the start. When the file fails a rule, the server
+keeps the old configuration and writes one ERROR line that names the key
+and the rule. The server writes one INFO line for each changed value, and
+one audit entry with the channel `config-file` for the reload, with each
+changed key. A changed setting takes effect at the next start. The metrics `dustpan_config_reloads_total` and
+`dustpan_config_last_reload_success` count the reloads.
+
+A ConfigMap volume mounted with `subPath` never updates. Mount the whole
+volume, so the poll sees the change.
+
+At each start, the server also writes one audit entry with the channel
+`startup` and each setting, with the rule for sensitive settings. The
+[audit guide](../guides/audit-log.md) shows these entries.
 
 This example uses the JSON shape with `#` comments. That text is valid
 YAML.

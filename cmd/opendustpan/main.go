@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -35,8 +36,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -201,10 +206,87 @@ func serveWithIO(
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	stopHangup := f.catchHangup()
+	defer stopHangup()
+
+	// The start resolves against the real variables. A variable changes
+	// only at a restart, and the server clears the secret variables after
+	// it reads them: each reload resolves against a snapshot that keeps no
+	// sensitive value, only its fingerprint (ADR 63 decision 5).
+	f.args = args
+	f.lookup = cli.SnapshotEnv(os.LookupEnv, cli.DeclaredEnvs())
+
 	if err := f.resolveLayers(fs, os.LookupEnv); err != nil {
 		return err
 	}
 
+	if err := f.check(); err != nil {
+		return err
+	}
+
+	return f.run(ctx, stdin, stderr, terminal)
+}
+
+// serveFlags holds the settings of the serve subcommand.
+type serveFlags struct {
+	common
+
+	// file holds the decoded configuration file, nil without --config.
+	// resolved holds the effective value and the source of each setting
+	// for the start log (ADR 63 decision 7).
+	file     cli.ConfigFile
+	resolved []cli.Resolved
+
+	// args and lookup are the command line and the environment snapshot
+	// of the start. A reload of the configuration file resolves against
+	// them again. fileSum is the SHA-256 of the file at start.
+	args    []string
+	lookup  cli.LookupFunc
+	fileSum [sha256.Size]byte
+
+	// hup receives SIGHUP from the parse of the flags on, when --config
+	// names a file. The reloader reads it.
+	hup chan os.Signal
+
+	// instanceID names this process in the audit entries that it writes
+	// on its own (ADR 63 decision 10).
+	instanceID string
+
+	config                  string
+	listen                  string
+	consoleDir              string
+	origins                 string
+	tlsCert                 string
+	tlsKey                  string
+	publicURL               string
+	trustedProxies          string
+	trustedProxyHeader      string
+	blobDir                 string
+	blobStore               string
+	s3Endpoint              string
+	s3Region                string
+	backupTarget            string
+	logLevel                string
+	logFormat               string
+	keyFile                 string
+	generateKey             bool
+	maxCheckpointBytes      int64
+	maxSecretBatchBytes     int64
+	maxStateBytes           int64
+	maxBodyBytesInFlight    int64
+	checkpointDeltaCutoff   int64
+	disablePulumiJournaling bool
+	auditSinks              []string
+	logSinks                []string
+	// app is the application logger and its sinks, set by run.
+	app appLog
+}
+
+// check refuses settings that are wrong together or out of range: the TLS
+// pair, the log level and format, the size limits, the delta cutoff and the
+// trusted proxies.
+// Serve runs it at start and on each reload of the configuration file.
+func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
 		return err
 	}
@@ -228,45 +310,28 @@ func serveWithIO(
 		return errDeltaCutoff
 	}
 
-	return f.run(ctx, stdin, stderr, terminal)
+	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
 
-// serveFlags holds the settings of the serve subcommand.
-type serveFlags struct {
-	common
+// checkProxyFlags refuses a trusted proxy list or header that the server
+// refuses, with the rules of internal/clientip, so a reload of the
+// configuration file refuses the same values as the start.
+func checkProxyFlags(list, header string) error {
+	prefixes, err := clientip.ParseList(list)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
+	}
 
-	// file holds the decoded configuration file, nil without --config.
-	// resolved holds the effective value and the source of each setting
-	// for the start log (ADR 63 decision 7).
-	file     cli.ConfigFile
-	resolved []cli.Resolved
+	parsed, err := clientip.ParseHeader(header)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxy-header: %w", err)
+	}
 
-	config                  string
-	listen                  string
-	consoleDir              string
-	origins                 string
-	tlsCert                 string
-	tlsKey                  string
-	publicURL               string
-	blobDir                 string
-	blobStore               string
-	s3Endpoint              string
-	s3Region                string
-	backupTarget            string
-	logLevel                string
-	logFormat               string
-	keyFile                 string
-	generateKey             bool
-	maxCheckpointBytes      int64
-	maxSecretBatchBytes     int64
-	maxStateBytes           int64
-	maxBodyBytesInFlight    int64
-	checkpointDeltaCutoff   int64
-	disablePulumiJournaling bool
-	auditSinks              []string
-	logSinks                []string
-	// app is the application logger and its sinks, set by run.
-	app appLog
+	if _, err := clientip.NewResolver(prefixes, parsed); err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
+	}
+
+	return nil
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -283,12 +348,18 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 // (ADR 63 decision 1). A refused file stops the start.
 func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) error {
 	if strings.TrimSpace(f.config) != "" {
-		file, err := cli.ReadConfigFile(strings.TrimSpace(f.config))
+		data, err := cli.ReadConfigBytes(strings.TrimSpace(f.config))
+		if err != nil {
+			return err
+		}
+
+		file, err := cli.ParseConfig(data)
 		if err != nil {
 			return err
 		}
 
 		f.file = file
+		f.fileSum = sha256.Sum256(data)
 	}
 
 	resolved, err := cli.Resolve(fs, cli.ServeSettings(), lookup, f.file)
@@ -328,6 +399,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
+	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -362,6 +435,9 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	defer closeAppLog(ctx, &app, stderr)
 
 	cli.LogResolved(ctx, logger, f.resolved)
+
+	f.instanceID = instance.NewID()
+	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
@@ -415,6 +491,20 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	}
 
 	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
+}
+
+// writeStartEntry writes the start entry of ADR 63 decision 10: one audit
+// entry in the server scope with the channel startup, the instance ID as the
+// subject and each setting with its layer and its effective value. The audit
+// log is always on, so a failed write stops the start (decision 11).
+func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerStore) error {
+	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), cli.AuditSettings(f.resolved))
+
+	if _, err := entries.AppendServer(ctx, entry); err != nil {
+		return fmt.Errorf("write the start audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // refuseNewKeyFile stops serve before it makes a key file at path when the
@@ -843,9 +933,29 @@ func (f *serveFlags) serveWithStores(
 	stopHangup := sinks.reopenOnHangup(ctx, logger, f.app.files)
 	defer stopHangup()
 
-	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
+	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
+	if optErr != nil {
+		return optErr
+	}
 	opts = append(opts, f.backupOptions(backupTarget)...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
+
+	// After the start-up checks and before serving, write the start entry
+	// and only then start the reloader: a start that fails its checks
+	// writes no entry, and no reload entry comes before the start entry
+	// (ADR 63 decision 10).
+	reloads := &reloadMetrics{observe: nil}
+	started := &startedReloader{stop: nil}
+
+	opts = append(opts, dustpan.WithBeforeServe(func(hookCtx context.Context) error {
+		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
+			return startErr
+		}
+
+		started.stop = f.startReloader(ctx, st, reloads.record, logger)
+
+		return nil
+	}))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
@@ -855,6 +965,10 @@ func (f *serveFlags) serveWithStores(
 	if f.app.drops != nil {
 		f.app.drops.attach(srv.Metrics().AddLogSinkDropped)
 	}
+
+	reloads.observe = srv.Metrics().ObserveConfigReload
+
+	defer started.Stop()
 
 	// Run runs the start-up checks, including the key-encryption key check
 	// (ADR 23), before it serves.
@@ -939,7 +1053,12 @@ func (f *serveFlags) serverOptions(
 	authn *identity.StaticTokens,
 	wrapper secret.Wrapper,
 	logger *slog.Logger,
-) []dustpan.Option {
+) ([]dustpan.Option, error) {
+	proxies, parseErr := clientip.ParseList(f.trustedProxies)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
+	}
+
 	return []dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
@@ -958,6 +1077,8 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithListenAddr(f.listen),
 		dustpan.WithConsoleDir(f.consoleDir),
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
+		dustpan.WithTrustedProxies(proxies...),
+		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
 		dustpan.WithVersion(version),
@@ -967,7 +1088,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
-	}
+	}, nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.
@@ -1314,6 +1435,7 @@ type store interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	audit.ServerStore
 	close()
 }
 

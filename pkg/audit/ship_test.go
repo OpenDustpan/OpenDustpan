@@ -174,6 +174,7 @@ func entryAt(ns namespace.Name, seq int64) audit.Entry {
 		Version:    "sv-1",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "OpenTofu/1.11",
 		Channel:    audit.ChannelAPI,
@@ -578,6 +579,37 @@ func TestToRecordCarriesAReadAccessEntry(t *testing.T) {
 		if !hasAttr(rec, "kind", "read-access") || !hasAttr(rec, "valuePath", "/history") {
 			t.Fatalf("read-access entry in %s: record lacks its kind or value path: %+v", scope, rec.Attrs)
 		}
+	}
+}
+
+// TestToRecordCarriesChanges proves that a record carries the changes of an
+// entry (ADR 63) as their canonical JSON, after valueCount, and that an
+// entry without changes has no changes attribute.
+func TestToRecordCarriesChanges(t *testing.T) {
+	t.Parallel()
+
+	old := "eu"
+	e := entryAt("acme", 8)
+	e.Kind = audit.KindChange
+	e.Changes = []audit.Change{
+		{Key: "region", Old: &old, New: "us <b>", Layer: "file", TakesEffect: "next start"},
+		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
+	}
+
+	rec := audit.ToRecord(e)
+
+	line, err := logsink.MarshalJSON(rec)
+	if err != nil {
+		t.Fatalf("marshal record: %v", err)
+	}
+
+	want := `"changes":` + audit.EncodeChanges(e.Changes)
+	if !strings.Contains(string(line), want) {
+		t.Fatalf("record line lacks %s: %s", want, line)
+	}
+
+	if rec := audit.ToRecord(entryAt("acme", 9)); hasKey(rec, "changes") {
+		t.Fatalf("entry without changes: record holds them: %+v", rec.Attrs)
 	}
 }
 

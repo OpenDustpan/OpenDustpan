@@ -24,7 +24,7 @@ func WithAuditSinks(sinks ...audit.ShipSink) Option {
 // newAuditShipper builds the shipper of the configured audit sinks, or nil
 // when none is configured. The failure and delivery hooks count on the
 // server metrics, labeled with the sink name only.
-func newAuditShipper(cfg settings, observed *metrics.ServerMetrics) (*audit.Shipper, error) {
+func newAuditShipper(cfg *settings, observed *metrics.ServerMetrics) (*audit.Shipper, error) {
 	if len(cfg.auditSinks) == 0 {
 		//nolint:nilnil // No sink without an error means the server ships nothing.
 		return nil, nil

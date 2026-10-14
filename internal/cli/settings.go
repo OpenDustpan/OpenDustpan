@@ -145,6 +145,18 @@ var Settings = []*Setting{
 		referenceNone,
 	).WithFile("public-url").WithURL(),
 	stringSetting(
+		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
+		"comma-separated CIDRs of trusted proxies, "+
+			"empty means none (DUSTPAN_TRUSTED_PROXIES)",
+		"(none: the server uses the address of the TCP peer only)",
+	).WithFile("trusted-proxies"),
+	stringSetting(
+		"trusted-proxy-header", "DUSTPAN_TRUSTED_PROXY_HEADER", "x-forwarded-for",
+		"forwarding header the server reads from trusted proxies: x-forwarded-for or forwarded "+
+			"(DUSTPAN_TRUSTED_PROXY_HEADER)",
+		"`x-forwarded-for` (or `forwarded`)",
+	).WithFile("trusted-proxy-header"),
+	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
 		"`info` (or `debug`, `warn`, `error`)",
