@@ -178,7 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	// A deleted stack keeps its row and moves its inventory entry to the
 	// deleted units (ADR 47), so the round trip carries both.
 	gone := mustCreateStack(t, s, acme, "gone")
-	if err := s.ForceDeleteStack(ctx, gone.Ref, acme.Fence(), deleteEntry(acme.Name)); err != nil {
+	err = s.ForceDeleteStack(
+		ctx,
+		gone.Ref,
+		acme.Fence(),
+		inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack %s: %v", gone.Ref, err)
 	}
 
@@ -238,6 +244,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupPrincipals(t, s)
 	seedBackupTokens(t, s)
 	seedBackupAccess(t, s)
+	seedBackupPurge(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -449,6 +456,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -606,6 +614,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Kind:       kind,
 			Outcome:    audit.OutcomeSuccess,
 			RequestID:  fmt.Sprintf("req-%d", i),
+			ObjectID:   "",
 			PrevHash:   "",
 			Hash:       "",
 			Sequence:   0,
@@ -666,6 +675,31 @@ func seedBackupKey(
 	_ = stored
 
 	return scope
+}
+
+// seedBackupPurge makes, deletes and purges the stack web/purged of acme, so
+// the seed holds one blob purge record (ADR 47) and the round trip carries
+// the blob_purges table.
+func seedBackupPurge(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	ctx := t.Context()
+	st := newStack(acme.Name, "web", "purged")
+
+	if err := s.CreateStack(ctx, st, acme.Fence()); err != nil {
+		t.Fatalf("create stack to purge: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()}
+	d.Entry.Object = "pulumi:" + acme.Name.String() + "/web/purged"
+
+	if err := s.DeleteStack(ctx, st.Ref, acme.Fence(), stack.EmptyGuard(), d); err != nil {
+		t.Fatalf("delete stack to purge: %v", err)
+	}
+
+	if err := s.PurgeStack(ctx, st.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
 }
 
 // seedBackupRecord stores one finished backup row, so the round trip compares

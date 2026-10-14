@@ -198,6 +198,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "blob_purges",
+			OrderBy: []string{portColTool, portColUnitID},
+			Columns: []Column{
+				{Name: portColTool, Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "purged_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "workspaces",
 			OrderBy: []string{"id"},
 			Columns: []Column{
@@ -269,6 +279,7 @@ func portableSpec() []PortableTable {
 				{Name: "hash", Kind: KindText},
 				{Name: "value_count", Kind: KindInteger},
 				{Name: "changes", Kind: KindText},
+				{Name: "object_id", Kind: KindText},
 			},
 		},
 		{

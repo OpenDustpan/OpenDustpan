@@ -278,11 +278,6 @@ UPDATE stacks
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1
 WHERE id = $2 AND deleted_at_ms IS NULL;
 
--- name: DeleteStack :execrows
--- Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
-DELETE FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3;
-
 -- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -342,10 +337,12 @@ INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, pu
 VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: ListDeletedInventory :many
+-- Byte order (COLLATE "C"), as QueryDeletedUnits and inventory.PageDeleted
+-- order, whatever the collation of the database.
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
 WHERE namespace = $1
-ORDER BY tool, name, unit_id;
+ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
 -- name: DeleteInventory :exec
 DELETE FROM inventory
@@ -419,13 +416,6 @@ SELECT EXISTS (
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
 WHERE id = $2 AND deleted_at_ms IS NULL;
-
--- name: DeleteWorkspace :execrows
--- Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
--- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
--- the data key through DeleteSecretKeysOfStack with the workspace ID.
-DELETE FROM workspaces
-WHERE namespace = $1 AND name = $2;
 
 -- name: DeleteStateVersionsOfWorkspace :exec
 -- Removes every state version of one workspace, pending and finalized.
@@ -678,7 +668,7 @@ ORDER BY content_key;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -687,14 +677,14 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -711,7 +701,7 @@ WHERE namespace = $1;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -1195,6 +1185,101 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL A
 -- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
 WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);
+
+-- name: GetDeletedStack :one
+-- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
+-- or a purge. A live stack matches no row.
+SELECT project, deleted_name
+FROM stacks
+WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL;
+
+-- name: RestoreStack :execrows
+-- Brings a deleted stack back under name. The unique key on (namespace,
+-- project, name) refuses a name that a live stack holds.
+UPDATE stacks
+SET name = $1, deleted_name = NULL, deleted_at_ms = NULL, updated_at_ms = $2
+WHERE namespace = $3 AND id = $4 AND deleted_at_ms IS NOT NULL;
+
+-- name: PurgeStack :execrows
+-- The final delete of a deleted stack by its stable ID (ADR 47). The
+-- children go first, through the queries below.
+DELETE FROM stacks
+WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL;
+
+-- name: DeleteEventsOfStack :exec
+DELETE FROM update_events
+WHERE stack_id = $1;
+
+-- name: DeleteCheckpointsOfStack :exec
+DELETE FROM checkpoints
+WHERE stack_id = $1;
+
+-- name: DeleteJournalSequencesOfStack :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = $1;
+
+-- name: DeleteJournalOfStack :exec
+DELETE FROM update_journal
+WHERE stack_id = $1;
+
+-- name: DeleteUpdatesOfStack :exec
+DELETE FROM updates
+WHERE stack_id = $1;
+
+-- name: GetDeletedWorkspace :one
+-- A deleted workspace of one namespace by its ID (ADR 47), for a restore or
+-- a purge. A live workspace matches no row.
+SELECT deleted_name
+FROM workspaces
+WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL;
+
+-- name: RestoreWorkspace :execrows
+-- Brings a deleted workspace back under name. The revision moves on, as
+-- the delete moved it. The unique key on (namespace, name) refuses a name
+-- that a live workspace holds.
+UPDATE workspaces
+SET name = $1, deleted_name = NULL, deleted_at_ms = NULL, revision = revision + 1, updated_at_ms = $2
+WHERE namespace = $3 AND id = $4 AND deleted_at_ms IS NOT NULL;
+
+-- name: PurgeWorkspace :execrows
+-- The final delete of a deleted workspace by its ID (ADR 47). The state
+-- versions and the data key go first.
+DELETE FROM workspaces
+WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL;
+
+-- name: GetDeletedInventory :one
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = $1 AND tool = $2 AND unit_id = $3;
+
+-- name: DeleteDeletedInventory :execrows
+DELETE FROM inventory_deleted
+WHERE tool = $1 AND unit_id = $2;
+
+-- name: RevokeGrantsOnTarget :execrows
+-- Ends every current grant on one target, for example unit:<stable ID> when
+-- the purge of a deleted unit removes it (ADR 47). The rows stay for the
+-- access-review history (ADR 52, decision 10).
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
+WHERE target = $3 AND revoked_at_ms IS NULL;
+
+-- name: InsertBlobPurge :exec
+-- Records a purged unit whose blobs may still exist (ADR 47). A second
+-- purge of the same unit cannot happen, but the row stays as it is.
+INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (tool, unit_id) DO NOTHING;
+
+-- name: DeleteBlobPurge :exec
+DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2;
+
+-- name: ListBlobPurges :many
+-- The oldest rows first, so the sweep finishes the oldest purges first.
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $1;
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.

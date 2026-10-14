@@ -157,6 +157,7 @@ func appendAuditEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 		Version:    "sv-1",
 		ValuePath:  "/outputs/db",
 		ValueCount: nil,
+		ObjectID:   "",
 		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "test",

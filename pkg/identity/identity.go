@@ -141,6 +141,13 @@ const (
 	// ActionUnitManageAccess allows granting and revoking roles on a unit.
 	// Its object is a unit.
 	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionUnitRestore allows bringing back a deleted unit before its
+	// retention period ends (ADR 47). Its object is a unit.
+	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitPurge allows the final delete of a deleted unit before its
+	// retention period ends (ADR 47). It cannot be undone. Its object is a
+	// unit.
+	ActionUnitPurge Action = "unit:purge"
 	// ActionServerReadAccess allows reading the access-review export of the
 	// whole installation: every grant (ADR 52, decision 10). Its object is
 	// ServerObject.

@@ -162,14 +162,14 @@ func grantOf(g access.Grant) grantResponse {
 // error with the result so far: a change names its record in both.
 // The call holds the audit entry of the caller, which a change hands to the
 // Service.
-type accessOp func(w http.ResponseWriter, r *http.Request, svc *access.Service, c call) (principalResult, error)
+type accessOp func(w http.ResponseWriter, r *http.Request, svc *access.Service, c *call) (principalResult, error)
 
 // serveAccessRead adapts a read to a route handler.
 func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runAccessOp(w, r, call{p: p, obj: obj, e: none}, op); ok {
+		if res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -180,7 +180,7 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 // writes one failure entry here, as well as possible.
 func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		res, ok := h.runAccessOp(w, r, call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
 
 		if !ok && res.object != "" && h.access != nil {
 			h.appendObjectChange(r, p, obj, serverChange{
@@ -203,7 +203,7 @@ type call struct {
 
 // runAccessOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
-func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c call, op accessOp) (principalResult, bool) {
+func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, bool) {
 	ctx := r.Context()
 
 	if h.access == nil {
@@ -343,7 +343,7 @@ func resolveUnitQuery(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 // listRoles serves GET /api/server/roles: the built-in roles in catalog
 // order, then the custom roles by name.
 func listRoles(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ *call,
 ) (principalResult, error) {
 	roles, err := svc.ListRoles(r.Context())
 	if err != nil {
@@ -360,7 +360,7 @@ func listRoles(
 
 // getRole serves GET /api/server/roles/{id}. An unknown ID answers 404.
 func getRole(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ *call,
 ) (principalResult, error) {
 	role, err := svc.GetRole(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -384,7 +384,7 @@ func actionsOf(names []string) []identity.Action {
 // custom role. A name that another role holds without regard to case
 // answers 409. A bad name, an unknown action or a bad body answers 400.
 func createRole(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	var req roleRequest
 	if err := decodeStrict(w, r, &req, errRoleBody); err != nil {
@@ -412,7 +412,7 @@ func createRole(
 // description or the actions of a custom role, and answers 200 with the
 // stored role. A built-in role answers 409.
 func changeRole(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := access.RoleRef(id)
@@ -456,7 +456,7 @@ func changeRole(
 // deleteRole serves DELETE /api/server/roles/{id}: it answers 204. A
 // built-in role, or a custom role that a grant holds, answers 409.
 func deleteRole(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	object := access.RoleRef(r.PathValue("id"))
 
@@ -473,7 +473,7 @@ func deleteRole(
 // ("principal:<id>" or "group:<id>#member"), and role keeps the grants of
 // one role.
 func listGrants(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
@@ -508,7 +508,7 @@ func listGrants(
 // answers 403. An unknown subject, role or namespace answers 404, and a
 // grant that exists 409.
 func createGrant(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	object := "grants " + c.obj.String()
 
@@ -551,7 +551,7 @@ const maxRoleIDLength = 64
 // 204. The row stays for the history. A grant on another object answers
 // 404.
 func revokeGrant(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	g, err := svc.Revoke(r.Context(), c.e, c.p, c.obj, r.PathValue("id"))
 	if err != nil {
