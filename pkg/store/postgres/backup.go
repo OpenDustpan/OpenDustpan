@@ -256,7 +256,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 		{
 			table: "grants",
 			columns: []string{
-				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "object_kind",
+				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, "created_by", "revoked_at_ms", "revoked_by",
 			},
 			orderBy: []string{"id"},

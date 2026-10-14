@@ -229,7 +229,11 @@ func KindOf(obj identity.Object) (ObjectKind, bool) {
 }
 
 // Grant is one tuple: the subject holds the role on the object, and on every
-// object that the object holds. ID is opaque, with the prefix "grt-".
+// object that the object holds. ID is opaque, with the prefix "grt-". A grant
+// on a unit follows the stable ID of the unit (Object.UnitID, ADR 19), not
+// its name: a new unit with the name of a deleted one does not get it. Its
+// Object holds the name of the unit at the time of the grant, until the
+// Service reads the current name.
 // Condition is empty: it is room for the attribute conditions of ADR 52
 // decision 9, and no decision reads it yet. CreatedBy names the subject of
 // the principal that made the grant.
@@ -280,7 +284,11 @@ type GrantQuery struct {
 type GrantStore interface {
 	// CreateGrant persists g. It returns ErrAlreadyExists when a current
 	// grant of the same subject, role and object exists, or when the ID is
-	// taken, and ErrInvalid for an object that takes no grant.
+	// taken, and ErrInvalid for an object that takes no grant or a unit with
+	// no stable ID. It returns ErrNotFound when the record of the subject,
+	// or the custom role, has ended: the write reads them in its own
+	// transaction, so a delete that commits first wins. A subject or a role
+	// with no record at all is the Service's to check.
 	CreateGrant(ctx context.Context, g Grant, e audit.Entry) error
 	// GetGrant returns the current grant with the ID id, or ErrNotFound.
 	GetGrant(ctx context.Context, id string) (Grant, error)
@@ -288,11 +296,13 @@ type GrantStore interface {
 	// returns ErrNotFound when no such grant exists.
 	RevokeGrant(ctx context.Context, id string, e audit.Entry) error
 	// ListGrantsOn returns one page of the current grants on obj, ordered
-	// by subject then role, and the count of every current grant on obj.
+	// by subject then role, and the count of every current grant on obj. A
+	// unit obj matches by its stable ID, and returns ErrInvalid with none.
 	ListGrantsOn(ctx context.Context, obj identity.Object, q GrantQuery) ([]Grant, int64, error)
 	// GrantsOn returns every current grant that one of subjects holds on
 	// one of objects, in one query. An empty list of subjects or objects
-	// returns none.
+	// returns none. A unit matches by its stable ID: a unit object with none
+	// matches no grant.
 	GrantsOn(ctx context.Context, subjects []Subject, objects []identity.Object) ([]Grant, error)
 	// GrantsWithRoles returns every current grant that one of subjects
 	// holds with one of roles, on any object, in one query. It serves
@@ -303,6 +313,19 @@ type GrantStore interface {
 	// start. A grant with no ID stores the namespace and the entry alone. It
 	// returns namespace.ErrAlreadyExists when the name is taken.
 	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
+}
+
+// GrantLookups reads the current grants that a change of who holds them
+// must check (ADR 52): the grants of one subject, and whether a role is
+// granted below the installation.
+type GrantLookups interface {
+	// GrantsOf returns every current grant of subject, on any object, in
+	// one query. It serves the checks of a membership change and of a
+	// delete.
+	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
+	// RoleGrantedBelowInstallation reports whether a current grant gives
+	// the role with the ID role on an object that is not the installation.
+	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
 }
 
 // RoleStore keeps the custom roles. The built-in roles live in code. The
@@ -332,8 +355,22 @@ type RoleStore interface {
 	DeleteRole(ctx context.Context, id string, e audit.Entry) error
 }
 
+// Units resolves the stable ID of a unit (ADR 19), so that a grant follows
+// the unit and not its name. The SQL stores meet it from the unit tables of
+// each tool. The core keeps the tool and the name of a unit opaque.
+type Units interface {
+	// UnitID returns the stable ID of the unit obj, and false when no such
+	// unit exists or obj is not a unit.
+	UnitID(ctx context.Context, obj identity.Object) (string, bool, error)
+	// UnitObjects returns the current reference of each unit with an ID in
+	// ids, with its ID set, in one read for each tool. An ID with no unit
+	// is left out.
+	UnitObjects(ctx context.Context, ids []string) (map[string]identity.Object, error)
+}
+
 // Store is the persistence port of roles and grants.
 type Store interface {
 	GrantStore
+	GrantLookups
 	RoleStore
 }

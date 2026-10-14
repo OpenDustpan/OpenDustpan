@@ -32,6 +32,10 @@ type AuthorizerConfig struct {
 	// Collections answers the collection of a unit. Nil means no unit is in
 	// a collection: a grant on a collection then covers the collection only.
 	Collections UnitCollections
+	// Units resolves the stable ID of a unit. Nil means that no unit has
+	// one: a grant on a unit then matches nothing, and only the grants on
+	// the objects that hold the unit apply.
+	Units Units
 }
 
 // Authorizer decides with grants (ADR 52). It implements identity.Authorizer
@@ -47,6 +51,7 @@ type Authorizer struct {
 	store       Store
 	callers     Callers
 	collections UnitCollections
+	units       Units
 }
 
 var _ identity.Authorizer = (*Authorizer)(nil)
@@ -60,7 +65,7 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 		return nil, fmt.Errorf("%w: callers", ErrMissingDependency)
 	}
 
-	return &Authorizer{store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections}, nil
+	return &Authorizer{store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units}, nil
 }
 
 // Authorize allows action on obj when a grant of one of the subjects of p,
@@ -132,6 +137,10 @@ func (a *Authorizer) Explain(ctx context.Context, p identity.Principal, obj iden
 		return Access{}, err
 	}
 
+	if _, err := a.currentUnits(ctx, held.grants); err != nil {
+		return Access{}, err
+	}
+
 	out.Actions = held.actions()
 	out.Grants = held.grants
 
@@ -199,8 +208,20 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 		return none, fmt.Errorf("read grants: %w", err)
 	}
 
+	live, err := a.currentUnits(ctx, grants)
+	if err != nil {
+		return none, err
+	}
+
 	out := none
+
 	for i := range grants {
+		// The name of a unit that no longer exists may name a new unit now:
+		// its grants give nothing.
+		if grants[i].Object.IsUnit() && !live[grants[i].Object.UnitID()] {
+			continue
+		}
+
 		out.add(grants[i].Object)
 	}
 
@@ -315,6 +336,13 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 		return nil, nil
 	}
 
+	if kind == ObjectUnit {
+		var err error
+		if obj, err = a.withUnitID(ctx, obj); err != nil {
+			return nil, err
+		}
+	}
+
 	out := []identity.Object{obj}
 
 	if kind == ObjectUnit && a.collections != nil {
@@ -426,4 +454,69 @@ func (a *Authorizer) rolesWith(ctx context.Context, action identity.Action) ([]s
 	}
 
 	return out, nil
+}
+
+// withUnitID returns the unit obj with its stable ID, read once for each
+// request. A unit that does not exist, or an Authorizer with no Units,
+// keeps no ID: a grant on the unit then matches nothing.
+func (a *Authorizer) withUnitID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.UnitID() != "" || a.units == nil {
+		return obj, nil
+	}
+
+	cache := cacheOf(ctx)
+	if id, ok := cache.unitID(obj.String()); ok {
+		return obj.WithUnitID(id), nil
+	}
+
+	id, found, err := a.units.UnitID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read unit ID: %w", err)
+	}
+
+	if !found {
+		id = ""
+	}
+
+	cache.keepUnitID(obj.String(), id)
+
+	return obj.WithUnitID(id), nil
+}
+
+// currentUnits replaces the object of each unit grant in grants with the
+// current reference of its unit, so a list shows the name that the unit
+// has now. A grant whose unit no longer exists keeps the name it had. It
+// returns the stable IDs of the units that exist.
+func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[string]bool, error) {
+	live := map[string]bool{}
+
+	if a.units == nil {
+		return live, nil
+	}
+
+	var ids []string
+
+	for i := range grants {
+		if id := grants[i].Object.UnitID(); id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) == 0 {
+		return live, nil
+	}
+
+	current, err := a.units.UnitObjects(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read units of grants: %w", err)
+	}
+
+	for i := range grants {
+		if obj, ok := current[grants[i].Object.UnitID()]; ok {
+			grants[i].Object = obj
+			live[obj.UnitID()] = true
+		}
+	}
+
+	return live, nil
 }

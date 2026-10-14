@@ -36,6 +36,27 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		return fmt.Errorf("%w: object %q takes no grant", access.ErrInvalid, g.Object.String())
 	}
 
+	target, err := targetOf(g.Object)
+	if err != nil {
+		return err
+	}
+
+	ended, err := q.CountEndedGrantRecords(ctx, db.CountEndedGrantRecordsParams{
+		SubjectKind: string(g.Subject.Kind), SubjectID: g.Subject.ID, Role: g.Role,
+	})
+	if err != nil {
+		return fmt.Errorf("read records of grant: %w", err)
+	}
+
+	if ended > 0 {
+		return fmt.Errorf(
+			"%w: the subject %s or the role %q was deleted",
+			access.ErrNotFound,
+			g.Subject.String(),
+			g.Role,
+		)
+	}
+
 	n, err := q.CreateGrant(ctx, db.CreateGrantParams{
 		ID:          g.ID,
 		Subject:     g.Subject.String(),
@@ -43,6 +64,7 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		SubjectID:   g.Subject.ID,
 		Role:        g.Role,
 		Object:      g.Object.String(),
+		Target:      target,
 		ObjectKind:  string(kind),
 		Namespace:   g.Object.Namespace().String(),
 		Condition:   toNullText(g.Condition),
@@ -103,9 +125,14 @@ func (s *Store) ListGrantsOn(
 		total int64
 	)
 
+	target, targetErr := targetOf(obj)
+	if targetErr != nil {
+		return nil, 0, targetErr
+	}
+
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListGrantsOn(ctx, db.ListGrantsOnParams{
-			Object: obj.String(), AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole, RowLimit: rowLimit(gq.Limit),
+			Target: target, AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole, RowLimit: rowLimit(gq.Limit),
 		})
 		if err != nil {
 			return fmt.Errorf("select grants on object: %w", err)
@@ -115,7 +142,7 @@ func (s *Store) ListGrantsOn(
 			return err
 		}
 
-		total, err = q.CountGrantsOn(ctx, obj.String())
+		total, err = q.CountGrantsOn(ctx, target)
 		if err != nil {
 			return fmt.Errorf("count grants on object: %w", err)
 		}
@@ -139,13 +166,35 @@ func (s *Store) GrantsOn(
 
 	rows, err := s.queries.GrantsOn(ctx, db.GrantsOnParams{
 		Subjects: subjectStrings(subjects),
-		Objects:  objectStrings(objects),
+		Targets:  targetStrings(objects),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select grants on objects: %w", err)
 	}
 
 	return fromGrantRows(rows)
+}
+
+// GrantsOf implements access.GrantStore.
+func (s *Store) GrantsOf(ctx context.Context, subject access.Subject) ([]access.Grant, error) {
+	rows, err := s.queries.GrantsOfSubject(ctx, db.GrantsOfSubjectParams{
+		SubjectKind: string(subject.Kind), SubjectID: subject.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select grants of subject: %w", err)
+	}
+
+	return fromGrantRows(rows)
+}
+
+// RoleGrantedBelowInstallation implements access.GrantStore.
+func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error) {
+	n, err := s.queries.CountRoleGrantsBelowInstallation(ctx, role)
+	if err != nil {
+		return false, fmt.Errorf("count grants of role: %w", err)
+	}
+
+	return n > 0, nil
 }
 
 // GrantsWithRoles implements access.GrantStore.
@@ -378,7 +427,7 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 // grantReadRow is each generated grant row. The grant reads select the same
 // columns, so sqlc generates one type for each of them.
 type grantReadRow interface {
-	db.GetGrantRow | db.ListGrantsOnRow | db.GrantsOnRow | db.GrantsWithRolesRow
+	db.GetGrantRow | db.ListGrantsOnRow | db.GrantsOnRow | db.GrantsWithRolesRow | db.GrantsOfSubjectRow
 }
 
 // grantRow maps any generated grant row to the row of GetGrant.
@@ -407,6 +456,10 @@ func fromGrantRow(row db.GetGrantRow) (access.Grant, error) {
 	obj, err := identity.ParseObject(row.Object)
 	if err != nil {
 		return access.Grant{}, fmt.Errorf("decode grant object: %w", err)
+	}
+
+	if id, isUnit := strings.CutPrefix(row.Target, unitTargetPrefix); isUnit {
+		obj = obj.WithUnitID(id)
 	}
 
 	var condition *string
@@ -475,13 +528,37 @@ func subjectStrings(subjects []access.Subject) []string {
 	return out
 }
 
-func objectStrings(objects []identity.Object) []string {
+// targetStrings returns the targets of objects. A unit with no stable ID
+// has no target and is left out: it matches no grant.
+func targetStrings(objects []identity.Object) []string {
 	out := make([]string, 0, len(objects))
+
 	for _, o := range objects {
-		out = append(out, o.String())
+		if t, err := targetOf(o); err == nil {
+			out = append(out, t)
+		}
 	}
 
 	return out
+}
+
+// unitTargetPrefix starts the target of a unit grant: the stable ID of the
+// unit follows it.
+const unitTargetPrefix = "unit:"
+
+// targetOf returns what a grant on obj matches: unit:<stable ID> for a unit,
+// and the wire form for every other object. A unit with no stable ID
+// returns access.ErrInvalid.
+func targetOf(obj identity.Object) (string, error) {
+	if !obj.IsUnit() {
+		return obj.String(), nil
+	}
+
+	if obj.UnitID() == "" {
+		return "", fmt.Errorf("%w: unit %q has no stable ID", access.ErrInvalid, obj.String())
+	}
+
+	return unitTargetPrefix + obj.UnitID(), nil
 }
 
 // toNullText maps an optional string to a nullable column.

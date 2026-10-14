@@ -75,54 +75,75 @@ func TestListWorkspacesPageSizeCapped(t *testing.T) {
 	}
 }
 
-// TestUnknownIDAnswersForbiddenWhenDenied proves an unknown workspace or
-// state version ID answers 403 for a caller without rights and 404 for an
-// allowed caller, so the absence does not leak.
-func TestUnknownIDAnswersForbiddenWhenDenied(t *testing.T) {
+// TestUnknownAndHiddenIDsAnswerTheSame proves that an unknown workspace or
+// state version ID, and an existing one that the caller cannot read, give
+// the same 404 document: the answer does not tell what exists. No sentinel
+// unit takes part, so a namespace or a workspace that someone names
+// "unknown" changes nothing. A caller that can read the workspace but not
+// lock it answers 403.
+func TestUnknownAndHiddenIDsAnswerTheSame(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		method string
-		target string
-		body   string
+		name    string
+		method  string
+		unknown string
+		hidden  string
+		body    string
 	}{
-		{name: "workspace by ID", method: http.MethodGet, target: "/api/v2/workspaces/ws-missing", body: ""},
 		{
-			name:   "lock",
-			method: http.MethodPost,
-			target: "/api/v2/workspaces/ws-missing/actions/lock",
-			body:   `{"data":{}}`,
+			name: "workspace by ID", method: http.MethodGet,
+			unknown: "/api/v2/workspaces/ws-missing", hidden: "/api/v2/workspaces/ws-test123", body: "",
 		},
 		{
-			name:   "state version",
-			method: http.MethodGet,
-			target: "/api/v2/state-versions/sv-missing",
-			body:   "",
+			name: "lock", method: http.MethodPost,
+			unknown: "/api/v2/workspaces/ws-missing/actions/lock",
+			hidden:  "/api/v2/workspaces/ws-test123/actions/lock", body: `{"data":{}}`,
+		},
+		{
+			name: "state version", method: http.MethodGet,
+			unknown: "/api/v2/state-versions/sv-missing", hidden: "/api/v2/state-versions/sv-test123", body: "",
 		},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.name+" denied", func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			handler := newEnforcingHandler(t, stubAuthorizer{})
 
+			unknown := httptest.NewRecorder()
+			handler.ServeHTTP(unknown, workspaceRequest(t, tc.method, tc.unknown, tc.body))
+
+			hidden := httptest.NewRecorder()
+			handler.ServeHTTP(hidden, workspaceRequest(t, tc.method, tc.hidden, tc.body))
+
+			checkJSONAPIError(t, unknown, http.StatusNotFound)
+			checkJSONAPIError(t, hidden, http.StatusNotFound)
+
+			if unknown.Body.String() != hidden.Body.String() {
+				t.Fatalf("unknown answers %q, hidden answers %q: want the same document",
+					unknown.Body.String(), hidden.Body.String())
+			}
+
+			allowed := newEnforcingHandler(t, allowAll())
+
 			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, workspaceRequest(t, tc.method, tc.target, tc.body))
-
-			checkJSONAPIError(t, rec, http.StatusForbidden)
-		})
-
-		t.Run(tc.name+" allowed", func(t *testing.T) {
-			t.Parallel()
-
-			handler := newEnforcingHandler(t, allowAll())
-
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, workspaceRequest(t, tc.method, tc.target, tc.body))
+			allowed.ServeHTTP(rec, workspaceRequest(t, tc.method, tc.unknown, tc.body))
 
 			checkJSONAPIError(t, rec, http.StatusNotFound)
 		})
 	}
+
+	t.Run("read but not lock", func(t *testing.T) {
+		t.Parallel()
+
+		handler := newEnforcingHandler(t, readOnlyAuthorizer{})
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, "/api/v2/workspaces/ws-test123/actions/lock",
+			`{"data":{}}`))
+
+		checkJSONAPIError(t, rec, http.StatusForbidden)
+	})
 }

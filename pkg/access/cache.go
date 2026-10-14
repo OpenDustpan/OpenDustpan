@@ -12,6 +12,7 @@ import (
 type requestCache struct {
 	subjects map[string][]Subject
 	roles    map[string]Role
+	units    map[string]string
 	mu       sync.Mutex
 }
 
@@ -26,6 +27,7 @@ func WithRequestCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, requestCacheKey{}, &requestCache{
 		subjects: map[string][]Subject{},
 		roles:    map[string]Role{},
+		units:    map[string]string{},
 		mu:       sync.Mutex{},
 	})
 }
@@ -87,4 +89,30 @@ func (c *requestCache) keepRole(r Role) {
 	defer c.mu.Unlock()
 
 	c.roles[r.ID] = r
+}
+
+// unitID returns the stable ID of the unit with the wire form ref, "" for a
+// unit that does not exist, and false when the cache has not read it.
+func (c *requestCache) unitID(ref string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	id, ok := c.units[ref]
+
+	return id, ok
+}
+
+func (c *requestCache) keepUnitID(ref, id string) {
+	if c == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.units[ref] = id
 }

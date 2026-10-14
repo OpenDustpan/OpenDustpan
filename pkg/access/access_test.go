@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -52,7 +54,9 @@ func newFixture(tb testing.TB) *fixture {
 
 	units := collections{}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: units})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: st, Callers: st, Collections: units, Units: st,
+	})
 	if err != nil {
 		tb.Fatalf("new authorizer: %v", err)
 	}
@@ -128,9 +132,52 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 	return access.Subject{Kind: access.SubjectGroup, ID: id}
 }
 
-// grant stores a grant of role on obj to subject, with no check.
+// unit returns the unit obj with its stable ID, and makes its stack first
+// when it does not exist: a grant names a unit that exists.
+func (f *fixture) unit(tb testing.TB, obj identity.Object) identity.Object {
+	tb.Helper()
+
+	ctx := tb.Context()
+
+	if id, found, err := f.store.UnitID(ctx, obj); err != nil || found {
+		if err != nil {
+			tb.Fatalf("unit ID: %v", err)
+		}
+
+		return obj.WithUnitID(id)
+	}
+
+	ns, err := f.store.GetNamespace(ctx, obj.Namespace())
+	if err != nil {
+		tb.Fatalf("namespace of unit: %v", err)
+	}
+
+	project, name, _ := strings.Cut(obj.UnitName(), "/")
+
+	ref, err := stack.ParseRef(obj.Namespace().String(), project, name)
+	if err != nil {
+		tb.Fatalf("stack ref: %v", err)
+	}
+
+	st := stack.Stack{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), Tags: map[string]string{}, Ref: ref,
+		ID: stack.ID("stk-" + strings.ReplaceAll(obj.UnitName(), "/", "-")), Version: 0,
+	}
+	if err := f.store.CreateStack(ctx, st, ns.Fence()); err != nil {
+		tb.Fatalf("create stack: %v", err)
+	}
+
+	return obj.WithUnitID(string(st.ID))
+}
+
+// grant stores a grant of role on obj to subject, with no check. A unit
+// gets its stack first.
 func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj identity.Object) {
 	tb.Helper()
+
+	if obj.IsUnit() {
+		obj = f.unit(tb, obj)
+	}
 
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
@@ -140,6 +187,11 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}
+}
+
+// admin returns the bootstrap admin caller, which holds every action.
+func admin() identity.Principal {
+	return identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
 }
 
 func prn(subject string) access.Subject {
@@ -167,7 +219,8 @@ type check struct {
 func assertChecks(t *testing.T, authz *access.Authorizer, p identity.Principal, checks []check) {
 	t.Helper()
 
-	for _, c := range checks {
+	for i := range checks {
+		c := &checks[i]
 		err := authz.Authorize(t.Context(), p, c.action, c.obj)
 
 		switch {
@@ -439,6 +492,10 @@ func TestEscalation(t *testing.T) {
 	}
 
 	for _, tc := range cases {
+		if tc.obj.IsUnit() {
+			f.unit(t, tc.obj)
+		}
+
 		_, err := f.svc.Grant(t.Context(), testEntry(), tc.granter, access.GrantInput{
 			Object: tc.obj, Role: tc.role, Subject: prn("target"),
 		})
@@ -615,7 +672,7 @@ func TestCustomRoles(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 
-	r, err := f.svc.CreateRole(ctx, testEntry(), access.RoleInput{
+	r, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
 		Name: "deployer", Description: "Runs updates",
 		Actions: []identity.Action{identity.ActionUnitWrite, identity.ActionUnitRead, identity.ActionUnitWrite},
 	})
@@ -636,15 +693,16 @@ func TestCustomRoles(t *testing.T) {
 	}
 
 	for _, in := range invalid {
-		if _, err := f.svc.CreateRole(ctx, testEntry(), in); !errors.Is(err, access.ErrInvalid) {
-			t.Errorf("create role %+v = %v, want ErrInvalid", in, err)
+		if _, createErr := f.svc.CreateRole(ctx, testEntry(), admin(), in); !errors.Is(createErr, access.ErrInvalid) {
+			t.Errorf("create role %+v = %v, want ErrInvalid", in, createErr)
 		}
 	}
 
 	in := access.RoleInput{
 		Name: "x", Description: "", Actions: []identity.Action{identity.ActionUnitRead},
 	}
-	if _, err := f.svc.UpdateRole(ctx, testEntry(), access.RoleViewer, in); !errors.Is(err, access.ErrBuiltIn) {
+	_, err = f.svc.UpdateRole(ctx, testEntry(), admin(), access.RoleViewer, in)
+	if !errors.Is(err, access.ErrBuiltIn) {
 		t.Errorf("update built-in role = %v, want ErrBuiltIn", err)
 	}
 
@@ -673,12 +731,12 @@ func TestRevokeChecksTheObject(t *testing.T) {
 		t.Fatalf("grant: %v", err)
 	}
 
-	_, err = f.svc.Revoke(t.Context(), testEntry(), identity.NamespaceObject("beta"), g.ID)
+	_, err = f.svc.Revoke(t.Context(), testEntry(), admin, identity.NamespaceObject("beta"), g.ID)
 	if !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("revoke through another namespace = %v, want ErrNotFound", err)
 	}
 
-	_, err = f.svc.Revoke(t.Context(), testEntry(), identity.NamespaceObject("acme"), g.ID)
+	_, err = f.svc.Revoke(t.Context(), testEntry(), admin, identity.NamespaceObject("acme"), g.ID)
 	if err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
@@ -727,7 +785,7 @@ func TestRequestCache(t *testing.T) {
 
 	ctx := t.Context()
 
-	reader, err := f.svc.CreateRole(ctx, testEntry(), access.RoleInput{
+	reader, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
 		Name: "reader", Description: "", Actions: []identity.Action{identity.ActionUnitRead},
 	})
 	if err != nil {
@@ -739,7 +797,9 @@ func TestRequestCache(t *testing.T) {
 
 	counted := &countingStore{Store: f.store, subjects: atomic.Int64{}, roles: atomic.Int64{}}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: counted, Callers: counted, Collections: nil})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: counted, Callers: counted, Collections: nil, Units: counted},
+	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}

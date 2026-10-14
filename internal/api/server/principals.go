@@ -211,16 +211,16 @@ type principalResult struct {
 // or an error with the result so far: a change names its record in both. e
 // is the audit entry of the caller, which a change hands to the Service.
 type principalOp func(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, p identity.Principal,
 ) (principalResult, error)
 
 // servePrincipalRead adapts a read to a route handler: it finds the
 // principal service, runs op and writes its answer or its error.
 func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, none); ok {
+		if res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: none}); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -231,7 +231,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 // change writes one failure entry here, best effort.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, callerEntry(r, p, action))
+		res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
 		if !ok && res.object != "" && h.principals != nil {
 			h.appendServerChange(r, p, serverChange{
@@ -248,7 +248,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 // runPrincipalOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
 func (h *Handler) runPrincipalOp(
-	w http.ResponseWriter, r *http.Request, op principalOp, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, op principalOp, c call,
 ) (principalResult, bool) {
 	ctx := r.Context()
 
@@ -258,7 +258,7 @@ func (h *Handler) runPrincipalOp(
 		return principalResult{body: nil, object: "", status: 0}, false
 	}
 
-	res, err := op(w, r, h.principals, e)
+	res, err := op(w, r, h.principals, c.e, c.p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -457,7 +457,7 @@ func pageRequest(r *http.Request) (principal.PageRequest, error) {
 // the new principal. A taken subject answers 409. A bad or reserved subject,
 // an unknown kind or a bad body answers 400.
 func createPrincipal(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req createPrincipalRequest
 	if err := decodeStrict(w, r, &req, errPrincipalBody); err != nil {
@@ -489,7 +489,7 @@ func createPrincipal(
 // listPrincipals serves GET /api/server/principals: one page, ordered by
 // subject.
 func listPrincipals(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
@@ -514,7 +514,7 @@ func listPrincipals(
 // getPrincipal serves GET /api/server/principals/{id}. An unknown ID
 // answers 404.
 func getPrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	p, err := svc.GetPrincipal(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -528,7 +528,7 @@ func getPrincipal(
 // display name and answers 200 with the stored principal. A body that sets
 // no field answers 400.
 func changePrincipal(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	object := principal.Ref(r.PathValue("id"))
 
@@ -551,11 +551,11 @@ func changePrincipal(
 // principal and its memberships, and answers 204. The rows stay for the
 // access-review history.
 func deletePrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	object := principal.Ref(r.PathValue("id"))
 
-	if err := svc.DeletePrincipal(r.Context(), e, r.PathValue("id")); err != nil {
+	if err := svc.DeletePrincipal(r.Context(), e, caller, r.PathValue("id")); err != nil {
 		return failed(object), err
 	}
 
@@ -565,7 +565,7 @@ func deletePrincipal(
 // listGroupsOfPrincipal serves GET /api/server/principals/{id}/groups: one
 // page, ordered by name.
 func listGroupsOfPrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
@@ -583,7 +583,7 @@ func listGroupsOfPrincipal(
 // createGroup serves POST /api/server/groups: it answers 201 with the new
 // group. A name that another group holds without regard to case answers 409.
 func createGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req createGroupRequest
 	if err := decodeStrict(w, r, &req, errGroupBody); err != nil {
@@ -609,7 +609,7 @@ func createGroup(
 
 // listGroups serves GET /api/server/groups: one page, ordered by name.
 func listGroups(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
@@ -626,7 +626,7 @@ func listGroups(
 
 // getGroup serves GET /api/server/groups/{id}. An unknown ID answers 404.
 func getGroup(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	g, err := svc.GetGroup(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -639,7 +639,7 @@ func getGroup(
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
 // changes its description or both, and answers 200 with the stored group.
 func changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
@@ -665,11 +665,11 @@ func changeGroup(
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and
 // its memberships, and answers 204. The members keep their records.
 func deleteGroup(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	object := principal.GroupRef(r.PathValue("id"))
 
-	if err := svc.DeleteGroup(r.Context(), e, r.PathValue("id")); err != nil {
+	if err := svc.DeleteGroup(r.Context(), e, caller, r.PathValue("id")); err != nil {
 		return failed(object), err
 	}
 
@@ -679,7 +679,7 @@ func deleteGroup(
 // listMembers serves GET /api/server/groups/{id}/members: one page, ordered
 // by subject.
 func listMembers(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, _ audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
@@ -710,7 +710,7 @@ func listMembers(
 // millisecond as a removal: the message says to try again. An unknown group
 // or principal answers 404.
 func addMember(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req addMemberRequest
 	if err := decodeStrict(w, r, &req, errMemberBody); err != nil {
@@ -729,7 +729,7 @@ func addMember(
 		return failed(object), err
 	}
 
-	m, err := svc.AddMember(ctx, e, r.PathValue("id"), p.ID)
+	m, err := svc.AddMember(ctx, e, caller, r.PathValue("id"), p.ID)
 	if err != nil {
 		return failed(object), err
 	}
@@ -740,11 +740,11 @@ func addMember(
 // removeMember serves DELETE /api/server/groups/{id}/members/{principal}:
 // it ends the membership and answers 204. The principal keeps its record.
 func removeMember(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	object := principal.MemberRef(r.PathValue("id"), r.PathValue("principal"))
 
-	if err := svc.RemoveMember(r.Context(), e, r.PathValue("id"), r.PathValue("principal")); err != nil {
+	if err := svc.RemoveMember(r.Context(), e, caller, r.PathValue("id"), r.PathValue("principal")); err != nil {
 		return failed(object), err
 	}
 

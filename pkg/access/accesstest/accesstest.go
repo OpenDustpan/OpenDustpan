@@ -15,6 +15,7 @@ package accesstest
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,9 +63,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "get roles reads several custom roles", test: testGetRoles},
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
+		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
+		{name: "a role granted below the installation is reported", test: testRoleGrantedBelow},
+		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range slices.Concat(cases, unitCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -167,7 +171,9 @@ func unit(t *testing.T, ns namespace.Name, name string) identity.Object {
 		t.Fatalf("unit object: %v", err)
 	}
 
-	return obj
+	// The store keeps the stable ID that the Service resolved. The suite
+	// gives each unit one of its own.
+	return obj.WithUnitID("stk-" + ns.String() + "-" + strings.ReplaceAll(name, "/", "-"))
 }
 
 func mustCreateRole(t *testing.T, s access.Store, r access.Role) {
@@ -700,8 +706,12 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	assertIDs(t, "grants after the deletes", list, "grt-3")
 
-	// The ended grants are history: the same tuple can be granted again.
-	mustCreateGrant(t, s, newGrant("grt-4", opsGroup(), access.RoleViewer, acme))
+	// A grant to a deleted subject is refused in the transaction of the
+	// grant, so a delete that commits first wins.
+	err = s.CreateGrant(ctx, newGrant("grt-4", opsGroup(), access.RoleViewer, acme), entry())
+	if !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("grant to a deleted group = %v, want ErrNotFound", err)
+	}
 }
 
 func testRevokedGrant(t *testing.T, s access.Store) {
@@ -946,5 +956,89 @@ func testRefusedEntry(t *testing.T, s access.Store) {
 		if _, nsErr := nss.GetNamespace(ctx, "gamma"); !errors.Is(nsErr, namespace.ErrNotFound) {
 			t.Fatalf("namespace of a refused create = %v, want namespace.ErrNotFound", nsErr)
 		}
+	}
+}
+
+func testGrantsOf(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	acme := identity.NamespaceObject("acme")
+
+	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), access.RoleWriter, unit(t, "acme", "web/prod")))
+	mustCreateGrant(t, s, newGrant("grt-3", principalSubject("prn-a"), access.RoleViewer, acme))
+	mustCreateGrant(t, s, newGrant("grt-4", opsGroup(), access.RoleAdmin, identity.NamespaceObject("beta")))
+
+	if err := s.RevokeGrant(ctx, "grt-4", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	got, err := s.GrantsOf(ctx, opsGroup())
+	if err != nil {
+		t.Fatalf("grants of: %v", err)
+	}
+
+	ids := grantIDs(got)
+	slices.Sort(ids)
+
+	if !slices.Equal(ids, []string{"grt-1", "grt-2"}) {
+		t.Fatalf("grants of the group = %v, want grt-1 grt-2", ids)
+	}
+
+	for i := range got {
+		if got[i].ID == "grt-2" && got[i].Object.UnitID() == "" {
+			t.Fatalf("unit grant %+v lost its stable ID", got[i])
+		}
+	}
+}
+
+func testRoleGrantedBelow(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), "rol-a", identity.ServerObject()))
+	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), "rol-b", identity.NamespaceObject("acme")))
+	mustCreateGrant(t, s, newGrant("grt-3", opsGroup(), "rol-c", identity.NamespaceObject("acme")))
+
+	if err := s.RevokeGrant(ctx, "grt-3", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	for role, want := range map[string]bool{"rol-a": false, "rol-b": true, "rol-c": false, "rol-none": false} {
+		got, err := s.RoleGrantedBelowInstallation(ctx, role)
+		if err != nil || got != want {
+			t.Errorf("role %s granted below the installation = %t, %v; want %t", role, got, err, want)
+		}
+	}
+}
+
+func testUnitTarget(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	web := unit(t, "acme", "web/prod")
+
+	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), access.RoleViewer, web))
+
+	// The same name with another stable ID is another unit.
+	other := web.WithUnitID("stk-other")
+
+	got, err := s.GrantsOn(ctx, []access.Subject{opsGroup()}, []identity.Object{other})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("grants on a new unit with the old name = %v, %v; want none", grantIDs(got), err)
+	}
+
+	got, err = s.GrantsOn(ctx, []access.Subject{opsGroup()}, []identity.Object{web})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("grants on the unit = %v, %v; want grt-1", grantIDs(got), err)
+	}
+
+	noID := web.WithUnitID("")
+
+	err = s.CreateGrant(ctx, newGrant("grt-2", opsGroup(), access.RoleWriter, noID), entry())
+	if !errors.Is(err, access.ErrInvalid) {
+		t.Fatalf("grant on a unit with no stable ID = %v, want ErrInvalid", err)
 	}
 }

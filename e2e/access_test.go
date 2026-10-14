@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"context"
 	"net/http"
+	"path"
 	"strings"
 	"testing"
 
@@ -97,6 +98,10 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/namespaces", `{"name":"grants"}`, http.StatusCreated,
 	}, nil)
+
+	// A grant names a unit that exists: it follows its stable ID.
+	createStack(ctx, t, env, "grants/web/prod")
+	checkUnitGrantNeedsTheUnit(ctx, t, env, "principal:"+bob.ID)
 
 	bobSubject := "principal:" + bob.ID
 	opsSubject := "group:" + ops.ID + "#member"
@@ -239,4 +244,33 @@ func checkSubjectDeleteRevokes(ctx context.Context, t *testing.T, env *e2e.Env, 
 	if len(list.Grants) != 0 {
 		t.Fatalf("grants after the principal delete = %+v, want none", list.Grants)
 	}
+}
+
+// createStack makes the Pulumi stack "<namespace>/<project>/<name>" through
+// the API that the Pulumi CLI calls on "pulumi stack init".
+func createStack(ctx context.Context, t *testing.T, env *e2e.Env, ref string) {
+	t.Helper()
+
+	project, name := path.Split(ref)
+
+	resp, err := env.APIStatusHeaders(ctx, http.MethodPost, "/api/stacks/"+strings.TrimSuffix(project, "/"),
+		`{"stackName":"`+name+`"}`)
+	if err != nil {
+		t.Fatalf("create stack %s: %v", ref, err)
+	}
+
+	if resp.Status != http.StatusOK {
+		t.Fatalf("create stack %s answers %d (%s)", ref, resp.Status, resp.Body)
+	}
+}
+
+// checkUnitGrantNeedsTheUnit grants on a unit that does not exist: the
+// grant answers 404, because a grant follows the stable ID of its unit.
+func checkUnitGrantNeedsTheUnit(ctx context.Context, t *testing.T, env *e2e.Env, subject string) {
+	t.Helper()
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/grants/unit-grants?tool=pulumi&unit=api%2Fprod",
+		`{"subject":"` + subject + `","role":"viewer"}`, http.StatusNotFound,
+	}, nil)
 }

@@ -514,12 +514,12 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 }
 
 // enforceAuthorized serves a route that needs a signed-in principal and the
-// Authorizer to allow every declared action on the resolved object. A resolver
-// that reads the database runs before authorization, so an unknown ID would
-// answer 404 and leak that it does not exist. When the resolver reports
-// absence, the wrapper authorizes the declared actions on a synthetic unit no
-// caller may read: a caller without rights answers 403 for unknown IDs too,
-// while an allowed caller still answers 404.
+// Authorizer to allow every declared action on the resolved object. A
+// resolver that reads the database runs before authorization, so an
+// unknown ID could tell a caller what exists. Two answers are the same 404:
+// an object that does not exist, and an object that exists but that the
+// caller cannot read. A caller that can read the object, but not do the
+// action, answers 403: it already knows that the object exists.
 func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -534,7 +534,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		obj, err := route.Resolve(w, r)
 		if err != nil {
 			if isAbsence(err) {
-				h.writeAbsence(ctx, w, p, route, err)
+				h.writeNotFound(ctx, w, notFoundDetail)
 			} else {
 				h.writeError(ctx, w, err)
 			}
@@ -544,7 +544,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 		for _, action := range route.Actions {
 			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
-				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
+				h.writeDenied(ctx, w, p, obj, fmt.Errorf("authorize %s: %w", action, err))
 
 				return
 			}
@@ -554,6 +554,43 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	}
 }
 
+// notFoundDetail is the one detail of an object that does not exist or
+// that the caller cannot read, so the two answers do not differ.
+const notFoundDetail = "not found"
+
+// writeDenied answers a refused action: the 404 of an absent object when p
+// cannot read obj either, else the error itself.
+func (h *Handler) writeDenied(
+	ctx context.Context,
+	w http.ResponseWriter,
+	p identity.Principal,
+	obj identity.Object,
+	err error,
+) {
+	if errors.Is(err, identity.ErrDenied) && h.hidden(ctx, p, obj) {
+		h.writeNotFound(ctx, w, notFoundDetail)
+
+		return
+	}
+
+	h.writeError(ctx, w, err)
+}
+
+// hidden reports whether p cannot read obj: a unit without unit:read, or a
+// namespace without namespace:read. Any other object is never hidden.
+func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) bool {
+	read := identity.ActionNamespaceRead
+	if obj.IsUnit() {
+		read = identity.ActionUnitRead
+	}
+
+	if obj.IsServer() || obj.IsCaller() || obj.Namespace() == "" {
+		return false
+	}
+
+	return h.authz.Authorize(ctx, p, read, obj) != nil
+}
+
 // isAbsence reports whether err means the resolver found nothing: an unknown
 // workspace, state version or namespace. Only these errors hide behind the
 // fallback authorization; every other resolver error answers as before.
@@ -561,46 +598,4 @@ func isAbsence(err error) bool {
 	return errors.Is(err, workspace.ErrNotFound) ||
 		errors.Is(err, workspace.ErrStateVersionNotFound) ||
 		errors.Is(err, namespace.ErrNotFound)
-}
-
-// writeAbsence answers a resolver absence without leaking it: it authorizes
-// every declared action on a synthetic unit that only administrators may
-// read. A denied caller answers 403 for unknown IDs too, while an allowed
-// caller answers the original 404.
-func (h *Handler) writeAbsence(
-	ctx context.Context, w http.ResponseWriter, p identity.Principal, route Route, err error,
-) {
-	unknown, objErr := unknownUnitObject()
-	if objErr != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	for _, action := range route.Actions {
-		if authErr := h.authz.Authorize(ctx, p, action, unknown); authErr != nil {
-			h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, authErr))
-
-			return
-		}
-	}
-
-	h.writeError(ctx, w, err)
-}
-
-// unknownUnitObject returns a synthetic unit no caller may read except through
-// the administrator bypass: the Authorizer denies it for every other caller,
-// so unknown IDs answer 403 for them. It never names a real workspace.
-func unknownUnitObject() (identity.Object, error) {
-	ns, err := namespace.ParseName("unknown")
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	name, err := workspace.ParseName("unknown")
-	if err != nil {
-		return identity.Object{}, err
-	}
-
-	return unitObject(workspace.Ref{Namespace: ns, Name: name})
 }

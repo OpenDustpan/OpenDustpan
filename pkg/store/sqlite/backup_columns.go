@@ -292,6 +292,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"subject_id",
 				"role",
 				"object",
+				"target",
 				"object_kind",
 				backupColNamespace,
 				"condition",

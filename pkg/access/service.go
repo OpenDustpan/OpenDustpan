@@ -18,6 +18,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
+var _ principal.Guard = (*Service)(nil)
+
 // ID prefixes. An ID is opaque: never parse it.
 const (
 	grantIDPrefix = "grt-"
@@ -146,8 +148,15 @@ type RoleInput struct {
 	Actions     []identity.Action
 }
 
-// CreateRole validates and stores a custom role, with the entry e.
-func (s *Service) CreateRole(ctx context.Context, e audit.Entry, in RoleInput) (Role, error) {
+// CreateRole validates and stores a custom role, with the entry e. caller
+// must hold every action of the role on the installation: a role is a grant
+// waiting to happen, so it cannot hold more than its maker.
+func (s *Service) CreateRole(
+	ctx context.Context,
+	e audit.Entry,
+	caller identity.Principal,
+	in RoleInput,
+) (Role, error) {
 	at := s.Now()
 	r := Role{
 		CreatedAt: at, UpdatedAt: at, ID: s.newID(roleIDPrefix), Name: in.Name,
@@ -155,6 +164,10 @@ func (s *Service) CreateRole(ctx context.Context, e audit.Entry, in RoleInput) (
 	}
 
 	if err := validateRole(r); err != nil {
+		return Role{}, err
+	}
+
+	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), r); err != nil {
 		return Role{}, err
 	}
 
@@ -166,8 +179,14 @@ func (s *Service) CreateRole(ctx context.Context, e audit.Entry, in RoleInput) (
 }
 
 // UpdateRole replaces the fields of the custom role with the ID id, with
-// the entry e. A built-in role answers ErrBuiltIn.
-func (s *Service) UpdateRole(ctx context.Context, e audit.Entry, id string, in RoleInput) (Role, error) {
+// the entry e. A built-in role answers ErrBuiltIn. caller must hold every
+// action of the new set on the installation, because each current grant of
+// the role gives the new set at once. A role that a current grant gives on
+// an object other than the installation keeps data actions only
+// (ErrInUse).
+func (s *Service) UpdateRole(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string, in RoleInput,
+) (Role, error) {
 	if _, ok := BuiltInRole(id); ok {
 		return Role{}, fmt.Errorf("%w: %q", ErrBuiltIn, id)
 	}
@@ -183,6 +202,14 @@ func (s *Service) UpdateRole(ctx context.Context, e audit.Entry, id string, in R
 	r.UpdatedAt = s.Now()
 
 	if err := validateRole(r); err != nil {
+		return Role{}, err
+	}
+
+	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), r); err != nil {
+		return Role{}, err
+	}
+
+	if err := s.checkPlacement(ctx, r); err != nil {
 		return Role{}, err
 	}
 
@@ -273,6 +300,10 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		return Grant{}, err
 	}
 
+	if in.Object, err = s.existingUnit(ctx, in.Object); err != nil {
+		return Grant{}, err
+	}
+
 	if err := s.checkGrant(ctx, granter, in, role); err != nil {
 		return Grant{}, err
 	}
@@ -289,18 +320,30 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 	return g, nil
 }
 
-// Revoke ends the grant with the ID id on obj, with the entry e. A grant on
-// another object answers ErrNotFound, so a caller cannot revoke through an
-// object that it manages a grant that it does not manage. The caller has
-// already authorized the manage-access action of obj.
-func (s *Service) Revoke(ctx context.Context, e audit.Entry, obj identity.Object, id string) (Grant, error) {
+// Revoke ends the grant with the ID id on obj for caller, with the entry e.
+// A grant on another object answers ErrNotFound, so a caller cannot revoke
+// through an object that it manages a grant that it does not manage. caller
+// must hold every action that the grant gives on its object (ErrEscalation),
+// as it must to make the grant. The caller has already authorized the
+// manage-access action of obj.
+func (s *Service) Revoke(
+	ctx context.Context, e audit.Entry, caller identity.Principal, obj identity.Object, id string,
+) (Grant, error) {
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if g.Object.String() != obj.String() {
+	if obj, err = s.existingUnit(ctx, obj); err != nil {
+		return Grant{}, err
+	}
+
+	if !sameTarget(g.Object, obj) {
 		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
+	}
+
+	if err := s.checkGrantHeld(ctx, caller, g); err != nil {
+		return Grant{}, err
 	}
 
 	if err := s.store.RevokeGrant(ctx, id, change(e, s.Now(), GrantRef(g))); err != nil {
@@ -339,9 +382,17 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 	limit := q.Limit
 	q.Limit++
 
+	if obj, err = s.existingUnit(ctx, obj); err != nil {
+		return Page{}, err
+	}
+
 	grants, total, err := s.store.ListGrantsOn(ctx, obj, q)
 	if err != nil {
 		return Page{}, fmt.Errorf("list grants on %q: %w", obj.String(), err)
+	}
+
+	if _, err := s.authz.currentUnits(ctx, grants); err != nil {
+		return Page{}, err
 	}
 
 	out := Page{Grants: grants, NextCursor: "", Total: total}
@@ -464,6 +515,19 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
+// CheckGroupGrants implements principal.Guard: caller must hold every action
+// that the current grants of the group give, on each of their objects.
+func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string) error {
+	return s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectGroup, ID: groupID})
+}
+
+// CheckPrincipalGrants implements principal.Guard: caller must hold every
+// action that the current grants of the principal give, on each of their
+// objects.
+func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error {
+	return s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectPrincipal, ID: principalID})
+}
+
 // checkGrant runs the checks of Grant.
 func (s *Service) checkGrant(ctx context.Context, granter identity.Principal, in GrantInput, role Role) error {
 	kind, ok := KindOf(in.Object)
@@ -533,6 +597,107 @@ func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
 
 	if err != nil {
 		return fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
+
+	return nil
+}
+
+// existingUnit returns obj with its stable ID when obj is a unit, and
+// ErrNotFound when no such unit exists: a grant names a unit that exists, so
+// that it follows the unit and not the name. Any other object returns as
+// it is.
+func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if !obj.IsUnit() {
+		return obj, nil
+	}
+
+	withID, err := s.authz.withUnitID(ctx, obj)
+	if err != nil {
+		return obj, err
+	}
+
+	if withID.UnitID() == "" {
+		return obj, fmt.Errorf("%w: unit %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return withID, nil
+}
+
+// sameTarget reports whether a and b are the same object for a grant: the
+// same stable ID for units, the same wire form for any other object.
+func sameTarget(a, b identity.Object) bool {
+	if a.IsUnit() || b.IsUnit() {
+		return a.IsUnit() && b.IsUnit() && a.UnitID() != "" && a.UnitID() == b.UnitID()
+	}
+
+	return a.String() == b.String()
+}
+
+// checkGrantHeld refuses when caller does not hold every action that g
+// gives on its object: the rule of a revoke, and of a change of who holds g.
+func (s *Service) checkGrantHeld(ctx context.Context, caller identity.Principal, g Grant) error {
+	role, err := s.GetRole(ctx, g.Role)
+	if errors.Is(err, ErrNotFound) {
+		// A deleted custom role gives nothing, so nothing is taken away.
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return s.checkEscalation(ctx, caller, g.Object, role)
+}
+
+// checkPlacement refuses a role with an operator or administration action
+// while a current grant gives it on an object other than the installation:
+// such a grant would then give those actions inside a namespace.
+func (s *Service) checkPlacement(ctx context.Context, r Role) error {
+	if !givesBeyondData(r) {
+		return nil
+	}
+
+	below, err := s.store.RoleGrantedBelowInstallation(ctx, r.ID)
+	if err != nil {
+		return fmt.Errorf("read grants of role %q: %w", r.ID, err)
+	}
+
+	if below {
+		return fmt.Errorf("%w: role %q is granted below the installation, so it can hold data actions only",
+			ErrInUse, r.ID)
+	}
+
+	return nil
+}
+
+// givesBeyondData reports whether r holds an operator or administration
+// action.
+func givesBeyondData(r Role) bool {
+	for _, a := range r.Actions {
+		if family, _ := FamilyOf(a); family != FamilyData {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkSubjectGrants checks each current grant of subject with
+// checkGrantHeld.
+func (s *Service) checkSubjectGrants(ctx context.Context, caller identity.Principal, subject Subject) error {
+	if caller.Admin {
+		return nil
+	}
+
+	grants, err := s.store.GrantsOf(ctx, subject)
+	if err != nil {
+		return fmt.Errorf("read grants of %s: %w", subject.String(), err)
+	}
+
+	for i := range grants {
+		if err := s.checkGrantHeld(ctx, caller, grants[i]); err != nil {
+			return err
+		}
 	}
 
 	return nil

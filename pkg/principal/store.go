@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // Store is the persistence port for principals, groups and memberships.
@@ -93,4 +94,21 @@ type MemberStore interface {
 	// name as the key. It returns ErrNotFound when the principal does not
 	// exist.
 	ListGroupsOf(ctx context.Context, principalID string, q Query) ([]Group, int64, error)
+}
+
+// Guard checks that a caller may change who holds a set of grants (ADR 52).
+// A membership change gives or takes the grants of the group, and the delete
+// of a principal or a group revokes its grants. So the caller must hold, on
+// the object of each grant, every action that the grant gives there, as it
+// must to make or revoke the grant itself. access.Service meets it.
+//
+// Each method returns nil when caller may make the change, or an error that
+// wraps the reason: access.ErrEscalation for an action that caller does not
+// hold.
+type Guard interface {
+	// CheckGroupGrants checks the current grants of the group groupID.
+	CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string) error
+	// CheckPrincipalGrants checks the current grants of the principal
+	// principalID.
+	CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error
 }

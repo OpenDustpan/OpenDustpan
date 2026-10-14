@@ -9,11 +9,17 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store Store
+	// Guard checks that the caller of a membership change or a delete holds
+	// what the grants of the principal or the group give (ADR 52). Nil means
+	// no check: only an installation that grants nothing, where every
+	// caller is an administrator, leaves it nil.
+	Guard Guard
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
@@ -29,6 +35,7 @@ type Config struct {
 // and the store appends the entry in the transaction of the change.
 type Service struct {
 	store Store
+	guard Guard
 	now   func() time.Time
 	newID func(prefix string) string
 }
@@ -49,7 +56,7 @@ func NewService(cfg Config) (*Service, error) {
 		newID = ident.NewID
 	}
 
-	return &Service{store: cfg.Store, now: now, newID: newID}, nil
+	return &Service{store: cfg.Store, guard: cfg.Guard, now: now, newID: newID}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -157,8 +164,13 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 }
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
-// with the entry e.
-func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, id string) error {
+// with the entry e. The store revokes its grants in the same transaction, so
+// the Guard checks that caller holds every action that they give.
+func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
 	if err := s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
@@ -259,8 +271,13 @@ func (s *Service) UpdateGroup(ctx context.Context, e audit.Entry, id string, c G
 }
 
 // DeleteGroup ends the group with the ID id and its memberships, with the
-// entry e.
-func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, id string) error {
+// entry e. The store revokes its grants in the same transaction, so the
+// Guard checks that caller holds every action that they give.
+func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
+	if err := s.checkGroup(ctx, caller, id); err != nil {
+		return fmt.Errorf("delete group %q: %w", id, err)
+	}
+
 	if err := s.store.DeleteGroup(ctx, id, change(e, s.Now(), GroupRef(id))); err != nil {
 		return fmt.Errorf("delete group %q: %w", id, err)
 	}
@@ -269,8 +286,15 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, id string) err
 }
 
 // AddMember puts the principal principalID in the group groupID, with the
-// entry e.
-func (s *Service) AddMember(ctx context.Context, e audit.Entry, groupID, principalID string) (Membership, error) {
+// entry e. A membership gives the grants of the group, so it is a grant by
+// proxy: the Guard checks that caller holds every action that they give.
+func (s *Service) AddMember(
+	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
+) (Membership, error) {
+	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
+
 	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
 
 	err := s.store.AddMember(ctx, m, change(e, m.AddedAt, MemberRef(groupID, principalID)))
@@ -287,8 +311,15 @@ func (s *Service) AddMember(ctx context.Context, e audit.Entry, groupID, princip
 }
 
 // RemoveMember ends the membership of the principal principalID in the
-// group groupID, with the entry e.
-func (s *Service) RemoveMember(ctx context.Context, e audit.Entry, groupID, principalID string) error {
+// group groupID, with the entry e. It takes the grants of the group away, so
+// the Guard checks that caller holds every action that they give.
+func (s *Service) RemoveMember(
+	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
+) error {
+	if err := s.checkGroup(ctx, caller, groupID); err != nil {
+		return fmt.Errorf("remove principal %q from group %q: %w", principalID, groupID, err)
+	}
+
 	err := s.store.RemoveMember(ctx, groupID, principalID, change(e, s.Now(), MemberRef(groupID, principalID)))
 	if err != nil {
 		return fmt.Errorf("remove principal %q from group %q: %w", principalID, groupID, err)
@@ -347,3 +378,23 @@ func exactKey(s string) string { return s }
 
 // groupKey is the sort key of a group: its name in lower case.
 func groupKey(g Group) string { return strings.ToLower(g.Name) }
+
+// checkGroup asks the Guard whether caller may change who holds the grants
+// of the group groupID.
+func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
+	if s.guard == nil {
+		return nil
+	}
+
+	return s.guard.CheckGroupGrants(ctx, caller, groupID)
+}
+
+// checkPrincipal asks the Guard whether caller may revoke the grants of the
+// principal principalID.
+func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal, principalID string) error {
+	if s.guard == nil {
+		return nil
+	}
+
+	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)
+}

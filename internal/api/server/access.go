@@ -384,7 +384,7 @@ func createRole(
 		in.Description = *req.Description
 	}
 
-	role, err := svc.CreateRole(r.Context(), c.e, in)
+	role, err := svc.CreateRole(r.Context(), c.e, c.p, in)
 	if err != nil {
 		return failed("roles"), err
 	}
@@ -429,7 +429,7 @@ func changeRole(
 		in.Actions = actionsOf(*req.Actions)
 	}
 
-	role, err := svc.UpdateRole(r.Context(), c.e, id, in)
+	role, err := svc.UpdateRole(r.Context(), c.e, c.p, id, in)
 	if err != nil {
 		return failed(object), err
 	}
@@ -527,7 +527,7 @@ const maxRoleIDLength = 64
 func revokeGrant(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
 ) (principalResult, error) {
-	g, err := svc.Revoke(r.Context(), c.e, c.obj, r.PathValue("id"))
+	g, err := svc.Revoke(r.Context(), c.e, c.p, c.obj, r.PathValue("id"))
 	if err != nil {
 		return failed(access.GrantIDRef(r.PathValue("id"))), err
 	}

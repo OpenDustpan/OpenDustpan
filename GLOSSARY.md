@@ -133,7 +133,7 @@ One of three sets of actions that do not overlap: operator, administration and d
 _Avoid_: Permission category, scope
 
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A revoke ends a grant and keeps its record for the access-review history.
+A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
 
 **No access**:

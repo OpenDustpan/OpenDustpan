@@ -911,46 +911,79 @@ UPDATE roles SET deleted_at_ms = $1 WHERE id = $2 AND deleted_at_ms IS NULL;
 SELECT COUNT(*) FROM grants WHERE role = $1 AND revoked_at_ms IS NULL;
 
 -- name: CreateGrant :execrows
-INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT DO NOTHING;
 
 -- name: GetGrant :one
-SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants WHERE id = $1 AND revoked_at_ms IS NULL;
 
 -- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants
-WHERE object = @object AND revoked_at_ms IS NULL
+WHERE target = @target AND revoked_at_ms IS NULL
   AND (subject > @after_subject OR (subject = @after_subject AND role > @after_role))
 ORDER BY subject, role
 LIMIT @row_limit;
 
 -- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE object = @object AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants WHERE target = @target AND revoked_at_ms IS NULL;
 
 -- name: RevokeGrant :execrows
 UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL;
 
 -- name: GrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants
-WHERE subject = ANY(@subjects::text[]) AND object = ANY(@objects::text[]) AND revoked_at_ms IS NULL
-ORDER BY object, subject, role;
+WHERE subject = ANY(@subjects::text[]) AND target = ANY(@targets::text[]) AND revoked_at_ms IS NULL
+ORDER BY target, subject, role;
 
 -- name: GrantsWithRoles :many
-SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants
 WHERE subject = ANY(@subjects::text[]) AND role = ANY(@roles::text[]) AND revoked_at_ms IS NULL
-ORDER BY object, subject, role;
+ORDER BY target, subject, role;
 
 -- name: RevokeGrantsOfSubject :exec
 UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
 WHERE subject_kind = $3 AND subject_id = $4 AND revoked_at_ms IS NULL;
+
+-- name: GrantsOfSubject :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject_kind = $1 AND subject_id = $2 AND revoked_at_ms IS NULL
+ORDER BY target, role;
+
+-- name: CountRoleGrantsBelowInstallation :one
+SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind <> 'installation' AND revoked_at_ms IS NULL;
+
+-- name: CountEndedGrantRecords :one
+-- The records of a new grant that have ended: its principal or group, and
+-- its custom role. The grant write checks it in its own transaction, so a
+-- delete that commits first wins.
+SELECT (SELECT COUNT(*) FROM principals p WHERE @subject_kind::text = 'principal' AND p.id = @subject_id::text
+          AND p.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM principal_groups g WHERE @subject_kind::text = 'group' AND g.id = @subject_id::text
+          AND g.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM roles r WHERE r.id = @role::text AND r.deleted_at_ms IS NOT NULL);
 
 -- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
 FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
 WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
+
+-- name: UnitStackID :one
+-- The stable ID of a Pulumi stack, for a grant on the unit (ADR 19, ADR 52).
+SELECT id FROM stacks WHERE namespace = $1 AND project = $2 AND name = $3;
+
+-- name: UnitWorkspaceID :one
+-- The stable ID of an OpenTofu workspace, for a grant on the unit.
+SELECT id FROM workspaces WHERE namespace = $1 AND name = $2;
+
+-- name: UnitStacksByIDs :many
+SELECT id, namespace, project, name FROM stacks WHERE id = ANY(@ids::text[]);
+
+-- name: UnitWorkspacesByIDs :many
+SELECT id, namespace, name FROM workspaces WHERE id = ANY(@ids::text[]);

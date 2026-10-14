@@ -225,6 +225,26 @@ Lead decisions under owner delegation, 2026-10-13:
   a custom role ends the role. A delete of a principal or a group revokes
   its grants in the same transaction. Each grant and role change writes its
   audit entry in the transaction of the change.
+- No escalation through a role, a membership or a revoke. The lead decided
+  these on 2026-10-14, by the delegation of the owner, after the security
+  review of the roles and grants change:
+  - A custom role holds only actions that its maker holds on the
+    installation, on create and on change. A role that a current grant gives
+    below the installation keeps data actions only.
+  - A membership change is a grant by proxy. To add or remove a member, the
+    caller must hold, on each object, every action that the current grants
+    of the group give there.
+  - A revoke, and the delete of a principal or a group, need every action
+    that the grants give on their objects. Two admins of one namespace hold
+    the same actions there, so each can revoke the other, the grant of the
+    creator included. This is accepted.
+  - A grant on a unit follows the stable ID of the unit (ADR 19), not its
+    name. A new unit with the name of a deleted one does not get its grants.
+    A deleted unit keeps its grants, and a restore brings them back.
+  - A grant reads its subject and its custom role in the transaction of the
+    grant, so a delete that commits first wins.
+  - The TFE-compatible API answers the same 404 for an object that does not
+    exist and for an object that the caller cannot read.
 - Decisions at scale. One decision reads the groups of the caller in one
   query, the grants on the chain of the object in one query, and the custom
   roles of those grants in one query. A request reads the groups and the

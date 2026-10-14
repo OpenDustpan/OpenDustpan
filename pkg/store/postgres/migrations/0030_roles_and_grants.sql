@@ -5,7 +5,11 @@
 -- a group revokes its grants. role is the ID of a built-in role (its name)
 -- or of a custom role (rol-...). object is the wire form of the object:
 -- @server for the installation, a namespace, <namespace>/<collection> or a
--- unit reference. object_kind and namespace name it again for lists.
+-- unit reference, as it was at the time of the grant. target is what a
+-- decision matches: unit:<stable ID> for a unit (ADR 19), so a grant follows
+-- its unit and a new unit with the name of a deleted one does not get it,
+-- and the wire form of the object for every other kind. object_kind and
+-- namespace name the object again for lists.
 -- condition stays NULL: it is room for the attribute conditions of ADR 52
 -- decision 9, and no decision reads it yet. Built-in roles live in code, not
 -- here.
@@ -36,6 +40,7 @@ CREATE TABLE grants (
     subject_id    TEXT   NOT NULL,
     role          TEXT   COLLATE "C" NOT NULL,
     object        TEXT   COLLATE "C" NOT NULL,
+    target        TEXT   COLLATE "C" NOT NULL,
     object_kind   TEXT   NOT NULL,
     namespace     TEXT   NOT NULL DEFAULT '',
     condition     TEXT,
@@ -47,10 +52,10 @@ CREATE TABLE grants (
 
 -- One current grant of a role to a subject on an object. The index also
 -- serves the decisions, which read the grants of a set of subjects.
-CREATE UNIQUE INDEX grants_current ON grants (subject, role, object) WHERE revoked_at_ms IS NULL;
+CREATE UNIQUE INDEX grants_current ON grants (subject, role, target) WHERE revoked_at_ms IS NULL;
 
 -- The grants on one object, in the order of a page.
-CREATE INDEX grants_object ON grants (object, subject, role) WHERE revoked_at_ms IS NULL;
+CREATE INDEX grants_target ON grants (target, subject, role) WHERE revoked_at_ms IS NULL;
 
 CREATE INDEX grants_role ON grants (role) WHERE revoked_at_ms IS NULL;
 

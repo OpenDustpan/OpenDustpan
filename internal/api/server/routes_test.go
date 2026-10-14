@@ -261,10 +261,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		t.Fatalf("seed role: %v", err)
 	}
 
-	unit, err := identity.UnitObject("pulumi", testNamespace, testUnitName)
-	if err != nil {
-		t.Fatalf("unit object: %v", err)
-	}
+	unit := seedStack(t, st, testNamespace, "web", "prod")
 
 	other := access.Subject{Kind: access.SubjectPrincipal, ID: testOtherPrincipalID}
 
@@ -302,7 +299,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		}
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
 	if err != nil {
 		t.Fatalf("access authorizer: %v", err)
 	}
@@ -355,7 +352,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		t.Fatalf("seed member: %v", err)
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}

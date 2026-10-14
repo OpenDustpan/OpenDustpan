@@ -309,6 +309,7 @@ func portableSpec() []PortableTable {
 				{Name: "subject_id", Kind: KindText},
 				{Name: "role", Kind: KindText},
 				{Name: "object", Kind: KindText},
+				{Name: "target", Kind: KindText},
 				{Name: "object_kind", Kind: KindText},
 				{Name: portColNamespace, Kind: KindText},
 				{Name: "condition", Kind: KindText},

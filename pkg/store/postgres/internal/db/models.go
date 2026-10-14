@@ -64,6 +64,7 @@ type Grant struct {
 	SubjectID   string
 	Role        string
 	Object      string
+	Target      string
 	ObjectKind  string
 	Namespace   string
 	Condition   pgtype.Text

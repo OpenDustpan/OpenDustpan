@@ -178,6 +178,9 @@ type Object struct {
 	// name of the collection as it was written.
 	isCollection bool
 	collection   string
+	// unitID is the stable ID of a unit reference, when the core resolved
+	// it (ADR 19). It is not part of the wire form.
+	unitID string
 }
 
 // NamespaceObject returns the reference to the namespace ns.
@@ -192,6 +195,7 @@ func NamespaceObject(ns namespace.Name) Object {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
+		unitID:       "",
 	}
 }
 
@@ -204,7 +208,7 @@ func NamespaceObject(ns namespace.Name) Object {
 func CallerObject() Object {
 	return Object{
 		raw: "@caller", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: true, isServer: false, isCollection: false, collection: "",
+		isUnit: false, isCaller: true, isServer: false, isCollection: false, collection: "", unitID: "",
 	}
 }
 
@@ -216,7 +220,7 @@ func CallerObject() Object {
 func ServerObject() Object {
 	return Object{
 		raw: "@server", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: false, isServer: true, isCollection: false, collection: "",
+		isUnit: false, isCaller: false, isServer: true, isCollection: false, collection: "", unitID: "",
 	}
 }
 
@@ -228,7 +232,7 @@ func ServerObject() Object {
 func CollectionObject(ns namespace.Name, name string) Object {
 	return Object{
 		raw: ns.String() + "/" + name, ns: ns, tool: "", unit: "",
-		isUnit: false, isCaller: false, isServer: false, isCollection: true, collection: name,
+		isUnit: false, isCaller: false, isServer: false, isCollection: true, collection: name, unitID: "",
 	}
 }
 
@@ -256,6 +260,7 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
+		unitID:       "",
 	}, nil
 }
 
@@ -286,6 +291,7 @@ func ParseObject(s string) (Object, error) {
 			isServer:     false,
 			isCollection: false,
 			collection:   "",
+			unitID:       "",
 		}, nil
 	}
 
@@ -351,6 +357,7 @@ func parseUnitObject(s string) (Object, error) {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
+		unitID:       "",
 	}, nil
 }
 
@@ -549,4 +556,22 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+}
+
+// WithUnitID returns o with the stable ID id of its unit (ADR 19). A grant
+// on a unit follows this ID, not the name, so a new unit with the name of a
+// deleted one does not get its grants. On an object that is not a unit
+// reference, it returns o unchanged.
+func (o Object) WithUnitID(id string) Object {
+	if o.isUnit {
+		o.unitID = id
+	}
+
+	return o
+}
+
+// UnitID returns the stable ID of a unit reference, or "" when the core has
+// not resolved it or o is not a unit.
+func (o Object) UnitID() string {
+	return o.unitID
 }

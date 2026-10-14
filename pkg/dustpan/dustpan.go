@@ -1192,12 +1192,12 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	principals, err := newPrincipalService(cfg)
+	grants, err := newAccessService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	grants, err := newAccessService(cfg)
+	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
 		return nil, err
 	}
@@ -1243,14 +1243,21 @@ func serverAuditOf(store namespace.Store) audit.ServerStore {
 // newPrincipalService builds the principal and group service (ADR 52) from
 // the namespace store, or returns nil when the store keeps no principals.
 // Every SQL adapter serves all ports from one database connection, so the
-// namespace store is the principal store too.
-func newPrincipalService(cfg settings) (*principal.Service, error) {
+// namespace store is the principal store too. The access service, when the
+// store keeps grants, guards the membership changes and the deletes: each
+// one gives or takes the grants of a principal or a group.
+func newPrincipalService(cfg settings, grants *access.Service) (*principal.Service, error) {
 	store, ok := cfg.namespaceStore.(principal.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: store, Now: nil, NewID: nil})
+	var guard principal.Guard
+	if grants != nil {
+		guard = grants
+	}
+
+	svc, err := principal.NewService(principal.Config{Store: store, Guard: guard, Now: nil, NewID: nil})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
 	}
@@ -1274,6 +1281,7 @@ func withRequestCache(next http.Handler) http.Handler {
 type accessStores interface {
 	access.Store
 	access.Callers
+	access.Units
 	principal.Store
 }
 
@@ -1289,7 +1297,9 @@ func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
 		return identity.AdminOnly{}, nil
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: stores, Callers: stores, Collections: nil})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: stores, Callers: stores, Collections: nil, Units: stores,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
@@ -1312,7 +1322,9 @@ func newAccessService(cfg settings) (*access.Service, error) {
 	if !isAccess {
 		var err error
 
-		authz, err = access.NewAuthorizer(access.AuthorizerConfig{Store: stores, Callers: stores, Collections: nil})
+		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
+			Store: stores, Callers: stores, Collections: nil, Units: stores,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
 		}

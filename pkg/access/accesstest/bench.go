@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // Sizes of the benchmark installation: thousands of principals and units,
@@ -25,13 +27,16 @@ const (
 	benchGrants      = 5000
 )
 
-// BenchStore is a store that keeps namespaces, principals, roles and
-// grants, and answers the subjects of a caller. Both SQL stores are one.
+// BenchStore is a store that keeps namespaces, principals, roles, grants
+// and Pulumi stacks, answers the subjects of a caller and the stable ID of a
+// unit. Both SQL stores are one.
 type BenchStore interface {
 	access.Store
 	access.Callers
+	access.Units
 	principal.Store
 	namespace.Store
+	CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error
 }
 
 // benchCollectionsOf is the collection of each benchmark unit.
@@ -54,7 +59,9 @@ func Bench(b *testing.B, s BenchStore) {
 
 	units, collections := seedBenchInstallation(b, s)
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: s, Callers: s, Collections: collections})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: s, Callers: s, Collections: collections, Units: s,
+	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
 	}
@@ -98,13 +105,16 @@ func seedBenchInstallation(b *testing.B, s BenchStore) ([]identity.Object, bench
 	ctx := b.Context()
 
 	nss := make([]namespace.Name, 0, benchNamespaces)
+	fences := make([]namespace.Fence, 0, benchNamespaces)
+
 	for i := range benchNamespaces {
-		ns := namespace.Name(fmt.Sprintf("ns%02d", i))
-		if err := s.CreateNamespace(ctx, newNamespace(ns)); err != nil {
+		ns := newNamespace(namespace.Name(fmt.Sprintf("ns%02d", i)))
+		if err := s.CreateNamespace(ctx, ns); err != nil {
 			b.Fatalf("seed namespace: %v", err)
 		}
 
-		nss = append(nss, ns)
+		nss = append(nss, ns.Name)
+		fences = append(fences, ns.Fence())
 	}
 
 	units := make([]identity.Object, 0, benchUnits)
@@ -116,7 +126,13 @@ func seedBenchInstallation(b *testing.B, s BenchStore) ([]identity.Object, bench
 			b.Fatalf("unit object: %v", err)
 		}
 
+		id := fmt.Sprintf("stk-bench%05d", i)
+		if err := s.CreateStack(ctx, benchStack(b, u, id), fences[i%benchNamespaces]); err != nil {
+			b.Fatalf("seed stack: %v", err)
+		}
+
 		collections[u.String()] = fmt.Sprintf("coll%02d", (i/benchNamespaces)%benchCollections)
+		// A route resolves a unit by name, so the decision reads the ID.
 		units = append(units, u)
 	}
 
@@ -190,13 +206,15 @@ func seedBenchGrants(b *testing.B, s BenchStore, nss []namespace.Name, units []i
 
 		switch i % 4 {
 		case 0:
-			obj = units[(i*7919)%benchUnits]
+			k := (i * 7919) % benchUnits
+			obj = units[k].WithUnitID(fmt.Sprintf("stk-bench%05d", k))
 		case 1:
 			obj = identity.CollectionObject(nss[i%benchNamespaces], fmt.Sprintf("coll%02d", (i/4)%benchCollections))
 		case 2:
 			obj = identity.NamespaceObject(nss[i%benchNamespaces])
 		default:
-			obj = units[(i*104729)%benchUnits]
+			k := (i * 104729) % benchUnits
+			obj = units[k].WithUnitID(fmt.Sprintf("stk-bench%05d", k))
 		}
 
 		g := access.Grant{
@@ -215,4 +233,20 @@ func seedBenchGrants(b *testing.B, s BenchStore, nss []namespace.Name, units []i
 // isDenied reports whether err is a refused decision.
 func isDenied(err error) bool {
 	return errors.Is(err, identity.ErrDenied)
+}
+
+// benchStack returns the Pulumi stack of the unit u, with the stable ID id.
+func benchStack(b *testing.B, u identity.Object, id string) stack.Stack {
+	b.Helper()
+
+	project, name, _ := strings.Cut(u.UnitName(), "/")
+
+	ref, err := stack.ParseRef(u.Namespace().String(), project, name)
+	if err != nil {
+		b.Fatalf("stack ref: %v", err)
+	}
+
+	return stack.Stack{
+		CreatedAt: at(0), UpdatedAt: at(0), Tags: map[string]string{}, Ref: ref, ID: stack.ID(id), Version: 0,
+	}
 }

@@ -91,7 +91,9 @@ func newAccessFixture(t *testing.T) accessFixture {
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil})
+	seedStack(t, st, "acme", "web", "prod")
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
@@ -103,7 +105,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 		t.Fatalf("access service: %v", err)
 	}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	principals, err := principal.NewService(principal.Config{Store: st, Guard: grants, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -497,4 +499,40 @@ func TestGrantPaging(t *testing.T) {
 			http.MethodGet, "/api/server/namespaces/acme/grants?" + bad, "", http.StatusBadRequest,
 		}, nil)
 	}
+}
+
+// TestAccountAdministratorCannotReachOperatorActions proves the three
+// refusals of the security review over HTTP: an account administrator
+// cannot make a role with an operator action, cannot join a group that
+// holds site-administrator, and cannot revoke a site-administrator grant.
+// Each answers 403.
+func TestAccountAdministratorCannotReachOperatorActions(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var ops struct {
+		ID string `json:"id"`
+	}
+	f.as(t, "admin", apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &ops)
+
+	var grant grantDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"group:` + ops.ID + `#member","role":"site-administrator"}`, http.StatusCreated,
+	}, &grant)
+
+	for _, c := range []apiCall{
+		{http.MethodPost, "/api/server/roles", `{"name":"restorer","actions":["server:restore"]}`, http.StatusForbidden},
+		{
+			http.MethodPost, "/api/server/groups/" + ops.ID + "/members", `{"principalID":"prn-ann"}`,
+			http.StatusForbidden,
+		},
+		{http.MethodDelete, "/api/server/grants/" + grant.ID, "", http.StatusForbidden},
+		{http.MethodDelete, "/api/server/groups/" + ops.ID, "", http.StatusForbidden},
+	} {
+		f.as(t, "ann", c, nil)
+	}
+
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/metrics", "", http.StatusForbidden}, nil)
 }

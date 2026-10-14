@@ -73,7 +73,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 		}
 	})
 
-	principals, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 
 	_, st := newTestPrincipalStore(t)
 
-	svc, err := principal.NewService(principal.Config{Store: failingStore{st}, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{Store: failingStore{st}, Guard: nil, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
