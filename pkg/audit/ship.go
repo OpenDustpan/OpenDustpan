@@ -65,6 +65,8 @@ type Feed interface {
 	// instances that ship the same batch never move a cursor back. It
 	// returns namespace.ErrNotFound if the fence names a missing namespace
 	// and namespace.ErrFenced if the fence carries a stale failover version.
+	// A fence that names ServerScope has no failover version: the store
+	// moves that cursor with no fence check.
 	AdvanceSinkCursor(ctx context.Context, fence namespace.Fence, sink string, seq int64) error
 }
 
@@ -133,6 +135,18 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 	}
 
 	return &Shipper{cfg: cfg}, nil
+}
+
+// serverScope answers ServerScope as a namespace value: its fence has no
+// failover version, so the store moves its cursor with no fence check.
+func serverScope() namespace.Namespace {
+	return namespace.Namespace{
+		CreatedAt:       time.Time{},
+		Name:            ServerScope,
+		HomeRegion:      "",
+		FailoverVersion: 0,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
 }
 
 // validSinkName reports whether name is a usable sink name.
@@ -228,14 +242,16 @@ func (s *Shipper) fail(ctx context.Context, name string, err error) {
 	}
 }
 
-// round copies the entries above the cursors of sink in every namespace.
-// It stops at the first failure, so the cursors keep the order of the
-// entries.
+// round copies the entries above the cursors of sink in every namespace
+// and in ServerScope. It stops at the first failure, so the cursors keep
+// the order of the entries.
 func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
 		return fmt.Errorf("list namespaces: %w", err)
 	}
+
+	namespaces = append(namespaces, serverScope())
 
 	for _, ns := range namespaces {
 		if err := s.shipNamespace(ctx, sink, ns); err != nil {

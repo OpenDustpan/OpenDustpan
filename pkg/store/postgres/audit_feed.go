@@ -52,9 +52,15 @@ func (s *Store) SinkCursor(ctx context.Context, sink string, ns namespace.Name) 
 }
 
 // AdvanceSinkCursor implements audit.Feed: it moves the cursor up in one
-// transaction with the fence check, and never moves it down.
+// transaction with the fence check, and never moves it down. The cursor of
+// audit.ServerScope has no fence: the scope describes the installation.
 func (s *Store) AdvanceSinkCursor(ctx context.Context, fence namespace.Fence, sink string, seq int64) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	inTx := func(fn func(q *db.Queries) error) error { return s.inFencedTx(ctx, fence, fn) }
+	if fence.Namespace == audit.ServerScope {
+		inTx = func(fn func(q *db.Queries) error) error { return s.inTx(ctx, fn) }
+	}
+
+	return inTx(func(q *db.Queries) error {
 		err := q.AdvanceAuditSinkCursor(ctx, db.AdvanceAuditSinkCursorParams{
 			Sink:        sink,
 			Namespace:   fence.Namespace.String(),

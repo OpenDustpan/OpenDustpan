@@ -12,6 +12,7 @@ import (
 // the audit store to append entries, and the feed under test.
 type FeedStore interface {
 	Store
+	audit.ServerStore
 	audit.Feed
 }
 
@@ -42,6 +43,7 @@ func RunFeed(t *testing.T, newStore FeedFactory) {
 		{name: "a cursor never moves back", test: testCursorNeverBack},
 		{name: "advance with a stale fence fails", test: testCursorStaleFence},
 		{name: "advance in a missing namespace fails", test: testCursorMissingNamespace},
+		{name: "the server scope reads and keeps a cursor with no fence", test: testServerScopeFeed},
 	}
 
 	for _, tc := range cases {
@@ -252,6 +254,30 @@ func testCursorMissingNamespace(t *testing.T, s FeedStore) {
 	err := s.AdvanceSinkCursor(t.Context(), missing, "siem", 1)
 	if !errors.Is(err, namespace.ErrNotFound) {
 		t.Fatalf("advance in a missing namespace: got %v, want namespace.ErrNotFound", err)
+	}
+}
+
+func testServerScopeFeed(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	e := newEntry(audit.ServerScope, "alice", "req-server", now())
+	e.Kind = audit.KindChange
+	e.Object = audit.ServerScope.String()
+
+	stored, err := s.AppendServer(t.Context(), e)
+	if err != nil {
+		t.Fatalf("append server entry: %v", err)
+	}
+
+	got := after(t, s, audit.ServerScope, 0)
+	if len(got) != 1 || got[0].Sequence != stored.Sequence || got[0].Hash != stored.Hash {
+		t.Fatalf("after on the server scope: got %d entries, want the one appended", len(got))
+	}
+
+	advance(t, s, namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 0}, "siem", stored.Sequence)
+
+	if c := cursor(t, s, "siem", audit.ServerScope); c != stored.Sequence {
+		t.Fatalf("server scope cursor: got %d, want %d", c, stored.Sequence)
 	}
 }
 
