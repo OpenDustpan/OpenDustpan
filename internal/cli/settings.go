@@ -123,6 +123,20 @@ var Settings = []*Setting{
 			"(DUSTPAN_TRUSTED_PROXY_HEADER)",
 		"`x-forwarded-for` (or `forwarded`)",
 	),
+	boolSetting(
+		"ip-allowlists", "DUSTPAN_IP_ALLOWLISTS",
+		"turn on IP allowlists: a namespace that has a list refuses requests from addresses outside it "+
+			"(DUSTPAN_IP_ALLOWLISTS)",
+		"(none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). "+
+			"The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, "+
+			"or every client reads as the address of the proxy.",
+	),
+	boolSetting(
+		"ip-allowlists-include-bootstrap", "DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP",
+		"apply IP allowlists to the bootstrap admin token too (DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP)",
+		"(none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). "+
+			"Set `true` to apply the lists to it as well.",
+	),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",

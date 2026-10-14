@@ -9,7 +9,7 @@ func ServeFlags() []*Setting {
 	return SettingsFor(
 		"database", "region",
 		"listen", "console-dir", "allowed-origins", "tls-cert", "tls-key", "public-url", "trusted-proxies",
-		"trusted-proxy-header",
+		"trusted-proxy-header", "ip-allowlists", "ip-allowlists-include-bootstrap",
 		"log-level", "log-format",
 		"blob-dir", "blob-store", "s3-endpoint", "s3-region", "backup-target",
 		"key-encryption-key-file", "generate-key-encryption-key",

@@ -60,6 +60,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -145,11 +146,20 @@ type settings struct {
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
 	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
+	ipAllowlists          *ipAllowlistSettings
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
-	backupTarget            blob.Store
-	backupTargetName        string
+}
+
+// ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
+// exemption switch and the list store (ADR 55, decision 8).
+type ipAllowlistSettings struct {
+	store            ipallow.Store
+	enabled          bool
+	includeBootstrap bool
 }
 
 // Option configures a Server.
@@ -346,6 +356,37 @@ func WithCheckpointDeltaCutoff(n int) Option {
 	return func(o *settings) { o.checkpointDeltaCutoff = n }
 }
 
+// WithIPAllowlists turns IP allowlists on when on is true. A namespace
+// that has a list then refuses requests from addresses outside it
+// (ADR 55, decision 8). Off by default.
+func WithIPAllowlists(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).enabled = on }
+}
+
+// WithIPAllowlistsIncludeBootstrap applies IP allowlists to the bootstrap
+// admin token too when on is true. Off by default: the bootstrap admin token
+// is exempt, so an administrator cannot lock themselves out.
+func WithIPAllowlistsIncludeBootstrap(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).includeBootstrap = on }
+}
+
+// WithIPAllowlistStore sets the IP allowlist persistence port. Required when
+// IP allowlists are on: every SQL adapter serves it from the same database
+// connection as the other ports.
+func WithIPAllowlistStore(s ipallow.Store) Option {
+	return func(o *settings) { ipAllowlistConfig(o).store = s }
+}
+
+// ipAllowlistConfig returns the mutable allowlist settings of o, creating
+// them when an Option runs on zero settings.
+func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
+	if o.ipAllowlists == nil {
+		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+	}
+
+	return o.ipAllowlists
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -427,6 +468,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		backupTarget:            nil,
 		backupTargetName:        "",
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 	}
 
 	for _, opt := range opts {
@@ -458,13 +500,33 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	// Every authenticated person can list and revoke its own personal
-	// tokens with no grant (ADR 53, decision 3).
-	cfg.authorizer = identity.SelfAllowed{
+	cfg.authorizer = wrapAuthorizer(cfg)
+
+	return assemble(cfg, base, svc, backups)
+}
+
+// wrapAuthorizer returns the authorizer that every adapter receives. Every
+// authenticated person can list and revoke its own personal tokens with no
+// grant (ADR 53, decision 3). When IP allowlists are on, the allowlist gate
+// is the outermost layer, so it runs in the authorization step of every
+// adapter. When off, it returns the plain authorizer with no decorator, so
+// the default path has zero cost and zero risk.
+//
+//nolint:ireturn // The adapters take the port.
+func wrapAuthorizer(cfg settings) identity.Authorizer {
+	selfAllowed := identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
 	}
 
-	return assemble(cfg, base, svc, backups)
+	allow := cfg.ipAllowlists
+	if allow == nil || !allow.enabled {
+		return selfAllowed
+	}
+
+	return ipallow.Gate{
+		Next: selfAllowed, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -728,13 +790,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		)
 	}
 
-	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
-		missing := "WithTLS certificate file"
-		if cfg.tlsCertFile != "" {
-			missing = "WithTLS key file"
-		}
-
-		return baseurl.Resolver{}, fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	if err := checkTLSAndAllowlist(cfg); err != nil {
+		return baseurl.Resolver{}, err
 	}
 
 	base, err := baseurl.Parse(cfg.publicURL)
@@ -743,6 +800,29 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	}
 
 	return base, nil
+}
+
+// checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
+// of cfg. It keeps checkSettings under the complexity limit.
+func checkTLSAndAllowlist(cfg *settings) error {
+	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
+		missing := "WithTLS certificate file"
+		if cfg.tlsCertFile != "" {
+			missing = "WithTLS key file"
+		}
+
+		return fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	}
+
+	allow := cfg.ipAllowlists
+	if allow != nil && allow.enabled && allow.store == nil {
+		return fmt.Errorf(
+			"%w: --ip-allowlists needs a store: pass WithIPAllowlistStore",
+			ErrMissingOption,
+		)
+	}
+
+	return nil
 }
 
 // newServices builds the domain services from validated settings. It reads
