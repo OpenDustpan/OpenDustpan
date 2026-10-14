@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -35,9 +36,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -75,6 +79,12 @@ var (
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+	)
+	// errRetention reports a soft-delete retention that is not a duration of
+	// at least one hour.
+	errRetention = errors.New(
+		"soft-delete retention must be a duration of at least 1h, for example 720h: " +
+			"set --soft-delete-retention (DUSTPAN_SOFT_DELETE_RETENTION)",
 	)
 	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
 	// the delta capability off, so only negative values fail.
@@ -202,31 +212,22 @@ func serveWithIO(
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	stopHangup := f.catchHangup()
+	defer stopHangup()
+
+	// The start resolves against the real variables. A variable changes
+	// only at a restart, and the server clears the secret variables after
+	// it reads them: each reload resolves against a snapshot that keeps no
+	// sensitive value, only its fingerprint (ADR 63 decision 5).
+	f.args = args
+	f.lookup = cli.SnapshotEnv(os.LookupEnv, cli.DeclaredEnvs())
+
 	if err := f.resolveLayers(fs, os.LookupEnv); err != nil {
 		return err
 	}
 
-	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+	if err := f.check(); err != nil {
 		return err
-	}
-
-	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
-		return err
-	}
-
-	sizeLimits := []int64{
-		f.maxCheckpointBytes,
-		f.maxSecretBatchBytes,
-		f.maxStateBytes,
-		f.maxBodyBytesInFlight,
-	}
-
-	if err := checkSizeFlags(sizeLimits); err != nil {
-		return err
-	}
-
-	if f.checkpointDeltaCutoff < 0 {
-		return errDeltaCutoff
 	}
 
 	return f.run(ctx, stdin, stderr, terminal)
@@ -241,6 +242,24 @@ type serveFlags struct {
 	// for the start log (ADR 63 decision 7).
 	file     cli.ConfigFile
 	resolved []cli.Resolved
+	// passwordFlags holds the flags that carry a password in a URL, for the
+	// warning that a flag holds a password, so the password can be moved to the variable.
+	passwordFlags []*cli.Setting
+
+	// args and lookup are the command line and the environment snapshot
+	// of the start. A reload of the configuration file resolves against
+	// them again. fileSum is the SHA-256 of the file at start.
+	args    []string
+	lookup  cli.LookupFunc
+	fileSum [sha256.Size]byte
+
+	// hup receives SIGHUP from the parse of the flags on, when --config
+	// names a file. The reloader reads it.
+	hup chan os.Signal
+
+	// instanceID names this process in the audit entries that it writes
+	// on its own (ADR 63 decision 10).
+	instanceID string
 
 	config                  string
 	listen                  string
@@ -266,6 +285,73 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
+	softDeleteRetention     string
+	// retention is softDeleteRetention after the check.
+	retention  time.Duration
+	auditSinks []string
+	logSinks   []string
+	// app is the application logger and its sinks, set by run.
+	app appLog
+}
+
+// check refuses settings that are wrong together or out of range: the TLS
+// pair, the log level and format, the size limits, the delta cutoff, the
+// soft-delete retention and the trusted proxies. It keeps the parsed
+// retention in f.retention.
+// Serve runs it at start and on each reload of the configuration file.
+func (f *serveFlags) check() error {
+	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
+		return err
+	}
+
+	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
+		return err
+	}
+
+	sizeLimits := []int64{
+		f.maxCheckpointBytes,
+		f.maxSecretBatchBytes,
+		f.maxStateBytes,
+		f.maxBodyBytesInFlight,
+	}
+
+	if err := checkSizeFlags(sizeLimits); err != nil {
+		return err
+	}
+
+	if f.checkpointDeltaCutoff < 0 {
+		return errDeltaCutoff
+	}
+
+	retention, err := parseRetention(f.softDeleteRetention)
+	if err != nil {
+		return err
+	}
+
+	f.retention = retention
+
+	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+}
+
+// checkProxyFlags refuses a trusted proxy list or header that the server
+// refuses, with the rules of internal/clientip, so a reload of the
+// configuration file refuses the same values as the start.
+func checkProxyFlags(list, header string) error {
+	prefixes, err := clientip.ParseList(list)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
+	}
+
+	parsed, err := clientip.ParseHeader(header)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxy-header: %w", err)
+	}
+
+	if _, err := clientip.NewResolver(prefixes, parsed); err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
+	}
+
+	return nil
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -282,12 +368,18 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 // (ADR 63 decision 1). A refused file stops the start.
 func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) error {
 	if strings.TrimSpace(f.config) != "" {
-		file, err := cli.ReadConfigFile(strings.TrimSpace(f.config))
+		data, err := cli.ReadConfigBytes(strings.TrimSpace(f.config))
+		if err != nil {
+			return err
+		}
+
+		file, err := cli.ParseConfig(data)
 		if err != nil {
 			return err
 		}
 
 		f.file = file
+		f.fileSum = sha256.Sum256(data)
 	}
 
 	resolved, err := cli.Resolve(fs, cli.ServeSettings(), lookup, f.file)
@@ -296,6 +388,7 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 	}
 
 	f.resolved = resolved
+	f.passwordFlags = cli.FlagsHoldingPassword(fs, resolved)
 
 	return nil
 }
@@ -316,6 +409,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 }
 
 // registerNet registers the network and console flags.
@@ -331,6 +425,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
+	cli.ByFlag("log-sink").List(fs, &f.logSinks)
 }
 
 // registerLimits registers the large-body size flags.
@@ -341,6 +436,20 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
+	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
+}
+
+// warnPasswordFlags writes one WARN line for each flag that holds a URL with a
+// password. The line names the flag and the variable to use, and it never
+// shows the value, because a flag shows in a process list.
+func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
+	for _, s := range settings {
+		logger.LogAttrs(ctx, slog.LevelWarn,
+			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
+			slog.String("flag", "--"+s.Flag),
+			slog.String("use", s.Env),
+		)
+	}
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -350,12 +459,22 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 // store must hold no wrapped keys, because a new key cannot open them (issue
 // 355). Serve then uses the same store.
 func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer, terminal bool) error {
-	logger, err := f.loggerFor(stderr)
+	app, err := f.appLogFor(stderr) //nolint:contextcheck // The log writers outlive this call; close bounds them.
 	if err != nil {
 		return err
 	}
 
+	f.app = app
+	logger := app.logger
+
+	defer closeAppLog(ctx, &app, stderr)
+
 	cli.LogResolved(ctx, logger, f.resolved)
+
+	warnPasswordFlags(ctx, logger, f.passwordFlags)
+
+	f.instanceID = instance.NewID()
+	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
 
 	if dbErr := checkDatabaseFlag(f.database); dbErr != nil {
 		return dbErr
@@ -409,6 +528,20 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	}
 
 	return f.serveWithStores(ctx, opened, authn, wrapper, logger)
+}
+
+// writeStartEntry writes the start entry of ADR 63 decision 10: one audit
+// entry in the server scope with the channel startup, the instance ID as the
+// subject and each setting with its layer and its effective value. The audit
+// log is always on, so a failed write stops the start (decision 11).
+func (f *serveFlags) writeStartEntry(ctx context.Context, entries audit.ServerStore) error {
+	entry := cli.SettingsEntry(audit.ChannelStartup, f.instanceID, time.Now(), cli.AuditSettings(f.resolved))
+
+	if _, err := entries.AppendServer(ctx, entry); err != nil {
+		return fmt.Errorf("write the start audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // refuseNewKeyFile stops serve before it makes a key file at path when the
@@ -823,17 +956,56 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := sinks.close(); closeErr != nil {
+			logger.WarnContext(ctx, "close audit sinks", slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	stopHangup := sinks.reopenOnHangup(ctx, logger, f.app.files)
+	defer stopHangup()
+
 	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
 	if optErr != nil {
 		return optErr
 	}
-
 	opts = append(opts, f.backupOptions(backupTarget)...)
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
+
+	// After the start-up checks and before serving, write the start entry
+	// and only then start the reloader: a start that fails its checks
+	// writes no entry, and no reload entry comes before the start entry
+	// (ADR 63 decision 10).
+	reloads := &reloadMetrics{observe: nil}
+	started := &startedReloader{stop: nil}
+
+	opts = append(opts, dustpan.WithBeforeServe(func(hookCtx context.Context) error {
+		if startErr := f.writeStartEntry(hookCtx, st); startErr != nil {
+			return startErr
+		}
+
+		started.stop = f.startReloader(ctx, st, reloads.record, logger)
+
+		return nil
+	}))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		return fmt.Errorf("configure server: %w", err)
 	}
+
+	if f.app.drops != nil {
+		f.app.drops.attach(srv.Metrics().AddLogSinkDropped)
+	}
+
+	reloads.observe = srv.Metrics().ObserveConfigReload
+
+	defer started.Stop()
 
 	// Run runs the start-up checks, including the key-encryption key check
 	// (ADR 23), before it serves.
@@ -953,6 +1125,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
+		dustpan.WithSoftDeleteRetention(f.retention),
 	}, nil
 }
 
@@ -1255,11 +1428,20 @@ func normalizeLogLevel(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// loggerFor builds the serve logger from the log flags. It keeps the JSON
-// default and switches to text only when asked.
-func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
+// closeAppLog flushes and closes the application log sinks. The sinks are
+// closing, so a failure goes to stderr.
+func closeAppLog(ctx context.Context, app *appLog, stderr io.Writer) {
+	if err := app.close(ctx); err != nil {
+		//nolint:errcheck // Nothing is left to report a failed write of stderr to.
+		fmt.Fprintln(stderr, "opendustpan: close log sinks:", err)
+	}
+}
+
+// appLogFor builds the application logger and its sinks from the log
+// flags. Without --log-sink it writes to stderr, as serve always did.
+func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 	if err := checkLogFlags(f.logLevel, f.logFormat); err != nil {
-		return nil, err
+		return appLog{}, err
 	}
 
 	var level slog.Level
@@ -1275,13 +1457,7 @@ func (f *serveFlags) loggerFor(stderr io.Writer) (*slog.Logger, error) {
 		level = slog.LevelInfo
 	}
 
-	opts := &slog.HandlerOptions{Level: level}
-
-	if normalizeLogLevel(f.logFormat) == "text" {
-		return slog.New(slog.NewTextHandler(stderr, opts)), nil
-	}
-
-	return slog.New(slog.NewJSONHandler(stderr, opts)), nil
+	return newAppLog(f.logSinks, level, f.logFormat, stderr, os.LookupEnv)
 }
 
 // store is the persistence adapter chosen by --database.
@@ -1297,6 +1473,7 @@ type store interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	audit.ServerStore
 	close()
 }
 
@@ -1350,6 +1527,20 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
+}
+
+// minRetention is the shortest soft-delete retention the server accepts.
+const minRetention = dustpan.MinSoftDeleteRetention
+
+// parseRetention parses the soft-delete retention: a Go duration of at least
+// one hour (ADR 47, decision 2). There is no maximum.
+func parseRetention(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minRetention {
+		return 0, errRetention
+	}
+
+	return d, nil
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,

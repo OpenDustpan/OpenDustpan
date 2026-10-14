@@ -612,6 +612,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            store,
+		Tokens:             nil,
 		Checkpoints:        store,
 		Events:             store,
 		Namespaces:         namespaces,

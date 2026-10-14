@@ -67,6 +67,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      maxState,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

@@ -35,6 +35,12 @@ func (s *Store) UnitID(ctx context.Context, obj identity.Object) (string, bool, 
 		return "", false, nil
 	}
 
+	return unitIDWith(ctx, s.queries, obj)
+}
+
+// unitIDWith returns the stable ID of the live unit obj, read with q, so a
+// transaction can read it.
+func unitIDWith(ctx context.Context, q *db.Queries, obj identity.Object) (string, bool, error) {
 	var (
 		id  string
 		err error
@@ -47,11 +53,11 @@ func (s *Store) UnitID(ctx context.Context, obj identity.Object) (string, bool, 
 			return "", false, nil
 		}
 
-		id, err = s.queries.UnitStackID(ctx, db.UnitStackIDParams{
+		id, err = q.UnitStackID(ctx, db.UnitStackIDParams{
 			Namespace: obj.Namespace().String(), Project: project, Name: stack,
 		})
 	case opentofuTool:
-		id, err = s.queries.UnitWorkspaceID(ctx, db.UnitWorkspaceIDParams{
+		id, err = q.UnitWorkspaceID(ctx, db.UnitWorkspaceIDParams{
 			Namespace: obj.Namespace().String(), Name: obj.UnitName(),
 		})
 	default:
@@ -67,6 +73,24 @@ func (s *Store) UnitID(ctx context.Context, obj identity.Object) (string, bool, 
 	}
 
 	return id, true, nil
+}
+
+// auditObjectID returns the stable ID of the unit that the audit object
+// names, read with q in the append transaction, or "" when the object is not
+// a live unit (ADR 47). A store that knows the unit fills the ID, so no
+// adapter has to.
+func auditObjectID(ctx context.Context, q *db.Queries, object string) (string, error) {
+	obj, err := identity.ParseObject(object)
+	if err != nil || !obj.IsUnit() {
+		return "", nil //nolint:nilerr // An object that is not a unit reference has no unit ID.
+	}
+
+	id, _, err := unitIDWith(ctx, q, obj)
+	if err != nil {
+		return "", err
+	}
+
+	return id, nil
 }
 
 // UnitObjects implements access.Units.

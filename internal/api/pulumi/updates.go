@@ -431,7 +431,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 // startUpdate starts the update and hands out its lease. The request tags
 // are ignored in milestone 1: they only annotate the stack. The journal version
 // is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
-func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
@@ -446,7 +446,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 
 	journal := h.journalVersionFor(r.UserAgent(), offer)
 
-	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
+	started, err := h.updates.StartBy(ctx, ref, id, p.TokenID, int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 

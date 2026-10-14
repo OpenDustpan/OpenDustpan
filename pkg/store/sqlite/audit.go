@@ -97,10 +97,12 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 // inFencedAuditedTx runs fn and appends e to the chain of the namespace of
 // fence in one fenced transaction: the change and its audit entry commit
 // together, or neither does (ADR 60, fail closed). An entry that fails
-// validation or names another namespace changes nothing. The write lock of the
+// validation or names another namespace changes nothing. fn may set fields
+// of e that only the transaction knows, such as the object ID, before the
+// append. The write lock of the
 // transaction orders the appends.
 func (s *Store) inFencedAuditedTx(
-	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -116,7 +118,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -140,9 +142,19 @@ func validServerEntry(e audit.Entry) error {
 }
 
 // appendAuditEntry reads the last entry of the scope of e and inserts e as
-// the next one, with its sequence, previous hash and hash. The caller runs
+// the next one, with its sequence, previous hash and hash. An entry with no
+// ObjectID gets the stable ID of the live unit that its Object names. The caller runs
 // it in a transaction that orders the appends of the scope.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	if e.ObjectID == "" {
+		id, err := auditObjectID(ctx, q, e.Object)
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		e.ObjectID = id
+	}
+
 	var prevHash string
 
 	var seq int64 = 1
@@ -181,6 +193,8 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 		ValueCount: toNullInt64(e.ValueCount),
+		Changes:    toChangesText(e.Changes),
+		ObjectID:   e.ObjectID,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -209,6 +223,7 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	}
 
 	entries := make([]audit.Entry, 0, len(rows))
+
 	for i := range rows {
 		entries = append(entries, fromAuditRow(rows[i]))
 	}
@@ -242,14 +257,9 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 		read := checked + int64(len(rows))
 
 		for i := range rows {
-			e := fromAuditRow(rows[i])
-
-			if e.Sequence != wantSeq || e.PrevHash != prevHash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
-			}
-
-			if got := audit.ComputeHash(e, e.PrevHash); got != e.Hash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
+			e, ok := chainEntry(rows[i], wantSeq, prevHash)
+			if !ok {
+				return audit.CheckResult{Checked: read, BadSequence: rows[i].Sequence, Valid: false}, nil
 			}
 
 			prevHash = e.Hash
@@ -266,9 +276,17 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
 // without validation: it was validated on write and the foreign key holds.
-// A NULL value count reads as nil: only a decrypt call stores a count.
+// A NULL value count reads as nil: only a decrypt call stores a count. A
+// NULL changes column reads as nil. The changes decode leniently, for
+// display: a text that does not decode reads as nil, so a list always
+// answers the entry, and only the chain check reports the changed text.
 func fromAuditRow(row db.AuditEntry) audit.Entry {
 	ns := namespace.Name(row.Namespace)
+
+	changes, err := audit.DecodeChanges(row.Changes.String)
+	if err != nil {
+		changes = nil
+	}
 
 	return audit.Entry{
 		At:         codec.FromMillis(row.AtMs),
@@ -280,7 +298,9 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Object:     row.Object,
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
+		Changes:    changes,
 		ValueCount: fromNullInt64(row.ValueCount),
+		ObjectID:   row.ObjectID,
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
 		Channel:    audit.Channel(row.Channel),
@@ -311,4 +331,32 @@ func fromNullInt64(count sql.NullInt64) *int64 {
 	out := count.Int64
 
 	return &out
+}
+
+// toChangesText maps the changes of an entry to their canonical JSON, and
+// no changes to NULL.
+func toChangesText(changes []audit.Change) sql.NullString {
+	text := audit.EncodeChanges(changes)
+
+	return sql.NullString{String: text, Valid: text != ""}
+}
+
+// chainEntry answers the entry of row and true when row is the next link of
+// the chain: it has the sequence wantSeq, it links to prevHash and its hash
+// matches its fields with the changes text as the store holds it. It
+// answers false for any other row.
+func chainEntry(row db.AuditEntry, wantSeq int64, prevHash string) (audit.Entry, bool) {
+	var none audit.Entry
+
+	e := fromAuditRow(row)
+
+	if e.Sequence != wantSeq || e.PrevHash != prevHash {
+		return none, false
+	}
+
+	if audit.ComputeStoredHash(e, e.PrevHash, row.Changes.String) != e.Hash {
+		return none, false
+	}
+
+	return e, true
 }

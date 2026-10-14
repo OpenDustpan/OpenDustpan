@@ -62,7 +62,7 @@ var (
 var errNoTokenStore = errors.New("the store of this server keeps no access tokens")
 
 // tokenResponse is one access token on the wire, without its secret. Status
-// is active, expired or revoked at the time of the answer. A null
+// is active, expired, revoked or disabled at the time of the answer. A null
 // lastUsedAt means that no request used the token. ReplacedBy names the
 // token that a rotation issued for this one, or is empty.
 //
@@ -71,6 +71,7 @@ var errNoTokenStore = errors.New("the store of this server keeps no access token
 type tokenResponse struct {
 	LastUsedAt *string `json:"lastUsedAt"`
 	RevokedAt  *string `json:"revokedAt"`
+	DisabledAt *string `json:"disabledAt"`
 	// ExpiresInDays is the count of whole days until the expiry, at the
 	// time of the answer by the server clock, or null for a token that is
 	// not active. A client warns from it with no need of its own clock.
@@ -168,6 +169,7 @@ func tokenOf(t accesstoken.Token, now time.Time) tokenResponse {
 		ExpiresInDays: expiresInDays,
 		LastUsedAt:    optionalWireTime(t.LastUsedAt),
 		RevokedAt:     optionalWireTime(t.RevokedAt),
+		DisabledAt:    optionalWireTime(t.DisabledAt),
 		ID:            t.ID,
 		PrincipalID:   t.PrincipalID,
 		Name:          t.Name,
@@ -538,6 +540,7 @@ func classifyToken(err error) (int, string, bool) {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
+		errors.Is(err, errPolicyBody),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):

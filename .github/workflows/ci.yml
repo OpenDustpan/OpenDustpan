@@ -8,17 +8,25 @@ on:
   pull_request:
     # Draft pull requests run no jobs: mark a PR ready to run CI on it.
     types: [opened, synchronize, reopened, ready_for_review]
+  # Every 2 hours, the go job on main runs each test package again without
+  # the test cache (make test-nocache), to find flaky tests. The e2e and scan
+  # jobs do not run on the schedule. Each run uses about 9 runner-minutes.
+  # GitHub sends the failure notification of a scheduled run to the user who
+  # last changed this cron line.
+  schedule:
+    - cron: "17 */2 * * *"
 
 permissions:
   contents: read
 
-# The project has two self-hosted runners. A new push to a pull request
+# The project has four self-hosted runners. A new push to a pull request
 # cancels the run for the older head of that pull request. Runs on main
 # are never canceled. The draft state is part of the group, so a run for a
 # draft (all jobs skipped) and a run for a ready pull request never cancel
-# each other.
+# each other. A scheduled run has its own group, so it never replaces a
+# pending push run for the same commit.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}-${{ github.event.pull_request.draft == true }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The repository variable CI_RUNS_ON picks the runners, as a JSON value:
@@ -37,12 +45,20 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     services:
       postgres:
-        image: postgres:18
+        # The Go test cache does not see the image. The digest makes sure that
+        # the image changes only in a commit, not under cached test results. The
+        # scheduled uncached run tests each new digest.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
         env:
           POSTGRES_PASSWORD: postgres
-        # A random host port, so two jobs on one self-hosted machine never collide.
-        ports: ["5432"]
+        # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
+        # so go test can use cached results. Each machine runs one job at a time.
+        ports: ["5432:5432"]
+        # The image declares a volume at /var/lib/postgresql, and the runner does
+        # not remove that volume after the job. A tmpfs at the same path replaces
+        # the volume. The size limits the memory that the database can use.
         options: >-
+          --tmpfs /var/lib/postgresql:rw,size=3g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
@@ -81,10 +97,12 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
+      # Pushes and pull requests use the test cache (make test). The schedule
+      # runs every package again (make test-nocache).
       - name: Test
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
-        run: go test -race -count=1 ./...
+        run: make ${{ github.event_name == 'schedule' && 'test-nocache' || 'test' }}
       - name: Build
         run: go build ./cmd/opendustpan
 
@@ -92,7 +110,7 @@ jobs:
   # the upstream releases, and each archive is checked against the SHA-256
   # pinned here. Change a version together with its checksum and the Makefile.
   scan:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     env:
       TRIVY_VERSION: 0.75.0
@@ -132,17 +150,25 @@ jobs:
   # The gate for every endpoint (AGENTS.md): real Pulumi CLI and OpenTofu
   # binaries drive the server on SQLite and on PostgreSQL.
   e2e:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 70
     services:
       postgres:
-        image: postgres:18
+        # The Go test cache does not see the image. The digest makes sure that
+        # the image changes only in a commit, not under cached test results. The
+        # scheduled uncached run tests each new digest.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
         env:
           POSTGRES_PASSWORD: postgres
-        # A random host port, so two jobs on one self-hosted machine never collide.
-        ports: ["5432"]
+        # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
+        # so go test can use cached results. Each machine runs one job at a time.
+        ports: ["5432:5432"]
+        # The image declares a volume at /var/lib/postgresql, and the runner does
+        # not remove that volume after the job. A tmpfs at the same path replaces
+        # the volume. The size limits the memory that the database can use.
         options: >-
+          --tmpfs /var/lib/postgresql:rw,size=3g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:

@@ -28,6 +28,14 @@ const (
 	maxRequestSeries = 1024
 	maxInFlightCount = 16
 	maxBuildCount    = 4
+	// maxSinkSeries caps the series of the audit sink families: one per
+	// configured sink.
+	maxSinkSeries = MaxSinkSeries
+	// maxReloadSeries holds one series for each reload result.
+	maxReloadSeries = 2
+	// maxSweepResults holds one series for each result of the inactivity
+	// disable.
+	maxSweepResults = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -38,16 +46,33 @@ const (
 	labelMethod  = "method"
 	labelCode    = "code"
 	labelVersion = "version"
+	// labelSink names a configured audit sink, for example "siem". The
+	// operator sets the name; it never holds an address or a secret.
+	labelSink   = "sink"
+	labelResult = "result"
 )
+
+// Results of a reload of the configuration file (ADR 63 decision 5).
+const (
+	ReloadSuccess = "success"
+	ReloadFailure = "failure"
+)
+
+// MaxSinkSeries is the count of sinks that the audit sink families label.
+// The metrics of a sink past this count go to no series.
+const MaxSinkSeries = 16
 
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5). All
+// audit append failure counter (ADR 41 decision 5), and the audit sink
+// counters and the log sink drop counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
-// the HTTP middleware do (ADR 32 decision 9).
+// the HTTP middleware do (ADR 32 decision 9). It also holds the two
+// families of the reload of the configuration file (ADR 63 decision 5),
+// and counts the runs of the inactivity disable by result (ADR 53).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -57,6 +82,10 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	sinks    sinkFamilies
+	reloads  *Counter
+	reloadOK *Gauge
+	sweeps   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -104,7 +133,25 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
+		sinks: newSinkFamilies(reg),
+		reloads: reg.NewCounter(
+			"dustpan_config_reloads_total",
+			"Reloads of the configuration file by result.",
+			[]string{labelResult},
+			maxReloadSeries,
+		),
+		reloadOK: reg.NewGauge(
+			"dustpan_config_last_reload_success",
+			"1 when the last reload of the configuration file succeeded, else 0.",
+			nil,
+			1,
+		),
+		sweeps: newSweepCounter(reg),
 	}
+
+	// The configuration that the server started with is valid, so the gauge
+	// starts at 1: an alert on 0 fires only after a failed reload.
+	m.reloadOK.Set(1, []string{}...)
 
 	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
 	build.Set(1, version)
@@ -177,6 +224,111 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// sinkFamilies holds the audit and log sink families: counters labeled by sink,
+// with one series for each configured sink.
+type sinkFamilies struct {
+	shipped  *Counter
+	sinkFail *Counter
+	sinkSkip *Counter
+	logDrop  *Counter
+}
+
+// newSinkFamilies registers the audit sink families in reg.
+func newSinkFamilies(reg *Registry) sinkFamilies {
+	family := func(name, help string) *Counter {
+		return reg.NewCounter(name, help, []string{labelSink}, maxSinkSeries)
+	}
+
+	return sinkFamilies{
+		shipped:  family("dustpan_audit_sink_entries_total", "Audit entries that a sink accepted, by sink."),
+		sinkFail: family("dustpan_audit_sink_failures_total", "Failed delivery rounds of an audit sink, by sink."),
+		sinkSkip: family(
+			"dustpan_audit_sink_skipped_total",
+			"Audit entries that a sink skipped because it cannot hold them, by sink.",
+		),
+		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
+	}
+}
+
+// AddAuditShipped adds entries to the count of audit entries that the sink
+// named sink accepted.
+func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
+	if entries > 0 {
+		m.sinks.shipped.Add(uint64(entries), sink)
+	}
+}
+
+// IncAuditSinkFailure adds one to the failed delivery rounds of the sink
+// named sink. The shipper retries, so a failure loses no entry, but a count
+// that keeps growing means the sink falls behind. Operators alert on it.
+func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
+	m.sinks.sinkFail.Inc(sink)
+}
+
+// AddAuditSkipped adds entries to the count of audit entries that the sink
+// named sink skipped because it cannot hold them, for example an entry
+// above the message size cap of a syslog sink. The sink never receives
+// such an entry. Operators alert when it is above zero.
+func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
+	if entries > 0 {
+		m.sinks.sinkSkip.Add(uint64(entries), sink)
+	}
+}
+
+// newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
+func newSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_inactivity_sweeps_total",
+		"Runs of the inactivity disable by result.",
+		[]string{labelResult},
+		maxSweepResults,
+	)
+}
+
+// Results of a run of the inactivity disable.
+const (
+	SweepSuccess = "success"
+	SweepFailure = "failure"
+)
+
+// ObserveSweep adds one to the inactivity disable counter for result:
+// SweepSuccess or SweepFailure. Any other value counts as SweepFailure. The
+// server calls it after each run (ADR 53). Operators alert when the failure
+// series grows: a failed run disables nothing.
+func (m *ServerMetrics) ObserveSweep(result string) {
+	if result != SweepSuccess {
+		result = SweepFailure
+	}
+
+	m.sweeps.Inc(result)
+}
+
+// ObserveConfigReload records one reload of the configuration file (ADR 63
+// decision 5): it counts result (ReloadSuccess or ReloadFailure) in
+// dustpan_config_reloads_total and sets dustpan_config_last_reload_success
+// to 1 for a success and 0 for a failure. Any other result counts as a
+// failure, so the label set stays fixed.
+func (m *ServerMetrics) ObserveConfigReload(result string) {
+	if result == ReloadSuccess {
+		m.reloads.Inc(ReloadSuccess)
+		m.reloadOK.Set(1, []string{}...)
+
+		return
+	}
+
+	m.reloads.Inc(ReloadFailure)
+	m.reloadOK.Set(0, []string{}...)
+}
+
+// AddLogSinkDropped adds records to the count of application log records
+// that the log sink named sink dropped: its queue was full or its write
+// failed (ADR 60 decision 14).
+func (m *ServerMetrics) AddLogSinkDropped(sink string, records int) {
+	if records > 0 {
+		m.sinks.logDrop.Add(uint64(records), sink)
+	}
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

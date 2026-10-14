@@ -134,6 +134,10 @@ type UpdatesConfig struct {
 	Checkpoints CheckpointStore
 	Events      EventStore
 	Namespaces  *namespace.Service
+	// Tokens checks the access token that started a running update, on each
+	// lease request (ADR 53). Nil refuses every update that an access token
+	// started, so the check fails closed.
+	Tokens TokenChecker
 	// Stacks resolves stack references to their stable IDs for checkpoint
 	// blob keys.
 	Stacks CheckpointStacks
@@ -162,10 +166,19 @@ type Updates struct {
 	namespaces     *namespace.Service
 	stacks         CheckpointStacks
 	blobs          blob.Store
+	tokens         TokenChecker
 	logger         *slog.Logger
 	now            func() time.Time
 	maxCheckpoints int
 	journal        *JournalEntries
+}
+
+// TokenChecker answers whether an access token still works. It is the port of
+// the lease check. accesstoken.Service implements it.
+type TokenChecker interface {
+	// CheckActive returns nil when the token with the ID id is active and its
+	// principal exists. Otherwise it wraps identity.ErrUnauthenticated.
+	CheckActive(ctx context.Context, id string) error
 }
 
 // NewUpdates returns Updates. Every store, Stacks, Blobs and Namespaces are required.
@@ -192,6 +205,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		namespaces:     cfg.Namespaces,
 		stacks:         cfg.Stacks,
 		blobs:          cfg.Blobs,
+		tokens:         cfg.Tokens,
 		logger:         cfg.Logger,
 		now:            cfg.Now,
 		maxCheckpoints: cfg.MaxCheckpointBytes,
@@ -230,6 +244,7 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 	}
 
 	u := Update{
+		TokenID:        "",
 		JournalVersion: 0,
 		CreatedAt:      s.clock(),
 		StartedAt:      time.Time{},
@@ -271,6 +286,15 @@ func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, err
 func (s *Updates) StartWithJournalVersion(
 	ctx context.Context, ref Ref, id UpdateID, journalVersion int64,
 ) (Started, error) {
+	return s.StartBy(ctx, ref, id, "", journalVersion)
+}
+
+// StartBy starts the update like StartWithJournalVersion, for the access token
+// tokenID. The update keeps the ID, so each later lease request can check the
+// token (ADR 53). An empty tokenID starts it for no access token.
+func (s *Updates) StartBy(
+	ctx context.Context, ref Ref, id UpdateID, tokenID string, journalVersion int64,
+) (Started, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Started{}, err
@@ -294,6 +318,7 @@ func (s *Updates) StartWithJournalVersion(
 	}
 
 	u.JournalVersion = journalVersion
+	u.TokenID = tokenID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {
@@ -307,7 +332,7 @@ func (s *Updates) StartWithJournalVersion(
 
 // Renew extends the update's lease to d from now.
 func (s *Updates) Renew(ctx context.Context, ref Ref, id UpdateID, tok token.Token, d time.Duration) (Update, error) {
-	return s.transition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
 		return u.renew(tok, now, d)
 	})
 }
@@ -316,7 +341,7 @@ func (s *Updates) Renew(ctx context.Context, ref Ref, id UpdateID, tok token.Tok
 func (s *Updates) Complete(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token, status UpdateStatus,
 ) (Update, error) {
-	return s.transition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
 		return u.complete(tok, now, status)
 	})
 }
@@ -334,10 +359,6 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 // collected: every new blob is fresh, and the row names it only after the
 // bytes land.
 const sweepGracePeriod = time.Hour
-
-// checkpointDeleteRetries bounds the blob deletes of one cleanup: a transient
-// object store failure retries instead of orphaning the blob.
-const checkpointDeleteRetries = 3
 
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
@@ -416,16 +437,15 @@ func (s *Updates) SaveCheckpoint(
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the stack. No route calls
-// it since the soft delete (ADR 47); it stays for the purge of a deleted
-// stack. The caller runs it after the rows are gone, so no save can still
-// commit a row naming these blobs. It is best effort and logs no key.
-func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
+// DeleteStackBlobs removes every checkpoint blob of the purged stack, with
+// a retry for each blob (ADR 47). The purge runs it after the rows are gone,
+// so no save can still commit a row naming these blobs. It returns an error
+// when a blob may remain, so the caller keeps the blob purge record for the
+// sweep. No log line and no error names a blob key.
+func (s *Updates) DeleteStackBlobs(ctx context.Context, stackID ID) error {
 	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
 	if err != nil {
-		s.logger.WarnContext(ctx, "delete checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
+		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
 	failed := 0
@@ -437,13 +457,10 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	}
 
 	if failed > 0 {
-		s.logger.WarnContext(
-			ctx,
-			"delete checkpoint blobs",
-			slog.String("stack", ref.String()),
-			slog.Int("failed", failed),
-		)
+		return fmt.Errorf("%w: %d checkpoint blobs of stack %s", ErrBlobsRemain, failed, stackID)
 	}
+
+	return nil
 }
 
 // AppendEvents stores a batch of engine events for the update.
@@ -749,6 +766,30 @@ func (s *Updates) Events(ctx context.Context, ref Ref, id UpdateID, after int64,
 	return events, nil
 }
 
+// leaseGet reads one update for a lease request. A token-started update must
+// still pass the access token check (ADR 53). The check uses the token ID of
+// this read, so a lease request costs one read of the update.
+func (s *Updates) leaseGet(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
+	u, err := s.Get(ctx, ref, id)
+	if err != nil {
+		return Update{}, err
+	}
+
+	if u.TokenID == "" {
+		return u, nil
+	}
+
+	if s.tokens == nil {
+		return Update{}, fmt.Errorf("%w: update %s", ErrAccessTokenUnchecked, id)
+	}
+
+	if err := s.tokens.CheckActive(ctx, u.TokenID); err != nil {
+		return Update{}, fmt.Errorf("access token of update %s: %w", id, err)
+	}
+
+	return u, nil
+}
+
 // storeNewCheckpoint writes the blob of save, then its row. A blob that is
 // already there belongs to a first attempt whose commit never landed: the
 // retry adopts it when it holds the same content.
@@ -1019,17 +1060,14 @@ func (s *Updates) storedLimit() int64 {
 }
 
 // deleteBlobRetried removes the object under key, retrying a transient
-// failure. Deleting a missing key is not an error.
+// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
+// is not an error.
 func (s *Updates) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	var err error
-
-	for range checkpointDeleteRetries {
-		if err = s.blobs.Delete(ctx, key); err == nil {
-			return nil
-		}
+	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // sweepUpdateBlobs deletes the checkpoint blobs of one update that no
@@ -1282,16 +1320,35 @@ func (s *Updates) restoreInput(ctx context.Context, ref Ref, version int64) (Che
 // compare-and-swap while a completion is in flight. change is a pure function
 // of the stored update, so it is re-applied to a fresh read: a completion that
 // raced a cancel then fails for the right reason.
+// transitionOp is one change of an update: the read that loads it, and the
+// change that moves it on.
+type transitionOp struct {
+	read   func(context.Context, Ref, UpdateID) (Update, error)
+	change func(Update, time.Time) (Update, error)
+}
+
 func (s *Updates) transition(
 	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error),
 ) (Update, error) {
+	return s.transitionFrom(ctx, ref, id, transitionOp{read: s.Get, change: change})
+}
+
+// leaseTransition is transition for a lease request: the update it changes
+// must still pass the access token check of leaseGet.
+func (s *Updates) leaseTransition(
+	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error),
+) (Update, error) {
+	return s.transitionFrom(ctx, ref, id, transitionOp{read: s.leaseGet, change: change})
+}
+
+func (s *Updates) transitionFrom(ctx context.Context, ref Ref, id UpdateID, op transitionOp) (Update, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Update{}, err
 	}
 
 	for attempt := 1; ; attempt++ {
-		u, err := s.applyOnce(ctx, ref, id, change, fence)
+		u, err := s.applyOnce(ctx, ref, id, op, fence)
 		if !errors.Is(err, ErrConcurrentModification) || attempt == transitionAttempts {
 			return u, err
 		}
@@ -1299,16 +1356,16 @@ func (s *Updates) transition(
 }
 
 func (s *Updates) applyOnce(
-	ctx context.Context, ref Ref, id UpdateID, change func(Update, time.Time) (Update, error), fence namespace.Fence,
+	ctx context.Context, ref Ref, id UpdateID, op transitionOp, fence namespace.Fence,
 ) (Update, error) {
-	u, err := s.Get(ctx, ref, id)
+	u, err := op.read(ctx, ref, id)
 	if err != nil {
 		return Update{}, err
 	}
 
 	before := u.Revision
 
-	u, err = change(u, s.clock())
+	u, err = op.change(u, s.clock())
 	if err != nil {
 		return Update{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
 	}
@@ -1334,7 +1391,7 @@ func (s *Updates) authorized(
 		return Update{}, namespace.Fence{}, err
 	}
 
-	u, err := s.Get(ctx, ref, id)
+	u, err := s.leaseGet(ctx, ref, id)
 	if err != nil {
 		return Update{}, namespace.Fence{}, err
 	}

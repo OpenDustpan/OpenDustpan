@@ -142,6 +142,47 @@ func (t Tool) Versions() []string {
 	return versions
 }
 
+// IsMatrixEnd reports whether label is the newest or the oldest version in
+// the matrix of t, so a slow step can run only at the two ends. Latest is the
+// newest. Other labels compare as x.y.z releases. A label that is not Latest
+// and not x.y.z counts as an end, so such a step never skips a version that
+// this function cannot place.
+func (t Tool) IsMatrixEnd(label string) bool {
+	if label == Latest {
+		return true
+	}
+
+	own := semver(label)
+	if own == nil {
+		return true
+	}
+
+	newest, oldest := true, true
+
+	for _, other := range t.Versions() {
+		if other == Latest {
+			newest = false
+
+			continue
+		}
+
+		parts := semver(other)
+		if parts == nil {
+			continue
+		}
+
+		if slices.Compare(parts, own) > 0 {
+			newest = false
+		}
+
+		if slices.Compare(parts, own) < 0 {
+			oldest = false
+		}
+	}
+
+	return newest || oldest
+}
+
 // ArchiveName returns the release archive of version for this machine.
 func (t Tool) ArchiveName(version string) (string, error) {
 	switch {

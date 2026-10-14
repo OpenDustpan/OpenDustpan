@@ -238,9 +238,10 @@ logging with `--log-level` and `--log-format`. Check readiness at
 - **You need remote runs.** OpenDustpan stores state. It does not run
   `pulumi up` or `tofu apply` for you.
 - **You need a full audit log, policy checks or drift detection.** The
-  audit log records secret reads and overrides only. ADR 60 plans the rest:
-  every change, export and sinks. Policy checks and drift detection do not
-  exist yet.
+  audit log records secret reads and overrides only, and can send a copy
+  of each entry to a file, syslog, a webhook or object storage. ADR 60
+  plans the rest: every change and an export. Policy checks and drift
+  detection do not exist yet.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
 
@@ -282,6 +283,8 @@ How-to guides:
   logs.
 - [Read the audit log](docs/guides/audit-log.md): the entries of a
   namespace and the check of their chain.
+- [Deleted units](docs/guides/deleted-units.md): list, restore and purge
+  the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 

@@ -42,7 +42,7 @@ type sqliteBackupTable struct {
 //
 //nolint:funlen // A constant table of column names; its length is the schema.
 func sqliteBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+	tables := []sqliteBackupTable{
 		{
 			table: "namespaces",
 			columns: []string{
@@ -95,6 +95,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"restored_from",
 				"journal_version",
 				"journal_closed",
+				"token_id",
 			},
 		},
 		{
@@ -190,6 +191,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "blob_purges",
+			columns: []string{
+				backupColTool,
+				backupColUnitID,
+				backupColNamespace,
+				"purged_at_ms",
+			},
+		},
+		{
 			table: "workspaces",
 			columns: []string{
 				"id",
@@ -257,8 +267,57 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"prev_hash",
 				"hash",
 				"value_count",
+				"changes",
+				"object_id",
 			},
 		},
+	}
+
+	tables = append(tables, sqliteIdentityBackupTables()...)
+
+	return append(tables, []sqliteBackupTable{
+		{
+			table: "backups",
+			columns: []string{
+				"id",
+				backupColState,
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"target",
+				"error",
+			},
+		},
+		{
+			table: "restores",
+			columns: []string{
+				"id",
+				backupColState,
+				"backup_id",
+				"pre_backup_id",
+				"requested_by",
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"error",
+			},
+		},
+		{
+			table: "installation",
+			columns: []string{
+				"id",
+				backupColState,
+			},
+		},
+	}...)
+}
+
+// sqliteIdentityBackupTables lists the column lists of the identity tables
+// (ADR 52, ADR 53): principals, groups, memberships, access tokens, roles,
+// grants, the audit sink cursors and the token policy, in the order of
+// backup.Tables.
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteIdentityBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: "principals",
 			columns: []string{
@@ -270,6 +329,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"disabled_at_ms",
+				"last_active_at_ms",
 			},
 		},
 		{
@@ -303,6 +364,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"revoked_at_ms",
 				"replaced_by",
 				backupColCreatedBy,
+				"disabled_at_ms",
 			},
 		},
 		{
@@ -338,34 +400,24 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "backups",
+			table: "audit_sink_cursors",
 			columns: []string{
-				"id",
-				backupColState,
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"target",
-				"error",
+				"sink",
+				backupColNamespace,
+				backupColSequence,
+				backupColUpdatedAtMs,
 			},
 		},
 		{
-			table: "restores",
+			table: "access_token_policy",
 			columns: []string{
 				"id",
-				backupColState,
-				"backup_id",
-				"pre_backup_id",
-				"requested_by",
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"error",
-			},
-		},
-		{
-			table: "installation",
-			columns: []string{
-				"id",
-				backupColState,
+				"max_lifetime_ms",
+				"inactivity_ms",
+				"disable_tokens",
+				"disable_accounts",
+				"disable_break_glass",
+				backupColUpdatedAtMs,
 			},
 		},
 	}
