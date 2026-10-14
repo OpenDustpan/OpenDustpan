@@ -49,6 +49,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Kind:       "",
 		Outcome:    "",
 		RequestID:  requestid.FromContext(r.Context()),
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

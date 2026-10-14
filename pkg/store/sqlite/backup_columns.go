@@ -191,6 +191,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "blob_purges",
+			columns: []string{
+				backupColTool,
+				backupColUnitID,
+				backupColNamespace,
+				"purged_at_ms",
+			},
+		},
+		{
 			table: "workspaces",
 			columns: []string{
 				"id",
@@ -259,6 +268,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"hash",
 				"value_count",
 				"changes",
+				"object_id",
 			},
 		},
 	}

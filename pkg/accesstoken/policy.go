@@ -183,5 +183,6 @@ func SweepEntry() audit.Entry {
 		Hash:       "",
 		Sequence:   0,
 		Changes:    nil,
+		ObjectID:   "",
 	}
 }

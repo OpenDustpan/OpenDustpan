@@ -551,6 +551,7 @@ func newWorkspaceService(
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		tb.Fatalf("workspace service: %v", err)
