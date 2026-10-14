@@ -98,6 +98,7 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
 		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -447,6 +448,39 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 	}
 }
 
+// TestRestoreAndPurgeGrants proves the grants of the ADR 47 actions: a
+// maintainer may restore a deleted unit but not purge it, because a purge
+// cannot be undone, and an admin may do both.
+func TestRestoreAndPurgeGrants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		role        string
+		wantRestore bool
+		wantPurge   bool
+	}{
+		{role: access.RoleViewer, wantRestore: false, wantPurge: false},
+		{role: access.RoleWriter, wantRestore: false, wantPurge: false},
+		{role: access.RoleMaintainer, wantRestore: true, wantPurge: false},
+		{role: access.RoleAdmin, wantRestore: true, wantPurge: true},
+	}
+
+	for _, tc := range cases {
+		r, ok := access.BuiltInRole(tc.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tc.role)
+		}
+
+		if got := r.Has(identity.ActionUnitRestore); got != tc.wantRestore {
+			t.Errorf("%s has unit:restore = %v, want %v", tc.role, got, tc.wantRestore)
+		}
+
+		if got := r.Has(identity.ActionUnitPurge); got != tc.wantPurge {
+			t.Errorf("%s has unit:purge = %v, want %v", tc.role, got, tc.wantPurge)
+		}
+	}
+}
+
 func TestEscalation(t *testing.T) {
 	t.Parallel()
 
@@ -781,8 +815,10 @@ func testEntry() audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "tester", IDPSubject: "", TokenID: "",
 		Action: "server:manage-access", Object: "", Version: "", ValuePath: "", ValueCount: nil,
+		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		ObjectID: "",
 	}
 }
 

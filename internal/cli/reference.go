@@ -104,8 +104,42 @@ func writeConfigFile(out *strings.Builder) {
 	out.WriteString("with a user name or a password, so the log can show its value.\n")
 	out.WriteString("\n")
 	out.WriteString("At the log level `warn` or `error`, the server does not write these INFO\n")
-	out.WriteString("lines: the level that the operator sets wins.\n")
+	out.WriteString("lines: the level that the operator sets wins. The start audit entry (see\n")
+	out.WriteString("\"Reload\") records the whole configuration at each level.\n")
 	out.WriteString("\n")
+	writeConfigReload(out)
+	writeConfigExample(out)
+}
+
+// writeConfigReload writes the reload part of the configuration file
+// section (ADR 63 decisions 5, 9 and 10).
+func writeConfigReload(out *strings.Builder) {
+	out.WriteString("### Reload\n")
+	out.WriteString("\n")
+	out.WriteString("The server reloads the file on SIGHUP, and when its content changes. It\n")
+	out.WriteString("reads the file every 10 seconds and compares the SHA-256 of the content.\n")
+	out.WriteString("A flag and a variable change only at a restart. A reload checks the whole\n")
+	out.WriteString("file with the rules of the start. When the file fails a rule, the server\n")
+	out.WriteString("keeps the old configuration and writes one ERROR line that names the key\n")
+	out.WriteString("and the rule. The server writes one INFO line for each changed value, and\n")
+	out.WriteString("one audit entry with the channel `config-file` for the reload, with each\n")
+	out.WriteString(
+		"changed key. A changed setting takes effect at the next start. The metrics `dustpan_config_reloads_total` and\n",
+	)
+	out.WriteString("`dustpan_config_last_reload_success` count the reloads.\n")
+	out.WriteString("\n")
+	out.WriteString("A ConfigMap volume mounted with `subPath` never updates. Mount the whole\n")
+	out.WriteString("volume, so the poll sees the change.\n")
+	out.WriteString("\n")
+	out.WriteString("At each start, the server also writes one audit entry with the channel\n")
+	out.WriteString("`startup` and each setting, with the rule for sensitive settings. The\n")
+	out.WriteString("[audit guide](../guides/audit-log.md) shows these entries.\n")
+	out.WriteString("\n")
+}
+
+// writeConfigExample writes the example configuration file in the JSON
+// shape with # comments.
+func writeConfigExample(out *strings.Builder) {
 	out.WriteString("This example uses the JSON shape with `#` comments. That text is valid\n")
 	out.WriteString("YAML.\n")
 	out.WriteString("\n")
@@ -140,6 +174,10 @@ var secretSettings = []*Setting{
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY"),
 	mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY_FILE"),
 	mustEnv("DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY"),
+	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET"),
+	mustEnv("DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE"),
+	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET"),
+	mustEnv("DUSTPAN_LOG_WEBHOOK_SECRET_FILE"),
 }
 
 // mustEnv answers the declaration of the environment variable. It panics

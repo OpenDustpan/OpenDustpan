@@ -90,8 +90,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // auditEntry is one audit entry as the console reads it, in camelCase. AtMs
 // is the time of the action in Unix milliseconds. Sequence numbers the entry
-// in its namespace from 1. PrevHash is empty for the first entry of a
-// namespace.
+// in its namespace from 1. ObjectID is the stable ID of the unit of the
+// entry, and is omitted when the entry has none. PrevHash is empty for the
+// first entry of a namespace.
 //
 // Contract: never remove or rename these fields. The console reads only this
 // API, and it ships on its own schedule, so a released console keeps working
@@ -107,14 +108,19 @@ type auditEntry struct {
 	Version    string `json:"version"`
 	ValuePath  string `json:"valuePath"`
 	ValueCount *int64 `json:"valueCount,omitempty"`
-	SourceIP   string `json:"sourceIP"`
-	UserAgent  string `json:"userAgent"`
-	Channel    string `json:"channel"`
-	Kind       string `json:"kind"`
-	Outcome    string `json:"outcome"`
-	RequestID  string `json:"requestID"`
-	PrevHash   string `json:"prevHash"`
-	Hash       string `json:"hash"`
+	// Changes holds the keys of the entry with their old and new values, for
+	// example the settings of a startup or config-file entry (ADR 63). It is
+	// omitted for an entry without them.
+	Changes   []auditChange `json:"changes,omitempty"`
+	SourceIP  string        `json:"sourceIP"`
+	UserAgent string        `json:"userAgent"`
+	Channel   string        `json:"channel"`
+	Kind      string        `json:"kind"`
+	Outcome   string        `json:"outcome"`
+	RequestID string        `json:"requestID"`
+	ObjectID  string        `json:"objectID,omitempty"`
+	PrevHash  string        `json:"prevHash"`
+	Hash      string        `json:"hash"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
@@ -130,15 +136,44 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Version:    e.Version,
 		ValuePath:  e.ValuePath,
 		ValueCount: e.ValueCount,
+		Changes:    toAuditChanges(e.Changes),
 		SourceIP:   e.SourceIP,
 		UserAgent:  e.UserAgent,
 		Channel:    string(e.Channel),
 		Kind:       string(e.Kind),
 		Outcome:    string(e.Outcome),
 		RequestID:  e.RequestID,
+		ObjectID:   e.ObjectID,
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 	}
+}
+
+// auditChange is the wire shape of one change of an entry: the key, the old
+// and the new value, the layer of a setting (ADR 63) and when a recorded
+// change applies. A sensitive key holds only set or not set.
+type auditChange struct {
+	Key         string  `json:"key"`
+	Old         *string `json:"old,omitempty"`
+	New         string  `json:"new"`
+	Layer       string  `json:"layer,omitempty"`
+	TakesEffect string  `json:"takesEffect,omitempty"`
+}
+
+// toAuditChanges maps the changes of an entry to their wire shape, nil for
+// none.
+func toAuditChanges(changes []audit.Change) []auditChange {
+	if len(changes) == 0 {
+		return nil
+	}
+
+	out := make([]auditChange, 0, len(changes))
+
+	for _, c := range changes {
+		out = append(out, auditChange{Key: c.Key, Old: c.Old, New: c.New, Layer: c.Layer, TakesEffect: c.TakesEffect})
+	}
+
+	return out
 }
 
 // listEntriesResponse is the answered document of the entry list.

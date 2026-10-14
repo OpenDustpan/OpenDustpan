@@ -88,6 +88,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            store,
+		Tokens:             nil,
 		Checkpoints:        store,
 		Events:             store,
 		Namespaces:         namespaces,

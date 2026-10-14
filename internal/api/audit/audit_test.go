@@ -220,12 +220,14 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,
 		Kind:       audit.KindReveal,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "req-" + subject,
+		ObjectID:   "id-" + subject,
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -348,6 +350,7 @@ type listEntriesItem struct {
 	AtMs      int64  `json:"atMs"`
 	SourceIP  string `json:"sourceIP"`
 	RequestID string `json:"requestID"`
+	ObjectID  string `json:"objectID"`
 	Hash      string `json:"hash"`
 }
 
@@ -416,13 +419,13 @@ func checkEntriesNewestFirst(t *testing.T, got listEntriesDoc) {
 }
 
 // checkListedFirstEntry fails the test unless first carries the sequence,
-// kind, time, source, request and hash of a stored entry.
+// kind, time, source, request, object ID and hash of a stored entry.
 func checkListedFirstEntry(t *testing.T, first listEntriesItem) {
 	t.Helper()
 
 	if first.Sequence != 1 || first.Kind != "reveal" || first.AtMs == 0 ||
-		first.SourceIP == "" || first.RequestID == "" || first.Hash == "" {
-		t.Fatalf("entry = %+v, want sequence, kind, time, source, request and hash", first)
+		first.SourceIP == "" || first.RequestID == "" || first.ObjectID != "id-first" || first.Hash == "" {
+		t.Fatalf("entry = %+v, want sequence, kind, time, source, request, object ID and hash", first)
 	}
 }
 

@@ -106,6 +106,11 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerManageSettings allows changing the installation settings
+	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
+	// settings name it: the start entry and the entry of a reload of the
+	// configuration file. RFC 68 decides the settings API that checks it.
+	ActionServerManageSettings Action = "server:manage-settings"
 	// ActionServerReadPrincipals allows reading the principals and the
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.
@@ -136,6 +141,13 @@ const (
 	// ActionUnitManageAccess allows granting and revoking roles on a unit.
 	// Its object is a unit.
 	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionUnitRestore allows bringing back a deleted unit before its
+	// retention period ends (ADR 47). Its object is a unit.
+	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitPurge allows the final delete of a deleted unit before its
+	// retention period ends (ADR 47). It cannot be undone. Its object is a
+	// unit.
+	ActionUnitPurge Action = "unit:purge"
 	// ActionServerReadAccess allows reading the access-review export of the
 	// whole installation: every grant (ADR 52, decision 10). Its object is
 	// ServerObject.
@@ -192,6 +204,10 @@ const (
 	// object is CallerObject. Every authenticated person holds it with no
 	// grant.
 	ActionTokenManageOwn Action = "token:manage-own"
+	// ActionServerManageTokenPolicy allows changing the token life cycle
+	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
+	// 6). Its object is ServerObject.
+	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

@@ -476,3 +476,105 @@ func TestLayeredLookup(t *testing.T) {
 		t.Errorf("AWS_SECRET_ACCESS_KEY = %q, want unset", got)
 	}
 }
+
+// TestChanges proves Changes answers each setting whose value changed, with
+// the old and the new value, and that a changed sensitive value shows only
+// set, with no text of either value.
+func TestChanges(t *testing.T) {
+	t.Parallel()
+
+	resolve := func(file cli.ConfigFile) []cli.Resolved {
+		t.Helper()
+
+		resolved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(nil), file)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+
+		return resolved
+	}
+
+	old := resolve(cli.ConfigFile{"region": "eu-west", "database": "sqlite:" + canaryValue + "-a", "listen": ":1"})
+	current := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+
+	changes := cli.Changes(old, current)
+
+	got := make([]string, 0, len(changes))
+	for _, c := range changes {
+		got = append(got, c.Key+":"+*c.Old+">"+c.New+"@"+c.Layer+"/"+c.TakesEffect)
+	}
+
+	want := []string{"database:set>set@file/next start", "region:eu-west>us-east@file/next start"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("Changes = %v, want %v", got, want)
+	}
+
+	if strings.Contains(fmt.Sprintf("%+v", changes), canaryValue) {
+		t.Fatal("a change holds a sensitive value")
+	}
+
+	same := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+
+	if again := cli.Changes(current, same); len(again) != 0 {
+		t.Fatalf("Changes of equal values = %+v, want none", again)
+	}
+}
+
+// TestSnapshotEnvKeepsNoSecret proves the snapshot keeps the value of a
+// setting that is not sensitive, keeps no form of a sensitive value, and
+// that a resolve against the snapshot sees no change against a resolve
+// against the real variables (the review of ADR 63 part 2, item 5).
+func TestSnapshotEnvKeepsNoSecret(t *testing.T) {
+	t.Parallel()
+
+	secretDB := "sqlite:/var/lib/" + canaryValue + ".db"
+	vars := map[string]string{
+		"DUSTPAN_DATABASE":           secretDB,
+		"DUSTPAN_ADMIN_TOKEN":        "token-" + canaryValue,
+		"DUSTPAN_KEY_ENCRYPTION_KEY": "kek-" + canaryValue,
+		"DUSTPAN_REGION":             "eu-west",
+		"DUSTPAN_ADMIN_TOKEN_FILE":   " ",
+	}
+
+	snapshot := cli.SnapshotEnv(mapLookup(vars), cli.DeclaredEnvs())
+
+	if got, ok := snapshot("DUSTPAN_REGION"); !ok || got != "eu-west" {
+		t.Errorf("DUSTPAN_REGION = %q, %v; want eu-west", got, ok)
+	}
+
+	for _, key := range []string{"DUSTPAN_DATABASE", "DUSTPAN_ADMIN_TOKEN", "DUSTPAN_KEY_ENCRYPTION_KEY"} {
+		got, ok := snapshot(key)
+		if !ok || got == "" {
+			t.Errorf("%s is not set in the snapshot", key)
+		}
+
+		if form := leak(got, vars[key]); form != "" {
+			t.Errorf("the snapshot of %s holds %s of the value", key, form)
+		}
+	}
+
+	start, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(vars), nil)
+	if err != nil {
+		t.Fatalf("Resolve against the variables: %v", err)
+	}
+
+	reload, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), snapshot, nil)
+	if err != nil {
+		t.Fatalf("Resolve against the snapshot: %v", err)
+	}
+
+	if changes := cli.Changes(start, reload); len(changes) != 0 {
+		t.Fatalf("Changes(start, reload) = %+v, want none", changes)
+	}
+
+	other := cli.SnapshotEnv(mapLookup(map[string]string{"DUSTPAN_DATABASE": "sqlite:/other.db"}), cli.DeclaredEnvs())
+
+	moved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), other, nil)
+	if err != nil {
+		t.Fatalf("Resolve against another snapshot: %v", err)
+	}
+
+	if changes := cli.Changes(start, moved); len(changes) == 0 {
+		t.Fatal("a changed sensitive variable gave no change")
+	}
+}
