@@ -170,10 +170,10 @@ func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal
 	return s.requireHeld(ctx, caller, t.PrincipalID)
 }
 
-// requireHeld runs the escalation check. With no GrantCheck wired, only an
-// administrator can act for another principal: an administrator holds
-// every action, so it raises nothing. This fails closed until the grants of
-// ADR 52 can answer the check.
+// requireHeld runs the escalation check. With no GrantCheck wired (a store
+// that keeps no grants), only an administrator can act for another
+// principal: an administrator holds every action, so it raises nothing.
+// This fails closed.
 func (s *Service) requireHeld(ctx context.Context, caller identity.Principal, principalID string) error {
 	if s.grants != nil {
 		if err := s.grants.RequireHeld(ctx, caller, principalID); err != nil {
@@ -185,7 +185,7 @@ func (s *Service) requireHeld(ctx context.Context, caller identity.Principal, pr
 
 	if !caller.Admin {
 		return fmt.Errorf("%w: %s may not make a token for principal %q: "+
-			"only an administrator can, until grants answer the escalation check", identity.ErrDenied,
+			"only an administrator can when the server keeps no grants", identity.ErrDenied,
 			caller.Subject, principalID)
 	}
 

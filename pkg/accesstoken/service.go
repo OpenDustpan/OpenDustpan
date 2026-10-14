@@ -61,8 +61,9 @@ type Config struct {
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
 	// Grants runs the escalation check of a token for another principal.
-	// Nil lets only an administrator act for another principal (fail
-	// closed) until the grants of ADR 52 can answer the check.
+	// The server wires the grants of ADR 52. Nil lets only an
+	// administrator act for another principal (fail closed): a store that
+	// keeps no grants.
 	Grants GrantCheck
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger

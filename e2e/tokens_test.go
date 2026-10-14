@@ -37,8 +37,8 @@ type e2eToken struct {
 // calls them with the bootstrap admin token, which keeps working (ADR 6).
 //
 // A stored token authenticates a principal that is not an administrator.
-// Until grants exist (ADR 52), that principal can do no action: a route
-// answers 403 for it, and 401 for a token that the server refuses.
+// Its grants (ADR 52) decide what it can do: a route answers 403 for an
+// action that it does not hold, and 401 for a token that the server refuses.
 func TestAccessTokens(t *testing.T) {
 	t.Parallel()
 
@@ -105,6 +105,7 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkTokenRefusals(ctx, t, env, deploy, robot)
 	checkPersonalTokens(ctx, t, env)
+	checkDelegatedTokens(ctx, t, env)
 	checkNoLockout(ctx, t, env, created.Secret)
 	checkTokenSignIn(ctx, t, env, created.Secret, http.StatusForbidden)
 	checkTokenReads(ctx, t, env, deploy, created)
@@ -395,4 +396,72 @@ func checkNoLockout(ctx context.Context, t *testing.T, env *e2e.Env, valid strin
 
 	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, nil)
 	checkTokenSignIn(ctx, t, env, valid, http.StatusForbidden)
+}
+
+// checkDelegatedTokens gives a person that is not an administrator the role
+// account-administrator, which holds server:manage-service-tokens. With its
+// own access token, it makes a service token for a principal that holds no
+// grant. It cannot make or rotate a token for a principal that holds
+// installation-operator: a token acts as its principal, so that would give
+// the person actions it does not hold (ADR 53, decision 3).
+func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var delegate, plain, operator e2ePrincipal
+
+	for _, p := range []struct {
+		dst  *e2ePrincipal
+		body string
+	}{
+		{&delegate, `{"subject":"delegate@example.com","kind":"person"}`},
+		{&plain, `{"subject":"ci-plain","kind":"service"}`},
+		{&operator, `{"subject":"ci-operator","kind":"service"}`},
+	} {
+		principalCall(
+			ctx,
+			t,
+			env,
+			principalStep{http.MethodPost, "/api/server/principals", p.body, http.StatusCreated},
+			p.dst,
+		)
+	}
+
+	for _, g := range []struct{ id, role string }{
+		{delegate.ID, "account-administrator"},
+		{operator.ID, "installation-operator"},
+	} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + g.id + `","role":"` + g.role + `"}`,
+			http.StatusCreated,
+		}, nil)
+	}
+
+	var own, operatorTok e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"delegate"}`,
+		http.StatusCreated,
+	}, &own)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + operator.ID + `","name":"ops"}`,
+		http.StatusCreated,
+	}, &operatorTok)
+
+	for _, step := range []principalStep{
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusCreated},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + operator.ID + `","name":"ops"}`, http.StatusForbidden},
+		{http.MethodPost, "/api/server/service-tokens/" + operatorTok.ID + "/rotate", `{}`, http.StatusForbidden},
+	} {
+		status, body, err := env.ServerAPIStatusAs(ctx, own.Secret, step.method, step.path, step.body)
+		if err != nil || status != step.want {
+			t.Fatalf(
+				"%s %s as the delegate = %d, %v (%s); want %d",
+				step.method,
+				step.path,
+				status,
+				err,
+				body,
+				step.want,
+			)
+		}
+	}
 }

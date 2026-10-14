@@ -1453,14 +1453,52 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	// The escalation check of a token for another principal (ADR 53,
+	// decision 3) is the grants of ADR 52. A store that keeps no grants
+	// leaves it nil: only an administrator passes.
+	var grants accesstoken.GrantCheck
+
+	accessSvc, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if accessSvc != nil {
+		grants = tokenGrants{access: accessSvc}
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: grants, Logger: cfg.logger, Now: cfg.now,
+		NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
 	}
 
 	return svc, nil
+}
+
+// tokenGrants is the escalation check of the access token service over the
+// grants of ADR 52. A token acts as its principal, so the caller must hold
+// every action that the grants of the principal give, through its groups
+// too: the check of a principal delete.
+type tokenGrants struct {
+	access *access.Service
+}
+
+// RequireHeld implements accesstoken.GrantCheck. A refusal wraps
+// identity.ErrDenied, so the API answers 403.
+func (g tokenGrants) RequireHeld(ctx context.Context, caller identity.Principal, principalID string) error {
+	err := g.access.CheckPrincipalGrants(ctx, caller, principalID)
+	if errors.Is(err, access.ErrEscalation) {
+		return fmt.Errorf("%w: %w", identity.ErrDenied, err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check the grants of principal %q: %w", principalID, err)
+	}
+
+	return nil
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the
