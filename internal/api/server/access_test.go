@@ -29,7 +29,13 @@ import (
 type subjectAuthenticator struct{}
 
 func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	return identity.Principal{Subject: token, DisplayName: token, Admin: token == "admin", TokenID: ""}, nil
+	return identity.Principal{
+		Subject:        token,
+		DisplayName:    token,
+		Admin:          token == "admin",
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}, nil
 }
 
 // roleDoc and grantDoc decode the wire forms in tests.
@@ -71,6 +77,21 @@ type accessFixture struct {
 func newAccessFixture(t *testing.T) accessFixture {
 	t.Helper()
 
+	return newAccessFixtureWith(t, func(st *sqlite.Store) auditStore { return st })
+}
+
+// auditStore keeps the entries of @server and of each namespace, as the
+// handler of the access review needs.
+type auditStore interface {
+	audit.ServerStore
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
+// newAccessFixtureWith builds the fixture of newAccessFixture with the
+// audit store that entries returns for the store.
+func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
+	t.Helper()
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -100,6 +121,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"},
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -124,7 +146,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 		Principals:     principals,
 		Tokens:         nil,
 		Access:         grants,
-		Audit:          st,
+		Audit:          entries(st),
 		OnAuditFailure: nil,
 	})
 	if err != nil {
