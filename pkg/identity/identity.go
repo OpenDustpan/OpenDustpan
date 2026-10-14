@@ -197,6 +197,10 @@ const (
 	// object is CallerObject. Every authenticated person holds it with no
 	// grant.
 	ActionTokenManageOwn Action = "token:manage-own"
+	// ActionServerManageTokenPolicy allows changing the token life cycle
+	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
+	// 6). Its object is ServerObject.
+	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

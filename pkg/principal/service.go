@@ -84,6 +84,7 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 	p := Principal{
 		CreatedAt:   at,
 		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
 		ID:          s.newID(principalIDPrefix),
 		Subject:     in.Subject,
 		DisplayName: displayName,
@@ -184,6 +185,16 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 
 	if err := s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// EnablePrincipal enables the principal with the ID id again after an
+// inactivity disable (ADR 53), with the entry e.
+func (s *Service) EnablePrincipal(ctx context.Context, e audit.Entry, id string) error {
+	if err := s.store.EnablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+		return fmt.Errorf("enable principal %q: %w", id, err)
 	}
 
 	return nil

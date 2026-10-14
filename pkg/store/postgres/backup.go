@@ -245,7 +245,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "principals",
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -276,6 +276,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				"revoked_at_ms",
 				"replaced_by",
 				pgColCreatedBy,
+				"disabled_at_ms",
 			},
 			orderBy: []string{"id"},
 		},
@@ -292,6 +293,14 @@ func pgCopyIdentityTables() []pgCopyTable {
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "access_token_policy",
+			columns: []string{
+				"id", "max_lifetime_ms", "inactivity_ms", "disable_tokens", "disable_accounts",
+				"disable_break_glass", pgColUpdatedAtMs,
 			},
 			orderBy: []string{"id"},
 		},

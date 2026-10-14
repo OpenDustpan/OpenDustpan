@@ -81,6 +81,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_audit_append_failures_total` | (none) |
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
+| `dustpan_inactivity_sweeps_total` | `result` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -99,6 +100,9 @@ with the label `result` (`success` or `failure`).
 and 0 when it failed. It holds 1 at start. Alert when it holds 0: the server
 kept its old configuration, and the log line `config file reload failed`
 names the key and the rule.
+`dustpan_inactivity_sweeps_total` counts the runs of the inactivity disable.
+The `result` label is `success` or `failure`.
+Alert when the `failure` series grows: a failed run disables nothing.
 
 ## Request log
 

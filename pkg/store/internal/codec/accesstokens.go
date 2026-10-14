@@ -1,6 +1,8 @@
 package codec
 
 import (
+	"time"
+
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -19,6 +21,7 @@ type AccessTokenRow struct {
 	ExpiresAtMs  int64
 	LastUsedAtMs int64
 	RevokedAtMs  int64
+	DisabledAtMs int64
 }
 
 // FromAccessTokenRow converts a row into a domain token.
@@ -28,6 +31,7 @@ func FromAccessTokenRow(row AccessTokenRow) accesstoken.Token {
 		ExpiresAt:   FromMillis(row.ExpiresAtMs),
 		LastUsedAt:  FromOptionalMillis(row.LastUsedAtMs),
 		RevokedAt:   FromOptionalMillis(row.RevokedAtMs),
+		DisabledAt:  FromOptionalMillis(row.DisabledAtMs),
 		ID:          row.ID,
 		PrincipalID: row.PrincipalID,
 		Name:        row.Name,
@@ -40,15 +44,19 @@ func FromAccessTokenRow(row AccessTokenRow) accesstoken.Token {
 // AccessTokenOwnerRow is the column representation of the owner of a
 // token.
 type AccessTokenOwnerRow struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
+	ID           string
+	Subject      string
+	DisplayName  string
+	Kind         string
+	DisabledAtMs int64
+	ActiveAtMs   int64
 }
 
 // FromAccessTokenOwnerRow converts a row into the owner of a token.
 func FromAccessTokenOwnerRow(row AccessTokenOwnerRow) accesstoken.Owner {
 	return accesstoken.Owner{
+		ActiveAt:    FromMillis(row.ActiveAtMs),
+		DisabledAt:  FromOptionalMillis(row.DisabledAtMs),
 		ID:          row.ID,
 		Subject:     row.Subject,
 		DisplayName: row.DisplayName,
@@ -95,5 +103,40 @@ func ToAccessTokenListQuery(q accesstoken.Query) AccessTokenListQuery {
 		SoonMs:      Millis(q.At.Add(accesstoken.ExpiringWithin)),
 		AfterMs:     Millis(q.AfterCreatedAt),
 		HasAfter:    q.HasAfter,
+	}
+}
+
+// AccessTokenPolicyRow is the column representation of the token policy.
+type AccessTokenPolicyRow struct {
+	MaxLifetimeMs     int64
+	InactivityMs      int64
+	UpdatedAtMs       int64
+	DisableTokens     bool
+	DisableAccounts   bool
+	DisableBreakGlass bool
+}
+
+// FromAccessTokenPolicyRow converts a row into the policy. An update time
+// of 0 is the zero time: the seeded defaults.
+func FromAccessTokenPolicyRow(row AccessTokenPolicyRow) accesstoken.Policy {
+	return accesstoken.Policy{
+		UpdatedAt:         FromOptionalMillis(row.UpdatedAtMs),
+		MaxLifetime:       time.Duration(row.MaxLifetimeMs) * time.Millisecond,
+		Inactivity:        time.Duration(row.InactivityMs) * time.Millisecond,
+		DisableTokens:     row.DisableTokens,
+		DisableAccounts:   row.DisableAccounts,
+		DisableBreakGlass: row.DisableBreakGlass,
+	}
+}
+
+// ToAccessTokenPolicyRow converts the policy into its columns.
+func ToAccessTokenPolicyRow(p accesstoken.Policy) AccessTokenPolicyRow {
+	return AccessTokenPolicyRow{
+		MaxLifetimeMs:     p.MaxLifetime.Milliseconds(),
+		InactivityMs:      p.Inactivity.Milliseconds(),
+		UpdatedAtMs:       OptionalMillis(p.UpdatedAt),
+		DisableTokens:     p.DisableTokens,
+		DisableAccounts:   p.DisableAccounts,
+		DisableBreakGlass: p.DisableBreakGlass,
 	}
 }
