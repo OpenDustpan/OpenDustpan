@@ -545,6 +545,7 @@ func newRouteTestRestores(
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})

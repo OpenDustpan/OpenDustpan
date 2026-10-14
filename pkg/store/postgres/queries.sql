@@ -1185,14 +1185,18 @@ WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sql
 -- name: GetAuditChainState :one
 -- The audit chain state that this installation recorded last (ADR 60
 -- decision 19), and whether its log ever held a chained entry. No row
--- means no record.
-SELECT state, ever_chained FROM audit_chain_state WHERE id = 1;
+-- means no record. The restore columns name the restore whose swap the
+-- server waits for.
+SELECT state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied
+FROM audit_chain_state WHERE id = 1;
 
 -- name: SetAuditChainState :exec
 -- Records the audit chain state of this installation.
-INSERT INTO audit_chain_state (id, state, ever_chained)
-VALUES (1, $1, $2)
-ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, ever_chained = EXCLUDED.ever_chained;
+INSERT INTO audit_chain_state (id, state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied)
+VALUES (1, $1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, ever_chained = EXCLUDED.ever_chained,
+    restore_id = EXCLUDED.restore_id, restore_backup_id = EXCLUDED.restore_backup_id,
+    restore_requested_by = EXCLUDED.restore_requested_by, restore_applied = EXCLUDED.restore_applied;
 
 -- name: LastAuditChainSwitchSequence :one
 -- The sequence of the last switch entry of the audit chain in the scope

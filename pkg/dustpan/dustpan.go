@@ -1241,18 +1241,30 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 		}
 	}
 
+	// The fence and the switch entry of the audit chain come before the
+	// rows fail: when either one fails, the next start still sees the
+	// stopped restore and runs both again.
+	if crashed {
+		if err := s.fenceStoppedRestore(ctx); err != nil {
+			return err
+		}
+	}
+
+	recheck := recheckChainAfterRestore(s.chain, restoreChain{logger: s.logger, now: s.now, observed: s.observed})
+	if err := recheck(ctx, backup.AppliedRestore{ID: "", BackupID: "", RequestedBy: ""}); err != nil {
+		return fmt.Errorf("stopped restore: %w", err)
+	}
+
 	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
 		return fmt.Errorf("fail running restores: %w", err)
 	}
 
-	if !crashed {
-		return nil
-	}
+	return nil
+}
 
-	if err := s.recheckStoppedRestores(ctx, running); err != nil {
-		return err
-	}
-
+// fenceStoppedRestore increments the failover version of every namespace
+// after a restore that stopped while it ran.
+func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 	fencer, ok := s.restoreRegistry.(backup.Fencer)
 	if !ok {
 		return nil
@@ -1769,8 +1781,9 @@ func newRestoreService(
 			now:      cfg.now,
 			observed: deps.observed,
 		})),
-		Now:    cfg.now,
-		Logger: cfg.logger,
+		BeforeSwap: markRestoreBeforeSwap(chain),
+		Now:        cfg.now,
+		Logger:     cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)
@@ -1782,31 +1795,6 @@ func newRestoreService(
 // restoreStep is one after-apply step of a restore. It receives the
 // restore that it follows.
 type restoreStep func(ctx context.Context, restore backup.AppliedRestore) error
-
-// recheckStoppedRestores runs the after-apply step of the audit chain for
-// each restore of running that stopped while it applied: the swap may have
-// replaced the log, and the step never ran (ADR 64 decision 6).
-func (s *Server) recheckStoppedRestores(ctx context.Context, running []backup.RestoreRecord) error {
-	recheck := recheckChainAfterRestore(s.chain, restoreChain{logger: s.logger, now: s.now, observed: s.observed})
-
-	for i := range running {
-		if running[i].State != backup.RestoreApplying {
-			continue
-		}
-
-		restore := backup.AppliedRestore{
-			ID:          running[i].ID,
-			BackupID:    running[i].BackupID,
-			RequestedBy: running[i].RequestedBy,
-		}
-
-		if err := recheck(ctx, restore); err != nil {
-			return fmt.Errorf("stopped restore %s: %w", running[i].ID, err)
-		}
-	}
-
-	return nil
-}
 
 // afterRestore returns the after-apply step of a restore that runs every
 // step in order, also after a step fails, and joins their errors. So a

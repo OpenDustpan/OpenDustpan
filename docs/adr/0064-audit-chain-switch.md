@@ -62,7 +62,12 @@ A review of the first build found three gaps:
      switch to off after that chained entry, less the switch lag, or a time
      within the switch lag after a switch to on.
    - Next to an entry without a hash, the time of the entries must not go
-     back along the sequence.
+     back along the sequence. A request takes its time before the store
+     transaction, and the store gives the sequence in that transaction,
+     so two appends to one scope can commit out of time order. So the
+     store keeps the times of a scope in order: in the transaction of an
+     append, an entry whose time is earlier than the last entry of its
+     scope takes the time of that entry.
    - When the installation holds a recorded state and no switch entry
      counts, every scope fails the check.
    - A row with the action `server:set-audit-chain` and a value path that
@@ -102,11 +107,23 @@ A review of the first build found three gaps:
      someone removed. When the check fails, the server still writes the
      entry, so it can serve. It logs an error and counts the restore in
      `dustpan_audit_restore_check_failures_total`.
-   - A restore that stops while it applies gets its entry at the next
-     start. A failure of another step after the apply does not skip the
-     entry.
+   - Just before the swap, the server names the restore in the record
+     of the chain. The swap copies the record into the restored data and
+     notes there that it replaced the log, in the same transaction. The
+     switch entry of the restore removes the name. So a restore that
+     stops after its swap gets its entry at the next start, and a restore
+     that stops before its swap gets no entry: its log is still the log
+     of the installation. A failure of another step after the swap does
+     not skip the entry. At a start, the server fences the namespaces and
+     writes the entry before it marks the stopped restore as failed, so a
+     start that stops between the steps runs them again.
    - A restore trusts the audit log in the backup. Signed audit checkpoints
      (ADR 60 decision 18) are what protect a backup.
+   - The check before the entry finds a backup without switch entries or
+     hashes only when the target recorded a chained log. A new
+     installation records the chain off and no chained log. So a restore
+     onto a new installation, the usual target of a disaster recovery,
+     cannot find such a backup.
    - After a restore, the server also logs the warning of a start when the
      restored log holds chained entries and the chain is off.
 7. **One start entry.** Two instances can start for the first time at the
@@ -156,5 +173,10 @@ A review of the first build found three gaps:
 - A restore trusts the audit log in the backup (decision 6). The check
   before the switch entry of the restore finds a backup without switch
   entries or hashes when the target recorded a chained log, but a backup
-  that someone changed with care can pass it. Signed audit checkpoints
-  protect a backup.
+  that someone changed with care can pass it. A restore onto a new
+  installation, the usual target of a disaster recovery, cannot find a
+  backup without switch entries or hashes at all. Signed audit
+  checkpoints protect a backup.
+- The time of an audit entry can be later than the time of its request,
+  by at most the time between two appends to its scope that commit out
+  of order.

@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -78,6 +79,10 @@ func (s *Server) resolveAuditChain(ctx context.Context) error {
 	ports := audit.ChainPorts{Switch: s.chain.sw, Logger: s.logger}
 
 	on, err := audit.ResolveChain(ctx, ports, s.chain.setting, s.now)
+	if errors.Is(err, audit.ErrChainStartRaced) {
+		return err
+	}
+
 	if err != nil {
 		return fmt.Errorf("audit chain: %w", err)
 	}
@@ -145,6 +150,31 @@ func (s *Server) checkAuditChain(ctx context.Context) {
 	}
 }
 
+// markRestoreBeforeSwap returns the before-swap step of a restore: it names
+// the restore in the audit chain record, so a start after a crash knows
+// whether the swap replaced the log (see audit.MarkRestore). Without a chain
+// switch it does nothing.
+func markRestoreBeforeSwap(chain *chainDeps) restoreStep {
+	return func(ctx context.Context, restore backup.AppliedRestore) error {
+		if chain == nil {
+			return nil
+		}
+
+		mark := audit.ChainRestoreMark{
+			ID:          restore.ID.String(),
+			BackupID:    restore.BackupID.String(),
+			RequestedBy: restore.RequestedBy,
+			Applied:     false,
+		}
+
+		if err := audit.MarkRestore(ctx, chain.sw, mark); err != nil {
+			return fmt.Errorf("audit chain before the swap: %w", err)
+		}
+
+		return nil
+	}
+}
+
 // scopes answers every namespace and the server scope: the scopes of a
 // check of the whole log.
 func (c *chainDeps) scopes(ctx context.Context) ([]namespace.Name, error) {
@@ -171,26 +201,22 @@ type restoreChain struct {
 
 // recheckChainAfterRestore returns the after-apply step of a restore for the
 // audit chain (RFC 22): the restore keeps the chain record of this
-// installation. The step checks the restored log, then writes a switch
-// entry for that state that marks the restore, notes the chained log and
-// logs the warning of a start while the chain is off (see
-// audit.RecheckChain). It never changes the state. When the check of the
+// installation. When the record says that the swap of a restore replaced
+// the log, the step checks the restored log, then writes a switch entry for
+// that state that marks the restore, notes the chained log and logs the
+// warning of a start while the chain is off (see audit.RecheckChain). The
+// restore comes from the record, so the step ignores its argument, and the
+// start runs it too. It never changes the state. When the check of the
 // restored log fails, it counts the restore in
 // dustpan_audit_restore_check_failures_total, and the restore still
 // succeeds. Without a chain switch it does nothing.
 func recheckChainAfterRestore(chain *chainDeps, rc restoreChain) restoreStep {
-	return func(ctx context.Context, restore backup.AppliedRestore) error {
+	return func(ctx context.Context, _ backup.AppliedRestore) error {
 		if chain == nil {
 			return nil
 		}
 
-		r := audit.ChainRestore{
-			Checker:   chain.checker,
-			Now:       rc.now,
-			BackupID:  restore.BackupID.String(),
-			Requester: restore.RequestedBy,
-			Scopes:    nil,
-		}
+		r := audit.ChainRestore{Checker: chain.checker, Now: rc.now, Scopes: nil}
 
 		if chain.checker != nil {
 			scopes, err := chain.scopes(ctx)
@@ -201,12 +227,7 @@ func recheckChainAfterRestore(chain *chainDeps, rc restoreChain) restoreStep {
 			r.Scopes = scopes
 		}
 
-		logger := rc.logger
-		if logger != nil {
-			logger = logger.With(slog.String("restore_id", restore.ID.String()))
-		}
-
-		ports := audit.ChainPorts{Switch: chain.sw, Logger: logger}
+		ports := audit.ChainPorts{Switch: chain.sw, Logger: rc.logger}
 
 		invalid, err := audit.RecheckChain(ctx, ports, r)
 		if invalid > 0 && rc.observed != nil {

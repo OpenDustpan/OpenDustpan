@@ -72,6 +72,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})

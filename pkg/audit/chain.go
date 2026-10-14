@@ -68,8 +68,29 @@ type ChainState string
 // and whether its log ever held a chained entry. A backup does not carry
 // it: a restore keeps the record of the target installation.
 type ChainRecord struct {
+	// Restore names the restore whose swap the installation waits for.
+	// Its zero value means no restore.
+	Restore     ChainRestoreMark
 	State       ChainState
 	EverChained bool
+}
+
+// NoRestore answers the restore mark of a record that names no restore.
+func NoRestore() ChainRestoreMark {
+	return ChainRestoreMark{ID: "", BackupID: "", RequestedBy: "", Applied: false}
+}
+
+// ChainRestoreMark names a restore in the chain record.
+// MarkRestore writes it just before the swap of a restore. The swap copies
+// it into the restored data and sets Applied in the same transaction, so a
+// start after a crash knows whether the swap replaced the log. RecheckChain
+// clears it when it writes the switch entry of the restore.
+type ChainRestoreMark struct {
+	ID          string
+	BackupID    string
+	RequestedBy string
+	// Applied is true once the swap replaced the log.
+	Applied bool
 }
 
 // Chain states.
@@ -136,6 +157,12 @@ type ChainWrite struct {
 // reads the record again and decides again.
 var ErrChainRecordChanged = errors.New("the audit chain record changed after it was read")
 
+// ErrChainStartRaced reports a start whose record changed two times between
+// its read and its write: other instances started at the same time.
+var ErrChainStartRaced = errors.New(
+	"the audit chain record changed while this instance started; start it again",
+)
+
 // ChainSwitch is the port that turns the chain on and off. The SQL stores
 // implement it next to Store.
 type ChainSwitch interface {
@@ -184,11 +211,15 @@ type ChainPorts struct {
 //
 // When another instance changes the record between the read and the write,
 // ResolveChain reads the record and decides again, one time. A second
-// change fails the start with ErrChainRecordChanged.
+// change fails the start with ErrChainStartRaced.
 func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, now func() time.Time) (bool, error) {
 	on, err := resolveOnce(ctx, ports, setting, now)
 	if errors.Is(err, ErrChainRecordChanged) {
 		on, err = resolveOnce(ctx, ports, setting, now)
+	}
+
+	if errors.Is(err, ErrChainRecordChanged) {
+		return false, ErrChainStartRaced
 	}
 
 	if err != nil {
@@ -250,27 +281,66 @@ type RestoreChecker interface {
 	CheckRestored(ctx context.Context, scopes []namespace.Name) ([]CheckResult, error)
 }
 
-// ChainRestore is the restore that RecheckChain follows: the ID of the
-// backup, the person who requested the restore, the scopes of the restored
-// log and the port that checks them, and the clock of the switch entry.
+// ChainRestore is what RecheckChain needs besides its ports: the scopes of
+// the restored log, the port that checks them, and the clock of the switch
+// entry. The restore itself comes from the chain record (see
+// ChainRestoreMark).
 type ChainRestore struct {
-	Checker   RestoreChecker
-	Now       func() time.Time
-	BackupID  string
-	Requester string
-	Scopes    []namespace.Name
+	Checker RestoreChecker
+	Now     func() time.Time
+	Scopes  []namespace.Name
 }
 
 // ChangeRestore is the key of the change that marks the switch entry of
 // RecheckChain: its new value is the ID of the restored backup.
 const ChangeRestore = "restore"
 
-// RecheckChain reads the chain record again after a restore. The restore
-// keeps the record of the target installation and never changes its state.
-// The restored log holds the switch entries of the backup, so RecheckChain
-// appends one switch entry with a hash for the recorded state: the
-// timeline then ends in the state of this installation (ADR 64 decision
-// 6). The record notes that the log holds a chained entry.
+// MarkRestore names the restore mark in the chain record just before the
+// swap of the restore, with Applied false. The swap sets
+// Applied, so a start after a crash rechecks the chain only when the swap
+// replaced the log. Without a record it changes nothing, because
+// RecheckChain then has nothing to recheck. When another instance changes
+// the record between the read and the write, MarkRestore reads it again,
+// one time.
+func MarkRestore(ctx context.Context, sw ChainSwitch, mark ChainRestoreMark) error {
+	err := markOnce(ctx, sw, mark)
+	if errors.Is(err, ErrChainRecordChanged) {
+		err = markOnce(ctx, sw, mark)
+	}
+
+	return err
+}
+
+// markOnce runs MarkRestore one time.
+func markOnce(ctx context.Context, sw ChainSwitch, mark ChainRestoreMark) error {
+	rec, err := sw.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	if rec.State == ChainUnknown {
+		return nil
+	}
+
+	next := rec
+	next.Restore = ChainRestoreMark{ID: mark.ID, BackupID: mark.BackupID, RequestedBy: mark.RequestedBy, Applied: false}
+
+	if err := sw.RecordChain(ctx, ChainWrite{Now: nil, Entries: nil, Read: rec, Record: next}); err != nil {
+		return fmt.Errorf("mark the restore in the audit chain record: %w", err)
+	}
+
+	return nil
+}
+
+// RecheckChain finishes the audit chain of a restore whose swap replaced
+// the log: the chain record holds a restore mark with Applied set.
+// Otherwise it changes nothing, so a restore that stopped before its swap
+// writes no switch entry. The restore keeps the record of the target
+// installation and never changes its state. The restored log holds the
+// switch entries of the backup, so RecheckChain appends one switch entry
+// with a hash for the recorded state: the timeline then ends in the state
+// of this installation. The record notes that the log
+// holds a chained entry, and the mark goes away in the same transaction.
 //
 // Before it writes the entry, it checks the scopes of r against the
 // restored log. The entry makes the timeline match again, so only this
@@ -279,12 +349,12 @@ const ChangeRestore = "restore"
 // entry, so the server can serve. It answers the count of scopes that
 // failed the check.
 //
-// The switch entry names r.Requester as its subject and holds the change
-// restore with the backup ID, so an auditor can tell it from a switch of an
-// administrator. While the chain is off and the restored log held chained
-// entries, the server logs the warning of a start. Without a record it
-// changes nothing. When another instance changes the record between the
-// read and the write, RecheckChain reads it again, one time.
+// The switch entry names the requester of the mark as its subject and
+// holds the change restore with the backup ID, so an auditor can tell it
+// from a switch of an administrator. While the chain is off and the
+// restored log held chained entries, the server logs the warning of a
+// start. When another instance changes the record between the read and the
+// write, RecheckChain reads it again, one time.
 func RecheckChain(ctx context.Context, ports ChainPorts, r ChainRestore) (int, error) {
 	invalid, err := recheckOnce(ctx, ports, r)
 	if errors.Is(err, ErrChainRecordChanged) {
@@ -303,7 +373,7 @@ func recheckOnce(ctx context.Context, ports ChainPorts, r ChainRestore) (int, er
 		return 0, fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	if rec.State == ChainUnknown {
+	if rec.State == ChainUnknown || !rec.Restore.Applied {
 		return 0, nil
 	}
 
@@ -312,13 +382,13 @@ func recheckOnce(ctx context.Context, ports ChainPorts, r ChainRestore) (int, er
 		return 0, fmt.Errorf("read audit chain: %w", err)
 	}
 
-	invalid := checkRestored(ctx, ports.Logger, r)
+	invalid := checkRestored(ctx, ports.Logger, r, rec.Restore)
 
 	w := ChainWrite{
 		Now:     r.Now,
-		Entries: []ChainEntry{{Entry: restoreEntry(rec.State, r), Chained: true}},
+		Entries: []ChainEntry{{Entry: restoreEntry(rec.State, r.Now, rec.Restore), Chained: true}},
 		Read:    rec,
-		Record:  ChainRecord{State: rec.State, EverChained: true},
+		Record:  ChainRecord{Restore: NoRestore(), State: rec.State, EverChained: true},
 	}
 
 	if err := sw.RecordChain(ctx, w); err != nil {
@@ -332,10 +402,10 @@ func recheckOnce(ctx context.Context, ports ChainPorts, r ChainRestore) (int, er
 	return invalid, nil
 }
 
-// checkRestored checks the scopes of r against the restored log, logs an
-// error when the check fails, and answers the count of scopes that failed.
-// A read error counts every scope as failed.
-func checkRestored(ctx context.Context, logger *slog.Logger, r ChainRestore) int {
+// checkRestored checks the scopes of r against the restored log of the
+// restore mark, logs an error when the check fails, and answers the count
+// of scopes that failed. A read error counts every scope as failed.
+func checkRestored(ctx context.Context, logger *slog.Logger, r ChainRestore, mark ChainRestoreMark) int {
 	if r.Checker == nil || len(r.Scopes) == 0 {
 		return 0
 	}
@@ -344,7 +414,8 @@ func checkRestored(ctx context.Context, logger *slog.Logger, r ChainRestore) int
 	if err != nil {
 		if logger != nil {
 			logger.ErrorContext(ctx, "the audit chain check of the restored log failed",
-				slog.String("backup_id", r.BackupID), slog.String("error", err.Error()))
+				slog.String("restore_id", mark.ID), slog.String("backup_id", mark.BackupID),
+				slog.String("error", err.Error()))
 		}
 
 		return len(r.Scopes)
@@ -360,26 +431,27 @@ func checkRestored(ctx context.Context, logger *slog.Logger, r ChainRestore) int
 
 	if invalid > 0 && logger != nil {
 		logger.ErrorContext(ctx, "the restored audit log does not match its chain",
-			slog.String("backup_id", r.BackupID), slog.Int("scopes", invalid))
+			slog.String("restore_id", mark.ID), slog.String("backup_id", mark.BackupID),
+			slog.Int("scopes", invalid))
 	}
 
 	return invalid
 }
 
-// restoreEntry returns the switch entry that RecheckChain writes for state:
-// it names the requester and holds the changes that mark a restore of the
-// backup.
-func restoreEntry(state ChainState, r ChainRestore) Entry {
+// restoreEntry returns the switch entry that RecheckChain writes for state
+// at the time now gives: it names the requester of mark and holds the
+// change that marks the restore of its backup.
+func restoreEntry(state ChainState, now func() time.Time, mark ChainRestoreMark) Entry {
 	e := chainEntry(state, time.Time{})
-	if r.Now != nil {
-		e.At = r.Now()
+	if now != nil {
+		e.At = now()
 	}
 
-	if r.Requester != "" {
-		e.Subject = r.Requester
+	if mark.RequestedBy != "" {
+		e.Subject = mark.RequestedBy
 	}
 
-	e.Changes = []Change{{Key: ChangeRestore, Old: nil, New: r.BackupID, Layer: "", TakesEffect: ""}}
+	e.Changes = []Change{{Key: ChangeRestore, Old: nil, New: mark.BackupID, Layer: "", TakesEffect: ""}}
 
 	return e
 }
@@ -440,7 +512,11 @@ func recordStart(ctx context.Context, sw ChainSwitch, rec ChainRecord, c chainSt
 		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.after], at), Chained: true})
 	}
 
-	next := ChainRecord{State: states[c.after], EverChained: c.chained || c.after || c.before != c.after}
+	next := ChainRecord{
+		Restore:     rec.Restore,
+		State:       states[c.after],
+		EverChained: c.chained || c.after || c.before != c.after,
+	}
 	if len(entries) == 0 && next == rec {
 		return nil
 	}

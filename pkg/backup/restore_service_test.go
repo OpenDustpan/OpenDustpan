@@ -226,6 +226,9 @@ type restoreServiceRegistry struct {
 	mu          sync.Mutex
 	rows        map[backup.RestoreID]backup.RestoreRecord
 	finishBlock chan struct{}
+	// failErr, when set, fails FailRunningRestores, the first step after
+	// the swap.
+	failErr error
 }
 
 func newRestoreServiceRegistry() *restoreServiceRegistry {
@@ -233,6 +236,7 @@ func newRestoreServiceRegistry() *restoreServiceRegistry {
 		mu:          sync.Mutex{},
 		rows:        map[backup.RestoreID]backup.RestoreRecord{},
 		finishBlock: nil,
+		failErr:     nil,
 	}
 }
 
@@ -347,6 +351,10 @@ func (r *restoreServiceRegistry) MarkRestoreApplying(
 func (r *restoreServiceRegistry) FailRunningRestores(_ context.Context, endedAt time.Time, errText string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.failErr != nil {
+		return r.failErr
+	}
 
 	for _, id := range sortedRestoreIDs(r.rows) {
 		row := r.rows[id]
@@ -540,6 +548,7 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -699,6 +708,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -888,6 +898,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1104,6 +1115,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      slog.New(slog.NewTextHandler(buf, nil)),
 	})
@@ -1303,6 +1315,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1563,11 +1576,42 @@ func restoreServiceWithHook(
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  hook,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
 	if err != nil {
 		t.Fatalf("new restore service with a hook: %v", err)
+	}
+
+	return service
+}
+
+// restoreServiceWithSteps rebuilds the restore service of setup with a
+// before-swap and an after-apply step, sharing its fakes.
+func restoreServiceWithSteps(
+	t *testing.T,
+	setup *restoreServiceSetup,
+	before, after func(ctx context.Context, restore backup.AppliedRestore) error,
+) *backup.RestoreService {
+	t.Helper()
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        setup.live,
+		Registry:    setup.regs,
+		Backups:     setup.backups,
+		Maintenance: setup.maint,
+		Blobs:       setup.blobs,
+		Target:      setup.target,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  after,
+		BeforeSwap:  before,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service with steps: %v", err)
 	}
 
 	return service
@@ -1613,6 +1657,62 @@ func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
 	case <-ran:
 	default:
 		t.Fatal("after-apply step never ran")
+	}
+}
+
+// TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails proves that a step
+// after the swap that fails still runs the after-apply step, which the
+// restored data needs, and the before-swap step runs
+// with the restore first.
+func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+	setup.regs.mu.Lock()
+	setup.regs.failErr = errFakeDriver
+	setup.regs.mu.Unlock()
+
+	var (
+		mu    sync.Mutex
+		steps []string
+	)
+
+	step := func(name string) func(context.Context, backup.AppliedRestore) error {
+		return func(_ context.Context, restore backup.AppliedRestore) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			steps = append(steps, name+" "+restore.BackupID.String()+" "+restore.RequestedBy)
+
+			return nil
+		}
+	}
+
+	service := restoreServiceWithSteps(t, setup, step("before"), step("after"))
+
+	id := backup.RestoreID("rst-afterswapfail0001")
+	req := backup.RestoreRequest{
+		BackupID:    setup.id,
+		PreBackupID: "",
+		CheckOnly:   false,
+		Force:       false,
+		RequestedBy: "tester",
+	}
+
+	if err := service.Start(t.Context(), id, req); err != nil {
+		t.Fatalf("start restore %s: %v", id, err)
+	}
+
+	if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	want := []string{"before " + setup.id.String() + " tester", "after " + setup.id.String() + " tester"}
+	if strings.Join(steps, "; ") != strings.Join(want, "; ") {
+		t.Fatalf("steps = %q, want %q", steps, want)
 	}
 }
 
@@ -1685,6 +1785,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -1776,6 +1877,7 @@ func TestRestoreRefusesNativeFormat(t *testing.T) {
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		BeforeSwap:  nil,
 		Now:         nil,
 		Logger:      nil,
 	})

@@ -169,6 +169,9 @@ The entry names the person who requested the restore, and holds the change `rest
 Before it writes the entry, the server checks the restored log.
 When that check fails, the server still serves, logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
 A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
+The check finds a backup without switch entries or hashes only when this installation recorded a chained log.
+So a restore onto a new installation cannot find such a backup.
+A restore that stops after it replaced the log gets its switch entry at the next start.
 When the restored log holds chained entries and the chain is off, the server logs the same warning after the restore.
 
 The check reads each run of chained entries on its own.
@@ -183,6 +186,8 @@ So an added row cannot turn the chain off.
 The first entry of `@server` of a new installation is the one exception: it is a switch to off without a hash.
 A row below sequence 1 fails the check.
 Next to an entry without a hash, the times of the entries must not go back.
+The store keeps the times of a scope in order.
+An entry whose time is earlier than the last entry of its scope takes the time of that entry.
 When the switch entries are gone and the installation still holds the state of the chain, every scope fails the check.
 Keep the clocks of the instances synchronized.
 The check answers `entriesUnchained`: the count of entries without a hash.

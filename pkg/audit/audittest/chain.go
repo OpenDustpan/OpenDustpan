@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a race of two starts with the same setting keeps the timeline", test: testChainRaceSameSetting},
 		{name: "a race of a first start with on and auto keeps the timeline", test: testChainRaceFirstStart},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
+		{name: "concurrent appends with the chain off then on check as valid", test: testChainConcurrentAppends},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a refused switch entry records nothing", test: testRecordChainIsAtomic},
@@ -146,7 +148,7 @@ func (tl *timeline) record(spec switchSpec) {
 	tl.t.Helper()
 
 	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained}
-	rec := audit.ChainRecord{State: spec.state, EverChained: spec.ever}
+	rec := audit.ChainRecord{Restore: audit.NoRestore(), State: spec.state, EverChained: spec.ever}
 
 	if err := writeChain(tl.t, tl.s, rec, entry); err != nil {
 		tl.t.Fatalf("record chain %s: %v", spec.state, err)
@@ -355,7 +357,7 @@ func (tl *timeline) forgeOff(at time.Time) {
 	tl.t.Helper()
 
 	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false}
-	rec := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
+	rec := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true}
 
 	if err := writeChain(tl.t, tl.s, rec, entry); err != nil {
 		tl.t.Fatalf("forge a switch to off: %v", err)
@@ -534,8 +536,8 @@ func testChainStaleReadRefused(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	s := ts.Store
-	none := audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}
-	off := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	none := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}
+	off := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false}
 	start := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, now()), Chained: false}
 
 	// Two instances read no record at the same time, and both write the
@@ -667,7 +669,13 @@ func testChainRaceSameSetting(t *testing.T, ts ChainTestStore) {
 	tl.at = tl.at.Add(2 * chainStep)
 	tl.append(1)
 
-	wantRaceResult(t, s, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}, 2, tl.ns.Name)
+	wantRaceResult(
+		t,
+		s,
+		audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true},
+		2,
+		tl.ns.Name,
+	)
 }
 
 func testChainRaceFirstStart(t *testing.T, ts ChainTestStore) {
@@ -688,7 +696,13 @@ func testChainRaceFirstStart(t *testing.T, ts ChainTestStore) {
 	tl.at = tl.at.Add(2 * chainStep)
 	tl.append(1)
 
-	wantRaceResult(t, s, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}, 2, tl.ns.Name)
+	wantRaceResult(
+		t,
+		s,
+		audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true},
+		2,
+		tl.ns.Name,
+	)
 }
 
 func testChainCheckEach(t *testing.T, ts ChainTestStore) {
@@ -771,10 +785,13 @@ func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 		t.Fatalf("chain record of a new store: got %+v, want no record", got)
 	}
 
+	mark := audit.ChainRestoreMark{ID: "rst-1", BackupID: "bkp-1", RequestedBy: "alice", Applied: true}
+
 	for _, want := range []audit.ChainRecord{
-		{State: audit.ChainStateOff, EverChained: false},
-		{State: audit.ChainStateOn, EverChained: true},
-		{State: audit.ChainStateOff, EverChained: true},
+		{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false},
+		{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true},
+		{Restore: mark, State: audit.ChainStateOn, EverChained: true},
+		{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: true},
 	} {
 		if err := writeChain(t, s, want); err != nil {
 			t.Fatalf("record chain %+v: %v", want, err)
@@ -795,8 +812,13 @@ func testRecordChainIsAtomic(t *testing.T, ts ChainTestStore) {
 	bad := good
 	bad.Namespace = "acme"
 
-	err := writeChain(t, s, audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
-		audit.ChainEntry{Entry: good, Chained: false}, audit.ChainEntry{Entry: bad, Chained: false})
+	err := writeChain(
+		t,
+		s,
+		audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false},
+		audit.ChainEntry{Entry: good, Chained: false},
+		audit.ChainEntry{Entry: bad, Chained: false},
+	)
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("record chain with an entry of another scope: got %v, want ErrInvalidEntry", err)
 	}
@@ -818,4 +840,69 @@ func testRecordChainIsAtomic(t *testing.T, ts ChainTestStore) {
 	if listing.Total != 0 {
 		t.Fatalf("server entries after a refused switch: got %d, want 0", listing.Total)
 	}
+}
+
+// Workers and appends of each worker of testChainConcurrentAppends.
+const (
+	concurrentWorkers = 8
+	concurrentAppends = 25
+)
+
+func testChainConcurrentAppends(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	tl := newTimeline(t, s)
+	tl.start(false)
+
+	base := tl.tick()
+
+	// Each request takes its time before its transaction, so the times
+	// arrive out of the order of the commits. Six workers append to acme
+	// and two to @server.
+	var wg sync.WaitGroup
+
+	for w := range concurrentWorkers {
+		wg.Go(func() {
+			for i := range concurrentAppends {
+				at := base.Add(time.Duration((i*37+w*101)%500) * time.Millisecond)
+				if err := concurrentAppend(t, s, tl.ns, w, at); err != nil {
+					t.Errorf("worker %d append %d: %v", w, i, err)
+
+					return
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+
+	tl.at = base.Add(time.Second)
+	tl.turn(true)
+	tl.append(2)
+
+	for _, scope := range []namespace.Name{tl.ns.Name, audit.ServerScope} {
+		if got := check(t, s, scope); !got.Valid {
+			t.Fatalf("check %s after concurrent appends: got %+v, want valid", scope, got)
+		}
+	}
+}
+
+// concurrentAppend appends one entry with the time at for worker w: to the server
+// scope for the last two workers, else to ns.
+func concurrentAppend(t *testing.T, s ChainStore, ns namespace.Namespace, w int, at time.Time) error {
+	t.Helper()
+
+	if w < concurrentWorkers-2 {
+		_, err := s.Append(t.Context(), ns.Fence(), newEntry(ns.Name, "admin", "req-"+strconv.Itoa(w), at))
+
+		return err
+	}
+
+	e := newEntry(audit.ServerScope, "admin", "req-"+strconv.Itoa(w), at)
+	e.Action, e.Object = "server:update-settings", audit.ServerScope.String()
+
+	_, err := s.AppendServer(t.Context(), e)
+
+	return err
 }

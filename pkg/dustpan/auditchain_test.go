@@ -98,10 +98,54 @@ func TestTurningTheAuditChainOffIsAudited(t *testing.T) {
 }
 
 // TestAStoppedRestoreRechecksTheAuditChain proves ADR 64 decision 6 for a
-// restore that stops while it applies: the next start writes the switch
-// entry of the restore, which names the requester and the backup.
+// restore that stops after its swap: the next start writes the switch entry
+// of the restore, which names the requester and the backup of the mark.
 func TestAStoppedRestoreRechecksTheAuditChain(t *testing.T) {
 	t.Parallel()
+
+	st, stopped := stoppedRestore(t, true)
+
+	before := len(listServer(t, st))
+
+	stop := runChainServer(t, st, audit.ChainOn)
+	waitForServerEntries(t, st, before+1)
+	waitForRestoreState(t, st, stopped.ID, backup.RestoreFailed)
+	stop()
+
+	// The list answers newest first.
+	got := listServer(t, st)[0]
+	marked := len(got.Changes) == 1 && got.Changes[0].Key == audit.ChangeRestore &&
+		got.Changes[0].New == stopped.BackupID.String()
+
+	if got.Action != audit.ActionSetChain || got.Subject != "alice" || got.Hash == "" || !marked {
+		t.Fatalf("restore switch entry: got %+v, want a chained switch by alice that marks the restore", got)
+	}
+}
+
+// TestARestoreStoppedBeforeItsSwapWritesNoSwitchEntry proves that a restore
+// that stopped before its swap writes no switch entry at the next start:
+// the log is still the log of this installation.
+func TestARestoreStoppedBeforeItsSwapWritesNoSwitchEntry(t *testing.T) {
+	t.Parallel()
+
+	st, stopped := stoppedRestore(t, false)
+
+	before := len(listServer(t, st))
+
+	stop := runChainServer(t, st, audit.ChainOn)
+	waitForRestoreState(t, st, stopped.ID, backup.RestoreFailed)
+	stop()
+
+	if got := len(listServer(t, st)); got != before {
+		t.Fatalf("server scope after the start: got %d entries, want %d", got, before)
+	}
+}
+
+// stoppedRestore answers a store with the chain on and a restore that
+// stopped while it applied, with the mark of the restore in the chain
+// record. swapped says whether the swap replaced the log before the stop.
+func stoppedRestore(t *testing.T, swapped bool) (*sqlite.Store, backup.RestoreRecord) {
+	t.Helper()
 
 	st := openChainStore(t)
 	createChainNamespace(t, st)
@@ -109,8 +153,6 @@ func TestAStoppedRestoreRechecksTheAuditChain(t *testing.T) {
 	stop := runChainServer(t, st, audit.ChainOn)
 	waitForChainState(t, st, audit.ChainStateOn)
 	stop()
-
-	before := len(listServer(t, st))
 
 	stopped := backup.RestoreRecord{
 		StartedAt:   time.Now().UTC(),
@@ -131,17 +173,50 @@ func TestAStoppedRestoreRechecksTheAuditChain(t *testing.T) {
 		t.Fatalf("mark restore applying: %v", err)
 	}
 
-	stop = runChainServer(t, st, audit.ChainOn)
-	waitForServerEntries(t, st, before+1)
-	stop()
+	rec, err := st.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
 
-	// The list answers newest first.
-	got := listServer(t, st)[0]
-	marked := len(got.Changes) == 1 && got.Changes[0].Key == audit.ChangeRestore &&
-		got.Changes[0].New == stopped.BackupID.String()
+	// The record holds the mark that the server writes before the swap,
+	// and the swap sets Applied.
+	next := rec
+	next.Restore = audit.ChainRestoreMark{
+		ID:          stopped.ID.String(),
+		BackupID:    stopped.BackupID.String(),
+		RequestedBy: stopped.RequestedBy,
+		Applied:     swapped,
+	}
 
-	if got.Action != audit.ActionSetChain || got.Subject != "alice" || got.Hash == "" || !marked {
-		t.Fatalf("restore switch entry: got %+v, want a chained switch by alice that marks the restore", got)
+	w := audit.ChainWrite{Now: nil, Entries: nil, Read: rec, Record: next}
+	if err := st.RecordChain(t.Context(), w); err != nil {
+		t.Fatalf("mark the restore: %v", err)
+	}
+
+	return st, stopped
+}
+
+// waitForRestoreState waits until the restore id in st holds want.
+func waitForRestoreState(t *testing.T, st *sqlite.Store, id backup.RestoreID, want backup.RestoreState) {
+	t.Helper()
+
+	deadline := time.Now().Add(chainWait)
+
+	for {
+		got, err := st.GetRestore(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get restore %s: %v", id, err)
+		}
+
+		if got.State == want {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s after %s: state %q, want %q", id, chainWait, got.State, want)
+		}
+
+		pauseChain(t)
 	}
 }
 

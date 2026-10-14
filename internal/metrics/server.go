@@ -246,8 +246,14 @@ func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 // newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
 // in reg.
 func newRestoreCheckCounter(reg *Registry) *Counter {
-	return reg.NewCounter("dustpan_audit_restore_check_failures_total",
+	c := reg.NewCounter("dustpan_audit_restore_check_failures_total",
 		"Restores whose restored audit log failed the chain check.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// failure.
+	c.Add(0, []string{}...)
+
+	return c
 }
 
 // IncAuditRestoreCheckFailure adds one to the count of restores whose

@@ -177,6 +177,14 @@ func (s *Store) insertAuditEntry(
 	default:
 		prevHash = last.Hash
 		seq = last.Sequence + 1
+
+		// Callers take the time before the transaction, and the sequence
+		// comes inside it, so two appends to one scope can commit out of
+		// time order. The time never goes back along the sequence of a
+		// scope: an entry earlier than the last one takes its time.
+		if codec.Millis(e.At) < last.AtMs {
+			e.At = codec.FromMillis(last.AtMs)
+		}
 	}
 
 	e.Sequence = seq

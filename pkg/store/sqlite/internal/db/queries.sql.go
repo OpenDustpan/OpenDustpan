@@ -1579,21 +1579,34 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 }
 
 const getAuditChainState = `-- name: GetAuditChainState :one
-SELECT state, ever_chained FROM audit_chain_state WHERE id = 1
+SELECT state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied
+FROM audit_chain_state WHERE id = 1
 `
 
 type GetAuditChainStateRow struct {
-	State       string
-	EverChained int64
+	State              string
+	EverChained        int64
+	RestoreID          string
+	RestoreBackupID    string
+	RestoreRequestedBy string
+	RestoreApplied     int64
 }
 
 // The audit chain state that this installation recorded last (ADR 60
 // decision 19), and whether its log ever held a chained entry. No row
-// means no record.
+// means no record. The restore columns name the restore whose swap the
+// server waits for.
 func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
 	row := q.db.QueryRowContext(ctx, getAuditChainState)
 	var i GetAuditChainStateRow
-	err := row.Scan(&i.State, &i.EverChained)
+	err := row.Scan(
+		&i.State,
+		&i.EverChained,
+		&i.RestoreID,
+		&i.RestoreBackupID,
+		&i.RestoreRequestedBy,
+		&i.RestoreApplied,
+	)
 	return i, err
 }
 
@@ -5098,19 +5111,32 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 }
 
 const setAuditChainState = `-- name: SetAuditChainState :exec
-INSERT INTO audit_chain_state (id, state, ever_chained)
-VALUES (1, ?, ?)
-ON CONFLICT (id) DO UPDATE SET state = excluded.state, ever_chained = excluded.ever_chained
+INSERT INTO audit_chain_state (id, state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied)
+VALUES (1, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state, ever_chained = excluded.ever_chained,
+    restore_id = excluded.restore_id, restore_backup_id = excluded.restore_backup_id,
+    restore_requested_by = excluded.restore_requested_by, restore_applied = excluded.restore_applied
 `
 
 type SetAuditChainStateParams struct {
-	State       string
-	EverChained int64
+	State              string
+	EverChained        int64
+	RestoreID          string
+	RestoreBackupID    string
+	RestoreRequestedBy string
+	RestoreApplied     int64
 }
 
 // Records the audit chain state of this installation.
 func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainStateParams) error {
-	_, err := q.db.ExecContext(ctx, setAuditChainState, arg.State, arg.EverChained)
+	_, err := q.db.ExecContext(ctx, setAuditChainState,
+		arg.State,
+		arg.EverChained,
+		arg.RestoreID,
+		arg.RestoreBackupID,
+		arg.RestoreRequestedBy,
+		arg.RestoreApplied,
+	)
 	return err
 }
 

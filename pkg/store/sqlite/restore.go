@@ -282,9 +282,17 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
 	}
 
+	// The swap applies the restore that the record names, so the copy sets
+	// restore_applied: a start after a crash then knows that the log was
+	// replaced.
 	if chain.State != audit.ChainUnknown {
-		const keepChain = `INSERT INTO audit_chain_state (id, state, ever_chained) VALUES (1, ?, ?)`
-		if _, err := tx.ExecContext(ctx, keepChain, string(chain.State), chain.EverChained); err != nil {
+		const keepChain = `INSERT INTO audit_chain_state (id, state, ever_chained, restore_id, restore_backup_id,
+    restore_requested_by, restore_applied) VALUES (1, ?, ?, ?, ?, ?, 1)`
+		mark := chain.Restore
+
+		_, err := tx.ExecContext(ctx, keepChain, string(chain.State), chain.EverChained,
+			mark.ID, mark.BackupID, mark.RequestedBy)
+		if err != nil {
 			return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
 		}
 	}

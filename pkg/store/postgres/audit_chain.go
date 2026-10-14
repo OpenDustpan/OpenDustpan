@@ -37,14 +37,14 @@ func (s *Store) HasChainedEntries(ctx context.Context) (bool, error) {
 func (s *Store) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
 	row, err := s.queries.GetAuditChainState(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
+		return audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}, nil
 	}
 
 	if err != nil {
 		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
+	return recordOf(row), nil
 }
 
 // RecordChain implements audit.ChainSwitch. The advisory lock of the
@@ -71,7 +71,14 @@ func (s *Store) RecordChain(ctx context.Context, w audit.ChainWrite) error {
 			return err
 		}
 
-		params := db.SetAuditChainStateParams{State: string(w.Record.State), EverChained: w.Record.EverChained}
+		params := db.SetAuditChainStateParams{
+			State:              string(w.Record.State),
+			EverChained:        w.Record.EverChained,
+			RestoreID:          w.Record.Restore.ID,
+			RestoreBackupID:    w.Record.Restore.BackupID,
+			RestoreRequestedBy: w.Record.Restore.RequestedBy,
+			RestoreApplied:     w.Record.Restore.Applied,
+		}
 		if err := q.SetAuditChainState(ctx, params); err != nil {
 			return fmt.Errorf("save audit chain state: %w", err)
 		}
@@ -123,14 +130,14 @@ func (s *Store) insertChainEntries(ctx context.Context, q *db.Queries, w audit.C
 func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, error) {
 	row, err := q.GetAuditChainState(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
+		return audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}, nil
 	}
 
 	if err != nil {
 		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
+	return recordOf(row), nil
 }
 
 // readChainState reads the recorded chain state in q, and false when no
@@ -215,4 +222,18 @@ func walkServerScope(ctx context.Context, q *db.Queries, b *audit.TimelineBuilde
 	}
 
 	return nil
+}
+
+// recordOf maps a row of audit_chain_state to the chain record.
+func recordOf(row db.GetAuditChainStateRow) audit.ChainRecord {
+	return audit.ChainRecord{
+		Restore: audit.ChainRestoreMark{
+			ID:          row.RestoreID,
+			BackupID:    row.RestoreBackupID,
+			RequestedBy: row.RestoreRequestedBy,
+			Applied:     row.RestoreApplied,
+		},
+		State:       audit.ChainState(row.State),
+		EverChained: row.EverChained,
+	}
 }

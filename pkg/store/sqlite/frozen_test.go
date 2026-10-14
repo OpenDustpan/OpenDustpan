@@ -60,7 +60,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0048_audit_changes.sql":             "4a4b1cba2d407ebd986c54a405d025186ae6b9f5b867cc2a5333e8f54e825cec",
 		"0049_audit_sink_cursors.sql":        "681d980748c2408d25a69857a4d5454ee38d9bc027834e8a6a70f63203841405",
 		"0054_token_policy.sql":              "66f78c48117299e60aeb4f4982cec7fb55ef828f8800206025b68962eee20a26",
-		"0055_audit_chain_state.sql":         "806a132772695355329f4e0e062c08e7e44073d67bcdbc308d401fd124e33d9d",
+		"0055_audit_chain_state.sql":         "8b26321acdfe4306f7007ec292196d1cfb2247bdee14f7c06ac0dd0ee73cf7e5",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

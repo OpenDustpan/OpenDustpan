@@ -34,9 +34,13 @@ type AccessTokenPolicy struct {
 }
 
 type AuditChainState struct {
-	ID          int16
-	State       string
-	EverChained bool
+	ID                 int16
+	State              string
+	EverChained        bool
+	RestoreID          string
+	RestoreBackupID    string
+	RestoreRequestedBy string
+	RestoreApplied     bool
 }
 
 type AuditEntry struct {

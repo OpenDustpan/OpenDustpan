@@ -63,6 +63,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
 		{name: "a restore of another chain state checks valid after the recheck", test: testRestoreChainChecksValid},
 		{name: "the recheck finds a restored log without switch entries", test: testRestoreChainFindsStrippedBackup},
+		{name: "a restore that stopped before its swap writes no switch entry", test: testRestoreChainWithoutSwap},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -525,9 +526,13 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 		t.Skip("the store has no audit chain switch")
 	}
 
-	saveChainRecord(t, srcChain, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true})
+	saveChainRecord(
+		t,
+		srcChain,
+		audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true},
+	)
 
-	want := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	want := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false}
 	saveChainRecord(t, dstChain, want)
 
 	sink, sum, files := exportPortable(t, ps.src)
@@ -545,6 +550,9 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("chain record after the restore: %v", err)
 	}
 
+	// The swap keeps the record of the target and notes that it replaced
+	// the log, so the server writes the switch entry of the restore.
+	want.Restore.Applied = true
 	if got != want {
 		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
 	}
@@ -563,7 +571,7 @@ func saveChainRecord(t *testing.T, s audit.ChainSwitch, rec audit.ChainRecord) {
 
 // noChainRecord is the chain record of a new store.
 func noChainRecord() audit.ChainRecord {
-	return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}
+	return audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}
 }
 
 // chainSwitchEntry returns a switch entry of the audit chain for state at
@@ -628,7 +636,11 @@ func testRestoreChainFindsStrippedBackup(t *testing.T, newStore RestoreFactory) 
 	// The source holds no switch entry and no hash: the backup of a chained
 	// installation after someone removed them.
 	restored := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
-		saveChainRecord(t, from, audit.ChainRecord{State: audit.ChainStateOff, EverChained: false})
+		saveChainRecord(
+			t,
+			from,
+			audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false},
+		)
 		appendDecrypts(t, from, acme, at, 2)
 	}, func(to chainRestoreStore) { recordChain(t, to, audit.ChainStateOn, at) })
 
@@ -679,6 +691,10 @@ func restoreChain(
 	fill(from, acme)
 	target(to)
 
+	if err := audit.MarkRestore(ctx, to, restoreMark()); err != nil {
+		t.Fatalf("mark the restore: %v", err)
+	}
+
 	sink, sum, files := exportPortable(t, ps.src)
 
 	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
@@ -695,15 +711,49 @@ func restoreChain(
 // restoreBackupID is the backup ID of the restore cases of the chain.
 const restoreBackupID = "bkp-chain"
 
-// restoreOf answers the restore of restoreBackupID by alice at at, which
-// checks scopes in s.
+// restoreMark answers the mark of the restore of restoreBackupID by alice.
+func restoreMark() audit.ChainRestoreMark {
+	return audit.ChainRestoreMark{ID: "rst-chain", BackupID: restoreBackupID, RequestedBy: "alice", Applied: false}
+}
+
+// restoreOf answers the recheck of a restore at at, which checks scopes in
+// s.
 func restoreOf(s audit.RestoreChecker, at time.Time, scopes ...namespace.Name) audit.ChainRestore {
-	return audit.ChainRestore{
-		Checker:   s,
-		Now:       func() time.Time { return at },
-		BackupID:  restoreBackupID,
-		Requester: "alice",
-		Scopes:    scopes,
+	return audit.ChainRestore{Checker: s, Now: func() time.Time { return at }, Scopes: scopes}
+}
+
+// testRestoreChainWithoutSwap proves that a restore that stopped before its
+// swap writes no switch entry: the record holds the mark of the restore,
+// but not that the swap replaced the log. A store without a chain switch
+// skips the case.
+func testRestoreChainWithoutSwap(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s, ok := newStore(t).(chainRestoreStore)
+	if !ok {
+		t.Skip("the store has no audit chain switch")
+	}
+
+	at := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	recordChain(t, s, audit.ChainStateOn, at)
+
+	if err := audit.MarkRestore(t.Context(), s, restoreMark()); err != nil {
+		t.Fatalf("mark the restore: %v", err)
+	}
+
+	ports := audit.ChainPorts{Switch: s, Logger: nil}
+	recheck := restoreOf(s, at.Add(time.Minute), audit.ServerScope)
+	if _, err := audit.RecheckChain(t.Context(), ports, recheck); err != nil {
+		t.Fatalf("recheck the chain: %v", err)
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list @server: %v", err)
+	}
+
+	if listing.Total != 1 {
+		t.Fatalf("@server holds %d entries, want the start entry only", listing.Total)
 	}
 }
 
@@ -717,7 +767,7 @@ func recordChain(t *testing.T, s audit.ChainSwitch, state audit.ChainState, at t
 		Now:     nil,
 		Entries: []audit.ChainEntry{{Entry: chainSwitchEntry(state, at), Chained: on}},
 		Read:    noChainRecord(),
-		Record:  audit.ChainRecord{State: state, EverChained: on},
+		Record:  audit.ChainRecord{Restore: audit.NoRestore(), State: state, EverChained: on},
 	}
 
 	if err := s.RecordChain(t.Context(), w); err != nil {

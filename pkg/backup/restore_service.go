@@ -79,6 +79,13 @@ type RestoreConfig struct {
 	// the backup holds unsealed. It receives the restore that it follows. A
 	// failure fails the restore. Nil skips it.
 	AfterApply func(ctx context.Context, restore AppliedRestore) error
+	// BeforeSwap runs just before the swap, after the checks, the backup
+	// of the live data and the copy of the blobs. It receives the restore
+	// that follows. The server names the restore in the audit chain record
+	// there, so a start after a crash knows whether the swap replaced the
+	// log. A failure fails the restore before the swap.
+	// Nil skips it.
+	BeforeSwap func(ctx context.Context, restore AppliedRestore) error
 	Now        func() time.Time
 	Logger     *slog.Logger
 }
@@ -106,6 +113,7 @@ type RestoreService struct {
 	key         secret.Wrapper
 	region      string
 	afterApply  func(ctx context.Context, restore AppliedRestore) error
+	beforeSwap  func(ctx context.Context, restore AppliedRestore) error
 	now         func() time.Time
 	logger      *slog.Logger
 	mu          sync.Mutex
@@ -159,6 +167,7 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		key:         cfg.Key,
 		region:      cfg.Region,
 		afterApply:  cfg.AfterApply,
+		beforeSwap:  cfg.BeforeSwap,
 		now:         now,
 		logger:      logger,
 		mu:          sync.Mutex{},
@@ -838,10 +847,29 @@ func (s *RestoreService) applyPinned(
 	// and Get serves the held row until recreateAfterSwap stores it again.
 	s.trackRestore(before)
 
+	if s.beforeSwap != nil {
+		if err := s.beforeSwap(ctx, restore); err != nil {
+			return fmt.Errorf("prepare the swap of restore %s: %w", id, err)
+		}
+	}
+
 	if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
 		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
 	}
 
+	// The swap replaced the live data. A later step that fails still runs
+	// the after-apply step, which the restored data needs, and the restore
+	// fails with both errors.
+	if err := s.afterSwap(ctx, id, before, pre); err != nil {
+		return errors.Join(err, s.runAfterApply(ctx, restore))
+	}
+
+	return s.runAfterApply(ctx, restore)
+}
+
+// afterSwap fails the running rows that the swap resurrected and preserves
+// the restore row and the pre-backup row across the swap.
+func (s *RestoreService) afterSwap(ctx context.Context, id RestoreID, before RestoreRecord, pre Record) error {
 	// The swapped-in snapshot predates this restore, so it may hold running
 	// rows of restores that finished since: the pre-backup of an undo holds
 	// the running row of the restore it undoes. Those rows will never finish,
@@ -864,13 +892,19 @@ func (s *RestoreService) applyPinned(
 		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
 	}
 
-	// A backup from before the seal change holds unsealed rows: run the
-	// after-apply step while maintenance mode still holds, so those rows
-	// end sealed. A failure fails the restore.
-	if s.afterApply != nil {
-		if err := s.afterApply(ctx, restore); err != nil {
-			return fmt.Errorf("seal restored state: %w", err)
-		}
+	return nil
+}
+
+// runAfterApply runs the after-apply step of restore. A backup from before
+// the seal change holds unsealed rows: the step runs while maintenance
+// mode still holds, so those rows end sealed. A failure fails the restore.
+func (s *RestoreService) runAfterApply(ctx context.Context, restore AppliedRestore) error {
+	if s.afterApply == nil {
+		return nil
+	}
+
+	if err := s.afterApply(ctx, restore); err != nil {
+		return fmt.Errorf("after the apply of restore %s: %w", restore.ID, err)
 	}
 
 	return nil
