@@ -626,14 +626,22 @@ func TestSecretCiphertextOfDoesNotReadLargeTarget(t *testing.T) {
 	}
 }
 
-// TestSecretCiphertextOfDeepPathReadsEachLevelOnce reveals a secret at the end
+// TestSecretCiphertextOfDeepPathAllocatesLinearly reveals a secret at the end
 // of a deep path, in a document of about 8 MiB that nests 4000 objects, each
-// with a 2 KiB string beside the path. It checks the answer only. A wall-clock
-// bound would depend on the load of the machine running the suite.
-func TestSecretCiphertextOfDeepPathReadsEachLevelOnce(t *testing.T) {
-	t.Parallel()
-
-	const depth = 4000
+// with a 2 KiB string beside the path. A lookup that copies or re-reads the
+// subtree at each level allocates a multiple of the document size. The test
+// bounds the bytes that one reveal allocates, which does not depend on the
+// scheduler. It runs without t.Parallel, because the measurement needs a quiet
+// runtime.
+//
+//nolint:paralleltest // The allocation measurement needs a quiet runtime, so this test never runs in parallel.
+func TestSecretCiphertextOfDeepPathAllocatesLinearly(t *testing.T) {
+	const (
+		depth = 4000
+		// maxAlloc is about twice the 2.6 MiB that one reveal allocates under
+		// -race, measured when the bound was set.
+		maxAlloc = 5 << 20
+	)
 
 	padding := strings.Repeat("p", 2048)
 
@@ -654,9 +662,32 @@ func TestSecretCiphertextOfDeepPathReadsEachLevelOnce(t *testing.T) {
 		`{"urn":"urn:pulumi:dev::web::a:index:A::x","type":"a:index:A","inputs":{},` +
 		`"outputs":` + open.String() + `}]}`)
 
-	got, _, err := stack.SecretCiphertextOf(deployment, "/resources/0/outputs"+tokens.String())
-	if err != nil || string(got) != "deep-cipher" {
-		t.Fatalf("deep reveal = %q, %v; want deep-cipher", got, err)
+	const path = "/resources/0/outputs"
+
+	reveal := func() uint64 {
+		runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+		runtime.GC() //nolint:revive // The allocation measurement needs a quiet runtime, so the test collects first.
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		got, _, err := stack.SecretCiphertextOf(deployment, path+tokens.String())
+
+		runtime.ReadMemStats(&after)
+
+		if err != nil || string(got) != "deep-cipher" {
+			t.Fatalf("deep reveal = %q, %v; want deep-cipher", got, err)
+		}
+
+		return after.TotalAlloc - before.TotalAlloc
+	}
+
+	reveal() // A warm-up run, so one-time allocations are not counted.
+
+	if alloc := reveal(); alloc > maxAlloc {
+		t.Fatalf("deep reveal allocated %d bytes, want at most %d for a %d-byte document",
+			alloc, maxAlloc, len(deployment))
 	}
 }
 
