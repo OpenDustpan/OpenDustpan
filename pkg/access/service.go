@@ -68,6 +68,10 @@ type ServiceConfig struct {
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
 	// random IDs.
 	NewID func(prefix string) string
+	// BootstrapAdmins are the subjects of the bootstrap admin tokens (ADR
+	// 6). They hold every action with no grant, so an access-review export
+	// shows one row for each.
+	BootstrapAdmins []string
 }
 
 // Service implements the role and grant use cases.
@@ -83,6 +87,7 @@ type Service struct {
 	authz      *Authorizer
 	now        func() time.Time
 	newID      func(prefix string) string
+	bootstrap  []string
 }
 
 // NewService returns a Service. Store, Directory, Namespaces and Authorizer
@@ -111,7 +116,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, directory: cfg.Directory, namespaces: cfg.Namespaces, authz: cfg.Authorizer,
-		now: now, newID: newID,
+		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins),
 	}, nil
 }
 
