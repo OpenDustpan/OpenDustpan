@@ -206,6 +206,8 @@ func newRevealHandler(
 		Workspaces:     revealWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          store,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: onFail,
 	})
 	if err != nil {

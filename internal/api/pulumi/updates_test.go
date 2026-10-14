@@ -428,7 +428,15 @@ func newUpdateFixtureWithCutoff(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
+	stores := &recordingStackStore{
+		created:   nil,
+		renamed:   nil,
+		tags:      nil,
+		deleted:   nil,
+		forced:    nil,
+		entries:   nil,
+		deleteErr: nil,
+	}
 
 	stacks, err := stack.NewService(
 		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
@@ -467,6 +475,7 @@ func newUpdateFixtureWithCutoff(
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   cutoff,
@@ -2626,7 +2635,15 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	stores := &recordingStackStore{created: nil, renamed: nil, tags: nil, deleted: nil, forced: nil, deleteErr: nil}
+	stores := &recordingStackStore{
+		created:   nil,
+		renamed:   nil,
+		tags:      nil,
+		deleted:   nil,
+		forced:    nil,
+		entries:   nil,
+		deleteErr: nil,
+	}
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
@@ -2664,6 +2681,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		CheckpointDeltaCutoff:   -1,
 		Audit:                   nil,
 		OnAuditFailure:          nil,

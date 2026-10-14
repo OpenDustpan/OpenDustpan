@@ -262,6 +262,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		Workspaces:    units,
 		Namespaces:    fakeNamespaces{},
 		Audit:         nil,
+		Gate:          nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

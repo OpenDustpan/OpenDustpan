@@ -15,10 +15,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -31,6 +34,17 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestPrincipalConformance runs the principal and group store suite.
+func TestPrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.Run(t, func(t *testing.T) principal.Store {
 		t.Helper()
 
 		return open(t)
@@ -572,6 +586,7 @@ type uncountedStore struct {
 var (
 	_ storetest.CountNullifier = (*uncountedStore)(nil)
 	_ storetest.CountSetter    = (*uncountedStore)(nil)
+	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
 // openUncounted returns a fresh store in a temporary directory that the
@@ -631,6 +646,48 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err
 
 	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
 		return fmt.Errorf("set the checkpoint count: %w", err)
+	}
+
+	return nil
+}
+
+// List forwards to the audit list of the wrapped store, which the embedded
+// interface hides, so the delete case can read the entry of a delete.
+func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+	lister, ok := s.UpdatesStore.(audit.Store)
+	if !ok {
+		return audit.Listing{}, errNoAuditList
+	}
+
+	listing, err := lister.List(ctx, ns, page)
+	if err != nil {
+		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+	}
+
+	return listing, nil
+}
+
+// errNoAuditList reports a wrapped store without an audit list.
+var errNoAuditList = errors.New("wrapped store lists no audit entries")
+
+// BreakAuditAppends implements storetest.AuditBreaker with a trigger that
+// aborts every insert of an audit entry.
+func (s *uncountedStore) BreakAuditAppends(ctx context.Context) (err error) {
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	_, err = conn.ExecContext(ctx, `CREATE TRIGGER break_audit_appends BEFORE INSERT ON audit_entries
+BEGIN SELECT RAISE(ABORT, 'audit append broken by the test'); END`)
+	if err != nil {
+		return fmt.Errorf("create the trigger: %w", err)
 	}
 
 	return nil
@@ -2078,4 +2135,21 @@ func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
 	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
 		t.Fatalf("seed checkpoint: %v", err)
 	}
+}
+
+// BenchmarkPrincipalLists measures each principal and group list with its
+// total, at the scale of principaltest.Bench.
+func BenchmarkPrincipalLists(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	principaltest.Bench(b, s)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -99,7 +100,7 @@ type deleteStacks struct {
 }
 
 func (m *deleteStacks) DeleteStack(
-	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard, _ time.Time,
+	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard, _ audit.Entry,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -132,7 +133,7 @@ func (m *deleteStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.St
 	return nil, nil
 }
 
-func (m *deleteStacks) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (m *deleteStacks) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return nil
 }
 
@@ -266,7 +267,7 @@ func TestDeleteServiceAllowsEmptyInlineCheckpoint(t *testing.T) {
 		[]deleteExportResult{exportedCheckpoint(deleteInlineCheckpoint(ref, "u1", deleteEmptyDeployment))},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete a stack with no resources: %v", err)
 	}
 
@@ -293,7 +294,7 @@ func TestDeleteServiceRefusesResourcedInlineCheckpoint(t *testing.T) {
 		[]deleteExportResult{exportedCheckpoint(deleteInlineCheckpoint(ref, "u1", deleteResourcedDeployment))},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, stack.ErrHasResources) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a stack with resources: err = %v, want ErrHasResources", err)
 	}
 
@@ -313,7 +314,7 @@ func TestDeleteServiceWithoutCheckpointPassesEmptyGuard(t *testing.T) {
 		[]deleteExportResult{failedExport(stack.ErrNoState)},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete a stack with no checkpoint: %v", err)
 	}
 
@@ -366,7 +367,7 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 		t.Fatalf("new service: %v", err)
 	}
 
-	if err := svc.Delete(t.Context(), ref); err != nil {
+	if err := svc.Delete(t.Context(), ref, deleteEntry()); err != nil {
 		t.Fatalf("delete without latest state: %v", err)
 	}
 
@@ -394,7 +395,7 @@ func TestDeleteServiceRetriesStaleGuardOnce(t *testing.T) {
 		},
 		[]error{stack.ErrConcurrentModification})
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, stack.ErrHasResources) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete after a save raced it: err = %v, want ErrHasResources", err)
 	}
 
@@ -428,7 +429,7 @@ func TestDeleteServiceStaleGuardThenEmptyDeletes(t *testing.T) {
 		},
 		[]error{stack.ErrConcurrentModification})
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete after the race dropped resources: %v", err)
 	}
 
@@ -456,7 +457,7 @@ func TestDeleteServiceDoubleRaceReportsConflict(t *testing.T) {
 		},
 		[]error{stack.ErrConcurrentModification, stack.ErrConcurrentModification})
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, stack.ErrConcurrentModification) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, stack.ErrConcurrentModification) {
 		t.Fatalf("delete while two saves race it: err = %v, want ErrConcurrentModification", err)
 	}
 
@@ -470,7 +471,7 @@ func TestDeleteServiceCheckpointErrorFailsDelete(t *testing.T) {
 
 	f := newDeleteFixture(t, []deleteExportResult{failedExport(errDeleteCheckpointBoom)}, nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, errDeleteCheckpointBoom) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, errDeleteCheckpointBoom) {
 		t.Fatalf("delete with an unreadable checkpoint: err = %v, want the checkpoint error", err)
 	}
 
@@ -499,7 +500,7 @@ func TestDeleteServiceUnavailableContentCountsAsResourced(t *testing.T) {
 		},
 		nil)
 
-	err = f.svc.Delete(t.Context(), f.ref)
+	err = f.svc.Delete(t.Context(), f.ref, deleteEntry())
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete with an unreadable blob: err = %v, want ErrHasResources", err)
 	}
@@ -539,7 +540,7 @@ func TestDeleteServiceMismatchedContentCountsAsResourced(t *testing.T) {
 		},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, stack.ErrHasResources) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete with mismatched content: err = %v, want ErrHasResources", err)
 	}
 
@@ -563,7 +564,7 @@ func TestDeleteServiceGuardsNameTheCountedCheckpoint(t *testing.T) {
 		},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete an empty stack: %v", err)
 	}
 
@@ -597,7 +598,7 @@ func TestDeleteServiceRefusesSequencedEnvelopeWithResources(t *testing.T) {
 		},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, stack.ErrHasResources) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a sequenced stack with resources: err = %v, want ErrHasResources", err)
 	}
 
@@ -628,7 +629,7 @@ func TestDeleteServiceAllowsSequencedEnvelopeWithoutResources(t *testing.T) {
 		},
 		nil)
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete a sequenced stack with no resources: %v", err)
 	}
 
@@ -800,7 +801,7 @@ func checkDeleteProvesCount(t *testing.T, f sequencedDeleteFixture, inner string
 		t.Fatalf("export = %q, want the inner deployment %q", got, inner)
 	}
 
-	if err := f.svc.Delete(t.Context(), f.ref); !errors.Is(err, wantErr) {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); !errors.Is(err, wantErr) {
 		t.Fatalf("delete: err = %v, want %v", err, wantErr)
 	}
 
@@ -884,7 +885,7 @@ func TestDeleteAllowsLargeEmptyCheckpointAboveDefaultLimit(t *testing.T) {
 
 	savePlainCheckpoint(t, f, deployment)
 
-	if err := f.svc.Delete(t.Context(), f.ref); err != nil {
+	if err := f.svc.Delete(t.Context(), f.ref, deleteEntry()); err != nil {
 		t.Fatalf("delete a large stack with no resources: %v", err)
 	}
 
@@ -949,4 +950,30 @@ func TestStartWithJournalVersionKeepsIt(t *testing.T) {
 // SetOverrides is not used by this fake.
 func (*memNamespaces) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
+}
+
+// deleteEntry returns the audit entry that the tests pass to a delete. The
+// fake store ignores it.
+func deleteEntry() audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
+		Namespace:  "acme",
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "pulumi:acme/web/prod",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "stack_test",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
 }

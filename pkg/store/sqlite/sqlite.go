@@ -27,6 +27,7 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -688,12 +689,12 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // or finish of an update either runs before the checks or waits until the
 // delete commits.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, at time.Time,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, e audit.Entry,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
 			return err
@@ -707,7 +708,7 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, stackID, at)
+		return softDeleteStack(ctx, q, ref, stackID, e.At)
 	})
 }
 
@@ -716,12 +717,12 @@ func (s *Store) DeleteStack(
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 func (s *Store) ForceDeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, at time.Time,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, e audit.Entry,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
 			return err
@@ -731,7 +732,7 @@ func (s *Store) ForceDeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, stackID, at)
+		return softDeleteStack(ctx, q, ref, stackID, e.At)
 	})
 }
 

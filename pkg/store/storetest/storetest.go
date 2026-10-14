@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -124,6 +125,33 @@ func newNamespace(t *testing.T, s namespace.Store, name string) namespace.Namesp
 // deletedAt returns the time that the suite passes to a stack delete.
 func deletedAt() time.Time {
 	return now().Add(time.Hour)
+}
+
+// deleteEntry returns the audit entry that the suite passes to a stack
+// delete in ns: a change at deletedAt, which the store appends in the delete
+// transaction.
+func deleteEntry(ns namespace.Name) audit.Entry {
+	return audit.Entry{
+		At:         deletedAt(),
+		Namespace:  ns,
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "pulumi:" + ns.String() + "/web/deleted",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "storetest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
 }
 
 func newStack(ns namespace.Name, project, name string) stack.Stack {
@@ -448,7 +476,7 @@ func testStackIDAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -486,7 +514,7 @@ func testDeleteMissingStack(t *testing.T, s Store) {
 		ghost,
 		ns.Fence(),
 		stack.EmptyGuard(),
-		deletedAt(),
+		deleteEntry(ns.Name),
 	)
 	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
@@ -509,7 +537,7 @@ func testDeleteStaleFence(t *testing.T, s Store) {
 		st.Ref,
 		stale,
 		stack.EmptyGuard(),
-		deletedAt(),
+		deleteEntry(stale.Namespace),
 	)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
@@ -818,7 +846,7 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -854,7 +882,7 @@ func testDeletedStackLeavesLists(t *testing.T, s Store) {
 		t.Fatalf("create stack %s: %v", kept.Ref, err)
 	}
 
-	if err := s.DeleteStack(t.Context(), gone.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+	if err := s.DeleteStack(t.Context(), gone.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -908,17 +936,26 @@ func testDeleteTwice(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); !errors.Is(
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); !errors.Is(
 		err, stack.ErrNotFound,
 	) {
 		t.Fatalf("second delete: err = %v, want ErrNotFound", err)
 	}
 
-	if err := s.ForceDeleteStack(t.Context(), st.Ref, ns.Fence(), deletedAt()); !errors.Is(err, stack.ErrNotFound) {
+	err := s.ForceDeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		deleteEntry(ns.Name),
+	)
+	if !errors.Is(
+		err,
+		stack.ErrNotFound,
+	) {
 		t.Fatalf("second force delete: err = %v, want ErrNotFound", err)
 	}
 }
@@ -939,7 +976,7 @@ func testDeleteMovesInventoryEntry(t *testing.T, s Store) {
 			t.Fatalf("create stack: %v", err)
 		}
 
-		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 			t.Fatalf("delete stack: %v", err)
 		}
 	}
@@ -1066,7 +1103,7 @@ func testInventoryAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

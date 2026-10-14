@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -67,6 +68,31 @@ func Run(t *testing.T, newStore Factory) {
 // now is a fixed, millisecond-precision instant: stores keep milliseconds.
 func now() time.Time {
 	return time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
+}
+
+// deleteEntry returns the audit entry of a stack delete in ns at the time at.
+func deleteEntry(ns namespace.Name, at time.Time) audit.Entry {
+	return audit.Entry{
+		At:         at,
+		Namespace:  ns,
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "pulumi:" + ns.String() + "/web/deleted",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "secrettest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
 }
 
 func newNamespace(t *testing.T, s Store) namespace.Namespace {
@@ -345,7 +371,7 @@ func testDeleteStackKeepsKey(t *testing.T, s Store) {
 	}
 
 	at := time.UnixMilli(1_760_000_000_000).UTC()
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), at); err != nil {
+	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name, at)); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

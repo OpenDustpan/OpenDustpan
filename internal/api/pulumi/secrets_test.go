@@ -183,12 +183,12 @@ func (m *mapStackStore) DeleteStack(
 	ref stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	return m.deleteRef(ref)
 }
 
-func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	return m.deleteRef(ref)
 }
 
@@ -332,6 +332,7 @@ func buildSecretFixture(
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   cfg.store,
 		OnAuditFailure:          cfg.onFail,
 		CheckpointDeltaCutoff:   0,
@@ -1096,6 +1097,7 @@ func TestSecretsMissingKey(t *testing.T) {
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
@@ -1149,12 +1151,12 @@ func (m *failingStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ time.Time,
+	_ audit.Entry,
 ) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
-func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ time.Time) error {
+func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
 	panic("failingStackStore.ForceDeleteStack is not used")
 }
 
@@ -1490,6 +1492,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
@@ -1689,6 +1692,7 @@ func newLoggedSecretsHandler(
 		Logger:                  logger,
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
@@ -1857,6 +1861,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 		Logger:                  slog.New(slog.NewJSONHandler(logged, nil)),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
@@ -1903,6 +1908,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
+		Gate:                    nil,
 		Audit:                   nil,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,

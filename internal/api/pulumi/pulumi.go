@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -83,8 +84,11 @@ type Config struct {
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
 	// MaxBodyBytesInFlight bounds concurrent large bodies by bytes held at
-	// once. Zero means DefaultMaxBodyBytesInFlight.
+	// once. Zero means DefaultMaxBodyBytesInFlight. Ignored when Gate is set.
 	MaxBodyBytesInFlight int64
+	// Gate bounds concurrent large bodies by bytes held at once. Nil builds
+	// one from MaxBodyBytesInFlight.
+	Gate *bodygate.Gate
 	// Audit is the audit store that the decrypt audit routes append to. Nil
 	// means no audit store is configured: the routes still answer 204.
 	Audit audit.Store
@@ -111,7 +115,7 @@ type Handler struct {
 	authz          identity.Authorizer
 	logger         *slog.Logger
 	baseURL        baseurl.Resolver
-	gate           *bodyGate
+	gate           *bodygate.Gate
 	audit          audit.Store
 	onAuditFailure func()
 	mux            *patternMux
@@ -157,7 +161,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		authz:          cfg.Authorizer,
 		logger:         cfg.Logger,
 		baseURL:        cfg.BaseURL,
-		gate:           newBodyGate(cfg.MaxBodyBytesInFlight),
+		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
@@ -166,6 +170,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,
+	}
+
+	if h.gate == nil {
+		h.gate = bodygate.New(cfg.MaxBodyBytesInFlight)
 	}
 
 	h.routes = h.buildRoutes()
@@ -645,7 +653,9 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 // The check runs inside the delete transaction, so an update that finishes
 // between the check and the delete cannot drop resources. A delete while a
 // mutating update runs answers 409. The checkpoint blobs stay, because a
-// restore reads them. Each delete writes an audit entry of the kind change.
+// restore reads them. Each delete writes an audit entry of the kind change in
+// the delete transaction: if the append fails, the delete rolls back and the
+// route answers 500 (ADR 60, fail closed).
 func (h *Handler) deleteStack(
 	w http.ResponseWriter, r *http.Request, principal identity.Principal, obj identity.Object,
 ) {
@@ -658,10 +668,17 @@ func (h *Handler) deleteStack(
 		return
 	}
 
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: principal,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
+
 	if deleteForce(r) {
-		err = h.stacks.ForceDelete(ctx, ref)
+		err = h.stacks.ForceDelete(ctx, ref, entry)
 	} else {
-		err = h.stacks.Delete(ctx, ref)
+		err = h.stacks.Delete(ctx, ref, entry)
 	}
 
 	if err != nil {
@@ -669,13 +686,6 @@ func (h *Handler) deleteStack(
 
 		return
 	}
-
-	h.appendChangeEntry(ctx, changeAudit{
-		request:   r,
-		principal: principal,
-		object:    obj,
-		action:    identity.ActionUnitManage,
-	})
 
 	w.WriteHeader(http.StatusNoContent)
 }
