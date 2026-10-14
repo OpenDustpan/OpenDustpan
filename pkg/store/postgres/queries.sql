@@ -759,6 +759,7 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject COLLATE "C" > @after::text
   AND p.subject COLLATE "C" >= @low::text
   AND (@high::text = '' OR p.subject COLLATE "C" < @high::text)
+  AND (@kind::text = '' OR p.kind = @kind::text)
 ORDER BY p.subject COLLATE "C"
 LIMIT @row_limit;
 
@@ -766,7 +767,8 @@ LIMIT @row_limit;
 SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject COLLATE "C" >= @low::text
-  AND (@high::text = '' OR subject COLLATE "C" < @high::text);
+  AND (@high::text = '' OR subject COLLATE "C" < @high::text)
+  AND (@kind::text = '' OR kind = @kind::text);
 
 -- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = $1, updated_at_ms = $2

@@ -334,15 +334,17 @@ SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject COLLATE "C" >= $1::text
   AND ($2::text = '' OR subject COLLATE "C" < $2::text)
+  AND ($3::text = '' OR kind = $3::text)
 `
 
 type CountPrincipalsParams struct {
 	Low  string
 	High string
+	Kind string
 }
 
 func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countPrincipals, arg.Low, arg.High)
+	row := q.db.QueryRow(ctx, countPrincipals, arg.Low, arg.High, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2704,14 +2706,16 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject COLLATE "C" > $1::text
   AND p.subject COLLATE "C" >= $2::text
   AND ($3::text = '' OR p.subject COLLATE "C" < $3::text)
+  AND ($4::text = '' OR p.kind = $4::text)
 ORDER BY p.subject COLLATE "C"
-LIMIT $4
+LIMIT $5
 `
 
 type ListPrincipalsParams struct {
 	After    string
 	Low      string
 	High     string
+	Kind     string
 	RowLimit int32
 }
 
@@ -2731,6 +2735,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 		arg.After,
 		arg.Low,
 		arg.High,
+		arg.Kind,
 		arg.RowLimit,
 	)
 	if err != nil {

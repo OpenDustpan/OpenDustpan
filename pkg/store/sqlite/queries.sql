@@ -680,6 +680,7 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject > sqlc.arg('after')
   AND p.subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
+  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
 
@@ -687,7 +688,8 @@ LIMIT sqlc.arg('row_limit');
 SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
-  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'));
+  AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
+  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'));
 
 -- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = ?, updated_at_ms = ?

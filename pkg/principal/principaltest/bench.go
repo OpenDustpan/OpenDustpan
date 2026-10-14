@@ -32,12 +32,22 @@ func Bench(b *testing.B, s principal.Store) {
 		name string
 	}{
 		{name: "principals", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), page)
+			rows, total, err := s.ListPrincipals(b.Context(), page, "")
 
 			return len(rows), total, err
 		}},
 		{name: "principals with a prefix", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), prefixed)
+			rows, total, err := s.ListPrincipals(b.Context(), prefixed, "")
+
+			return len(rows), total, err
+		}},
+		{name: "workloads, 2 percent of the principals", run: func() (int, int64, error) {
+			rows, total, err := s.ListPrincipals(b.Context(), page, principal.KindWorkload)
+
+			return len(rows), total, err
+		}},
+		{name: "services with a prefix", run: func() (int, int64, error) {
+			rows, total, err := s.ListPrincipals(b.Context(), prefixed, principal.KindService)
 
 			return len(rows), total, err
 		}},
@@ -87,7 +97,7 @@ func seedBench(b *testing.B, s principal.Store) {
 	for i := range benchPrincipals {
 		id := fmt.Sprintf("prn-%05d", i)
 
-		p := newPrincipal(id, fmt.Sprintf("user-%05d", i), principal.KindPerson)
+		p := newPrincipal(id, fmt.Sprintf("user-%05d", i), benchKind(i))
 		if err := s.CreatePrincipal(ctx, p, entry()); err != nil {
 			b.Fatalf("seed principal: %v", err)
 		}
@@ -107,5 +117,18 @@ func seedBench(b *testing.B, s principal.Store) {
 				b.Fatalf("seed member: %v", err)
 			}
 		}
+	}
+}
+
+// benchKind returns the kind of the bench principal i: one in 50 is a
+// workload, one in 10 is a service, and the others are persons.
+func benchKind(i int) principal.Kind {
+	switch {
+	case i%50 == 1:
+		return principal.KindWorkload
+	case i%10 == 5:
+		return principal.KindService
+	default:
+		return principal.KindPerson
 	}
 }
