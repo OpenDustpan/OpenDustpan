@@ -70,6 +70,13 @@ import (
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
 
+// ErrInvalidOption reports an option with a value that the server refuses.
+var ErrInvalidOption = errors.New("invalid option")
+
+// MinSoftDeleteRetention is the shortest soft-delete retention that
+// WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
+const MinSoftDeleteRetention = time.Hour
+
 // The secret service seals OpenTofu state blobs and outputs documents behind
 // the workspace Sealer port.
 var _ workspace.Sealer = (*secret.Service)(nil)
@@ -300,7 +307,8 @@ func WithMaxSecretBatchBytes(n int) Option {
 
 // WithSoftDeleteRetention sets how long a deleted stack or workspace stays
 // before its final delete (ADR 47, decision 2). Zero means the domain
-// default, inventory.DeletedRetention.
+// default, inventory.DeletedRetention. Any other value below
+// MinSoftDeleteRetention makes NewServer fail with ErrInvalidOption.
 func WithSoftDeleteRetention(d time.Duration) Option {
 	return func(o *settings) { o.softDeleteRetention = d }
 }
@@ -421,6 +429,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	base, err := checkSettings(&cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if retentionErr := checkRetention(cfg.softDeleteRetention); retentionErr != nil {
+		return nil, retentionErr
 	}
 
 	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
@@ -1176,6 +1188,17 @@ func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// checkRetention refuses a soft-delete retention below
+// MinSoftDeleteRetention. Zero means the domain default.
+func checkRetention(d time.Duration) error {
+	if d != 0 && d < MinSoftDeleteRetention {
+		return fmt.Errorf("%w: WithSoftDeleteRetention needs at least %s, got %s",
+			ErrInvalidOption, MinSoftDeleteRetention, d)
+	}
+
+	return nil
 }
 
 // newInventoryHandler builds the tool-neutral inventory API from the

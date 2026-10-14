@@ -627,13 +627,15 @@ func TestRestoreUnitErrors(t *testing.T) {
 			want: http.StatusInternalServerError,
 		},
 		{name: "invalid body", target: restoreTarget, body: "[]", err: nil, want: http.StatusBadRequest},
+		{name: "unknown field", target: restoreTarget, body: `{"label":"x"}`, err: nil, want: http.StatusBadRequest},
+		{name: "two values", target: restoreTarget, body: `{} {}`, err: nil, want: http.StatusBadRequest},
 		{
 			name: "long body", target: restoreTarget, body: strings.Repeat(" ", 5000), err: nil,
 			want: http.StatusBadRequest,
 		},
 		{
 			name: "unknown unit", target: "/api/inventory/deleted-units/pulumi/other/restore?organization=acme",
-			body: "{}", err: nil, want: http.StatusNotFound,
+			body: "{}", err: coreinventory.ErrNotFound, want: http.StatusNotFound,
 		},
 		{name: "unknown tool", target: "/api/inventory/deleted-units/other/" + seededUnitID +
 			"/restore?organization=acme", body: "{}", err: nil, want: http.StatusNotFound},
@@ -761,6 +763,57 @@ func TestRestoreAndPurgeAuthorizeTheUnitID(t *testing.T) {
 
 			if len(denied.pulumi.calls) != 0 {
 				t.Fatalf("denied request reached the lifecycle: %+v", denied.pulumi.calls)
+			}
+		})
+	}
+}
+
+// TestUnknownUnitAnswersLikeAForbiddenOne proves that a caller without the
+// action gets 403 for an unknown unit ID and for a deleted unit alike, so the
+// answer does not show which IDs exist. A caller with the action gets 404 for
+// the unknown ID.
+func TestUnknownUnitAnswersLikeAForbiddenOne(t *testing.T) {
+	t.Parallel()
+
+	unknown := "/api/inventory/deleted-units/pulumi/stk-unknown?organization=acme"
+
+	cases := []struct {
+		action identity.Action
+		method string
+		known  string
+	}{
+		{action: identity.ActionUnitRestore, method: http.MethodPost, known: restoreTarget},
+		{action: identity.ActionUnitPurge, method: http.MethodDelete, known: purgeTarget},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.action), func(t *testing.T) {
+			t.Parallel()
+
+			unknownTarget := unknown
+			if tc.method == http.MethodPost {
+				unknownTarget = strings.Replace(unknown, "?", "/restore?", 1)
+			}
+
+			denied := newDeletedFixture(
+				t, seededDeleted().entries, selectiveAuthorizer{deny: map[identity.Action]bool{tc.action: true}}, nil,
+			)
+
+			for _, target := range []string{tc.known, unknownTarget} {
+				if rec := denied.serve(t, tc.method, target, ""); rec.Code != http.StatusForbidden {
+					t.Fatalf("denied %s %s = %d, want %d", tc.method, target, rec.Code, http.StatusForbidden)
+				}
+			}
+
+			allowed := newDeletedFixture(
+				t,
+				seededDeleted().entries,
+				selectiveAuthorizer{deny: map[identity.Action]bool{}},
+				coreinventory.ErrNotFound,
+			)
+
+			if rec := allowed.serve(t, tc.method, unknownTarget, ""); rec.Code != http.StatusNotFound {
+				t.Fatalf("allowed %s %s = %d, want %d", tc.method, unknownTarget, rec.Code, http.StatusNotFound)
 			}
 		})
 	}

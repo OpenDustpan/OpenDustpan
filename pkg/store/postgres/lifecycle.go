@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -48,6 +49,12 @@ func (s *Store) RestoreStack(
 
 		ref = stack.Ref{Namespace: fence.Namespace, Project: stack.ProjectName(row.Project), Stack: name}
 		e.ObjectID = id.String()
+		e.Object = restoredReference(
+			inventoryTool,
+			fence.Namespace,
+			ref.Project.String()+"/"+ref.Stack.String(),
+			e.Object,
+		)
 
 		return restoreStackRow(ctx, q, ref, id, e)
 	})
@@ -184,6 +191,7 @@ func (s *Store) RestoreWorkspace(
 
 		ref = workspace.Ref{Namespace: fence.Namespace, Name: name}
 		e.ObjectID = id.String()
+		e.Object = restoredReference(inventoryToolOpenTofu, fence.Namespace, name.String(), e.Object)
 
 		return restoreWorkspaceRow(ctx, q, ref, id, e)
 	})
@@ -367,4 +375,17 @@ func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error 
 	}
 
 	return nil
+}
+
+// restoredReference returns the unit reference of a restored unit under its
+// name after the restore, so the audit entry of the restore records the new
+// name. The object ID links the entry to the delete entry, which keeps the
+// old name. It returns fallback when the name makes no valid reference.
+func restoredReference(tool string, ns namespace.Name, name, fallback string) string {
+	obj, err := identity.UnitObject(tool, ns, name)
+	if err != nil {
+		return fallback
+	}
+
+	return obj.String()
 }

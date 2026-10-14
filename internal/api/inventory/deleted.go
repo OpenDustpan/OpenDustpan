@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -290,7 +291,11 @@ func deletedObject(e coreinventory.DeletedEntry) (identity.Object, error) {
 
 // resolveDeletedUnit returns the unit reference of the deleted unit in the
 // path: the tool and unit ID in the path and the namespace in the
-// organization query value. An unknown tool or unit answers 404.
+// organization query value. An unknown tool answers 404. An unknown unit
+// resolves to a reference with the unit ID as its name, so the route
+// authorizes it before the handler finds that it does not exist: a caller
+// without the action gets 403 for an unknown unit and for a forbidden one
+// alike, and only a caller with the action learns that it is unknown (404).
 func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	nsObj, err := resolveListUnits(nil, r)
 	if err != nil {
@@ -302,7 +307,18 @@ func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (id
 		return identity.Object{}, unknownTool(tool)
 	}
 
-	e, err := h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, r.PathValue("unitID"))
+	unitID := r.PathValue("unitID")
+
+	e, err := h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, unitID)
+	if errors.Is(err, coreinventory.ErrNotFound) {
+		obj, objErr := identity.UnitObject(tool, nsObj.Namespace(), unitID)
+		if objErr != nil {
+			return identity.Object{}, fmt.Errorf("unit reference: %w", objErr)
+		}
+
+		return obj.WithUnitID(unitID), nil
+	}
+
 	if err != nil {
 		return identity.Object{}, fmt.Errorf("deleted unit: %w", err)
 	}
@@ -359,7 +375,8 @@ func (h *Handler) restoreUnit(
 }
 
 // readRestoreRequest reads the optional body of a restore. An empty body is
-// a restore under the name before the delete.
+// a restore under the name before the delete. A body with another field, or
+// with more than one JSON value, answers 400.
 func readRestoreRequest(r *http.Request) (restoreRequest, error) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxRestoreBody+1))
 	if err != nil || len(raw) > maxRestoreBody {
@@ -371,7 +388,10 @@ func readRestoreRequest(r *http.Request) (restoreRequest, error) {
 		return req, nil
 	}
 
-	if err := json.Unmarshal(raw, &req); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&req); err != nil || dec.More() {
 		return restoreRequest{}, errInvalidBody
 	}
 

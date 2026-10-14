@@ -168,6 +168,36 @@ func TestComputeHashCoversTheObjectID(t *testing.T) {
 	}
 }
 
+// TestComputeHashFixesTheOrderOfTheOptionalFields pins the encoding of the
+// optional fields after prevHash: value_count, then object_id, each only
+// when it is set. The audit, settings and soft-delete PRs agreed this order
+// (value_count, object_id, then changes), so an entry keeps its hash whatever
+// order the PRs merge in.
+func TestComputeHashFixesTheOrderOfTheOptionalFields(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wantObjectID = "27bf6e010faa24ec19ce291310ab009791de303c31f867f003548d541533c298"
+		wantBoth     = "7a5ab76b68f08bbde3ebccda9e91110df4f2be9b852e060c4aae00e341d51e36"
+	)
+
+	withID := testEntry()
+	withID.ObjectID = "stk-1"
+
+	if got := audit.ComputeHash(withID, ""); got != wantObjectID {
+		t.Fatalf("hash with an object ID = %q, want %q", got, wantObjectID)
+	}
+
+	both := testEntry()
+	count := int64(2)
+	both.ValueCount = &count
+	both.ObjectID = "stk-1"
+
+	if got := audit.ComputeHash(both, ""); got != wantBoth {
+		t.Fatalf("hash with a value count and an object ID = %q, want %q", got, wantBoth)
+	}
+}
+
 func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 	t.Parallel()
 

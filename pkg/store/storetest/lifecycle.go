@@ -98,6 +98,37 @@ func testRestoreStackUnderANewName(t *testing.T, f fixture) {
 	if err != nil || got.ID != before.ID {
 		t.Fatalf("restored stack = %+v, %v, want ID %s", got, err, before.ID)
 	}
+
+	checkRestoreEntry(t, f.s, f.ref.Namespace, "pulumi:acme/"+f.ref.Project.String()+"/restored", before.ID.String())
+}
+
+// checkRestoreEntry checks that the newest audit entry of ns is the restore
+// of the unit id, and that it names the unit under its name after the
+// restore. A store with no audit list has no entry to check.
+func checkRestoreEntry(t *testing.T, s any, ns namespace.Name, wantObject, id string) {
+	t.Helper()
+
+	lister, ok := storeAs[auditLister](s)
+	if !ok {
+		return
+	}
+
+	listing, err := lister.List(t.Context(), ns, audit.Page{Number: 1, Size: 1})
+	if err != nil || len(listing.Entries) != 1 {
+		t.Fatalf("list audit entries: %+v, %v", listing, err)
+	}
+
+	got := listing.Entries[0]
+	if got.Action != "unit:restore" || got.Object != wantObject || got.ObjectID != id {
+		t.Fatalf(
+			"restore entry = %s %s %s, want unit:restore %s %s",
+			got.Action,
+			got.Object,
+			got.ObjectID,
+			wantObject,
+			id,
+		)
+	}
 }
 
 // testRestoreOrPurgeUnknownStack restores and purges an unknown ID and a
@@ -281,6 +312,8 @@ func testRestoreWorkspace(t *testing.T, s WorkspaceStore) {
 	if err != nil || len(deleted) != 0 {
 		t.Fatalf("deleted units after the restore = %+v, %v, want none", deleted, err)
 	}
+
+	checkRestoreEntry(t, s, ns.Name, "opentofu:acme/restored", gone.ID.String())
 }
 
 // testPurgeWorkspace deletes a workspace and purges it: the deleted units

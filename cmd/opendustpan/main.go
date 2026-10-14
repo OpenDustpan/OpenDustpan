@@ -1356,7 +1356,7 @@ func withBinaryVersion(err error) error {
 }
 
 // minRetention is the shortest soft-delete retention the server accepts.
-const minRetention = time.Hour
+const minRetention = dustpan.MinSoftDeleteRetention
 
 // parseRetention parses the soft-delete retention: a Go duration of at least
 // one hour (ADR 47, decision 2). There is no maximum.

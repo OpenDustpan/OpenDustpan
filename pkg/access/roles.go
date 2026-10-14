@@ -53,7 +53,10 @@ var builtInDescriptions = []struct {
 	{RoleAuditor, "Reads like a viewer, and reads the audit log of a namespace."},
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
 	{RoleWriter, "Reads, and runs updates, plans and applies."},
-	{RoleMaintainer, "Writes, and makes, renames, deletes, unlocks and moves units, and manages collections."},
+	{
+		RoleMaintainer,
+		"Writes, and makes, renames, deletes, restores, unlocks and moves units, and manages collections.",
+	},
 	{RoleAdmin, "Holds every action inside its object, access management included."},
 	{RoleInstallationOperator, "Operates the installation: backups, restores, maintenance and metrics. Reads no data."},
 	{
