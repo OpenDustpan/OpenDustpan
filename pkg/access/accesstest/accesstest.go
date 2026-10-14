@@ -9,7 +9,8 @@
 //
 // A store that also implements namespace.Store and principal.Store runs the
 // cases that cross those ports: a namespace created with its grant, and a
-// deleted principal or group that loses its grants.
+// deleted principal or group that loses its grants. A store that also
+// implements access.ReviewStore runs the access-review cases.
 package accesstest
 
 import (
@@ -69,7 +70,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, unitCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))

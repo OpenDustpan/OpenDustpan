@@ -97,17 +97,8 @@ func auditObjectID(ctx context.Context, q *db.Queries, object string) (string, e
 
 // UnitObjects implements access.Units.
 func (s *Store) UnitObjects(ctx context.Context, ids []string) (map[string]identity.Object, error) {
-	var stacks, workspaces []string
-
-	for _, id := range ids {
-		switch {
-		case strings.HasPrefix(id, stackIDPrefix):
-			stacks = append(stacks, id)
-		case strings.HasPrefix(id, workspaceIDPrefix):
-			workspaces = append(workspaces, id)
-		default:
-		}
-	}
+	split := splitUnitIDs(ids)
+	stacks, workspaces := split.stacks, split.workspaces
 
 	out := make(map[string]identity.Object, len(ids))
 
@@ -184,4 +175,28 @@ func unitObject(tool, ns, name string) (identity.Object, error) {
 	}
 
 	return obj, nil
+}
+
+// unitIDs are the stable IDs of units, by tool.
+type unitIDs struct {
+	stacks     []string
+	workspaces []string
+}
+
+// splitUnitIDs returns the stack IDs and the workspace IDs in ids. Any
+// other ID names no unit.
+func splitUnitIDs(ids []string) unitIDs {
+	var out unitIDs
+
+	for _, id := range ids {
+		switch {
+		case strings.HasPrefix(id, stackIDPrefix):
+			out.stacks = append(out.stacks, id)
+		case strings.HasPrefix(id, workspaceIDPrefix):
+			out.workspaces = append(out.workspaces, id)
+		default:
+		}
+	}
+
+	return out
 }
