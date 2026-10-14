@@ -133,8 +133,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
-	trustedProxies       []netip.Prefix
-	trustedProxyHeader   string
+	proxies              proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -276,13 +275,20 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// proxySettings holds the trusted proxy settings of the client address
+// (internal/clientip): the proxies and the forwarding header they set.
+type proxySettings struct {
+	prefixes []netip.Prefix
+	header   string
+}
+
 // WithTrustedProxies names the proxies whose forwarding headers the server
 // trusts. Empty means none: every request reads as its TCP peer. List a proxy
 // only when it always overwrites or appends the header named by
 // WithTrustedProxyHeader, so a client cannot name any address. NewServer
 // refuses a list that covers every address or holds host bits.
 func WithTrustedProxies(prefixes ...netip.Prefix) Option {
-	return func(o *settings) { o.trustedProxies = prefixes }
+	return func(o *settings) { o.proxies.prefixes = prefixes }
 }
 
 // WithTrustedProxyHeader names the one forwarding header the server reads
@@ -290,7 +296,7 @@ func WithTrustedProxies(prefixes ...netip.Prefix) Option {
 // match ignores case and "" means the default. The server never reads the
 // other header. NewServer refuses an unknown value.
 func WithTrustedProxyHeader(h string) Option {
-	return func(o *settings) { o.trustedProxyHeader = h }
+	return func(o *settings) { o.proxies.header = h }
 }
 
 // WithClock overrides the time source, for tests.
@@ -409,8 +415,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
-		trustedProxies:          nil,
-		trustedProxyHeader:      "",
+		proxies:                 proxySettings{prefixes: nil, header: ""},
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -1770,12 +1775,12 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 // the trusted proxy settings. An unknown header or a refused proxy list
 // fails the build, so the server never starts with them.
 func newClientIPResolver(cfg settings) (*clientip.Resolver, error) {
-	header, err := clientip.ParseHeader(cfg.trustedProxyHeader)
+	header, err := clientip.ParseHeader(cfg.proxies.header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxy header: %w", err)
 	}
 
-	resolver, err := clientip.NewResolver(cfg.trustedProxies, header)
+	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxies: %w", err)
 	}
