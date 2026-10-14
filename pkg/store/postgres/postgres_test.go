@@ -257,7 +257,17 @@ var errUnknownAuditField = errors.New("unknown audit field")
 // names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "hash", "prev_hash", "at_ms", "sequence", "changes":
+	case "subject",
+		"action",
+		"object",
+		"outcome",
+		"kind",
+		"hash",
+		"prev_hash",
+		"at_ms",
+		"sequence",
+		"changes",
+		"value_path":
 		return field, true
 	default:
 		return "", false

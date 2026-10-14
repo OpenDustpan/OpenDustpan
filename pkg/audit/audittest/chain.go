@@ -17,6 +17,7 @@ type ChainStore interface {
 	Store
 	audit.ServerStore
 	audit.ChainSwitch
+	audit.ScopesChecker
 }
 
 // ChainTestStore is one fresh, empty store with the tamper hook of
@@ -52,6 +53,11 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a chain record without switch entries is found", test: testChainSwitchesRemoved},
 		{name: "a forged switch to off at sequence 0 is found", test: testChainForgedOffAtZero},
 		{name: "a forged switch to off at sequence -1 with an early time is found", test: testChainForgedOffBelowZero},
+		{name: "a switch to on renamed and stripped is found", test: testChainSwitchRenamed},
+		{name: "a switch to on with another action and stripped is found", test: testChainSwitchActionChanged},
+		{name: "a start on rewritten to off without a hash is found", test: testChainStartRewritten},
+		{name: "a second start entry is skipped", test: testChainSecondStartSkipped},
+		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a refused switch entry records nothing", test: testRecordChainIsAtomic},
@@ -136,7 +142,7 @@ type switchSpec struct {
 func (tl *timeline) record(spec switchSpec) {
 	tl.t.Helper()
 
-	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained}
+	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained, Start: false}
 	rec := audit.ChainRecord{State: spec.state, EverChained: spec.ever}
 
 	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
@@ -332,7 +338,7 @@ func testChainSwitchLag(t *testing.T, ts ChainTestStore) {
 func (tl *timeline) forgeOff(at time.Time) {
 	tl.t.Helper()
 
-	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false}
+	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false, Start: false}
 	rec := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
 
 	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
@@ -450,6 +456,119 @@ func testChainForgedOffBelowZero(t *testing.T, ts ChainTestStore) {
 	wantInvalidAt(t, check(t, ts.Store, audit.ServerScope), -1)
 }
 
+// onAfterOffStart writes the timeline of a new installation that started
+// with the chain off and turned it on, with two chained entries in acme
+// after the switch.
+func onAfterOffStart(t *testing.T, ts ChainTestStore) *timeline {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
+	tl.turn(true)
+	tl.append(2)
+
+	return tl
+}
+
+func testChainSwitchRenamed(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := onAfterOffStart(t, ts)
+
+	// Someone renames the switch to on to a value path that names no state
+	// and removes its hash, then removes every hash of acme.
+	ts.TamperEntry(t, audit.ServerScope, 2, "value_path", "/audit/chain/On")
+	strip(t, ts, audit.ServerScope, 2)
+	strip(t, ts, tl.ns.Name, 1, 2)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+func testChainSwitchActionChanged(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := onAfterOffStart(t, ts)
+
+	// The switch to on gets another action, so it is no switch entry.
+	ts.TamperEntry(t, audit.ServerScope, 2, "action", "server:other")
+	strip(t, ts, audit.ServerScope, 2)
+	strip(t, ts, tl.ns.Name, 1, 2)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+func testChainStartRewritten(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(2)
+
+	// Someone rewrites the start on as the unhashed start off of a new
+	// installation, then removes every hash of acme. The record still says
+	// on and chained.
+	ts.TamperEntry(t, audit.ServerScope, 1, "value_path", "/audit/chain/off")
+	strip(t, ts, audit.ServerScope, 1)
+	strip(t, ts, tl.ns.Name, 1, 2)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+func testChainSecondStartSkipped(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	rec := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+
+	// Two instances read no record at the same time, and both write the
+	// start entry of a new installation.
+	for range 2 {
+		start := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, now()), Chained: false, Start: true}
+		if err := s.RecordChain(t.Context(), rec, []audit.ChainEntry{start}); err != nil {
+			t.Fatalf("record start: %v", err)
+		}
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list @server: %v", err)
+	}
+
+	if listing.Total != 1 {
+		t.Fatalf("@server holds %d entries, want 1 start entry", listing.Total)
+	}
+
+	if got := check(t, s, audit.ServerScope); !got.Valid {
+		t.Fatalf("check @server: got %+v, want valid", got)
+	}
+}
+
+func testChainCheckEach(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(2)
+	strip(t, ts, tl.ns.Name, 2)
+
+	scopes := []namespace.Name{audit.ServerScope, tl.ns.Name}
+
+	got, err := ts.Store.CheckEach(t.Context(), scopes)
+	if err != nil {
+		t.Fatalf("check each: %v", err)
+	}
+
+	if len(got) != len(scopes) {
+		t.Fatalf("check each: got %d results, want %d", len(got), len(scopes))
+	}
+
+	for i, scope := range scopes {
+		if want := check(t, ts.Store, scope); got[i] != want {
+			t.Fatalf("check each %s: got %+v, want %+v", scope, got[i], want)
+		}
+	}
+}
+
 func testHasChainedEntries(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
@@ -529,7 +648,7 @@ func testRecordChainIsAtomic(t *testing.T, ts ChainTestStore) {
 	bad.Namespace = "acme"
 
 	err := s.RecordChain(t.Context(), audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
-		[]audit.ChainEntry{{Entry: good, Chained: false}, {Entry: bad, Chained: false}})
+		[]audit.ChainEntry{{Entry: good, Chained: false, Start: false}, {Entry: bad, Chained: false, Start: false}})
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("record chain with an entry of another scope: got %v, want ErrInvalidEntry", err)
 	}

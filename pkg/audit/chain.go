@@ -112,10 +112,16 @@ func ParseChainSetting(raw string) (ChainSetting, error) {
 const ChainSwitchLag = 2 * time.Second
 
 // ChainEntry is one switch entry that RecordChain appends in ServerScope,
-// and whether it holds a hash.
+// whether it holds a hash, and whether it is the start entry of an
+// installation without a record.
 type ChainEntry struct {
 	Entry   Entry
 	Chained bool
+	// Start marks the start entry that ResolveChain writes for an
+	// installation without a record. RecordChain skips it when the
+	// installation holds a record at the time of the transaction, so two
+	// instances that start at the same time write one start entry.
+	Start bool
 }
 
 // ChainSwitch is the port that turns the chain on and off. The SQL stores
@@ -135,9 +141,10 @@ type ChainSwitch interface {
 	ChainRecord(ctx context.Context) (ChainRecord, error)
 	// RecordChain appends entries in ServerScope, each with a hash only
 	// when it is Chained, and records rec for the installation, in one
-	// transaction. rec.State is ChainStateOn or ChainStateOff. It returns
-	// ErrInvalidEntry when an entry fails validation or names another
-	// scope, and then changes nothing.
+	// transaction. It skips an entry marked Start when the installation
+	// holds a record in that transaction. rec.State is ChainStateOn or
+	// ChainStateOff. It returns ErrInvalidEntry when an entry fails
+	// validation or names another scope, and then changes nothing.
 	RecordChain(ctx context.Context, rec ChainRecord, entries []ChainEntry) error
 }
 
@@ -200,9 +207,13 @@ func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, n
 
 // RecheckChain reads the chain record again after a restore. The restore
 // keeps the record of the target installation and never changes its state.
-// When the restored log holds chained entries, the record notes it, and
-// while the chain is off the server logs the warning of a start.
-func RecheckChain(ctx context.Context, ports ChainPorts) error {
+// The restored log holds the switch entries of the backup, so RecheckChain
+// appends one switch entry with a hash for the recorded state at now: the
+// timeline then ends in the state of this installation (ADR 64 decision
+// 6). The record notes that the log holds a chained entry. While the chain
+// is off and the restored log held chained entries, the server logs the
+// warning of a start. Without a record it changes nothing.
+func RecheckChain(ctx context.Context, ports ChainPorts, now time.Time) error {
 	sw := ports.Switch
 
 	rec, err := sw.ChainRecord(ctx)
@@ -210,24 +221,23 @@ func RecheckChain(ctx context.Context, ports ChainPorts) error {
 		return fmt.Errorf("read audit chain state: %w", err)
 	}
 
+	if rec.State == ChainUnknown {
+		return nil
+	}
+
 	chained, err := sw.HasChainedEntries(ctx)
 	if err != nil {
 		return fmt.Errorf("read audit chain: %w", err)
 	}
 
-	if !chained {
-		return nil
+	entry := ChainEntry{Entry: chainEntry(rec.State, now), Chained: true, Start: false}
+	next := ChainRecord{State: rec.State, EverChained: true}
+
+	if err := sw.RecordChain(ctx, next, []ChainEntry{entry}); err != nil {
+		return fmt.Errorf("record audit chain after restore: %w", err)
 	}
 
-	if !rec.EverChained && rec.State != ChainUnknown {
-		rec.EverChained = true
-
-		if err := sw.RecordChain(ctx, rec, nil); err != nil {
-			return fmt.Errorf("save audit chain state: %w", err)
-		}
-	}
-
-	if rec.State == ChainStateOff {
+	if rec.State == ChainStateOff && chained {
 		warnChainOff(ctx, ports.Logger)
 	}
 
@@ -276,11 +286,11 @@ func recordStart(ctx context.Context, sw ChainSwitch, rec ChainRecord, c chainSt
 	var entries []ChainEntry
 
 	if rec.State == ChainUnknown {
-		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.before], c.at), Chained: c.before})
+		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.before], c.at), Chained: c.before, Start: true})
 	}
 
 	if c.before != c.after {
-		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.after], c.at), Chained: true})
+		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.after], c.at), Chained: true, Start: false})
 	}
 
 	next := ChainRecord{State: states[c.after], EverChained: c.chained || c.after || c.before != c.after}
@@ -322,10 +332,25 @@ func chainEntry(state ChainState, at time.Time) Entry {
 	}
 }
 
+// ScopesChecker is the port that checks many scopes against one timeline
+// of the chain. The SQL stores implement it next to Store. It builds the
+// timeline once and walks every scope in one read transaction, so a check
+// of all scopes reads ServerScope once.
+type ScopesChecker interface {
+	// CheckEach answers the result of Check for each scope of scopes, in
+	// order. It answers an error when a read fails, and then no result.
+	CheckEach(ctx context.Context, scopes []namespace.Name) ([]CheckResult, error)
+}
+
 // CheckScopes runs the chain check of each scope in scopes and answers the
-// count of scopes whose check fails. A scope whose check answers an error
-// counts as failed too, and the error joins the answer.
+// count of scopes whose check fails. A store that implements ScopesChecker
+// checks them all against one timeline. A scope whose check answers an
+// error counts as failed too, and the error joins the answer.
 func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int, error) {
+	if checker, ok := store.(ScopesChecker); ok {
+		return checkEach(ctx, checker, scopes)
+	}
+
 	var (
 		invalid int
 		errs    []error
@@ -347,6 +372,25 @@ func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int
 	}
 
 	return invalid, errors.Join(errs...)
+}
+
+// checkEach runs CheckScopes with one call of checker. A failed call
+// counts every scope as failed.
+func checkEach(ctx context.Context, checker ScopesChecker, scopes []namespace.Name) (int, error) {
+	results, err := checker.CheckEach(ctx, scopes)
+	if err != nil {
+		return len(scopes), fmt.Errorf("check scopes: %w", err)
+	}
+
+	invalid := len(scopes) - len(results)
+
+	for i := range results {
+		if !results[i].Valid {
+			invalid++
+		}
+	}
+
+	return invalid, nil
 }
 
 // ChainPoint is one switch entry of the timeline: when the chain went on
@@ -395,6 +439,7 @@ type TimelineBuilder struct {
 	walk   *ChainWalk
 	points []ChainPoint
 	broken bool
+	hashed bool
 }
 
 // NewTimelineBuilder returns a builder that expects sequence 1 first.
@@ -403,6 +448,7 @@ func NewTimelineBuilder() *TimelineBuilder {
 		walk:   NewChainWalk(ChainTimeline{Points: nil, Recorded: false, Broken: false}),
 		points: nil,
 		broken: false,
+		hashed: false,
 	}
 }
 
@@ -419,8 +465,9 @@ func (b *TimelineBuilder) AddStored(e Entry, changesText string) bool {
 		return false
 	}
 
-	if p, ok := switchPoint(e); ok {
-		if !b.acceptSwitch(e, p) {
+	if e.Namespace == ServerScope && e.Action == ActionSetChain {
+		p, known := ChainPointFromPath(e.At, e.ValuePath)
+		if !known || !b.acceptSwitch(e, p) {
 			b.broken = true
 
 			return false
@@ -428,6 +475,7 @@ func (b *TimelineBuilder) AddStored(e Entry, changesText string) bool {
 
 		b.points = append(b.points, p)
 		b.walk.points = b.points
+		b.hashed = b.hashed || e.Hash != ""
 	}
 
 	if !b.walk.StepStored(e, changesText) {
@@ -439,10 +487,34 @@ func (b *TimelineBuilder) AddStored(e Entry, changesText string) bool {
 	return true
 }
 
-// Timeline answers the timeline that the builder holds, with recorded as
-// whether the installation holds a recorded chain state.
-func (b *TimelineBuilder) Timeline(recorded bool) ChainTimeline {
-	return ChainTimeline{Points: b.points, Recorded: recorded, Broken: b.broken}
+// Timeline answers the timeline that the builder holds, against rec, the
+// record of the installation. Without a record (State ChainUnknown) the
+// timeline is as the builder read it. With a record, the timeline breaks
+// when it disagrees with the record:
+//
+//   - A record that says the log was ever chained, or that the chain is on,
+//     needs at least one switch entry with a hash in the timeline. A
+//     timeline of the one start entry without a hash then means that
+//     someone removed the hashes of the switch entries.
+//   - The last point must hold the recorded state, because the record and
+//     the switch entry of each change commit together (ADR 64 decision 5).
+func (b *TimelineBuilder) Timeline(rec ChainRecord) ChainTimeline {
+	recorded := rec.State != ChainUnknown
+	out := ChainTimeline{Points: b.points, Recorded: recorded, Broken: b.broken}
+
+	if !recorded || out.Broken {
+		return out
+	}
+
+	if (rec.EverChained || rec.State == ChainStateOn) && !b.hashed {
+		out.Broken = true
+	}
+
+	if n := len(b.points); n > 0 && b.points[n-1].On != (rec.State == ChainStateOn) {
+		out.Broken = true
+	}
+
+	return out
 }
 
 // acceptSwitch reports whether the switch entry e with the point p can join
@@ -456,15 +528,6 @@ func (b *TimelineBuilder) acceptSwitch(e Entry, p ChainPoint) bool {
 	n := len(b.points)
 
 	return n == 0 || p.At.UnixMilli() >= b.points[n-1].At.UnixMilli()
-}
-
-// switchPoint answers the point of e when e is a switch entry of the chain.
-func switchPoint(e Entry) (ChainPoint, bool) {
-	if e.Namespace != ServerScope || e.Action != ActionSetChain {
-		return ChainPoint{At: e.At, On: false}, false
-	}
-
-	return ChainPointFromPath(e.At, e.ValuePath)
 }
 
 // ChainWalk checks the entries of one scope in order of sequence. The

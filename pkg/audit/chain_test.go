@@ -244,13 +244,17 @@ func TestRecheckChainAfterARestore(t *testing.T) {
 
 			ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
 
-			if err := audit.RecheckChain(t.Context(), ports); err != nil {
+			if err := audit.RecheckChain(t.Context(), ports, walkAt(0, 0)); err != nil {
 				t.Fatalf("recheck: %v", err)
 			}
 
-			if f.rec.State != tc.rec.State || f.rec.EverChained != tc.wantEver || len(f.entries) != 0 {
-				t.Fatalf("record %+v with %d entries, want state %q, ever %v and no entry",
-					f.rec, len(f.entries), tc.rec.State, tc.wantEver)
+			// A restore ends the restored timeline with one chained switch
+			// entry for the recorded state, so the record notes a chained
+			// log.
+			if f.rec.State != tc.rec.State || !f.rec.EverChained || len(f.entries) != 1 ||
+				!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(tc.rec.State) {
+				t.Fatalf("record %+v with entries %+v, want state %q, ever and one chained switch entry",
+					f.rec, f.entries, tc.rec.State)
 			}
 
 			if warned := strings.Contains(logs.String(), "audit chain is off"); warned != tc.wantWarn {
@@ -495,8 +499,8 @@ func serverLink(entries ...audit.Entry) []audit.Entry {
 	return es
 }
 
-// build adds es to a new builder and answers the timeline.
-func build(es []audit.Entry) audit.ChainTimeline {
+// build adds es to a new builder and answers the timeline against rec.
+func build(rec audit.ChainRecord, es []audit.Entry) audit.ChainTimeline {
 	b := audit.NewTimelineBuilder()
 
 	for i := range es {
@@ -505,7 +509,12 @@ func build(es []audit.Entry) audit.ChainTimeline {
 		}
 	}
 
-	return b.Timeline(true)
+	return b.Timeline(rec)
+}
+
+// noRecord answers the record of an installation that recorded nothing.
+func noRecord() audit.ChainRecord {
+	return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}
 }
 
 func TestTimelineBuilder(t *testing.T) {
@@ -514,7 +523,7 @@ func TestTimelineBuilder(t *testing.T) {
 	plain := walkChained(0, "")
 	plain.At = walkAt(2, 0)
 
-	got := build(serverLink(
+	got := build(audit.ChainRecord{State: audit.ChainStateOff, EverChained: true}, serverLink(
 		walkSwitch(1, audit.ChainStateOff, walkAt(0, 0)),
 		walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0)),
 		plain,
@@ -550,8 +559,55 @@ func TestTimelineBuilder(t *testing.T) {
 	}
 
 	for _, tc := range broken {
-		if got := build(tc.entries); !got.Broken {
+		if got := build(noRecord(), tc.entries); !got.Broken {
 			t.Fatalf("%s: timeline is not broken: %+v", tc.name, got)
+		}
+	}
+}
+
+func TestTimelineAgainstTheRecord(t *testing.T) {
+	t.Parallel()
+
+	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
+	on := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
+	unknown := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
+	unknown.ValuePath = "/audit/chain/On"
+
+	cases := []struct {
+		name    string
+		rec     audit.ChainRecord
+		entries []audit.Entry
+		broken  bool
+	}{
+		{
+			name: "a fresh installation with the chain off", broken: false,
+			rec: audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}, entries: serverLink(startOff),
+		},
+		{
+			name: "a chain that is on with a switch to on", broken: false,
+			rec: audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}, entries: serverLink(startOff, on),
+		},
+		{
+			name: "a record that says chained and no hashed switch", broken: true,
+			rec: audit.ChainRecord{State: audit.ChainStateOff, EverChained: true}, entries: serverLink(startOff),
+		},
+		{
+			name: "a record that says on and no hashed switch", broken: true,
+			rec: audit.ChainRecord{State: audit.ChainStateOn, EverChained: false}, entries: serverLink(startOff),
+		},
+		{
+			name: "a last point that is not the recorded state", broken: true,
+			rec: audit.ChainRecord{State: audit.ChainStateOff, EverChained: true}, entries: serverLink(startOff, on),
+		},
+		{
+			name: "a switch entry with an unknown value path", broken: true,
+			rec: noRecord(), entries: serverLink(startOff, unknown),
+		},
+	}
+
+	for _, tc := range cases {
+		if got := build(tc.rec, tc.entries); got.Broken != tc.broken {
+			t.Fatalf("%s: broken %v, want %v", tc.name, got.Broken, tc.broken)
 		}
 	}
 }

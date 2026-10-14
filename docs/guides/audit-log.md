@@ -162,7 +162,9 @@ While the log holds chained entries and the chain is off, the server logs a warn
 
 The installation keeps the state of the chain, and whether its log ever held a chained entry, in a table of its own.
 A backup does not carry that table.
-A restore keeps the state of the target installation and writes no change entry.
+A restore keeps the state of the target installation.
+After a restore, the server writes one switch entry with a hash for that state.
+So the switch entries end in the state of this installation.
 When the restored log holds chained entries and the chain is off, the server logs the same warning after the restore.
 
 The check reads each run of chained entries on its own.

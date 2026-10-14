@@ -64,6 +64,12 @@ A review of the first build found three gaps:
      back along the sequence.
    - When the installation holds a recorded state and no switch entry
      counts, every scope fails the check.
+   - A row with the action `server:set-audit-chain` and a value path that
+     names no state breaks the timeline.
+   - The timeline must agree with the recorded state. When the record says
+     that the log was ever chained or that the chain is on, the timeline
+     must hold a switch entry with a hash. Its last switch entry must hold
+     the recorded state. Otherwise the timeline is broken.
 4. **Every instance follows the recorded state within 2 seconds.** An
    instance reads the recorded state in the transaction of an append and
    keeps it for at most 2 seconds. So a change of the chain reaches every
@@ -73,9 +79,19 @@ A review of the first build found three gaps:
    state commit together in one store transaction, or neither does.
 6. **A backup does not carry the state.** The state is bookkeeping of the
    installation, like `schema_migrations`. A restore keeps the state of the
-   target installation and writes no switch entry. After a restore, the
-   server logs the warning of a start when the restored log holds chained
-   entries and the chain is off.
+   target installation. The restored log holds the switch entries of the
+   backup, so after a restore the server writes one switch entry with a
+   hash for the recorded state. The timeline then ends in the state of the
+   target installation. After a restore, the server also logs the warning
+   of a start when the restored log holds chained entries and the chain is
+   off.
+7. **One start entry.** Two instances can start for the first time at the
+   same time. Each one marks its start entry, and the store writes it only
+   when the installation holds no record in the transaction of the write.
+8. **One timeline for each check.** The scheduled check builds the
+   timeline once and checks every scope against it, in one read
+   transaction. A switch of the chain during the check gives no false
+   failure.
 
 ## Consequences
 
@@ -103,6 +119,6 @@ A review of the first build found three gaps:
 - A person who can compute SHA-256 can write a switch entry with a hash
   that matches its fields. The chain does not stop such a person (ADR 60
   decision 17). Signed audit checkpoints do.
-- Two instances that start for the first time at the same time can both
-  write a start switch entry. The second one has no hash and does not
-  count, and it holds the same state as the first, so it does no harm.
+- A person who changes the record of the chain too, next to the switch
+  entries and the entries of a scope, can make the timeline agree with the
+  changed log. Signed audit checkpoints catch such a change.

@@ -248,12 +248,66 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 
 // Check implements audit.Store: it walks the chain of ns oldest first in
 // bounded pages and reports the first entry that does not match: a changed
-// field, a broken link or a gap after a deleted entry. Each round trip reads
-// at most audit.CheckPageSize entries, so a namespace with a large log never
-// grows the check without a bound. A namespace with no entries checks as
-// valid.
+// field, a broken link, a gap after a deleted entry, or an entry that does
+// not fit the timeline of the chain. Each round trip reads at most
+// audit.CheckPageSize entries, so a namespace with a large log never grows
+// the check without a bound. A namespace with no entries checks as valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	lowest, err := s.queries.MinAuditSequence(ctx, ns.String())
+	results, err := s.CheckEach(ctx, []namespace.Name{ns})
+	if err != nil {
+		return audit.CheckResult{}, err
+	}
+
+	if len(results) != 1 {
+		return audit.CheckResult{}, fmt.Errorf("check %s: %w", ns, errCheckCount)
+	}
+
+	return results[0], nil
+}
+
+// CheckEach implements audit.ScopesChecker: it builds the timeline of the
+// chain once and checks each scope against it, in a read transaction that
+// sees one snapshot of the log and takes no write lock. So a switch of the
+// chain during the check gives no false failure.
+func (s *Store) CheckEach(ctx context.Context, scopes []namespace.Name) ([]audit.CheckResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]audit.CheckResult, 0, len(scopes))
+
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
+		timeline, err := chainTimeline(ctx, q)
+		if err != nil {
+			return err
+		}
+
+		for _, ns := range scopes {
+			result, err := checkScope(ctx, q, ns, timeline)
+			if err != nil {
+				return err
+			}
+
+			out = append(out, result)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// errCheckCount reports a check that answered another count of results
+// than of scopes. CheckEach answers one result for each scope.
+var errCheckCount = errors.New("the check answered no result")
+
+// checkScope walks the chain of ns in q against timeline (see Check).
+func checkScope(
+	ctx context.Context, q *db.Queries, ns namespace.Name, timeline audit.ChainTimeline,
+) (audit.CheckResult, error) {
+	lowest, err := q.MinAuditSequence(ctx, ns.String())
 	if err != nil {
 		return audit.CheckResult{}, fmt.Errorf("select lowest audit sequence: %w", err)
 	}
@@ -264,11 +318,6 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 		return audit.CheckResult{Checked: 0, BadSequence: lowest, Unchained: 0, Valid: false}, nil
 	}
 
-	timeline, err := chainTimeline(ctx, s.queries)
-	if err != nil {
-		return audit.CheckResult{}, err
-	}
-
 	walk := audit.NewChainWalk(timeline)
 
 	var wantSeq int64 = 1
@@ -276,7 +325,7 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 	var checked int64
 
 	for {
-		rows, err := s.queries.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
+		rows, err := q.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
 			Namespace: ns.String(),
 			Sequence:  wantSeq - 1,
 			Limit:     audit.CheckPageSize,

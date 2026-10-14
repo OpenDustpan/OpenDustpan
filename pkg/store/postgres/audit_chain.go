@@ -57,7 +57,15 @@ func (s *Store) RecordChain(ctx context.Context, rec audit.ChainRecord, entries 
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
 
-		if err := s.insertChainEntries(ctx, q, entries); err != nil {
+		// Two instances that start at the same time both write a start
+		// entry. The record that the first one commits makes the second
+		// skip it, so the timeline holds one start entry.
+		current, err := readChainRecord(ctx, q)
+		if err != nil {
+			return err
+		}
+
+		if err := s.insertChainEntries(ctx, q, withoutStart(entries, current)); err != nil {
 			return err
 		}
 
@@ -94,6 +102,21 @@ func (s *Store) insertChainEntries(ctx context.Context, q *db.Queries, entries [
 	return nil
 }
 
+// readChainRecord reads the record of the chain in q. A missing row reads
+// as no record.
+func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, error) {
+	row, err := q.GetAuditChainState(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
+	}
+
+	if err != nil {
+		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
+}
+
 // readChainState reads the recorded chain state in q, and false when no
 // row exists.
 func readChainState(ctx context.Context, q *db.Queries) (audit.ChainState, bool, error) {
@@ -115,7 +138,7 @@ func readChainState(ctx context.Context, q *db.Queries) (audit.ChainState, bool,
 // count (see audit.TimelineBuilder). A row of the server scope below
 // sequence 1 breaks the timeline.
 func chainTimeline(ctx context.Context, q *db.Queries) (audit.ChainTimeline, error) {
-	_, recorded, err := readChainState(ctx, q)
+	rec, err := readChainRecord(ctx, q)
 	if err != nil {
 		return audit.ChainTimeline{}, err
 	}
@@ -132,14 +155,14 @@ func chainTimeline(ctx context.Context, q *db.Queries) (audit.ChainTimeline, err
 
 	b := audit.NewTimelineBuilder()
 	if lowest < 1 {
-		return audit.ChainTimeline{Points: nil, Recorded: recorded, Broken: true}, nil
+		return audit.ChainTimeline{Points: nil, Recorded: rec.State != audit.ChainUnknown, Broken: true}, nil
 	}
 
 	if err := walkServerScope(ctx, q, b, last); err != nil {
 		return audit.ChainTimeline{}, err
 	}
 
-	return b.Timeline(recorded), nil
+	return b.Timeline(rec), nil
 }
 
 // walkServerScope adds the entries of the server scope from sequence 1 up
@@ -172,4 +195,22 @@ func walkServerScope(ctx context.Context, q *db.Queries, b *audit.TimelineBuilde
 	}
 
 	return nil
+}
+
+// withoutStart answers entries without the start entry when the
+// installation already holds a record (see audit.ChainEntry.Start).
+func withoutStart(entries []audit.ChainEntry, current audit.ChainRecord) []audit.ChainEntry {
+	if current.State == audit.ChainUnknown {
+		return entries
+	}
+
+	out := make([]audit.ChainEntry, 0, len(entries))
+
+	for i := range entries {
+		if !entries[i].Start {
+			out = append(out, entries[i])
+		}
+	}
+
+	return out
 }

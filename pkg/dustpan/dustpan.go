@@ -1650,7 +1650,7 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, cfg.logger)),
+		AfterApply:  afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, cfg.logger, cfg.now)),
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
