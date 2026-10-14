@@ -946,6 +946,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		s3Endpoint:    setup.s3Endpoint,
 		token:         in.token,
 		tokenB:        in.tokenB,
+		memberToken:   "",
 		home:          filepath.Join(in.dir, "home"),
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",

@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -235,6 +237,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	entries := seedBackupAudit(t, s, acme)
 	seedBackupPrincipals(t, s)
 	seedBackupTokens(t, s)
+	seedBackupAccess(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -397,6 +400,105 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+	}
+}
+
+// GrantWrite returns the fence and the audit entry that a grant write on
+// obj takes in s, for the record object at the time at: the zero fence and
+// an entry in @server for the installation, the fence of the namespace of
+// obj and an entry in that namespace otherwise.
+func GrantWrite(
+	tb testing.TB, s namespace.Store, obj identity.Object, at time.Time, object string,
+) (namespace.Fence, audit.Entry) {
+	tb.Helper()
+
+	e := ServerChange(at, object)
+	if obj.Namespace() == "" {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}, e
+	}
+
+	ns, err := s.GetNamespace(tb.Context(), obj.Namespace())
+	if err != nil {
+		tb.Fatalf("namespace of grant on %q: %v", obj.String(), err)
+	}
+
+	e.Namespace = ns.Name
+
+	return ns.Fence(), e
+}
+
+// seedBackupAccess writes a custom role, an ended role, two current grants
+// (one with a condition) and a revoked one when s keeps roles and grants
+// (ADR 52), so the round trip carries the nullable end times. A store with
+// no access port skips it.
+func seedBackupAccess(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	as, ok := s.(access.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	role := access.Role{
+		CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "rol-deployer", Name: "Deployer",
+		Description: "Runs updates", Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitWrite},
+		BuiltIn: false,
+	}
+	if err := as.CreateRole(ctx, role, ServerChange(now(), "role:rol-deployer")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	gone := role
+	gone.ID, gone.Name = "rol-gone", "Gone"
+
+	if err := as.CreateRole(ctx, gone, ServerChange(now(), "role:rol-gone")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	if err := as.DeleteRole(ctx, gone.ID, ServerChange(now().Add(time.Hour), "role:rol-gone")); err != nil {
+		t.Fatalf("delete role: %v", err)
+	}
+
+	condition := "reserved"
+
+	grants := []access.Grant{
+		{
+			CreatedAt: now(),
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-ops",
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectGroup, ID: "grp-ops"},
+		},
+		{
+			CreatedAt: now().Add(time.Hour), Condition: &condition, Object: identity.ServerObject(), ID: "grt-deploy",
+			Role: role.ID, CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-deploy"},
+		},
+		{
+			CreatedAt: now(),
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-revoked",
+			Role:      access.RoleWriter,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-alice"},
+		},
+	}
+	for i := range grants {
+		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
+		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+			t.Fatalf("create grant %q: %v", grants[i].ID, err)
+		}
+	}
+
+	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
+
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	if err != nil {
+		t.Fatalf("revoke grant: %v", err)
 	}
 }
 

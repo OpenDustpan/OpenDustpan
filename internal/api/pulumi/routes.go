@@ -113,12 +113,12 @@ func (h *Handler) baseRoutes() []Route {
 			Method: http.MethodGet,
 			Path:   "/api/user",
 			// GET /api/user reads the caller's own record, so its object is
-			// the caller itself and caller:read stays the gate. The
-			// organizations list holds the readable namespaces (ADR 18): the
-			// handler filters them with the Authorizer for namespace:read,
-			// which this route declares for the filter.
+			// the caller itself and caller:read is the gate: every signed-in
+			// principal holds it. The organizations list holds the readable
+			// namespaces (ADR 18): the handler filters them with the
+			// Authorizer for namespace:read on each namespace.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead, identity.ActionNamespaceRead},
+			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
 			Serve:   h.currentUser,
 		},
@@ -126,10 +126,11 @@ func (h *Handler) baseRoutes() []Route {
 			Method: http.MethodGet,
 			Path:   "/api/user/organizations/default",
 			// The default organization is the only readable namespace, so its
-			// object is the caller itself and the handler filters with the
-			// Authorizer for namespace:read.
+			// object is the caller itself, caller:read is the gate, and the
+			// handler filters with the Authorizer for namespace:read on each
+			// namespace.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead, identity.ActionNamespaceRead},
+			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
 			Serve:   h.defaultOrganization,
 		},
@@ -138,9 +139,12 @@ func (h *Handler) baseRoutes() []Route {
 			Path:   "/api/user/stacks",
 			// With an organization the object is that namespace. Without one
 			// the object is the caller itself and the handler lists every
-			// readable namespace, filtered with the Authorizer.
+			// readable namespace, filtered with the Authorizer. Both forms
+			// pass the gate caller:read. With an organization, the handler
+			// then authorizes unit:read and namespace:read on the namespace
+			// before it reads anything.
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionUnitRead, identity.ActionNamespaceRead},
+			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveListStacks,
 			Serve:   h.listStacks,
 		},

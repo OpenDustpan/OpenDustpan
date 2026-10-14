@@ -260,7 +260,8 @@ func checkJSONAPINotFound(t *testing.T, body, target string) {
 }
 
 // TestStateDiffDenied proves the diff route needs unit:read: a caller
-// without it answers 403.
+// without it answers the 404 of an unknown state version, so the answer
+// does not tell that the unit exists.
 func TestStateDiffDenied(t *testing.T) {
 	t.Parallel()
 
@@ -271,7 +272,7 @@ func TestStateDiffDenied(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, stateRequest(t, "/api/v2/state-versions/sv-second123/diff?from=sv-test123"))
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("GET diff answers %d, want %d", rec.Code, http.StatusForbidden)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET diff answers %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
