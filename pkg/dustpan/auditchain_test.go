@@ -308,6 +308,7 @@ func appendChainEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 		TokenID:    "",
 		Action:     "unit:read-secrets",
 		Object:     "opentofu:acme/prod",
+		ObjectID:   "",
 		Version:    "sv-1",
 		ValuePath:  "/outputs/db",
 		ValueCount: nil,

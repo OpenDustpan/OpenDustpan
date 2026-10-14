@@ -360,10 +360,6 @@ func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, err
 // bytes land.
 const sweepGracePeriod = time.Hour
 
-// checkpointDeleteRetries bounds the blob deletes of one cleanup: a transient
-// object store failure retries instead of orphaning the blob.
-const checkpointDeleteRetries = 3
-
 // checkpointSave groups one checkpoint save after the lease and idempotency
 // checks: the row parts with the blob key to write.
 type checkpointSave struct {
@@ -441,16 +437,15 @@ func (s *Updates) SaveCheckpoint(
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the stack. No route calls
-// it since the soft delete (ADR 47); it stays for the purge of a deleted
-// stack. The caller runs it after the rows are gone, so no save can still
-// commit a row naming these blobs. It is best effort and logs no key.
-func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
+// DeleteStackBlobs removes every checkpoint blob of the purged stack, with
+// a retry for each blob (ADR 47). The purge runs it after the rows are gone,
+// so no save can still commit a row naming these blobs. It returns an error
+// when a blob may remain, so the caller keeps the blob purge record for the
+// sweep. No log line and no error names a blob key.
+func (s *Updates) DeleteStackBlobs(ctx context.Context, stackID ID) error {
 	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
 	if err != nil {
-		s.logger.WarnContext(ctx, "delete checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
+		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
 	failed := 0
@@ -462,13 +457,10 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	}
 
 	if failed > 0 {
-		s.logger.WarnContext(
-			ctx,
-			"delete checkpoint blobs",
-			slog.String("stack", ref.String()),
-			slog.Int("failed", failed),
-		)
+		return fmt.Errorf("%w: %d checkpoint blobs of stack %s", ErrBlobsRemain, failed, stackID)
 	}
+
+	return nil
 }
 
 // AppendEvents stores a batch of engine events for the update.
@@ -1068,17 +1060,14 @@ func (s *Updates) storedLimit() int64 {
 }
 
 // deleteBlobRetried removes the object under key, retrying a transient
-// failure. Deleting a missing key is not an error.
+// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
+// is not an error.
 func (s *Updates) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	var err error
-
-	for range checkpointDeleteRetries {
-		if err = s.blobs.Delete(ctx, key); err == nil {
-			return nil
-		}
+	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // sweepUpdateBlobs deletes the checkpoint blobs of one update that no

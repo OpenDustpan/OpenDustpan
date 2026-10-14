@@ -116,7 +116,9 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 		b.Fatalf("create namespace: %v", createErr)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil, Retention: 0},
+	)
 	if err != nil {
 		b.Fatalf("stack service: %v", err)
 	}
@@ -320,7 +322,7 @@ func benchCaller() audit.Entry {
 		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "bench", Channel: audit.ChannelAPI, Kind: "",
-		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil,
+		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
 	}
 }
 

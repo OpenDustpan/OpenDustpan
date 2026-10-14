@@ -66,11 +66,13 @@ func SetWALGuardForTest(
 	}
 }
 
-// WALGuardTick describes one past-threshold guard tick for tests: when the
-// truncate finished, how long the tick took, whether it succeeded, whether
-// the tick saw a slow busy attempt, the slow and total attempt counts, and
-// the wait the guard slept before the tick.
+// WALGuardTick describes one past-threshold guard tick for tests: the
+// database path of the store that ticked, when the truncate finished, how
+// long the tick took, whether it succeeded, whether the tick saw a slow busy
+// attempt, the slow and total attempt counts, and the wait the guard slept
+// before the tick.
 type WALGuardTick struct {
+	Path         string
 	At           time.Time
 	Waited       time.Duration
 	Elapsed      time.Duration
@@ -91,6 +93,7 @@ func WALGuardTicksForTest() []WALGuardTick {
 
 	for _, tick := range walGuardTicks {
 		out = append(out, WALGuardTick{
+			Path:         tick.path,
 			At:           tick.at,
 			Waited:       tick.waited,
 			Elapsed:      tick.elapsed,

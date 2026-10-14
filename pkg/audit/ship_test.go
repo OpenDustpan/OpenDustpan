@@ -174,6 +174,7 @@ func entryAt(ns namespace.Name, seq int64) audit.Entry {
 		Version:    "sv-1",
 		ValuePath:  "",
 		ValueCount: nil,
+		ObjectID:   "",
 		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "OpenTofu/1.11",
@@ -610,6 +611,23 @@ func TestToRecordCarriesChanges(t *testing.T) {
 
 	if rec := audit.ToRecord(entryAt("acme", 9)); hasKey(rec, "changes") {
 		t.Fatalf("entry without changes: record holds them: %+v", rec.Attrs)
+	}
+}
+
+// TestToRecordCarriesTheObjectID proves that a record carries the stable ID
+// of the unit of an entry (ADR 47) only when the entry has one.
+func TestToRecordCarriesTheObjectID(t *testing.T) {
+	t.Parallel()
+
+	e := entryAt("acme", 10)
+	e.ObjectID = "ws-1"
+
+	if rec := audit.ToRecord(e); !hasAttr(rec, "objectID", "ws-1") {
+		t.Fatalf("entry with an object ID: record lacks it: %+v", rec.Attrs)
+	}
+
+	if rec := audit.ToRecord(entryAt("acme", 11)); hasKey(rec, "objectID") {
+		t.Fatalf("entry without an object ID: record holds one: %+v", rec.Attrs)
 	}
 }
 

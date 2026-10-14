@@ -539,6 +539,7 @@ func chainEntry(state ChainState, at time.Time) Entry {
 		TokenID:    "",
 		Action:     ActionSetChain,
 		Object:     ServerScope.String(),
+		ObjectID:   "",
 		Version:    "",
 		ValuePath:  chainPathPrefix + string(state),
 		ValueCount: nil,

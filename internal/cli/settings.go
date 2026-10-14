@@ -231,6 +231,13 @@ var Settings = []*Setting{
 			"about 72 MiB of the budget. Installations with large outputs should raise this value. An upload "+
 			"that can never fit answers 413.",
 	).WithFile("max-body-bytes-in-flight"),
+	stringSetting(
+		"soft-delete-retention", "DUSTPAN_SOFT_DELETE_RETENTION", "720h",
+		"how long a deleted stack or workspace stays before its final delete, at least 1h "+
+			"(DUSTPAN_SOFT_DELETE_RETENTION)",
+		"`720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records "+
+			"the end of its retention, so a change applies to later deletes",
+	).WithFile("soft-delete-retention"),
 	intSetting(
 		"checkpoint-delta-cutoff", "DUSTPAN_CHECKPOINT_DELTA_CUTOFF", "1048576",
 		"checkpoint size in bytes from which the CLI sends delta uploads, "+

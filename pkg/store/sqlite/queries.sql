@@ -251,11 +251,6 @@ UPDATE stacks
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL;
 
--- name: DeleteStack :execrows
--- Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
-DELETE FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?;
-
 -- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES (?, ?, ?, ?, ?)
@@ -377,13 +372,6 @@ WHERE id = @id AND revision = @expected_revision;
 UPDATE workspaces
 SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?, revision = revision + 1
 WHERE id = ? AND deleted_at_ms IS NULL;
-
--- name: DeleteWorkspace :execrows
--- Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
--- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
--- the data key through DeleteSecretKeysOfStack with the workspace ID.
-DELETE FROM workspaces
-WHERE namespace = ? AND name = ?;
 
 -- name: DeleteStateVersionsOfWorkspace :exec
 -- Removes every state version of one workspace, pending and finalized.
@@ -605,7 +593,7 @@ SET failover_version = failover_version + 1;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -614,14 +602,14 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -638,7 +626,7 @@ WHERE namespace = ?;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -870,15 +858,29 @@ SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind,
 FROM grants WHERE id = ? AND revoked_at_ms IS NULL;
 
 -- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants
-WHERE target = sqlc.arg('target') AND revoked_at_ms IS NULL
-  AND (subject > sqlc.arg('after_subject') OR (subject = sqlc.arg('after_subject') AND role > sqlc.arg('after_role')))
-ORDER BY subject, role
+-- One page of the current grants on a target, with the name and the kind of
+-- each holder: the display name (else the subject) and the kind of a
+-- principal, or the name of a group and the kind "group". An empty subject
+-- or role filter keeps every grant.
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
+  g.condition, g.created_at_ms, g.created_by,
+  CAST(COALESCE(NULLIF(p.display_name, ''), p.subject, pg.name, '') AS TEXT) AS holder_name,
+  CAST(COALESCE(p.kind, CASE WHEN pg.id IS NOT NULL THEN 'group' END, '') AS TEXT) AS holder_kind
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+WHERE g.target = sqlc.arg('target') AND g.revoked_at_ms IS NULL
+  AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR g.subject = CAST(sqlc.arg('subject') AS TEXT))
+  AND (CAST(sqlc.arg('role') AS TEXT) = '' OR g.role = CAST(sqlc.arg('role') AS TEXT))
+  AND (g.subject > sqlc.arg('after_subject') OR (g.subject = sqlc.arg('after_subject') AND g.role > sqlc.arg('after_role')))
+ORDER BY g.subject, g.role
 LIMIT sqlc.arg('row_limit');
 
 -- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE target = ? AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants
+WHERE target = sqlc.arg('target') AND revoked_at_ms IS NULL
+  AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR subject = CAST(sqlc.arg('subject') AS TEXT))
+  AND (CAST(sqlc.arg('role') AS TEXT) = '' OR role = CAST(sqlc.arg('role') AS TEXT));
 
 -- name: RevokeGrant :execrows
 UPDATE grants SET revoked_at_ms = ?, revoked_by = ? WHERE id = ? AND revoked_at_ms IS NULL;
@@ -1133,6 +1135,101 @@ SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE name
 -- name: HasChainedAuditEntries :one
 -- Whether any scope holds an audit entry with a hash.
 SELECT EXISTS (SELECT 1 FROM audit_entries WHERE hash <> '');
+
+-- name: GetDeletedStack :one
+-- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
+-- or a purge. A live stack matches no row.
+SELECT project, deleted_name
+FROM stacks
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: RestoreStack :execrows
+-- Brings a deleted stack back under name. The unique key on (namespace,
+-- project, name) refuses a name that a live stack holds.
+UPDATE stacks
+SET name = ?, deleted_name = NULL, deleted_at_ms = NULL, updated_at_ms = ?
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: PurgeStack :execrows
+-- The final delete of a deleted stack by its stable ID (ADR 47). The
+-- children go first, through the queries below.
+DELETE FROM stacks
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: DeleteEventsOfStack :exec
+DELETE FROM update_events
+WHERE stack_id = ?;
+
+-- name: DeleteCheckpointsOfStack :exec
+DELETE FROM checkpoints
+WHERE stack_id = ?;
+
+-- name: DeleteJournalSequencesOfStack :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = ?;
+
+-- name: DeleteJournalOfStack :exec
+DELETE FROM update_journal
+WHERE stack_id = ?;
+
+-- name: DeleteUpdatesOfStack :exec
+DELETE FROM updates
+WHERE stack_id = ?;
+
+-- name: GetDeletedWorkspace :one
+-- A deleted workspace of one namespace by its ID (ADR 47), for a restore or
+-- a purge. A live workspace matches no row.
+SELECT deleted_name
+FROM workspaces
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: RestoreWorkspace :execrows
+-- Brings a deleted workspace back under name. The revision moves on, as
+-- the delete moved it. The unique key on (namespace, name) refuses a name
+-- that a live workspace holds.
+UPDATE workspaces
+SET name = ?, deleted_name = NULL, deleted_at_ms = NULL, revision = revision + 1, updated_at_ms = ?
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: PurgeWorkspace :execrows
+-- The final delete of a deleted workspace by its ID (ADR 47). The state
+-- versions and the data key go first.
+DELETE FROM workspaces
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL;
+
+-- name: GetDeletedInventory :one
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = ? AND tool = ? AND unit_id = ?;
+
+-- name: DeleteDeletedInventory :execrows
+DELETE FROM inventory_deleted
+WHERE tool = ? AND unit_id = ?;
+
+-- name: RevokeGrantsOnTarget :execrows
+-- Ends every current grant on one target, for example unit:<stable ID> when
+-- the purge of a deleted unit removes it (ADR 47). The rows stay for the
+-- access-review history (ADR 52, decision 10).
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE target = ? AND revoked_at_ms IS NULL;
+
+-- name: InsertBlobPurge :exec
+-- Records a purged unit whose blobs may still exist (ADR 47). A second
+-- purge of the same unit cannot happen, but the row stays as it is.
+INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (tool, unit_id) DO NOTHING;
+
+-- name: DeleteBlobPurge :exec
+DELETE FROM blob_purges WHERE tool = ? AND unit_id = ?;
+
+-- name: ListBlobPurges :many
+-- The oldest rows first, so the sweep finishes the oldest purges first.
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+ORDER BY purged_at_ms, tool, unit_id
+LIMIT ?;
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.

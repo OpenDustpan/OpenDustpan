@@ -133,7 +133,10 @@ var (
 // client address (internal/clientip): the TCP peer, or the address that a
 // trusted proxy forwarded. UserAgent is the client user agent, capped at
 // MaxUserAgentLen bytes. Channel is where the request came from.
-// RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
+// RequestID is the X-Request-Id of the request (ADR 32). ObjectID is the
+// stable ID of the unit that Object names (ADR 19, ADR 47), so the history of
+// one unit can be found across a rename or a reuse of its name; it is empty
+// when the object is not a unit or the ID is not known. PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).
 type Entry struct {
@@ -154,6 +157,7 @@ type Entry struct {
 	Kind       Kind
 	Outcome    Outcome
 	RequestID  string
+	ObjectID   string
 	PrevHash   string
 	Hash       string
 	Sequence   int64
@@ -308,6 +312,10 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 
 	if e.ValueCount != nil {
 		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+	}
+
+	if e.ObjectID != "" {
+		write("object_id=" + e.ObjectID)
 	}
 
 	if changesText != "" {

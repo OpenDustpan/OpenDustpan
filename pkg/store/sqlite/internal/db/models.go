@@ -64,6 +64,7 @@ type AuditEntry struct {
 	Hash       string
 	ValueCount sql.NullInt64
 	Changes    sql.NullString
+	ObjectID   string
 }
 
 type AuditSinkCursor struct {
@@ -80,6 +81,13 @@ type Backup struct {
 	EndedAtMs   int64
 	Target      string
 	Error       string
+}
+
+type BlobPurge struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
 }
 
 type Checkpoint struct {

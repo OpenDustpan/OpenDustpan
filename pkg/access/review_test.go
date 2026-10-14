@@ -7,6 +7,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -81,7 +82,8 @@ func deleteStack(t *testing.T, f *fixture, project, name string) {
 	gone.At, gone.Namespace, gone.Action = time.Unix(1, 0), "acme", "unit:manage"
 	gone.Object, gone.Kind, gone.Outcome = "pulumi:acme/"+project+"/"+name, audit.KindChange, audit.OutcomeSuccess
 
-	if err := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), gone); err != nil {
+	d := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(inventory.DeletedRetention)}
+	if err := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 }

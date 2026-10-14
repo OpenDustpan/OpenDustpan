@@ -80,6 +80,12 @@ var (
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
 	)
+	// errRetention reports a soft-delete retention that is not a duration of
+	// at least one hour.
+	errRetention = errors.New(
+		"soft-delete retention must be a duration of at least 1h, for example 720h: " +
+			"set --soft-delete-retention (DUSTPAN_SOFT_DELETE_RETENTION)",
+	)
 	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
 	// the delta capability off, so only negative values fail.
 	errDeltaCutoff = errors.New(
@@ -236,6 +242,9 @@ type serveFlags struct {
 	// for the start log (ADR 63 decision 7).
 	file     cli.ConfigFile
 	resolved []cli.Resolved
+	// passwordFlags holds the flags that carry a password in a URL, for the
+	// warning that a flag holds a password, so the password can be moved to the variable.
+	passwordFlags []*cli.Setting
 
 	// args and lookup are the command line and the environment snapshot
 	// of the start. A reload of the configuration file resolves against
@@ -277,15 +286,19 @@ type serveFlags struct {
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
 	auditChain              string
-	auditSinks              []string
-	logSinks                []string
+	softDeleteRetention     string
+	// retention is softDeleteRetention after the check.
+	retention  time.Duration
+	auditSinks []string
+	logSinks   []string
 	// app is the application logger and its sinks, set by run.
 	app appLog
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
-// pair, the log level and format, the size limits, the delta cutoff and the
-// trusted proxies.
+// pair, the log level and format, the size limits, the delta cutoff, the
+// soft-delete retention and the trusted proxies. It keeps the parsed
+// retention in f.retention.
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
@@ -314,6 +327,13 @@ func (f *serveFlags) check() error {
 	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
 		return fmt.Errorf("--audit-chain: %w", err)
 	}
+
+	retention, err := parseRetention(f.softDeleteRetention)
+	if err != nil {
+		return err
+	}
+
+	f.retention = retention
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -373,6 +393,7 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 	}
 
 	f.resolved = resolved
+	f.passwordFlags = cli.FlagsHoldingPassword(fs, resolved)
 
 	return nil
 }
@@ -421,6 +442,20 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
+	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
+}
+
+// warnPasswordFlags writes one WARN line for each flag that holds a URL with a
+// password. The line names the flag and the variable to use, and it never
+// shows the value, because a flag shows in a process list.
+func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
+	for _, s := range settings {
+		logger.LogAttrs(ctx, slog.LevelWarn,
+			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
+			slog.String("flag", "--"+s.Flag),
+			slog.String("use", s.Env),
+		)
+	}
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -441,6 +476,8 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	defer closeAppLog(ctx, &app, stderr)
 
 	cli.LogResolved(ctx, logger, f.resolved)
+
+	warnPasswordFlags(ctx, logger, f.passwordFlags)
 
 	f.instanceID = instance.NewID()
 	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
@@ -1102,6 +1139,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),
+		dustpan.WithSoftDeleteRetention(f.retention),
 	}, nil
 }
 
@@ -1503,6 +1541,20 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
+}
+
+// minRetention is the shortest soft-delete retention the server accepts.
+const minRetention = dustpan.MinSoftDeleteRetention
+
+// parseRetention parses the soft-delete retention: a Go duration of at least
+// one hour (ADR 47, decision 2). There is no maximum.
+func parseRetention(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minRetention {
+		return 0, errRetention
+	}
+
+	return d, nil
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,

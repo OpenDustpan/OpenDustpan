@@ -54,7 +54,7 @@ func caller() audit.Entry {
 		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
-		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 	}
 }
 
@@ -1383,5 +1383,50 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	// The account rule covers persons only.
 	if _, err := f.svc.AuthenticateToken(ctx, serviceSecret.Reveal()); err != nil {
 		t.Fatalf("token of a service: %v", err)
+	}
+}
+
+func TestAdministratorCreateAndRotateNeedASignIn(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	personTok, _ := f.create(t, f.person, "laptop")
+	serviceTok, _ := f.create(t, f.service, "deploy")
+
+	// A caller that authenticated with an access token cannot make or
+	// rotate a token in any scope, an administrator scope included: the
+	// new token would outlive a revoke of the one that made it.
+	withToken := admin()
+	withToken.TokenID = personTok.ID
+
+	creates := []struct {
+		scope accesstoken.Scope
+		owner string
+	}{
+		{accesstoken.ScopePersonal, f.person.ID},
+		{accesstoken.ScopeService, f.service.ID},
+	}
+	for _, c := range creates {
+		_, _, err := f.svc.Create(ctx, withToken, caller(), c.scope,
+			accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: c.owner, Name: "more"})
+		if !errors.Is(err, accesstoken.ErrSignInRequired) {
+			t.Errorf("create in scope %d with a token: err = %v, want ErrSignInRequired", c.scope, err)
+		}
+	}
+
+	rotations := []struct {
+		scope accesstoken.Scope
+		id    string
+	}{
+		{accesstoken.ScopePersonal, personTok.ID},
+		{accesstoken.ScopeService, serviceTok.ID},
+	}
+	for _, r := range rotations {
+		in := accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: r.id, Scope: r.scope}
+		if _, _, err := f.svc.Rotate(ctx, withToken, caller(), in); !errors.Is(err, accesstoken.ErrSignInRequired) {
+			t.Errorf("rotation in scope %d with a token: err = %v, want ErrSignInRequired", r.scope, err)
+		}
 	}
 }

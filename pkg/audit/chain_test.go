@@ -660,6 +660,7 @@ func walkEntry(seq int64) audit.Entry {
 		TokenID:    "",
 		Action:     "unit:read-secrets",
 		Object:     "opentofu:acme/prod",
+		ObjectID:   "",
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,

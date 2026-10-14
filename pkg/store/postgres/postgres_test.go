@@ -625,6 +625,11 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) erro
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
+// Inner implements storetest.Wrapper.
+func (s *uncountedStore) Inner() any {
+	return s.UpdatesStore
+}
+
 func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
