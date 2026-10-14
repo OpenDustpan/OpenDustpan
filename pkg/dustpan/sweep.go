@@ -84,11 +84,32 @@ func (d *deletedSweeper) Sweep(ctx context.Context, e audit.Entry) (inventory.Sw
 			slog.String("error_kind", inventory.ErrorKind(err)))
 	}
 
+	d.logPurged(ctx, res)
+
 	if err != nil {
 		return res, fmt.Errorf("retention sweep: %w", err)
 	}
 
 	return res, nil
+}
+
+// logPurged writes one INFO line when the sweep purged units: the count and
+// the oldest purge time among them. The first sweep after an upgrade can
+// purge many units whose retention ended long ago, and this line shows it.
+func (d *deletedSweeper) logPurged(ctx context.Context, res inventory.SweepResult) {
+	if len(res.Purged) == 0 {
+		return
+	}
+
+	oldest := res.Purged[0].PurgeAfter
+	for _, u := range res.Purged[1:] {
+		if u.PurgeAfter.Before(oldest) {
+			oldest = u.PurgeAfter
+		}
+	}
+
+	d.logger.InfoContext(ctx, "retention sweep purged deleted units",
+		slog.Int("purged", len(res.Purged)), slog.Time("oldest_purge_after", oldest.UTC()))
 }
 
 // scheduledSweepEntry is the audit entry of each purge of a scheduled
@@ -126,21 +147,14 @@ func (s *Server) sweepDeleted(ctx context.Context) {
 }
 
 // sweepDeletedOnce runs one scheduled retention sweep within
-// deletedSweepTimeout and logs what it purged. The sweeper counts and logs
+// deletedSweepTimeout. The sweeper logs the purges, and counts and logs
 // each failure.
 func (s *Server) sweepDeletedOnce(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(ctx, deletedSweepTimeout)
 	defer cancel()
 
-	res, err := s.deleted.Sweep(bounded, scheduledSweepEntry())
-	if err != nil {
-		return
-	}
-
-	if len(res.Purged) > 0 || res.FinishedBlobPurges > 0 {
-		s.logger.InfoContext(ctx, "retention sweep",
-			slog.Int("purged", len(res.Purged)), slog.Int("finished_blob_purges", res.FinishedBlobPurges))
-	}
+	//nolint:errcheck // The sweeper counts and logs a failed sweep, and the next tick tries again.
+	_, _ = s.deleted.Sweep(bounded, scheduledSweepEntry())
 }
 
 // DeletePurgedBlobs implements inventory.PurgedBlobs for Pulumi stacks,

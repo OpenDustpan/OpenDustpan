@@ -1,8 +1,10 @@
 package dustpan
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -50,6 +52,7 @@ type sweepFixture struct {
 	svc      services
 	sweeper  *deletedSweeper
 	observed *metrics.ServerMetrics
+	log      *bytes.Buffer
 }
 
 func newSweepFixture(t *testing.T) sweepFixture {
@@ -77,13 +80,14 @@ func newSweepFixture(t *testing.T) sweepFixture {
 	}
 
 	clock := &sweepClock{mu: sync.Mutex{}, now: time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)}
+	log := &bytes.Buffer{}
 
 	cfg := defaultSettings()
 	for _, opt := range []Option{
 		WithRegion("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
-		WithClock(clock.Now), WithSoftDeleteRetention(time.Hour),
+		WithClock(clock.Now), WithSoftDeleteRetention(time.Hour), WithLogger(slog.New(slog.NewTextHandler(log, nil))),
 	} {
 		opt(cfg)
 	}
@@ -104,7 +108,9 @@ func newSweepFixture(t *testing.T) sweepFixture {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	return sweepFixture{store: st, blobs: blobs, clock: clock, svc: svc, sweeper: sweeper, observed: observed}
+	return sweepFixture{
+		store: st, blobs: blobs, clock: clock, svc: svc, sweeper: sweeper, observed: observed, log: log,
+	}
 }
 
 // sweepDeleteEntry is the audit entry of the delete of the unit object.
@@ -212,6 +218,7 @@ func TestRetentionSweepRemovesALateBlob(t *testing.T) {
 
 	f.clock.advance(2 * time.Hour)
 	f.checkSweep(t, "after the retention", sweepCounts{purged: 2, finished: 0, pending: 2})
+	checkPurgeLog(t, f.log.String())
 	f.checkBlobs(t, units, 0, "after the purge")
 
 	// A save or an upload that passed its checks before the purge writes its
@@ -235,6 +242,20 @@ func TestRetentionSweepRemovesALateBlob(t *testing.T) {
 
 	checkSweepAudit(t, f, units)
 	checkSweepMetrics(t, f.observed)
+}
+
+// checkPurgeLog checks the INFO line of the sweep that purged both units:
+// the count, and the oldest purge time, one hour after the deletes.
+func checkPurgeLog(t *testing.T, logged string) {
+	t.Helper()
+
+	for _, want := range []string{
+		"retention sweep purged deleted units", "purged=2", "oldest_purge_after=2026-11-01T13:00:00",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log misses %q:\n%s", want, logged)
+		}
+	}
 }
 
 // sweepCounts is the expected outcome of one sweep.
