@@ -238,10 +238,12 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 }
 
 // fail logs a failed round and calls the failure hook. The log line holds
-// the sink name and the error, never an entry.
+// the sink name, the count of scopes that failed and a fixed error class,
+// never an entry and never the text of a store, driver or transport error:
+// the line can go to a remote sink (ADR 32 decision 7).
 func (s *Shipper) fail(ctx context.Context, name string, err error) {
 	s.cfg.Logger.WarnContext(ctx, "audit sink delivery failed",
-		slog.String("sink", name), slog.String("error", err.Error()))
+		slog.String("sink", name), slog.Int("scopes", failedScopes(err)), slog.String("error", ErrorClass(err)))
 
 	if s.cfg.OnFailure != nil {
 		s.cfg.OnFailure(name)
@@ -267,7 +269,7 @@ func (s *Shipper) skip(ctx context.Context, name string, skip *logsink.SkipError
 func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
-		return fmt.Errorf("list namespaces: %w", err)
+		return &shipError{step: stepList, err: err}
 	}
 
 	namespaces = append(namespaces, serverScope())
@@ -292,13 +294,13 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace.Namespace) error {
 	cursor, err := s.cfg.Feed.SinkCursor(ctx, sink.Name, ns.Name)
 	if err != nil {
-		return fmt.Errorf("read cursor: %w", err)
+		return &shipError{step: stepCursor, err: err}
 	}
 
 	for {
 		entries, err := s.cfg.Feed.After(ctx, ns.Name, cursor, ShipBatchSize)
 		if err != nil {
-			return fmt.Errorf("read entries: %w", err)
+			return &shipError{step: stepRead, err: err}
 		}
 
 		if len(entries) == 0 {
@@ -330,7 +332,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 	if err := sink.Sink.Write(ctx, records); err != nil {
 		skip, ok := errors.AsType[*logsink.SkipError](err)
 		if !ok {
-			return fmt.Errorf("write: %w", err)
+			return &shipError{step: stepWrite, err: err}
 		}
 
 		s.skip(ctx, sink.Name, skip)
@@ -341,7 +343,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 	last := entries[len(entries)-1].Sequence
 
 	if err := s.cfg.Feed.AdvanceSinkCursor(ctx, ns.Fence(), sink.Name, last); err != nil {
-		return fmt.Errorf("advance cursor: %w", err)
+		return &shipError{step: stepAdvance, err: err}
 	}
 
 	if s.cfg.OnShipped != nil && delivered > 0 {
@@ -395,4 +397,78 @@ func ToRecord(e Entry) logsink.Record {
 		Message: RecordMessage,
 		Attrs:   attrs,
 	}
+}
+
+// Steps of a round, for the error class of a failure.
+const (
+	stepList    = "list namespaces"
+	stepCursor  = "read cursor"
+	stepRead    = "read entries"
+	stepWrite   = "write"
+	stepAdvance = "advance cursor"
+)
+
+// shipError is a failure of one step of a round. Its text holds the text of
+// the cause, so the log never prints it: it prints ErrorClass instead.
+type shipError struct {
+	err  error
+	step string
+}
+
+// Error implements error.
+func (e *shipError) Error() string {
+	return e.step + ": " + e.err.Error()
+}
+
+// Unwrap returns the cause.
+func (e *shipError) Unwrap() error {
+	return e.err
+}
+
+// ErrorClass reduces a failure of a round to a fixed text: the step that
+// failed and a class of the cause, for example "write: refused by the
+// target". It never holds the text of the cause, which can carry driver
+// detail, a host name or a token (ADR 32 decision 7). When several scopes
+// fail, it names the first.
+func ErrorClass(err error) string {
+	step := "round"
+	if se, ok := errors.AsType[*shipError](err); ok {
+		step = se.step
+	}
+
+	return step + ": " + causeClass(err)
+}
+
+// causeClass names the class of the cause of err.
+func causeClass(err error) string {
+	var timeout interface{ Timeout() bool }
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, logsink.ErrClosed):
+		return "sink closed"
+	case errors.Is(err, logsink.ErrRefused):
+		return "refused by the target"
+	case errors.Is(err, namespace.ErrFenced):
+		return "fenced"
+	case errors.Is(err, namespace.ErrNotFound):
+		return "namespace not found"
+	case errors.As(err, &timeout) && timeout.Timeout():
+		return "timeout"
+	default:
+		return "failed"
+	}
+}
+
+// failedScopes counts the scopes whose shipping failed in the round that
+// answered err.
+func failedScopes(err error) int {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		return len(joined.Unwrap())
+	}
+
+	return 1
 }

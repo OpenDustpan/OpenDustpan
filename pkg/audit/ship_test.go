@@ -1,10 +1,13 @@
 package audit_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -325,6 +328,99 @@ func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
 
 	if shipped != 2 || skipped != 1 {
 		t.Fatalf("counts: shipped %d, skipped %d, want 2 and 1", shipped, skipped)
+	}
+}
+
+// failingFeed is a memFeed whose After fails with err.
+type failingFeed struct {
+	*memFeed
+
+	err error
+}
+
+func (f failingFeed) After(context.Context, namespace.Name, int64, int) ([]audit.Entry, error) {
+	return nil, f.err
+}
+
+func TestAFailedRoundLogsAClassNotTheDriverText(t *testing.T) {
+	t.Parallel()
+
+	const canary = "canary-driver-9f8e7d6c5b4a"
+
+	base := newMemFeed(map[namespace.Name]int{"acme": 1, "globex": 1})
+	feed := failingFeed{
+		memFeed: base,
+		err:     fmt.Errorf("%w: pq: connection to 10.0.0.7 reset (%s)", errSinkDown, canary),
+	}
+
+	var logs bytes.Buffer
+
+	failed := make(chan struct{}, 1)
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:       feed,
+		Namespaces: base,
+		Logger:     slog.New(slog.NewJSONHandler(&logs, nil)),
+		OnShipped:  nil,
+		OnFailure: func(string) {
+			select {
+			case failed <- struct{}{}:
+			default:
+			}
+		},
+		OnSkipped: nil,
+		Sinks: []audit.ShipSink{
+			{
+				Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
+				Name:     "siem",
+				Interval: time.Millisecond,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	<-failed
+	cancel()
+	<-done
+
+	out := logs.String()
+	if strings.Contains(out, canary) || strings.Contains(out, "10.0.0.7") {
+		t.Fatalf("log holds the driver text: %s", out)
+	}
+
+	if !strings.Contains(out, `"error":"read entries: failed"`) || !strings.Contains(out, `"scopes":3`) {
+		t.Fatalf("log lacks the error class and the scope count: %s", out)
+	}
+}
+
+func TestErrorClass(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]error{
+		"round: canceled":              context.Canceled,
+		"round: timeout":               fmt.Errorf("dial: %w", context.DeadlineExceeded),
+		"round: refused by the target": fmt.Errorf("webhook: %w", logsink.ErrRefused),
+		"round: sink closed":           logsink.ErrClosed,
+		"round: fenced":                namespace.ErrFenced,
+		"round: failed":                errSinkDown,
+	}
+
+	for want, err := range cases {
+		if got := audit.ErrorClass(err); got != want {
+			t.Fatalf("class of %v: got %q, want %q", err, got, want)
+		}
 	}
 }
 

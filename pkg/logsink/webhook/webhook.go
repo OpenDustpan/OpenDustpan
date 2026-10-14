@@ -34,7 +34,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
-// ErrRefused reports a receiver that answered a status other than 2xx.
+// ErrRefused reports a receiver that answered a status other than 2xx. An
+// error that wraps it also wraps logsink.ErrRefused.
 var ErrRefused = errors.New("webhook receiver refused the batch")
 
 // Header names of a request.
@@ -242,7 +243,7 @@ func (s *Sink) post(ctx context.Context, body []byte) error {
 	_ = resp.Body.Close()               //nolint:errcheck // The status decides the result.
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%w: status %d", ErrRefused, resp.StatusCode)
+		return fmt.Errorf("%w (%w): status %d", ErrRefused, logsink.ErrRefused, resp.StatusCode)
 	}
 
 	return nil

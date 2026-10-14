@@ -24,6 +24,9 @@ var (
 	ErrClosed = errors.New("log sink closed")
 	// ErrInvalidConfig reports a sink configuration that an adapter refuses.
 	ErrInvalidConfig = errors.New("invalid log sink configuration")
+	// ErrRefused reports a target that answered and refused the batch, for
+	// example a webhook receiver that answered a status other than 2xx.
+	ErrRefused = errors.New("log sink target refused the batch")
 	// ErrSkipped reports a Write that delivered the batch except the records
 	// that the target cannot hold, for example a record above the size cap
 	// of the target. A SkipError carries it.

@@ -199,6 +199,10 @@ It counts the entry in `dustpan_audit_sink_skipped_total`, logs an error and goe
 ### Webhook
 
 The URL must use HTTPS.
+The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
+Only the operator sets the URL.
+Check it as you check any outbound address of the server.
+If you can, block the metadata endpoints in your network.
 Set the signing key in `DUSTPAN_AUDIT_WEBHOOK_SECRET`, or in a file that `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` names.
 Only the owner of the file can read it.
 Each request carries two headers:
