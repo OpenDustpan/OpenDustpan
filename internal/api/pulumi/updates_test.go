@@ -421,6 +421,16 @@ func newUpdateFixtureWithCutoff(
 ) updateFixture {
 	t.Helper()
 
+	return newUpdateFixtureWithAuthenticator(t, authz, tokenAuthenticator{}, limit, cutoff)
+}
+
+// newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
+// does, with authn as the authenticator of access tokens.
+func newUpdateFixtureWithAuthenticator(
+	t *testing.T, authz identity.Authorizer, authn identity.Authenticator, limit, cutoff int,
+) updateFixture {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -470,7 +480,7 @@ func newUpdateFixtureWithCutoff(
 		Updates:                 updates,
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
-		Authenticator:           tokenAuthenticator{},
+		Authenticator:           authn,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
