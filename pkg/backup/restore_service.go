@@ -76,10 +76,18 @@ type RestoreConfig struct {
 	// AfterApply runs after the swap with the rows preserved, while the
 	// server still holds maintenance mode, so a restore of data that
 	// predates a later change converges to it: the server seals rows that
-	// the backup holds unsealed. A failure fails the restore. Nil skips it.
-	AfterApply func(ctx context.Context) error
+	// the backup holds unsealed. It receives the restore that it follows. A
+	// failure fails the restore. Nil skips it.
+	AfterApply func(ctx context.Context, restore AppliedRestore) error
 	Now        func() time.Time
 	Logger     *slog.Logger
+}
+
+// AppliedRestore names the restore that the after-apply step follows: its
+// ID and the person who requested it.
+type AppliedRestore struct {
+	ID          RestoreID
+	RequestedBy string
 }
 
 // RestoreService runs online restores of a whole installation (ADR 38): it
@@ -96,7 +104,7 @@ type RestoreService struct {
 	target      blob.Store
 	key         secret.Wrapper
 	region      string
-	afterApply  func(ctx context.Context) error
+	afterApply  func(ctx context.Context, restore AppliedRestore) error
 	now         func() time.Time
 	logger      *slog.Logger
 	mu          sync.Mutex
@@ -779,7 +787,7 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 		s.trackRestore(marked)
 	}
 
-	return s.applyPinned(ctx, id, req.BackupID, pinned, pre)
+	return s.applyPinned(ctx, AppliedRestore{ID: id, RequestedBy: req.RequestedBy}, req.BackupID, pinned, pre)
 }
 
 // applyPinned stages the pinned backup, copies its blobs, swaps the staged
@@ -788,8 +796,10 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 // manifest is pinned again first, so a target mutated after the checks cannot
 // be applied.
 func (s *RestoreService) applyPinned(
-	ctx context.Context, id RestoreID, backupID ID, pinned pinnedManifest, pre Record,
+	ctx context.Context, restore AppliedRestore, backupID ID, pinned pinnedManifest, pre Record,
 ) error {
+	id := restore.ID
+
 	if repinErr := s.repinManifest(ctx, backupID, pinned); repinErr != nil {
 		return repinErr
 	}
@@ -851,7 +861,7 @@ func (s *RestoreService) applyPinned(
 	// after-apply step while maintenance mode still holds, so those rows
 	// end sealed. A failure fails the restore.
 	if s.afterApply != nil {
-		if err := s.afterApply(ctx); err != nil {
+		if err := s.afterApply(ctx, restore); err != nil {
 			return fmt.Errorf("seal restored state: %w", err)
 		}
 	}

@@ -81,8 +81,11 @@ A review of the first build found three gaps:
    installation, like `schema_migrations`. A restore keeps the state of the
    target installation. The restored log holds the switch entries of the
    backup, so after a restore the server writes one switch entry with a
-   hash for the recorded state. The timeline then ends in the state of the
-   target installation. After a restore, the server also logs the warning
+   hash for the recorded state, in the name of the person who requested
+   the restore. The timeline then ends in the state of the target
+   installation. Without this entry, a backup with another chain state
+   would make every scope fail the check, because the last switch entry
+   must hold the recorded state (decision 3). After a restore, the server also logs the warning
    of a start when the restored log holds chained entries and the chain is
    off.
 7. **One start entry.** Two instances can start for the first time at the

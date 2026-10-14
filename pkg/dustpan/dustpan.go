@@ -1678,12 +1678,16 @@ func newRestoreService(
 	return service, nil
 }
 
+// restoreStep is one after-apply step of a restore. It receives the
+// restore that it follows.
+type restoreStep func(ctx context.Context, restore backup.AppliedRestore) error
+
 // afterRestore returns the after-apply step of a restore that runs steps in
 // order and stops at the first error.
-func afterRestore(steps ...func(ctx context.Context) error) func(ctx context.Context) error {
-	return func(ctx context.Context) error {
+func afterRestore(steps ...restoreStep) restoreStep {
+	return func(ctx context.Context, restore backup.AppliedRestore) error {
 		for _, step := range steps {
-			if err := step(ctx); err != nil {
+			if err := step(ctx, restore); err != nil {
 				return err
 			}
 		}
@@ -1697,8 +1701,8 @@ func afterRestore(steps ...func(ctx context.Context) error) func(ctx context.Con
 // decision 11), with the same job the server runs at start-up. NewServer
 // refuses to build without a key-encryption key (#367), so the step is
 // always set.
-func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
-	return func(ctx context.Context) error {
+func sealAfterRestore(deps installationDeps) restoreStep {
+	return func(ctx context.Context, _ backup.AppliedRestore) error {
 		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
 			return fmt.Errorf("seal unsealed state: %w", err)
 		}

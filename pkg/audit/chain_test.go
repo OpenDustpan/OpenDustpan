@@ -244,7 +244,7 @@ func TestRecheckChainAfterARestore(t *testing.T) {
 
 			ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
 
-			if err := audit.RecheckChain(t.Context(), ports, walkAt(0, 0)); err != nil {
+			if err := audit.RecheckChain(t.Context(), ports, walkAt(0, 0), "alice"); err != nil {
 				t.Fatalf("recheck: %v", err)
 			}
 
@@ -252,7 +252,8 @@ func TestRecheckChainAfterARestore(t *testing.T) {
 			// entry for the recorded state, so the record notes a chained
 			// log.
 			if f.rec.State != tc.rec.State || !f.rec.EverChained || len(f.entries) != 1 ||
-				!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(tc.rec.State) {
+				!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(tc.rec.State) ||
+				f.entries[0].Entry.Subject != "alice" {
 				t.Fatalf("record %+v with entries %+v, want state %q, ever and one chained switch entry",
 					f.rec, f.entries, tc.rec.State)
 			}

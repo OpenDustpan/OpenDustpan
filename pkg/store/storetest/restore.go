@@ -61,6 +61,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
+		{name: "a restore of another chain state checks valid after the recheck", test: testRestoreChainChecksValid},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -550,6 +551,129 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 
 	if got != want {
 		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
+	}
+}
+
+// chainSwitchEntry returns a switch entry of the audit chain for state at
+// at, as the server writes it (ADR 64).
+func chainSwitchEntry(state audit.ChainState, at time.Time) audit.Entry {
+	e := ServerChange(at, audit.ServerScope.String())
+	e.Subject, e.Action, e.ValuePath = "opendustpan serve", audit.ActionSetChain, "/audit/chain/"+string(state)
+
+	return e
+}
+
+// chainRestoreStore is a store with the audit chain and its check.
+type chainRestoreStore interface {
+	audit.Store
+	audit.ChainSwitch
+	audit.ScopesChecker
+}
+
+// testRestoreChainChecksValid proves ADR 64 decision 6: the backup comes
+// from an installation with the chain on, the target has the chain off.
+// After the restore, audit.RecheckChain writes one hashed switch entry for
+// the state of the target, in the name of the person who requested the
+// restore, and every scope checks valid. A store without a chain switch
+// skips the case.
+func testRestoreChainChecksValid(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+	acme := newNamespace(t, src, "acme")
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	from, okSrc := ps.src.(chainRestoreStore)
+	to, okDst := ps.dst.(chainRestoreStore)
+
+	if !okSrc || !okDst {
+		t.Skip("the store has no audit chain switch")
+	}
+
+	at := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	recordChain(t, from, audit.ChainStateOn, at)
+	appendDecrypts(t, from, acme, at, 2)
+	recordChain(t, to, audit.ChainStateOff, at)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	ports := audit.ChainPorts{Switch: to, Logger: nil}
+	if err := audit.RecheckChain(ctx, ports, at.Add(time.Minute), "alice"); err != nil {
+		t.Fatalf("recheck the chain after the restore: %v", err)
+	}
+
+	wantScopesValid(t, to, audit.ServerScope, acme.Name)
+	wantRestoreSwitch(t, to, "alice", audit.ChainStateOff)
+}
+
+// recordChain records state for s with the start entry of a new
+// installation: with a hash when on, without a hash when off.
+func recordChain(t *testing.T, s audit.ChainSwitch, state audit.ChainState, at time.Time) {
+	t.Helper()
+
+	on := state == audit.ChainStateOn
+	start := audit.ChainEntry{Entry: chainSwitchEntry(state, at), Chained: on, Start: true}
+	rec := audit.ChainRecord{State: state, EverChained: on}
+
+	if err := s.RecordChain(t.Context(), rec, []audit.ChainEntry{start}); err != nil {
+		t.Fatalf("record the chain %s: %v", state, err)
+	}
+}
+
+// appendDecrypts appends n decrypt entries to ns in s, one second apart
+// after at.
+func appendDecrypts(t *testing.T, s audit.Store, ns namespace.Namespace, at time.Time, n int) {
+	t.Helper()
+
+	for i := range n {
+		e := ServerChange(at.Add(time.Duration(i+1)*time.Second), "pulumi:acme/web/prod")
+		e.Namespace, e.Action = ns.Name, "unit:decrypt"
+
+		if _, err := s.Append(t.Context(), ns.Fence(), e); err != nil {
+			t.Fatalf("append entry %d: %v", i, err)
+		}
+	}
+}
+
+// wantScopesValid fails the test unless every scope of scopes checks valid.
+func wantScopesValid(t *testing.T, s audit.ScopesChecker, scopes ...namespace.Name) {
+	t.Helper()
+
+	results, err := s.CheckEach(t.Context(), scopes)
+	if err != nil {
+		t.Fatalf("check scopes: %v", err)
+	}
+
+	for i := range results {
+		if !results[i].Valid {
+			t.Fatalf("check %s = %+v, want valid", scopes[i], results[i])
+		}
+	}
+}
+
+// wantRestoreSwitch fails the test unless the last entry of @server is a
+// hashed switch entry to state by actor.
+func wantRestoreSwitch(t *testing.T, s audit.Store, actor string, state audit.ChainState) {
+	t.Helper()
+
+	last, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 1})
+	if err != nil || len(last.Entries) != 1 {
+		t.Fatalf("read the last entry of @server: %v", err)
+	}
+
+	got := last.Entries[0]
+	if got.Subject != actor || got.ValuePath != "/audit/chain/"+string(state) || got.Hash == "" {
+		t.Fatalf("restore switch entry = %+v, want a hashed switch to %s by %s", got, state, actor)
 	}
 }
 

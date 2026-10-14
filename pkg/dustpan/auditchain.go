@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -148,16 +149,14 @@ func (s *Server) checkAuditChain(ctx context.Context) {
 // the chained log and logs the warning of a start while the chain is off
 // (see audit.RecheckChain). It never changes the state.
 // Without a chain switch it does nothing.
-func recheckChainAfterRestore(
-	chain *chainDeps, logger *slog.Logger, now func() time.Time,
-) func(ctx context.Context) error {
-	return func(ctx context.Context) error {
+func recheckChainAfterRestore(chain *chainDeps, logger *slog.Logger, now func() time.Time) restoreStep {
+	return func(ctx context.Context, restore backup.AppliedRestore) error {
 		if chain == nil {
 			return nil
 		}
 
 		ports := audit.ChainPorts{Switch: chain.sw, Logger: logger}
-		if err := audit.RecheckChain(ctx, ports, now()); err != nil {
+		if err := audit.RecheckChain(ctx, ports, now(), restore.RequestedBy); err != nil {
 			return fmt.Errorf("audit chain after restore: %w", err)
 		}
 

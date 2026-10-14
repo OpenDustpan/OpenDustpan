@@ -1549,7 +1549,7 @@ func waitServiceRestoreSucceeded(t *testing.T, service *backup.RestoreService, i
 // restoreServiceWithHook rebuilds the restore service of setup with an
 // after-apply step, sharing its fakes. The setup service stays idle.
 func restoreServiceWithHook(
-	t *testing.T, setup *restoreServiceSetup, hook func(ctx context.Context) error,
+	t *testing.T, setup *restoreServiceSetup, hook func(ctx context.Context, restore backup.AppliedRestore) error,
 ) *backup.RestoreService {
 	t.Helper()
 
@@ -1583,7 +1583,7 @@ func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
 
 	ran := make(chan struct{}, 1)
 
-	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+	service := restoreServiceWithHook(t, setup, func(_ context.Context, _ backup.AppliedRestore) error {
 		ran <- struct{}{}
 
 		return nil
@@ -1623,7 +1623,7 @@ func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
 
 	setup := newRestoreServiceSetup(t)
 
-	service := restoreServiceWithHook(t, setup, func(_ context.Context) error {
+	service := restoreServiceWithHook(t, setup, func(_ context.Context, _ backup.AppliedRestore) error {
 		return errFakeDriver
 	})
 

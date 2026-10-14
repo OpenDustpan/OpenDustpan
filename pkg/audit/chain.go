@@ -212,8 +212,10 @@ func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, n
 // timeline then ends in the state of this installation (ADR 64 decision
 // 6). The record notes that the log holds a chained entry. While the chain
 // is off and the restored log held chained entries, the server logs the
-// warning of a start. Without a record it changes nothing.
-func RecheckChain(ctx context.Context, ports ChainPorts, now time.Time) error {
+// warning of a start. The switch entry names actor, the person who
+// requested the restore, as its subject. Without a record it changes
+// nothing.
+func RecheckChain(ctx context.Context, ports ChainPorts, now time.Time, actor string) error {
 	sw := ports.Switch
 
 	rec, err := sw.ChainRecord(ctx)
@@ -230,7 +232,12 @@ func RecheckChain(ctx context.Context, ports ChainPorts, now time.Time) error {
 		return fmt.Errorf("read audit chain: %w", err)
 	}
 
-	entry := ChainEntry{Entry: chainEntry(rec.State, now), Chained: true, Start: false}
+	switched := chainEntry(rec.State, now)
+	if actor != "" {
+		switched.Subject = actor
+	}
+
+	entry := ChainEntry{Entry: switched, Chained: true, Start: false}
 	next := ChainRecord{State: rec.State, EverChained: true}
 
 	if err := sw.RecordChain(ctx, next, []ChainEntry{entry}); err != nil {
