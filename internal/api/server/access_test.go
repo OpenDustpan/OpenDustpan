@@ -29,7 +29,7 @@ import (
 type subjectAuthenticator struct{}
 
 func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	return identity.Principal{Subject: token, DisplayName: token, Admin: token == "admin"}, nil
+	return identity.Principal{Subject: token, DisplayName: token, Admin: token == "admin", TokenID: ""}, nil
 }
 
 // roleDoc and grantDoc decode the wire forms in tests.
@@ -122,6 +122,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     principals,
+		Tokens:         nil,
 		Access:         grants,
 		Audit:          st,
 		OnAuditFailure: nil,

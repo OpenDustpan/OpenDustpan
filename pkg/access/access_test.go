@@ -102,7 +102,7 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 		tb.Fatalf("create principal %q: %v", subject, err)
 	}
 
-	return identity.Principal{Subject: subject, DisplayName: "", Admin: false}
+	return identity.Principal{Subject: subject, DisplayName: "", Admin: false, TokenID: ""}
 }
 
 // group stores the group "grp-<name>" with the members.
@@ -193,7 +193,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 
 // admin returns the bootstrap admin caller, which holds every action.
 func admin() identity.Principal {
-	return identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
+	return identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
 }
 
 func prn(subject string) access.Subject {
@@ -309,7 +309,7 @@ func TestUnknownAndDeletedPrincipals(t *testing.T) {
 
 	f := newFixture(t)
 	deleted := f.person(t, "deleted")
-	unknown := identity.Principal{Subject: "nobody", DisplayName: "", Admin: false}
+	unknown := identity.Principal{Subject: "nobody", DisplayName: "", Admin: false, TokenID: ""}
 	web := unitObject(t, "acme", "web/prod")
 
 	f.grant(t, prn("deleted"), access.RoleSiteAdministrator, identity.ServerObject())
@@ -341,7 +341,7 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 
 	assertChecks(t, f.authz, site, []check{{identity.ServerObject(), identity.Action("server:future"), false}})
 
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
 
@@ -517,7 +517,7 @@ func TestGrantChecksSubjectAndNamespace(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
 	f.person(t, "target")
 
 	cases := []struct {
@@ -640,7 +640,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 
 	f := newFixture(t)
 	account := f.person(t, "account")
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
 
 	ns := namespace.Namespace{
 		CreatedAt: time.Unix(0, 0), Name: "gamma", HomeRegion: "",
@@ -724,7 +724,7 @@ func TestRevokeChecksTheObject(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true}
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
 	f.person(t, "target")
 
 	g, err := f.svc.Grant(t.Context(), testEntry(), admin, access.GrantInput{

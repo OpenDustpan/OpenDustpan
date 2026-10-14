@@ -164,6 +164,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		}},
 		Principals:     nil,
 		Access:         nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -203,6 +204,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Schema:         nil,
 		Principals:     nil,
 		Access:         nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -269,6 +271,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		}},
 		Principals:     nil,
 		Access:         nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

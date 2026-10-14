@@ -83,7 +83,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false}, nil
+	return identity.Principal{Subject: "tester", DisplayName: "Tester", Admin: false, TokenID: ""}, nil
 }
 
 // stubAuthorizer denies every action.

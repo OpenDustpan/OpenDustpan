@@ -47,11 +47,13 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -361,6 +363,9 @@ type services struct {
 	updates    *stack.Updates
 	secrets    *secret.Service
 	workspaces *workspace.Service
+	// tokens keeps the access tokens of the principals (ADR 53), or is nil
+	// when the store keeps none. NewServer sets it after newServices.
+	tokens *accesstoken.Service
 }
 
 // NewServer validates the options and wires the server together.
@@ -409,14 +414,16 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	if cfg.authorizer == nil {
-		cfg.authorizer, err = defaultAuthorizer(cfg.namespaceStore)
-		if err != nil {
-			return nil, err
-		}
+	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
+		return nil, authzErr
 	}
 
 	svc, err := newServices(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.tokens, err = newTokenService(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +433,28 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	if tokensErr := wireTokens(&cfg, svc.tokens); tokensErr != nil {
+		return nil, tokensErr
+	}
+
 	return assemble(cfg, base, svc, backups)
+}
+
+// wireTokens puts the stored access tokens behind the configured
+// authenticator, and lets every authenticated person list and revoke its
+// own personal tokens with no grant (ADR 53, decision 3).
+func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
+	authn, err := gatedAuthenticator(*cfg, tokens)
+	if err != nil {
+		return err
+	}
+
+	cfg.authenticator = authn
+	cfg.authorizer = identity.SelfAllowed{
+		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
+	}
+
+	return nil
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -779,6 +807,7 @@ func newServices(cfg settings) (services, error) {
 		updates:    updates,
 		secrets:    secrets,
 		workspaces: workspaces,
+		tokens:     nil,
 	}, nil
 }
 
@@ -1215,6 +1244,7 @@ func newServerHandler(
 		Schema:        schemaReporterOf(cfg.namespaceStore),
 		Principals:    principals,
 		Access:        grants,
+		Tokens:        deps.services.tokens,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -1285,6 +1315,23 @@ type accessStores interface {
 	principal.Store
 }
 
+// setDefaultAuthorizer sets the default authorizer of the store when no
+// option sets one.
+func setDefaultAuthorizer(cfg *settings) error {
+	if cfg.authorizer != nil {
+		return nil
+	}
+
+	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	if err != nil {
+		return err
+	}
+
+	cfg.authorizer = authz
+
+	return nil
+}
+
 // defaultAuthorizer returns an access.Authorizer over the store when it
 // keeps roles, grants and principals, else identity.AdminOnly. The
 // bootstrap admin tokens are administrators, so they hold every action
@@ -1338,6 +1385,54 @@ func newAccessService(cfg settings) (*access.Service, error) {
 	}
 
 	return svc, nil
+}
+
+// newTokenService builds the access token service (ADR 53) from the
+// namespace store, or returns nil when the store keeps no access tokens or
+// no principals. Every SQL adapter keeps both.
+func newTokenService(cfg settings) (*accesstoken.Service, error) {
+	store, ok := cfg.namespaceStore.(accesstoken.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
+	}
+
+	principals, ok := cfg.namespaceStore.(accesstoken.PrincipalReader)
+	if !ok {
+		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
+	}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access token service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// gatedAuthenticator returns the authenticator that every adapter and the
+// request log use: the configured authenticator first, so the bootstrap
+// admin tokens (ADR 6) never meet the failure budget, then the stored access
+// tokens when the store keeps them, behind a gate. The gate resolves a
+// token once for each request and slows the misses of secret-shaped values
+// from one source. It never refuses a valid token.
+//
+//nolint:ireturn // The adapters take the port.
+func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
+	if tokens == nil {
+		return cfg.authenticator, nil
+	}
+
+	gate, err := authgate.New(authgate.Config{
+		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authentication gate: %w", err)
+	}
+
+	return identity.Chain{cfg.authenticator, gate}, nil
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or
@@ -1552,6 +1647,17 @@ func debugRoute(pattern string) bool {
 	}
 }
 
+// remoteHost returns the remote address of r without the port: the source
+// that the authentication gate counts failures for.
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
 // subjectForRequest returns the subject of the signed-in principal, or false
 // when the request carries no valid access token. Lease and upload requests
 // carry no access token, so they log with no subject.
@@ -1608,6 +1714,7 @@ func withRequestLog(
 		w.Header()[requestIDHeader] = []string{id}
 
 		ctx := requestid.WithContext(r.Context(), id)
+		ctx = authgate.WithRequest(ctx, remoteHost(r))
 
 		r = r.WithContext(ctx)
 

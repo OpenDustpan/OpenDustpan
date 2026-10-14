@@ -36,7 +36,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Namespace:  "",
 		Subject:    p.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    p.TokenID,
 		Action:     string(action),
 		Object:     "",
 		Version:    "",

@@ -95,6 +95,10 @@ var families = map[identity.Action]Family{
 	identity.ActionServerManageRoles:      FamilyAdministration,
 	identity.ActionServerManageAccess:     FamilyAdministration,
 	identity.ActionServerCreateNamespace:  FamilyAdministration,
+	// The access tokens of other principals (ADR 53, decision 3).
+	identity.ActionServerReadTokens:          FamilyAdministration,
+	identity.ActionServerManageTokens:        FamilyAdministration,
+	identity.ActionServerManageServiceTokens: FamilyAdministration,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,
@@ -119,8 +123,9 @@ var families = map[identity.Action]Family{
 	identity.ActionUnitMove:               FamilyData,
 	identity.ActionUnitManageAccess:       FamilyData,
 
-	identity.ActionCallerRead: FamilySelf,
-	identity.ActionRoleRead:   FamilySelf,
+	identity.ActionCallerRead:     FamilySelf,
+	identity.ActionRoleRead:       FamilySelf,
+	identity.ActionTokenManageOwn: FamilySelf,
 }
 
 // FamilyOf returns the family of action, and false when the core does not

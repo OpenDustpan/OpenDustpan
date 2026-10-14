@@ -43,6 +43,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
 		Access:         nil,
+		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

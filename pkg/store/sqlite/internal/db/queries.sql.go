@@ -140,6 +140,45 @@ func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) erro
 	return err
 }
 
+const countAccessToken = `-- name: CountAccessToken :one
+SELECT COUNT(*) FROM access_tokens WHERE id = ?
+`
+
+func (q *Queries) CountAccessToken(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAccessToken, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAccessTokens = `-- name: CountAccessTokens :one
+SELECT COUNT(*) FROM access_tokens
+WHERE (CAST(?1 AS TEXT) = '' OR principal_id = ?1)
+  AND (CAST(?2 AS INTEGER) = 0
+    OR ((CAST(?2 AS INTEGER) = 1 OR CAST(?2 AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(?3 AS INTEGER)
+      AND (CAST(?2 AS INTEGER) = 1 OR expires_at_ms <= CAST(?4 AS INTEGER)))
+    OR (CAST(?2 AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(?3 AS INTEGER))))
+`
+
+type CountAccessTokensParams struct {
+	PrincipalID string
+	Status      int64
+	AtMs        int64
+	SoonMs      int64
+}
+
+func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAccessTokens,
+		arg.PrincipalID,
+		arg.Status,
+		arg.AtMs,
+		arg.SoonMs,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countAuditEntries = `-- name: CountAuditEntries :one
 SELECT COUNT(*)
 FROM audit_entries
@@ -260,6 +299,17 @@ func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfP
 	return count, err
 }
 
+const countLivePrincipal = `-- name: CountLivePrincipal :one
+SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLivePrincipal, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -316,6 +366,45 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createAccessToken = `-- name: CreateAccessToken :execrows
+
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
+SELECT ?1, p.id, ?2, ?3, ?4,
+  ?5, ?6, ?7
+FROM principals p
+WHERE p.id = ?8 AND p.deleted_at_ms IS NULL
+ON CONFLICT DO NOTHING
+`
+
+type CreateAccessTokenParams struct {
+	ID          string
+	Name        string
+	Kind        string
+	Digest      string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+	CreatedBy   string
+	PrincipalID string
+}
+
+// Access tokens (ADR 53).
+func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createAccessToken,
+		arg.ID,
+		arg.Name,
+		arg.Kind,
+		arg.Digest,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
+		arg.CreatedBy,
+		arg.PrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const createBackup = `-- name: CreateBackup :execrows
@@ -989,6 +1078,34 @@ func (q *Queries) EndMembershipsOfPrincipal(ctx context.Context, arg EndMembersh
 	return err
 }
 
+const endRotatedAccessToken = `-- name: EndRotatedAccessToken :execrows
+UPDATE access_tokens
+SET expires_at_ms = MIN(expires_at_ms, CAST(?1 AS INTEGER)),
+  replaced_by = CAST(?2 AS TEXT)
+WHERE id = ?3 AND revoked_at_ms IS NULL AND replaced_by IS NULL
+  AND expires_at_ms > ?4
+`
+
+type EndRotatedAccessTokenParams struct {
+	EndsAtMs   int64
+	ReplacedBy string
+	ID         string
+	NowMs      int64
+}
+
+func (q *Queries) EndRotatedAccessToken(ctx context.Context, arg EndRotatedAccessTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endRotatedAccessToken,
+		arg.EndsAtMs,
+		arg.ReplacedBy,
+		arg.ID,
+		arg.NowMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failRunningBackups = `-- name: FailRunningBackups :exec
 UPDATE backups
 SET state = 'failed', error = ?, ended_at_ms = ?
@@ -1122,6 +1239,89 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const getAccessToken = `-- name: GetAccessToken :one
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+FROM access_tokens WHERE id = ?
+`
+
+type GetAccessTokenRow struct {
+	ID           string
+	PrincipalID  string
+	Name         string
+	Kind         string
+	CreatedAtMs  int64
+	ExpiresAtMs  int64
+	LastUsedAtMs sql.NullInt64
+	RevokedAtMs  sql.NullInt64
+	ReplacedBy   sql.NullString
+	CreatedBy    string
+}
+
+func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessTokenRow, error) {
+	row := q.db.QueryRowContext(ctx, getAccessToken, id)
+	var i GetAccessTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Name,
+		&i.Kind,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.LastUsedAtMs,
+		&i.RevokedAtMs,
+		&i.ReplacedBy,
+		&i.CreatedBy,
+	)
+	return i, err
+}
+
+const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
+SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
+  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
+FROM access_tokens t
+JOIN principals p ON p.id = t.principal_id
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL
+`
+
+type GetAccessTokenByDigestRow struct {
+	ID            string
+	PrincipalID   string
+	Name          string
+	Kind          string
+	Digest        string
+	CreatedAtMs   int64
+	ExpiresAtMs   int64
+	LastUsedAtMs  sql.NullInt64
+	RevokedAtMs   sql.NullInt64
+	ReplacedBy    sql.NullString
+	CreatedBy     string
+	Subject       string
+	DisplayName   string
+	PrincipalKind string
+}
+
+func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
+	row := q.db.QueryRowContext(ctx, getAccessTokenByDigest, digest)
+	var i GetAccessTokenByDigestRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Name,
+		&i.Kind,
+		&i.Digest,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+		&i.LastUsedAtMs,
+		&i.RevokedAtMs,
+		&i.ReplacedBy,
+		&i.CreatedBy,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+	)
+	return i, err
 }
 
 const getBackup = `-- name: GetBackup :one
@@ -2426,6 +2626,88 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (sql.
 	var resource_count sql.NullInt64
 	err := row.Scan(&resource_count)
 	return resource_count, err
+}
+
+const listAccessTokens = `-- name: ListAccessTokens :many
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
+FROM access_tokens
+WHERE (CAST(?1 AS TEXT) = '' OR principal_id = ?1)
+  AND (CAST(?2 AS INTEGER) = 0
+    OR ((CAST(?2 AS INTEGER) = 1 OR CAST(?2 AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(?3 AS INTEGER)
+      AND (CAST(?2 AS INTEGER) = 1 OR expires_at_ms <= CAST(?4 AS INTEGER)))
+    OR (CAST(?2 AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(?3 AS INTEGER))))
+  AND (CAST(?5 AS INTEGER) = 0
+    OR created_at_ms < ?6
+    OR (created_at_ms = ?6 AND id < ?7))
+ORDER BY created_at_ms DESC, id DESC
+LIMIT ?8
+`
+
+type ListAccessTokensParams struct {
+	PrincipalID string
+	Status      int64
+	AtMs        int64
+	SoonMs      int64
+	HasAfter    int64
+	AfterMs     int64
+	AfterID     string
+	RowLimit    int64
+}
+
+type ListAccessTokensRow struct {
+	ID           string
+	PrincipalID  string
+	Name         string
+	Kind         string
+	CreatedAtMs  int64
+	ExpiresAtMs  int64
+	LastUsedAtMs sql.NullInt64
+	RevokedAtMs  sql.NullInt64
+	ReplacedBy   sql.NullString
+	CreatedBy    string
+}
+
+func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensParams) ([]ListAccessTokensRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAccessTokens,
+		arg.PrincipalID,
+		arg.Status,
+		arg.AtMs,
+		arg.SoonMs,
+		arg.HasAfter,
+		arg.AfterMs,
+		arg.AfterID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAccessTokensRow
+	for rows.Next() {
+		var i ListAccessTokensRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrincipalID,
+			&i.Name,
+			&i.Kind,
+			&i.CreatedAtMs,
+			&i.ExpiresAtMs,
+			&i.LastUsedAtMs,
+			&i.RevokedAtMs,
+			&i.ReplacedBy,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
@@ -3899,6 +4181,24 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected()
 }
 
+const revokeAccessToken = `-- name: RevokeAccessToken :execrows
+UPDATE access_tokens SET revoked_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2 AND revoked_at_ms IS NULL
+`
+
+type RevokeAccessTokenParams struct {
+	RevokedAtMs int64
+	ID          string
+}
+
+func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeAccessToken, arg.RevokedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const revokeGrant = `-- name: RevokeGrant :execrows
 UPDATE grants SET revoked_at_ms = ?, revoked_by = ? WHERE id = ? AND revoked_at_ms IS NULL
 `
@@ -4333,6 +4633,23 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchAccessToken = `-- name: TouchAccessToken :exec
+UPDATE access_tokens SET last_used_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2
+  AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(?3 AS INTEGER))
+`
+
+type TouchAccessTokenParams struct {
+	AtMs     int64
+	ID       string
+	BeforeMs int64
+}
+
+func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenParams) error {
+	_, err := q.db.ExecContext(ctx, touchAccessToken, arg.AtMs, arg.ID, arg.BeforeMs)
+	return err
 }
 
 const touchStack = `-- name: TouchStack :exec

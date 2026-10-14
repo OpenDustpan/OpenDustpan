@@ -4,6 +4,7 @@ package sqlite
 // each one a constant.
 const (
 	backupColCreatedAtMs = "created_at_ms"
+	backupColCreatedBy   = "created_by"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
 	backupColNamespace   = "namespace"
@@ -90,7 +91,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColStartedAtMs,
 				backupColEndedAtMs,
-				"created_by",
+				backupColCreatedBy,
 				"restored_from",
 				"journal_version",
 				"journal_closed",
@@ -289,6 +290,22 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
 		},
 		{
+			table: "access_tokens",
+			columns: []string{
+				"id",
+				"principal_id",
+				backupColName,
+				backupColKind,
+				"digest",
+				backupColCreatedAtMs,
+				"expires_at_ms",
+				"last_used_at_ms",
+				"revoked_at_ms",
+				"replaced_by",
+				backupColCreatedBy,
+			},
+		},
+		{
 			table: "roles",
 			columns: []string{
 				"id",
@@ -315,7 +332,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColNamespace,
 				"condition",
 				backupColCreatedAtMs,
-				"created_by",
+				backupColCreatedBy,
 				"revoked_at_ms",
 				"revoked_by",
 			},

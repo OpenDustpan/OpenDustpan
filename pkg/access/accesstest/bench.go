@@ -66,7 +66,7 @@ func Bench(b *testing.B, s BenchStore) {
 		b.Fatalf("authorizer: %v", err)
 	}
 
-	caller := identity.Principal{Subject: "user-00000", DisplayName: "", Admin: false}
+	caller := identity.Principal{Subject: "user-00000", DisplayName: "", Admin: false, TokenID: ""}
 
 	b.Run("check", func(b *testing.B) {
 		b.ReportAllocs()

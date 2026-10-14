@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
+	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -65,6 +66,22 @@ func TestAccessConformance(t *testing.T) {
 	}
 
 	accesstest.Run(t, func(t *testing.T) access.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestAccessTokenConformance runs the access token store suite.
+func TestAccessTokenConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
 		t.Helper()
 
 		return open(t, base)

@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
+	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -47,6 +48,17 @@ func TestAccessConformance(t *testing.T) {
 	t.Parallel()
 
 	accesstest.Run(t, func(t *testing.T) access.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestAccessTokenConformance runs the access token store suite.
+func TestAccessTokenConformance(t *testing.T) {
+	t.Parallel()
+
+	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
 		t.Helper()
 
 		return open(t)

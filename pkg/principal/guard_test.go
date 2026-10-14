@@ -53,7 +53,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 
 	ctx := t.Context()
 	e := testEntry()
-	caller := identity.Principal{Subject: "tester", DisplayName: "", Admin: false}
+	caller := identity.Principal{Subject: "tester", DisplayName: "", Admin: false, TokenID: ""}
 
 	p, err := svc.CreatePrincipal(
 		ctx,

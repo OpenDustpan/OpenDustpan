@@ -569,7 +569,10 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 		return fmt.Errorf("read principal %q: %w", principalID, err)
 	}
 
-	subjects, err := s.authz.subjectsOf(ctx, identity.Principal{Subject: p.Subject, DisplayName: "", Admin: false})
+	subjects, err := s.authz.subjectsOf(
+		ctx,
+		identity.Principal{Subject: p.Subject, DisplayName: "", Admin: false, TokenID: ""},
+	)
 	if err != nil {
 		return err
 	}

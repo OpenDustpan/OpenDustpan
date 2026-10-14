@@ -34,6 +34,7 @@ const pgMD5Len = 16
 const (
 	pgColArrival     = "arrival"
 	pgColCreatedAtMs = "created_at_ms"
+	pgColCreatedBy   = "created_by"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
@@ -53,6 +54,7 @@ const (
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
 	pgColUnitID      = "unit_id"
+	pgColPrincipalID = "principal_id"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -113,7 +115,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
-				"created_by", "restored_from", "journal_version", "journal_closed",
+				pgColCreatedBy, "restored_from", "journal_version", "journal_closed",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -251,8 +253,25 @@ func pgCopyIdentityTables() []pgCopyTable {
 		},
 		{
 			table:   "group_members",
-			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
-			orderBy: []string{"group_id", "principal_id", "added_at_ms"},
+			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
+			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
+		},
+		{
+			table: "access_tokens",
+			columns: []string{
+				"id",
+				pgColPrincipalID,
+				pgColName,
+				pgColKind,
+				"digest",
+				pgColCreatedAtMs,
+				"expires_at_ms",
+				"last_used_at_ms",
+				"revoked_at_ms",
+				"replaced_by",
+				pgColCreatedBy,
+			},
+			orderBy: []string{"id"},
 		},
 		{
 			table: "roles",
@@ -266,7 +285,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "grants",
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
-				pgColNamespace, "condition", pgColCreatedAtMs, "created_by", "revoked_at_ms", "revoked_by",
+				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
 			},
 			orderBy: []string{"id"},
 		},

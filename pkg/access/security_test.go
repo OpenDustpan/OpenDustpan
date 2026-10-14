@@ -425,3 +425,33 @@ func TestUpdateRoleNeedsTheActionsItRemoves(t *testing.T) {
 		t.Fatalf("remove an operator action as the bootstrap admin: %v", err)
 	}
 }
+
+// TestTokenActionsHaveTheirFamilies places the access token actions of ADR
+// 53: an account administrator manages the tokens of others, an operator
+// does not, and every signed-in principal manages its own.
+func TestTokenActionsHaveTheirFamilies(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acct := f.accountAdministrator(t, "tokens-admin")
+	ops := f.person(t, "ops")
+	plain := f.person(t, "plain")
+
+	f.grant(t, prn("ops"), access.RoleInstallationOperator, identity.ServerObject())
+
+	server := identity.ServerObject()
+	manage := []identity.Action{
+		identity.ActionServerReadTokens, identity.ActionServerManageTokens, identity.ActionServerManageServiceTokens,
+	}
+
+	for _, a := range manage {
+		if family, ok := access.FamilyOf(a); !ok || family != access.FamilyAdministration {
+			t.Errorf("family of %s = %q, %t; want administration", a, family, ok)
+		}
+
+		assertChecks(t, f.authz, acct, []check{{server, a, true}})
+		assertChecks(t, f.authz, ops, []check{{server, a, false}})
+	}
+
+	assertChecks(t, f.authz, plain, []check{{identity.CallerObject(), identity.ActionTokenManageOwn, true}})
+}
