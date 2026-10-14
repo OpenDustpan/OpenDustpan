@@ -40,7 +40,9 @@ package server
 //
 // GET /api/server/caller/grants answers the current grants of the caller,
 // paged: its own grants and the grants of its groups, with the group
-// named. It needs caller:read only, and writes no audit entry.
+// named. It needs caller:read only, and writes no audit entry. Each page
+// reads the groups of the caller at its request, and the memberships and
+// the grants as of the snapshot time of the first page (asOfMs).
 
 import (
 	"errors"

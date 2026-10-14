@@ -131,13 +131,20 @@ func (s *Service) Review(ctx context.Context, obj identity.Object, req ReviewReq
 		return ReviewPage{}, err
 	}
 
-	return s.reviewEntries(ctx, rs, reviewRead{grantAccess: grantAccess, obj: obj, q: q, boot: boot})
+	return s.reviewEntries(ctx, rs, reviewRead{
+		read: rs.ReviewGrants, grantAccess: grantAccess, obj: obj, q: q, boot: boot,
+	})
 }
 
-// reviewRead is one page read of an export: the object of the export, its
-// query with its scope, the count of bootstrap rows that the pages before
-// gave, and the roles that manage access.
+// reviewReader reads one page of grant rows of an export and, when the
+// query asks, their count.
+type reviewReader func(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error)
+
+// reviewRead is one page read of an export: the reader of its rows, the
+// object of the export, its query with its scope, the count of bootstrap
+// rows that the pages before gave, and the roles that manage access.
 type reviewRead struct {
+	read        reviewReader
 	grantAccess map[string]bool
 	obj         identity.Object
 	q           ReviewQuery
@@ -147,7 +154,7 @@ type reviewRead struct {
 // reviewEntries reads the page of r and returns it with the state of each
 // unit and who can grant access.
 func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRead) (ReviewPage, error) {
-	page, rows, err := s.reviewPage(ctx, rs, r.obj, r.q, r.boot)
+	page, rows, err := s.reviewPage(ctx, r.read, r.obj, r.q, r.boot)
 	if err != nil {
 		return ReviewPage{}, err
 	}
@@ -170,7 +177,7 @@ func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRea
 // rows that come after the bootstrap rows. The bootstrap rows come first,
 // inside the limit of a page.
 func (s *Service) reviewPage(
-	ctx context.Context, rs ReviewStore, obj identity.Object, q ReviewQuery, boot int,
+	ctx context.Context, read reviewReader, obj identity.Object, q ReviewQuery, boot int,
 ) (ReviewPage, []ReviewRow, error) {
 	var tokens []ReviewEntry
 	if q.Subject == "" {
@@ -184,7 +191,7 @@ func (s *Service) reviewPage(
 	first := q.After == (ReviewKey{ID: "", MemberID: "", AtMs: 0, MemberAtMs: 0}) && boot == 0
 	q.Limit, q.Count = room+1, first
 
-	rows, total, err := rs.ReviewGrants(ctx, q)
+	rows, total, err := read(ctx, q)
 	if err != nil {
 		return ReviewPage{}, nil, fmt.Errorf("read access review: %w", err)
 	}

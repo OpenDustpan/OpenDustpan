@@ -176,6 +176,12 @@ type CallerGrantsRequest struct {
 // Row.SubjectName. It is a snapshot at the time of the first page, in the
 // order of an access-review export, with the total on the first page only.
 //
+// Each page reads the groups of p at the time of its request, and keeps a
+// grant of a group only while the membership of p is current at the time
+// of the snapshot. So a page after the first can leave out the grants of a
+// group that p joined or left since the first page, and a grant revoked
+// since. The store reads only the grants of p and its groups (ADR 52).
+//
 // A caller with no principal record, for example a bootstrap admin token
 // (ADR 6), holds no grant: its page is empty. Access answers what such a
 // caller can do. A bad request returns ErrInvalid, and a store that reads
@@ -191,11 +197,15 @@ func (s *Service) CallerGrants(ctx context.Context, p identity.Principal, req Ca
 		return ReviewPage{}, err
 	}
 
-	own := ""
+	own, principalID, groups := "", "", []string{}
 
 	for _, subject := range subjects {
-		if subject.Kind == SubjectPrincipal {
-			own = subject.String()
+		switch subject.Kind {
+		case SubjectPrincipal:
+			own, principalID = subject.String(), subject.ID
+		case SubjectGroup:
+			groups = append(groups, subject.ID)
+		default:
 		}
 	}
 
@@ -218,9 +228,15 @@ func (s *Service) CallerGrants(ctx context.Context, p identity.Principal, req Ca
 		return ReviewPage{}, err
 	}
 
-	q.Scope.All = true
+	// The rows read only the grants of the caller: none is on a container
+	// of another object, so the scope names no object.
+	read := func(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error) {
+		return rs.CallerGrants(ctx, CallerGrantsQuery{
+			Groups: groups, Principal: principalID, After: q.After, AsOfMs: q.AsOfMs, Limit: q.Limit, Count: q.Count,
+		})
+	}
 
-	return s.reviewEntries(ctx, rs, reviewRead{grantAccess: grantAccess, obj: obj, q: q, boot: 0})
+	return s.reviewEntries(ctx, rs, reviewRead{read: read, grantAccess: grantAccess, obj: obj, q: q, boot: 0})
 }
 
 // noGrants returns the page of a caller with no grant at the time of the

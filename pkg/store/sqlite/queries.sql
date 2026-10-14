@@ -1005,6 +1005,64 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
   ELSE g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END;
 
+-- name: CallerGrants :many
+-- One page of the current grants of a caller (ADR 52): the grants of the
+-- principal, and the grants of each of its groups through its membership
+-- at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+-- follows the grants of the caller, not the grants of the installation. A
+-- JSON array carries the groups, so the query stays fixed. CROSS JOIN
+-- keeps the holders as the outer loop.
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(sqlc.arg('principal') AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(sqlc.arg('groups') AS TEXT))
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)) AS member_count
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND (g.created_at_ms > CAST(sqlc.arg('after_at_ms') AS INTEGER)
+    OR (g.created_at_ms = CAST(sqlc.arg('after_at_ms') AS INTEGER)
+      AND (g.id > CAST(sqlc.arg('after_id') AS TEXT)
+        OR (g.id = CAST(sqlc.arg('after_id') AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(sqlc.arg('after_member_id') AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(sqlc.arg('principal') AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(sqlc.arg('groups') AS TEXT))
+)
+SELECT COUNT(*)
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER);
+
 -- name: ReviewStacksByIDs :many
 -- The stacks of the unit grants of an export, deleted ones included (ADR 47):
 -- an export shows a grant on a deleted unit, with its name at the time of
