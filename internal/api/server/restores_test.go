@@ -174,12 +174,19 @@ type getRestoreDoc struct {
 	Manifest    *backup.Manifest `json:"manifest"`
 }
 
+// restorePollTimeout bounds the wait for a restore to leave checking and
+// applying. A restore takes a pre-backup, stages the backup with migrations and
+// swaps the data. Under full-suite CPU load that takes longer than pollTimeout,
+// which the backup tests use. The wait still ends, so a restore that never
+// moves fails the test.
+const restorePollTimeout = 2 * time.Minute
+
 // waitRestoreState polls one restore until it reaches want or the wait times
 // out, failing the test otherwise.
 func waitRestoreState(t *testing.T, handler *apiserver.Handler, id, want string) getRestoreDoc {
 	t.Helper()
 
-	deadline := time.Now().Add(pollTimeout)
+	deadline := time.Now().Add(restorePollTimeout)
 
 	for time.Now().Before(deadline) {
 		status, body := serveRestore(t, handler, http.MethodGet, "/api/server/restores/"+id, "")
