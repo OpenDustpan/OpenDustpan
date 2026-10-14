@@ -64,6 +64,18 @@ _Avoid_: Origin, legacy backend
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
+**Setting**:
+One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
+_Avoid_: Option, parameter, config value
+
+**Layer**:
+A source of the value of a setting: `flag`, `env`, `file` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
+_Avoid_: Level, tier
+
+**Sensitive setting**:
+A setting that holds a secret, a credential or a URL, for example the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
+_Avoid_: Secret setting, private setting
+
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot

@@ -1,36 +1,88 @@
 # Configuration
 
-`opendustpan serve` reads each setting from a flag or from an environment
-variable. A flag wins over its variable. `opendustpan serve --help` prints the
-same list.
+`opendustpan serve` reads each setting from a flag, from an environment
+variable or from the configuration file. A flag wins over its variable, and
+a variable wins over the file. `opendustpan serve --help` prints the same
+list.
 
 ## Server settings
 
-| Flag | Environment | Default |
-| --- | --- | --- |
-| `--database` | `DUSTPAN_DATABASE` | `sqlite:dustpan.db` (or `postgres://...`) |
-| `--region` | `DUSTPAN_REGION` | `local` |
-| `--listen` | `DUSTPAN_LISTEN` | `:8080` |
-| `--console-dir` | `DUSTPAN_CONSOLE_DIR` | (none) |
-| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | (none) |
-| `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
-| `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
-| `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
-| `--log-level` | `DUSTPAN_LOG_LEVEL` | `info` (or `debug`, `warn`, `error`) |
-| `--log-format` | `DUSTPAN_LOG_FORMAT` | `json` (or `text`) |
-| `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
-| `--blob-store` | `DUSTPAN_BLOB_STORE` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
-| `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | (none: AWS) |
-| `--s3-region` | `DUSTPAN_S3_REGION` | `us-east-1` |
-| `--backup-target` | `DUSTPAN_BACKUP_TARGET` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
-| `--key-encryption-key-file` | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | `dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL |
-| `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
-| `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `0`: 32 MiB, the largest Pulumi checkpoint |
-| `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
-| `--disable-pulumi-journaling` | `DUSTPAN_DISABLE_PULUMI_JOURNALING` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
-| `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `0`: 32 MiB, the largest batch of Pulumi secrets |
-| `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `0`: 32 MiB, the largest OpenTofu state |
-| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| Flag | Environment | File key | Default |
+| --- | --- | --- | --- |
+| `--config` | `DUSTPAN_CONFIG` | (none) | (none) |
+| `--database` | `DUSTPAN_DATABASE` | `database` | `sqlite:dustpan.db` (or `postgres://...`) |
+| `--region` | `DUSTPAN_REGION` | `region` | `local` |
+| `--listen` | `DUSTPAN_LISTEN` | `listen` | `:8080` |
+| `--console-dir` | `DUSTPAN_CONSOLE_DIR` | `console-dir` | (none) |
+| `--allowed-origins` | `DUSTPAN_ALLOWED_ORIGINS` | `allowed-origins` | (none) |
+| `--tls-cert` | `DUSTPAN_TLS_CERT` | `tls-cert` | (none, with `--tls-key`) |
+| `--tls-key` | `DUSTPAN_TLS_KEY` | `tls-key` | (none, with `--tls-cert`) |
+| `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
+| `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
+| `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
+| `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blob-dir` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
+| `--blob-store` | `DUSTPAN_BLOB_STORE` | `blob-store` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
+| `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | `s3-endpoint` | (none: AWS) |
+| `--s3-region` | `DUSTPAN_S3_REGION` | `s3-region` | `us-east-1` |
+| `--backup-target` | `DUSTPAN_BACKUP_TARGET` | `backup-target` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
+| `--key-encryption-key-file` | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | `key-encryption-key-file` | `dustpan.key` next to the SQLite file, or `./dustpan.key` for PostgreSQL |
+| `--generate-key-encryption-key` | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | `generate-key-encryption-key` | (none: ask on a terminal, else refuse). Set `true` to make the key file with no prompt |
+| `--max-checkpoint-bytes` | `DUSTPAN_MAX_CHECKPOINT_BYTES` | `max-checkpoint-bytes` | `0`: 32 MiB, the largest Pulumi checkpoint |
+| `--checkpoint-delta-cutoff` | `DUSTPAN_CHECKPOINT_DELTA_CUTOFF` | `checkpoint-delta-cutoff` | `1048576` (1 MiB). `0` turns delta checkpoint uploads off |
+| `--disable-pulumi-journaling` | `DUSTPAN_DISABLE_PULUMI_JOURNALING` | `disable-pulumi-journaling` | (none: journaling on). Set `true` to make the Pulumi CLI save checkpoints |
+| `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
+| `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
+| `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+
+## Configuration file
+
+`--config` (`DUSTPAN_CONFIG`) names one YAML file. Each key in the file is
+the file key of a setting in the table above, or `admin-token-file` for
+`DUSTPAN_ADMIN_TOKEN_FILE`. A secret is never in the file: the file can
+only name the file that holds it.
+
+The server refuses a file that:
+
+- is larger than 64 KiB,
+- has an anchor or an alias,
+- has a key two times,
+- has a key that no setting declares,
+- has a value of the wrong type.
+
+A bool is only `true` or `false`. A string setting takes only a string, so
+`no` stays the string `no`. An int setting takes only a decimal integer of
+0 or more. A refused file stops the start. The error names the key and the
+rule, never the value.
+
+At start, the server writes one INFO line for each setting, with its key,
+its value and its layer: `flag`, `env`, `file` or `default`. When more than
+one of `flag`, `env` and `file` sets a key, the server writes one WARN line
+for that key, also when the values are equal. For a sensitive setting, a
+line shows only `set` or `not set`, never the value. The sensitive settings
+are the database URL, each other URL and each secret.
+
+This example uses the JSON shape with `#` comments. That text is valid
+YAML.
+
+```yaml
+# opendustpan serve --config /etc/opendustpan/config.yaml
+{
+  # The region that this server is authoritative for.
+  "region": "eu-west",
+  "listen": ":8443",
+  "public-url": "https://dustpan.example",
+  "tls-cert": "/etc/opendustpan/tls.crt",
+  "tls-key": "/etc/opendustpan/tls.key",
+  "log-level": "info",
+  "log-format": "json",
+  # A bool is only true or false.
+  "disable-pulumi-journaling": false,
+  # An int is a decimal integer. 0 means the built-in limit.
+  "max-state-bytes": 0,
+  # The file holds the name of the token file, never a token.
+  "admin-token-file": "/run/secrets/dustpan-admin-tokens"
+}
+```
 
 ## Secrets
 
