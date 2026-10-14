@@ -72,6 +72,25 @@ type ReviewQuery struct {
 	Count     bool
 }
 
+// CallerGrantsQuery is one page of the current grants of a caller as a
+// store reads them: the grants of the principal Principal, and the grants
+// of each group in Groups through the membership of the principal.
+//
+// The page is a snapshot at AsOfMs of the grants that are not revoked: a
+// grant made after AsOfMs is not in it, and neither is a grant revoked
+// since. A grant of a group is in it only while the membership of the
+// principal is current at AsOfMs. The page holds at most Limit rows after
+// the key After, in the order of ReviewKey. Count asks for the count of
+// every row of the query as well.
+type CallerGrantsQuery struct {
+	Groups    []string
+	Principal string
+	After     ReviewKey
+	AsOfMs    int64
+	Limit     int
+	Count     bool
+}
+
 // ReviewRow is one row of an access-review export: a grant, how it ended,
 // the name of its subject and, for a row through a group, the membership.
 type ReviewRow struct {
@@ -122,6 +141,14 @@ type ReviewStore interface {
 	// true, the count of every row of q without its page. It reads the
 	// page and the count from one snapshot of the store.
 	ReviewGrants(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error)
+	// CallerGrants returns one page of the rows of q and, when q.Count is
+	// true, the count of every row of q, from one snapshot of the store,
+	// as ReviewGrants does. It reads the grants of each holder of q from
+	// the index of the holders of current grants, so its cost follows the
+	// grants of the caller, not the grants of the installation. A row of a
+	// group grant holds the membership in Via, and the member count of the
+	// group at q.AsOfMs.
+	CallerGrants(ctx context.Context, q CallerGrantsQuery) ([]ReviewRow, int64, error)
 	// ReviewUnits returns the unit of each stable ID in ids that the store
 	// keeps, a deleted one included. An ID with no unit (a purged one, or an
 	// ID of no unit) is not in the map.

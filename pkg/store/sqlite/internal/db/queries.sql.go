@@ -155,6 +155,133 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+const callerGrants = `-- name: CallerGrants :many
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(?2 AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(?8 AS TEXT))
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(?1 AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)) AS member_count
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(?2 AS TEXT)
+  AND m.added_at_ms <= CAST(?1 AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(?1 AS INTEGER)
+  AND (g.created_at_ms > CAST(?3 AS INTEGER)
+    OR (g.created_at_ms = CAST(?3 AS INTEGER)
+      AND (g.id > CAST(?4 AS TEXT)
+        OR (g.id = CAST(?4 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?5 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?5 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?6 AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT ?7
+`
+
+type CallerGrantsParams struct {
+	AsOfMs          int64
+	Principal       string
+	AfterAtMs       int64
+	AfterID         string
+	AfterMemberAtMs int64
+	AfterMemberID   string
+	RowLimit        int64
+	Groups          string
+}
+
+type CallerGrantsRow struct {
+	ID                string
+	Subject           string
+	SubjectKind       string
+	SubjectID         string
+	Role              string
+	Object            string
+	Target            string
+	Condition         sql.NullString
+	CreatedAtMs       int64
+	CreatedBy         string
+	RevokedAtMs       sql.NullInt64
+	RevokedBy         string
+	MemberAddedAtMs   int64
+	MemberRemovedAtMs sql.NullInt64
+	MemberID          string
+	MemberSubject     string
+	SubjectName       string
+	MemberCount       int64
+}
+
+// One page of the current grants of a caller (ADR 52): the grants of the
+// principal, and the grants of each of its groups through its membership
+// at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+// follows the grants of the caller, not the grants of the installation. A
+// JSON array carries the groups, so the query stays fixed. CROSS JOIN
+// keeps the holders as the outer loop.
+func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]CallerGrantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, callerGrants,
+		arg.AsOfMs,
+		arg.Principal,
+		arg.AfterAtMs,
+		arg.AfterID,
+		arg.AfterMemberAtMs,
+		arg.AfterMemberID,
+		arg.RowLimit,
+		arg.Groups,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CallerGrantsRow
+	for rows.Next() {
+		var i CallerGrantsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+			&i.RevokedAtMs,
+			&i.RevokedBy,
+			&i.MemberAddedAtMs,
+			&i.MemberRemovedAtMs,
+			&i.MemberID,
+			&i.MemberSubject,
+			&i.SubjectName,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -217,6 +344,35 @@ WHERE namespace = ?
 
 func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAuditEntries, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countCallerGrants = `-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(?1 AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(?3 AS TEXT))
+)
+SELECT COUNT(*)
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(?1 AS TEXT)
+  AND m.added_at_ms <= CAST(?2 AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?2 AS INTEGER)
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(?2 AS INTEGER)
+`
+
+type CountCallerGrantsParams struct {
+	Principal string
+	AsOfMs    int64
+	Groups    string
+}
+
+func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countCallerGrants, arg.Principal, arg.AsOfMs, arg.Groups)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

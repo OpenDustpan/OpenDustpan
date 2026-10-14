@@ -2249,6 +2249,23 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	principaltest.Bench(b, s)
 }
 
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchCallerGrants(b, s)
+}
+
 // BenchmarkAuthorizer measures one decision and one list-objects at the
 // scale of accesstest.Bench.
 func BenchmarkAuthorizer(b *testing.B) {
