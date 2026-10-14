@@ -279,6 +279,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
+				"created_by",
 			},
 			orderBy: []string{"id"},
 		},

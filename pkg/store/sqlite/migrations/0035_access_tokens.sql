@@ -4,27 +4,29 @@
 -- service. expires_at_ms is the end of the token: a rotation moves it to the
 -- end time of the old token and sets replaced_by. last_used_at_ms is NULL
 -- until a request uses the token. revoked_at_ms is set by a revoke.
+-- created_by is the subject of the caller that made the token: a principal
+-- subject, or admin for a bootstrap admin token.
 --
 -- Nothing is erased: a revoked or expired token keeps its row for the
 -- history. The rows carry no fence: they describe the installation, not one
--- namespace. The ID indexes use the C collation, so the keyset reads compare
--- bytes as SQLite does.
+-- namespace.
 CREATE TABLE access_tokens (
-    id              TEXT   NOT NULL PRIMARY KEY,
-    principal_id    TEXT   NOT NULL REFERENCES principals (id),
-    name            TEXT   NOT NULL,
-    kind            TEXT   NOT NULL,
-    digest          TEXT   NOT NULL,
-    created_at_ms   BIGINT NOT NULL,
-    expires_at_ms   BIGINT NOT NULL,
-    last_used_at_ms BIGINT,
-    revoked_at_ms   BIGINT,
-    replaced_by     TEXT
-);
+    id              TEXT    NOT NULL PRIMARY KEY,
+    principal_id    TEXT    NOT NULL REFERENCES principals (id),
+    name            TEXT    NOT NULL,
+    kind            TEXT    NOT NULL,
+    digest          TEXT    NOT NULL,
+    created_at_ms   INTEGER NOT NULL,
+    expires_at_ms   INTEGER NOT NULL,
+    last_used_at_ms INTEGER,
+    revoked_at_ms   INTEGER,
+    replaced_by     TEXT,
+    created_by      TEXT    NOT NULL DEFAULT ''
+) STRICT;
 
 CREATE UNIQUE INDEX access_tokens_digest ON access_tokens (digest);
 
 -- The lists read the tokens newest first, of every principal or of one.
-CREATE INDEX access_tokens_created ON access_tokens (created_at_ms DESC, id COLLATE "C" DESC);
+CREATE INDEX access_tokens_created ON access_tokens (created_at_ms DESC, id DESC);
 
-CREATE INDEX access_tokens_principal ON access_tokens (principal_id, created_at_ms DESC, id COLLATE "C" DESC);
+CREATE INDEX access_tokens_principal ON access_tokens (principal_id, created_at_ms DESC, id DESC);

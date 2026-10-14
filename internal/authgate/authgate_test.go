@@ -13,7 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// countingAuthenticator accepts the token "good" and counts its lookups.
+// countingAuthenticator accepts the token "badgood" and counts its lookups.
 type countingAuthenticator struct {
 	lookups atomic.Int64
 }
@@ -21,14 +21,14 @@ type countingAuthenticator struct {
 func (c *countingAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
 	c.lookups.Add(1)
 
-	if token != "good" {
+	if token != "badgood" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
 	return identity.Principal{Subject: "ci", DisplayName: "CI", Admin: false, TokenID: "tok-1"}, nil
 }
 
-// clock is a settable test clock.
+// clock is a settable test clock for the budget.
 type clock struct {
 	now time.Time
 	mu  sync.Mutex
@@ -52,16 +52,22 @@ func newClock() *clock {
 	return &clock{now: time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
 }
 
-// chargeBad charges the misses of tokens that start with "bad", as the
-// server charges the misses of secret-shaped values.
+// chargeBad charges the lookups of tokens that start with "bad", as the
+// server charges secret-shaped values. "badgood" is the valid token.
 func chargeBad(token string) bool { return strings.HasPrefix(token, "bad") }
 
-func newGate(t *testing.T, next identity.Authenticator, c *clock, maxSources int) *authgate.Gate {
+type gateOptions struct {
+	penalty    time.Duration
+	maxWaiting int
+	maxSources int
+}
+
+func newGate(t *testing.T, next identity.Authenticator, c *clock, o gateOptions) *authgate.Gate {
 	t.Helper()
 
 	g, err := authgate.New(authgate.Config{
 		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Burst: 3, Refill: time.Second,
-		Penalty: time.Millisecond, MaxSources: maxSources,
+		Penalty: o.penalty, MaxWaiting: o.maxWaiting, MaxSources: o.maxSources,
 	})
 	if err != nil {
 		t.Fatalf("new gate: %v", err)
@@ -70,75 +76,161 @@ func newGate(t *testing.T, next identity.Authenticator, c *clock, maxSources int
 	return g
 }
 
-func attempt(t *testing.T, g *authgate.Gate, source, token string) error {
-	t.Helper()
-
-	_, err := g.AuthenticateToken(authgate.WithRequest(t.Context(), source), token)
+func attempt(ctx context.Context, g *authgate.Gate, source, token string) error {
+	_, err := g.AuthenticateToken(authgate.WithRequest(ctx, source), token)
 
 	return err
+}
+
+// canceled returns a context that is already done: a request over the
+// budget then ends its wait at once, with ErrRateLimited and no lookup,
+// while a request within the budget still goes to the store.
+func canceled(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	return ctx
+}
+
+// spend makes three misses from source, the whole burst.
+func spend(t *testing.T, g *authgate.Gate, source string) {
+	t.Helper()
+
+	for i := range 3 {
+		if err := attempt(t.Context(), g, source, "bad"); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Fatalf("miss %d from %s: err = %v, want ErrUnauthenticated", i+1, source, err)
+		}
+	}
+}
+
+// overBudget reports whether source is over its budget: its request waits,
+// so with a done context it ends with ErrRateLimited.
+func overBudget(t *testing.T, g *authgate.Gate, source string) bool {
+	t.Helper()
+
+	return errors.Is(attempt(canceled(t), g, source, "bad"), identity.ErrRateLimited)
 }
 
 func TestNewNeedsNext(t *testing.T) {
 	t.Parallel()
 
 	_, err := authgate.New(authgate.Config{
-		Next: nil, Charge: nil, Logger: nil, Now: nil, Burst: 0, Refill: 0, Penalty: 0, MaxSources: 0,
+		Next: nil, Charge: nil, Logger: nil, Now: nil, Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0,
+		MaxSources: 0,
 	})
 	if !errors.Is(err, authgate.ErrMissingNext) {
 		t.Fatalf("err = %v, want ErrMissingNext", err)
 	}
 }
 
-func TestLimitsMissesButNeverAValidToken(t *testing.T) {
+func TestOverTheBudgetEveryRequestWaitsBeforeTheStore(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
 	c := newClock()
-	g := newGate(t, next, c, 0)
+	g := newGate(t, next, c, gateOptions{penalty: 20 * time.Millisecond, maxWaiting: 4, maxSources: 0})
 
-	for i := range 3 {
-		if err := attempt(t, g, "192.0.2.1", "bad"); !errors.Is(err, identity.ErrUnauthenticated) ||
-			errors.Is(err, authgate.ErrLimited) {
-			t.Fatalf("miss %d: err = %v, want a plain ErrUnauthenticated", i+1, err)
-		}
+	spend(t, g, "192.0.2.1")
+
+	// A valid token waits too, so the time of the answer tells nothing, and
+	// it still passes.
+	start := time.Now()
+
+	if err := attempt(t.Context(), g, "192.0.2.1", "badgood"); err != nil {
+		t.Fatalf("valid token over the budget: %v", err)
 	}
 
-	if err := attempt(t, g, "192.0.2.1", "bad"); !errors.Is(err, authgate.ErrLimited) {
-		t.Fatalf("miss after the burst: err = %v, want ErrLimited", err)
+	if waited := time.Since(start); waited < 20*time.Millisecond {
+		t.Fatalf("valid token over the budget answered after %s, want the penalty of 20ms first", waited)
 	}
 
-	if !errors.Is(authgate.ErrLimited, identity.ErrUnauthenticated) {
-		t.Fatal("ErrLimited does not wrap ErrUnauthenticated, so adapters would not answer 401")
+	// A miss over the budget waits and answers the plain 401.
+	if err := attempt(t.Context(), g, "192.0.2.1", "bad"); !errors.Is(err, identity.ErrUnauthenticated) ||
+		errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("miss over the budget: err = %v, want a plain ErrUnauthenticated", err)
 	}
 
-	// A valid token from the same address passes: the budget never refuses
-	// it, so an attacker behind a shared address locks out nobody.
-	if err := attempt(t, g, "192.0.2.1", "good"); err != nil {
-		t.Fatalf("valid token from a limited address: %v", err)
+	// A client that goes away during the wait causes no store read.
+	before := next.lookups.Load()
+
+	if !overBudget(t, g, "192.0.2.1") || next.lookups.Load() != before {
+		t.Fatal("a request whose client went away during the wait reached the store")
 	}
 
-	// One refill period gives one miss back.
+	// Another source keeps its budget, and one refill period gives one
+	// request back.
+	if overBudget(t, g, "192.0.2.2") {
+		t.Fatal("another source was over the budget")
+	}
+
 	c.Advance(time.Second)
 
-	if err := attempt(t, g, "192.0.2.1", "bad"); errors.Is(err, authgate.ErrLimited) {
-		t.Fatalf("miss after one refill: err = %v, want a plain ErrUnauthenticated", err)
+	if overBudget(t, g, "192.0.2.1") {
+		t.Fatal("the source was over the budget after one refill")
 	}
 }
 
-func TestOnlyChargedMissesUseTheBudget(t *testing.T) {
+func TestWaitingCapAnswers429WithNoStoreRead(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
-	g := newGate(t, next, newClock(), 0)
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 1, maxSources: 0})
 
-	for i := range 10 {
-		if err := attempt(t, g, "192.0.2.1", "other"); errors.Is(err, authgate.ErrLimited) {
-			t.Fatalf("uncharged miss %d was limited", i+1)
+	spend(t, g, "192.0.2.1")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+
+	go func() { done <- attempt(ctx, g, "192.0.2.1", "badgood") }()
+
+	// The first request holds the one waiting place. A second one gets
+	// ErrLimited at once, with no store read.
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		before := next.lookups.Load()
+
+		err := attempt(canceled(t), g, "192.0.2.1", "badgood")
+		if errors.Is(err, authgate.ErrLimited) {
+			if next.lookups.Load() != before {
+				t.Fatal("a request over the waiting cap reached the store")
+			}
+
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("no request over the waiting cap after 5s: last err = %v", err)
 		}
 	}
 
-	if err := attempt(t, g, "192.0.2.1", "bad"); errors.Is(err, authgate.ErrLimited) {
-		t.Fatal("the first charged miss was limited after uncharged misses")
+	if !errors.Is(authgate.ErrLimited, identity.ErrRateLimited) {
+		t.Fatal("ErrLimited does not wrap ErrRateLimited, so adapters would not answer 429")
+	}
+
+	cancel()
+
+	if err := <-done; !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("waiting request after its client went away: err = %v, want ErrRateLimited", err)
+	}
+}
+
+func TestOnlyChargedLookupsUseTheBudget(t *testing.T) {
+	t.Parallel()
+
+	next := &countingAuthenticator{lookups: atomic.Int64{}}
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 0, maxSources: 0})
+
+	for i := range 10 {
+		if err := attempt(canceled(t), g, "192.0.2.1", "other"); errors.Is(err, identity.ErrRateLimited) {
+			t.Fatalf("uncharged miss %d waited", i+1)
+		}
+	}
+
+	if overBudget(t, g, "192.0.2.1") {
+		t.Fatal("uncharged misses used the budget")
 	}
 }
 
@@ -146,24 +238,24 @@ func TestIPv6SourcesShareTheirSlash64(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
-	g := newGate(t, next, newClock(), 0)
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 0, maxSources: 0})
 
 	for _, source := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2", "2001:db8:1:2:ffff::3"} {
-		if err := attempt(t, g, source, "bad"); errors.Is(err, authgate.ErrLimited) {
-			t.Fatalf("miss from %s was limited inside the burst", source)
+		if err := attempt(t.Context(), g, source, "bad"); errors.Is(err, identity.ErrRateLimited) {
+			t.Fatalf("miss from %s waited inside the burst", source)
 		}
 	}
 
-	if err := attempt(t, g, "2001:db8:1:2::4", "bad"); !errors.Is(err, authgate.ErrLimited) {
-		t.Fatalf("fourth miss from the same /64: err = %v, want ErrLimited", err)
+	if !overBudget(t, g, "2001:db8:1:2::4") {
+		t.Fatal("the /64 was not over the budget after three misses")
 	}
 
-	if err := attempt(t, g, "2001:db8:1:3::1", "bad"); errors.Is(err, authgate.ErrLimited) {
-		t.Fatal("a miss from another /64 was limited")
+	if overBudget(t, g, "2001:db8:1:3::1") {
+		t.Fatal("another /64 was over the budget")
 	}
 
-	if err := attempt(t, g, "::ffff:192.0.2.9", "bad"); errors.Is(err, authgate.ErrLimited) {
-		t.Fatal("a miss from a mapped IPv4 address was limited")
+	if overBudget(t, g, "::ffff:192.0.2.9") {
+		t.Fatal("a mapped IPv4 address was over the budget")
 	}
 }
 
@@ -171,11 +263,11 @@ func TestMemoResolvesOncePerRequest(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
-	g := newGate(t, next, newClock(), 0)
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 0, maxSources: 0})
 	ctx := authgate.WithRequest(t.Context(), "192.0.2.1")
 
 	for range 3 {
-		p, err := g.AuthenticateToken(ctx, "good")
+		p, err := g.AuthenticateToken(ctx, "badgood")
 		if err != nil || p.TokenID != "tok-1" {
 			t.Fatalf("authenticate = %+v, %v", p, err)
 		}
@@ -184,27 +276,17 @@ func TestMemoResolvesOncePerRequest(t *testing.T) {
 	if got := next.lookups.Load(); got != 1 {
 		t.Fatalf("lookups = %d, want 1", got)
 	}
-
-	for range 2 {
-		if _, err := g.AuthenticateToken(ctx, "bad"); !errors.Is(err, identity.ErrUnauthenticated) {
-			t.Fatalf("bad token: err = %v", err)
-		}
-	}
-
-	if got := next.lookups.Load(); got != 2 {
-		t.Fatalf("lookups = %d, want 2", got)
-	}
 }
 
 func TestNoRequestStatePassesThrough(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
-	g := newGate(t, next, newClock(), 0)
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 0, maxSources: 0})
 
 	for range 5 {
-		if _, err := g.AuthenticateToken(t.Context(), "bad"); errors.Is(err, authgate.ErrLimited) {
-			t.Fatal("a context without request state was limited")
+		if _, err := g.AuthenticateToken(canceled(t), "bad"); errors.Is(err, identity.ErrRateLimited) {
+			t.Fatal("a context without request state waited")
 		}
 	}
 
@@ -213,31 +295,21 @@ func TestNoRequestStatePassesThrough(t *testing.T) {
 	}
 }
 
-func TestSourcesStayBounded(t *testing.T) {
+func TestForgetsTheSourceSeenLeastRecently(t *testing.T) {
 	t.Parallel()
 
 	next := &countingAuthenticator{lookups: atomic.Int64{}}
-	g := newGate(t, next, newClock(), 2)
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 0, maxSources: 2})
 
-	// Three sources spend their budget. The gate keeps two at most, so it
-	// forgets one, and that source gets a fresh budget.
-	for _, source := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
-		for range 3 {
-			if err := attempt(t, g, source, "bad"); err == nil {
-				t.Fatal("a bad token authenticated")
-			}
-		}
+	spend(t, g, "192.0.2.1")
+	spend(t, g, "192.0.2.2")
+
+	// A third source pushes out 192.0.2.1, the one seen least recently.
+	if err := attempt(t.Context(), g, "192.0.2.3", "bad"); errors.Is(err, identity.ErrRateLimited) {
+		t.Fatal("a new source waited")
 	}
 
-	fresh := 0
-
-	for _, source := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
-		if err := attempt(t, g, source, "bad"); !errors.Is(err, authgate.ErrLimited) {
-			fresh++
-		}
-	}
-
-	if fresh == 0 {
-		t.Fatal("the gate kept every source past MaxSources")
+	if overBudget(t, g, "192.0.2.1") {
+		t.Fatal("the source seen least recently was kept")
 	}
 }

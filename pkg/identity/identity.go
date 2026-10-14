@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -22,6 +23,10 @@ import (
 var (
 	// ErrUnauthenticated reports a missing, malformed or unknown credential.
 	ErrUnauthenticated = errors.New("unauthenticated")
+	// ErrRateLimited reports a request that the server refuses before any
+	// credential check, because its source failed too many sign-ins. The
+	// client can try again later. Adapters answer 429.
+	ErrRateLimited = errors.New("too many failed sign-ins from this address")
 	// ErrDenied reports an authenticated principal without permission.
 	ErrDenied = errors.New("permission denied")
 	// ErrWeakToken reports a configured token that is too short to be safe.
@@ -451,6 +456,27 @@ func (c Chain) AuthenticateToken(ctx context.Context, token string) (Principal, 
 	}
 
 	return Principal{}, last
+}
+
+// SelfAllowed allows each of Actions on CallerObject to every authenticated
+// principal, with no grant, and asks Next for every other check. It carries
+// the self actions until the grants of ADR 52 can, for example
+// token:manage-own (ADR 53). The domain service of each action checks
+// whether the caller can use it, such as the kind of the principal.
+type SelfAllowed struct {
+	Next    Authorizer
+	Actions []Action
+}
+
+var _ Authorizer = SelfAllowed{Next: nil, Actions: nil}
+
+// Authorize allows a self action on the caller, and asks Next otherwise.
+func (s SelfAllowed) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
+	if obj.IsCaller() && slices.Contains(s.Actions, action) {
+		return nil
+	}
+
+	return s.Next.Authorize(ctx, p, action, obj)
 }
 
 // AdminOnly allows administrators and denies everyone else. It is the safe

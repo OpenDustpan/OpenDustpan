@@ -133,6 +133,7 @@ func newToken(id, principalID string, created int) accesstoken.Token {
 		Name:        "token " + id,
 		Kind:        accesstoken.KindService,
 		ReplacedBy:  "",
+		CreatedBy:   "admin",
 	}
 }
 
@@ -176,7 +177,7 @@ func equalToken(t *testing.T, got, want accesstoken.Token) {
 	same := got.CreatedAt.Equal(want.CreatedAt) && got.ExpiresAt.Equal(want.ExpiresAt) &&
 		got.LastUsedAt.Equal(want.LastUsedAt) && got.RevokedAt.Equal(want.RevokedAt) &&
 		got.ID == want.ID && got.PrincipalID == want.PrincipalID && got.Name == want.Name &&
-		got.Kind == want.Kind && got.ReplacedBy == want.ReplacedBy
+		got.Kind == want.Kind && got.ReplacedBy == want.ReplacedBy && got.CreatedBy == want.CreatedBy
 
 	if !same {
 		t.Fatalf("token = %+v, want %+v", got, want)
@@ -504,8 +505,8 @@ func testTouch(t *testing.T, s Store) {
 // listQuery returns a query for every row of principalID.
 func listQuery(principalID string) accesstoken.Query {
 	return accesstoken.Query{
-		ActiveAt: time.Time{}, AfterCreatedAt: time.Time{}, PrincipalID: principalID, AfterID: "",
-		Limit: accesstoken.MaxLimit + 1, HasAfter: false,
+		At: at(10), AfterCreatedAt: time.Time{}, PrincipalID: principalID, AfterID: "",
+		Filter: accesstoken.FilterAll, Limit: accesstoken.MaxLimit + 1, HasAfter: false,
 	}
 }
 
@@ -539,7 +540,9 @@ func testList(t *testing.T, s Store) {
 
 	mustToken(t, s, newToken("tok-a", "prn-1", 1), digest(1))
 	mustToken(t, s, newToken("tok-b", "prn-2", 2), digest(2))
-	mustToken(t, s, newToken("tok-c", "prn-1", 3), digest(3))
+	long := newToken("tok-c", "prn-1", 3)
+	long.ExpiresAt = at(3).Add(30 * 24 * time.Hour)
+	mustToken(t, s, long, digest(3))
 	mustToken(t, s, newToken("tok-d", "prn-1", 3), digest(4))
 
 	expired := newToken("tok-e", "prn-1", 4)
@@ -553,9 +556,20 @@ func testList(t *testing.T, s Store) {
 	wantList(t, s, listQuery(""), []string{"tok-e", "tok-d", "tok-c", "tok-b", "tok-a"}, 5)
 	wantList(t, s, listQuery("prn-1"), []string{"tok-e", "tok-d", "tok-c", "tok-a"}, 4)
 
-	active := listQuery("prn-1")
-	active.ActiveAt = at(10)
-	wantList(t, s, active, []string{"tok-d", "tok-c"}, 2)
+	// At minute 10: tok-a is revoked and tok-e expired. tok-d expires in a
+	// day, so it is expiring, and tok-c in 30 days.
+	for _, tc := range []struct {
+		filter accesstoken.Filter
+		want   []string
+	}{
+		{accesstoken.FilterActive, []string{"tok-d", "tok-c"}},
+		{accesstoken.FilterExpiring, []string{"tok-d"}},
+		{accesstoken.FilterEnded, []string{"tok-e", "tok-a"}},
+	} {
+		q := listQuery("prn-1")
+		q.Filter = tc.filter
+		wantList(t, s, q, tc.want, int64(len(tc.want)))
+	}
 
 	wantList(t, s, listQuery("prn-none"), []string{}, 0)
 }

@@ -505,13 +505,15 @@ func TestListPages(t *testing.T) {
 
 	f := listFixture(t)
 
-	page := mustList(t, f, accesstoken.PageRequest{PrincipalID: "", Cursor: "", Limit: 1, IncludeEnded: false})
+	page := mustList(t, f, accesstoken.PageRequest{
+		PrincipalID: "", Cursor: "", Filter: accesstoken.FilterActive, Limit: 1,
+	})
 	if len(page.Items) != 1 || page.Items[0].Name != "three" || page.Total != 2 || page.NextCursor == "" {
 		t.Fatalf("page 1 = %+v, want three, total 2 and a cursor", page)
 	}
 
 	page = mustList(t, f, accesstoken.PageRequest{
-		PrincipalID: "", Cursor: page.NextCursor, Limit: 1, IncludeEnded: false,
+		PrincipalID: "", Cursor: page.NextCursor, Filter: accesstoken.FilterActive, Limit: 1,
 	})
 	if len(page.Items) != 1 || page.Items[0].Name != "two" || page.NextCursor != "" {
 		t.Fatalf("page 2 = %+v, want two and no cursor", page)
@@ -523,11 +525,21 @@ func TestListEnded(t *testing.T) {
 
 	f := listFixture(t)
 
-	page := mustList(t, f, accesstoken.PageRequest{
-		PrincipalID: f.service.ID, Cursor: "", Limit: 0, IncludeEnded: true,
-	})
-	if len(page.Items) != 2 || page.Total != 2 || page.Items[1].StatusAt(f.clock.Now()) != accesstoken.StatusRevoked {
-		t.Fatalf("tokens of the service = %+v, want two with the revoked one last", page)
+	for _, tc := range []struct {
+		filter accesstoken.Filter
+		want   int
+	}{
+		{accesstoken.FilterAll, 2},
+		{accesstoken.FilterEnded, 1},
+		{accesstoken.FilterActive, 1},
+		{accesstoken.FilterExpiring, 0},
+	} {
+		page := mustList(t, f, accesstoken.PageRequest{
+			PrincipalID: f.service.ID, Cursor: "", Filter: tc.filter, Limit: 0,
+		})
+		if len(page.Items) != tc.want || page.Total != int64(tc.want) {
+			t.Fatalf("tokens of the service with status %q = %+v, want %d", tc.filter, page, tc.want)
+		}
 	}
 }
 
@@ -537,11 +549,12 @@ func TestListRefusesBadRequests(t *testing.T) {
 	f := newFixture(t, nil)
 
 	for _, req := range []accesstoken.PageRequest{
-		{PrincipalID: "", Cursor: "", Limit: accesstoken.MaxLimit + 1, IncludeEnded: false},
-		{PrincipalID: "", Cursor: "", Limit: -1, IncludeEnded: false},
-		{PrincipalID: "", Cursor: "@@", Limit: 0, IncludeEnded: false},
-		{PrincipalID: "", Cursor: strings.Repeat("A", accesstoken.MaxCursorLength+1), Limit: 0, IncludeEnded: false},
-		{PrincipalID: "a b", Cursor: "", Limit: 0, IncludeEnded: false},
+		{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: accesstoken.MaxLimit + 1},
+		{PrincipalID: "", Cursor: "", Filter: "other", Limit: 0},
+		{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: -1},
+		{PrincipalID: "", Cursor: "@@", Filter: accesstoken.FilterAll, Limit: 0},
+		{PrincipalID: "", Cursor: strings.Repeat("A", accesstoken.MaxCursorLength+1), Filter: accesstoken.FilterAll, Limit: 0},
+		{PrincipalID: "a b", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0},
 	} {
 		if _, err := f.svc.List(t.Context(), req); !errors.Is(err, accesstoken.ErrInvalid) {
 			t.Errorf("list %+v: err = %v, want ErrInvalid", req, err)
@@ -634,7 +647,7 @@ func TestOwnTokens(t *testing.T) {
 	}
 
 	page, err := f.svc.ListOwn(ctx, alice, accesstoken.PageRequest{
-		PrincipalID: f.service.ID, Cursor: "", Limit: 0, IncludeEnded: false,
+		PrincipalID: f.service.ID, Cursor: "", Filter: accesstoken.FilterAll, Limit: 0,
 	})
 	if err != nil || page.Total != 1 || page.Items[0].ID != own.ID {
 		t.Fatalf("own list = %+v, %v; want the own token only", page, err)
@@ -804,5 +817,64 @@ func TestEscalationCheckUsesTheGrants(t *testing.T) {
 
 	if len(grants.checked) != 2 || grants.checked[1] != other.ID {
 		t.Fatalf("checked = %q, want both principals", grants.checked)
+	}
+}
+
+func TestOwnCreateAndRotateNeedASignIn(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	tok, _ := f.create(t, f.person, "laptop")
+
+	// The person signs in with its token: it can list and revoke its own
+	// tokens, but it cannot make or rotate one.
+	withToken := as(f.person)
+	withToken.TokenID = tok.ID
+
+	_, _, err := f.svc.Create(ctx, withToken, caller(), accesstoken.ScopeOwn,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: "more"})
+	if !errors.Is(err, accesstoken.ErrSignInRequired) {
+		t.Fatalf("own create with a token: err = %v, want ErrSignInRequired", err)
+	}
+
+	rotate := accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeOwn}
+	_, _, rotErr := f.svc.Rotate(ctx, withToken, caller(), rotate)
+	if !errors.Is(rotErr, accesstoken.ErrSignInRequired) {
+		t.Fatalf("own rotation with a token: err = %v, want ErrSignInRequired", rotErr)
+	}
+
+	page, err := f.svc.ListOwn(ctx, withToken, accesstoken.PageRequest{
+		PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0,
+	})
+	if err != nil || page.Total != 1 {
+		t.Fatalf("own list with a token = %+v, %v; want the one token", page, err)
+	}
+
+	if err := f.svc.Revoke(ctx, withToken, caller(), accesstoken.ScopeOwn, tok.ID); err != nil {
+		t.Fatalf("own revoke with a token: %v", err)
+	}
+}
+
+func TestCreatedByAndDaysLeft(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	tok, _ := f.create(t, f.service, "deploy")
+	if tok.CreatedBy != "admin" {
+		t.Fatalf("created by = %q, want admin", tok.CreatedBy)
+	}
+
+	days, active := tok.DaysLeft(f.clock.Now())
+	if !active || days != int64(accesstoken.DefaultLifetime/(24*time.Hour)) {
+		t.Fatalf("days left = %d, %v; want %d, true", days, active, accesstoken.DefaultLifetime/(24*time.Hour))
+	}
+
+	f.clock.Advance(accesstoken.DefaultLifetime)
+
+	if _, active := tok.DaysLeft(f.clock.Now()); active {
+		t.Fatal("an expired token has days left")
 	}
 }

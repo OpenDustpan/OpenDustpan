@@ -369,7 +369,7 @@ func seedBackupTokens(t *testing.T, s BackupStore) {
 func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Token {
 	return accesstoken.Token{
 		CreatedAt: now(), ExpiresAt: now().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-		ID: id, PrincipalID: principalID, Name: "seed " + id, Kind: kind, ReplacedBy: "",
+		ID: id, PrincipalID: principalID, Name: "seed " + id, Kind: kind, ReplacedBy: "", CreatedBy: "admin",
 	}
 }
 

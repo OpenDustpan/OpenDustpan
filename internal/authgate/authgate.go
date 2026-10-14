@@ -1,17 +1,22 @@
 // Package authgate wraps the stored-token Authenticator for the HTTP server.
-// It does two things:
+// It bounds the rate of token guesses and the store load that each source
+// address can cause (ADR 53). It does not protect a token: the 256 bits of
+// a secret do that.
 //
-//   - It slows the failed token lookups of each source address. A source
-//     that fails more often than its budget allows waits a penalty before
-//     each further miss is refused (ADR 53). The gate never refuses a valid
-//     token: a token that the next Authenticator accepts always passes, so
-//     an attacker behind the same address as other clients, for example a
-//     NAT or a load balancer, cannot lock them out. Only lookups that
-//     Charge selects use the budget: the server charges values that have
-//     the form of a stored-token secret.
-//   - It keeps the answer of one request, so the request log and the
-//     adapter resolve a token once: one store read, one last-used write and
-//     one count of a failure for each request.
+// Each source has a budget of misses. Only lookups that Charge selects
+// count: the server charges values that have the form of a stored-token
+// secret. While a source has budget, its requests go to the store at once.
+// When it has spent the budget, each further charged request from it waits
+// a penalty before the store read, a valid token too, so the time of an
+// answer tells nothing about the token, and no valid token is refused. At
+// most MaxWaiting requests of one source wait at the same time; a request
+// over that cap gets identity.ErrRateLimited (429) with no store read. A
+// wait ends early when the client goes away, and the request then gets no
+// store read either.
+//
+// The gate also keeps the answer of one request, so the request log and
+// the adapter resolve a token once: one store read, one last-used write and
+// one count of a miss for each request.
 //
 // The server checks the bootstrap admin tokens (ADR 6) before the gate, so
 // the gate never sees them. The root middleware in pkg/dustpan calls
@@ -21,6 +26,7 @@
 package authgate
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -34,74 +40,82 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// Default budget of failed lookups for each source: a burst of 30, refilled
-// at one each 2 seconds (30 a minute), and a penalty of 1 second for each
-// miss over the budget.
+// Defaults of a Gate: a burst of 30 misses for each source, refilled at one
+// each 2 seconds (30 a minute), a penalty of 1 second for each request over
+// the budget, and at most 4 waiting requests for each source.
 const (
-	DefaultBurst   = 30
-	DefaultRefill  = 2 * time.Second
-	DefaultPenalty = time.Second
-	// DefaultMaxSources bounds the sources that the gate tracks, so a flood
-	// of addresses cannot grow its memory without limit.
+	DefaultBurst      = 30
+	DefaultRefill     = 2 * time.Second
+	DefaultPenalty    = time.Second
+	DefaultMaxWaiting = 4
+	// DefaultMaxSources bounds the sources that the gate tracks. Over it,
+	// the gate forgets the source that it saw least recently.
 	DefaultMaxSources = 10000
 	// ipv6PrefixBits is the part of an IPv6 address that names one source:
 	// a /64 is the smallest network that one site usually gets.
 	ipv6PrefixBits = 64
 )
 
-// ErrLimited reports a miss from a source that failed too many lookups. It
-// wraps identity.ErrUnauthenticated, so every adapter answers 401.
-var ErrLimited = fmt.Errorf("%w: too many failed sign-ins from this address, try again later",
-	identity.ErrUnauthenticated)
+// ErrLimited reports a request over the waiting cap of its source. It wraps
+// identity.ErrRateLimited, so every adapter answers 429.
+var ErrLimited = fmt.Errorf("%w: try again later", identity.ErrRateLimited)
+
+// ErrMissingNext reports a Config without Next.
+var ErrMissingNext = errors.New("authgate: missing next authenticator")
 
 // Config holds the settings of a Gate. Zero values take the defaults.
 type Config struct {
 	// Next resolves the tokens. Required.
 	Next identity.Authenticator
-	// Charge reports whether a miss of token uses the budget of its source.
-	// Nil charges every miss.
+	// Charge reports whether a lookup of token counts for the budget of
+	// its source. Nil charges every lookup.
 	Charge func(token string) bool
-	// Logger logs the first limited miss of a source in each limit period.
-	// Nil discards it.
+	// Logger logs the first request over the budget of a source in each
+	// limit period, with the source only. Nil discards it.
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
-	// Burst is the count of failures that a source can have at once.
+	// Burst is the count of misses that a source can have at once.
 	Burst int
-	// Refill is the time that gives a source back one failure.
+	// Refill is the time that gives a source back one miss.
 	Refill time.Duration
-	// Penalty is how long a miss over the budget waits before its answer.
+	// Penalty is how long a request over the budget waits before the store
+	// read.
 	Penalty time.Duration
+	// MaxWaiting bounds the requests of one source that wait at once.
+	MaxWaiting int
 	// MaxSources bounds the tracked sources.
 	MaxSources int
 }
 
-// Gate is an identity.Authenticator that slows failed lookups for each
+// Gate is an identity.Authenticator that bounds the guess rate of each
 // source and keeps the answer of each request.
 type Gate struct {
 	next       identity.Authenticator
 	charge     func(token string) bool
 	logger     *slog.Logger
 	now        func() time.Time
-	sources    map[string]*bucket
+	sources    map[string]*list.Element
+	recent     *list.List
 	refill     time.Duration
 	penalty    time.Duration
 	burst      float64
+	maxWaiting int
 	maxSources int
 	mu         sync.Mutex
 }
 
 var _ identity.Authenticator = (*Gate)(nil)
 
-// bucket is the failure budget of one source.
+// bucket is the budget of one source. waiting counts its requests that wait
+// the penalty now.
 type bucket struct {
-	at     time.Time
-	tokens float64
-	logged bool
+	at      time.Time
+	key     string
+	tokens  float64
+	waiting int
+	logged  bool
 }
-
-// ErrMissingNext reports a Config without Next.
-var ErrMissingNext = errors.New("authgate: missing next authenticator")
 
 // New returns a Gate.
 func New(cfg Config) (*Gate, error) {
@@ -114,10 +128,12 @@ func New(cfg Config) (*Gate, error) {
 		charge:     cfg.Charge,
 		logger:     cfg.Logger,
 		now:        cfg.Now,
-		sources:    map[string]*bucket{},
+		sources:    map[string]*list.Element{},
+		recent:     list.New(),
 		refill:     positiveOr(cfg.Refill, DefaultRefill),
 		penalty:    positiveOr(cfg.Penalty, DefaultPenalty),
 		burst:      float64(positiveOr(cfg.Burst, DefaultBurst)),
+		maxWaiting: positiveOr(cfg.MaxWaiting, DefaultMaxWaiting),
 		maxSources: positiveOr(cfg.MaxSources, DefaultMaxSources),
 		mu:         sync.Mutex{},
 	}
@@ -192,9 +208,8 @@ func sourceKey(source string) string {
 
 // AuthenticateToken implements identity.Authenticator. A token that the
 // request resolved before gets the same answer with no lookup. Every other
-// token is looked up: a valid token always passes. A charged miss uses one
-// unit of the budget of the source, and a charged miss from a source with
-// no budget left waits the penalty and answers ErrLimited.
+// token is looked up, after the penalty when its source is over the budget.
+// A charged miss uses one unit of the budget of the source.
 func (g *Gate) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
 	req, ok := ctx.Value(key{}).(*request)
 	if !ok || req == nil {
@@ -203,68 +218,94 @@ func (g *Gate) AuthenticateToken(ctx context.Context, token string) (identity.Pr
 
 	digest := sha256.Sum256([]byte(token))
 
-	req.mu.Lock()
-	defer req.mu.Unlock()
-
-	if req.memo != nil && subtle.ConstantTimeCompare(req.memo.digest[:], digest[:]) == 1 {
-		return req.memo.principal, req.memo.err
+	if m := req.recall(digest); m != nil {
+		return m.principal, m.err
 	}
 
 	p, err := g.lookup(ctx, req.source, token)
-	req.memo = &memo{err: err, principal: p, digest: digest}
+	req.remember(digest, p, err)
 
 	return p, err
 }
 
-// lookup resolves token for the source and charges a miss to its budget.
-func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Principal, error) {
-	p, err := g.next.AuthenticateToken(ctx, token)
-	if !errors.Is(err, identity.ErrUnauthenticated) || !g.charge(token) {
-		return p, err
+// recall returns the answer that the request kept for digest, or nil.
+func (r *request) recall(digest [sha256.Size]byte) *memo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.memo == nil || subtle.ConstantTimeCompare(r.memo.digest[:], digest[:]) != 1 {
+		return nil
 	}
 
-	if g.fail(ctx, source) {
-		return p, err
-	}
-
-	g.wait(ctx)
-
-	return identity.Principal{}, ErrLimited
+	return r.memo
 }
 
-// wait sleeps the penalty, or less when ctx ends first.
-func (g *Gate) wait(ctx context.Context) {
+// remember keeps the answer for digest.
+func (r *request) remember(digest [sha256.Size]byte, p identity.Principal, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.memo = &memo{err: err, principal: p, digest: digest}
+}
+
+// lookup resolves token for the source within its budget.
+func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Principal, error) {
+	if !g.charge(token) {
+		return g.next.AuthenticateToken(ctx, token)
+	}
+
+	if err := g.admit(ctx, source); err != nil {
+		var none identity.Principal
+
+		return none, err
+	}
+
+	p, err := g.next.AuthenticateToken(ctx, token)
+	if errors.Is(err, identity.ErrUnauthenticated) {
+		g.spend(source)
+	}
+
+	return p, err
+}
+
+// admit returns nil when a request of source can go to the store: at once
+// while the source has budget, else after the penalty. It returns ErrLimited
+// when the waiting cap of the source is full, and identity.ErrRateLimited
+// when ctx ends during the wait.
+func (g *Gate) admit(ctx context.Context, source string) error {
+	if !g.reserve(ctx, source) {
+		return nil
+	}
+
+	b, ok := g.enterWait(source)
+	if !ok {
+		return ErrLimited
+	}
+
+	defer g.leaveWait(b)
+
 	timer := time.NewTimer(g.penalty)
 	defer timer.Stop()
 
 	select {
 	case <-ctx.Done():
+		return fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
 	case <-timer.C:
+		return nil
 	}
 }
 
-// fail uses one unit of the budget of source. It reports whether the
-// source had budget left. It logs the first miss over the budget of each
-// limit period, with the source only.
-func (g *Gate) fail(ctx context.Context, source string) bool {
+// reserve reports whether source is over its budget. It logs the first
+// request over the budget of each limit period.
+func (g *Gate) reserve(ctx context.Context, source string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	b, ok := g.sources[source]
-	if !ok {
-		g.makeRoomLocked()
-
-		b = &bucket{at: g.now(), tokens: g.burst, logged: false}
-		g.sources[source] = b
-	}
-
-	g.fillLocked(b)
-
+	b := g.touchLocked(source)
 	if b.tokens >= 1 {
-		b.tokens--
 		b.logged = false
 
-		return true
+		return false
 	}
 
 	if !b.logged {
@@ -272,13 +313,84 @@ func (g *Gate) fail(ctx context.Context, source string) bool {
 		g.logger.WarnContext(ctx, "failed sign-ins limited", slog.String("source_ip", source))
 	}
 
-	return false
+	return true
+}
+
+// enterWait takes a waiting place of source, or reports false when its cap
+// is full.
+func (g *Gate) enterWait(source string) (*bucket, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b := g.touchLocked(source)
+	if b.waiting >= g.maxWaiting {
+		return nil, false
+	}
+
+	b.waiting++
+
+	return b, true
+}
+
+// leaveWait gives back the waiting place of b.
+func (g *Gate) leaveWait(b *bucket) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b.waiting--
+}
+
+// spend uses one unit of the budget of source.
+func (g *Gate) spend(source string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b := g.touchLocked(source)
+
+	b.tokens--
+	if b.tokens < 0 {
+		b.tokens = 0
+	}
+}
+
+// touchLocked returns the bucket of source with the budget it earned since
+// its last change, and marks it as the source seen most recently. A new
+// source starts with a full budget. Over MaxSources, it forgets the source
+// seen least recently, in O(1). A source with waiting requests keeps its
+// bucket alive through their pointers.
+func (g *Gate) touchLocked(source string) *bucket {
+	now := g.now()
+
+	if el, ok := g.sources[source]; ok {
+		if b, isBucket := el.Value.(*bucket); isBucket {
+			g.recent.MoveToFront(el)
+			g.fillLocked(b, now)
+
+			return b
+		}
+
+		delete(g.sources, source)
+		g.recent.Remove(el)
+	}
+
+	if g.recent.Len() >= g.maxSources {
+		if oldest := g.recent.Back(); oldest != nil {
+			if old, ok := oldest.Value.(*bucket); ok {
+				delete(g.sources, old.key)
+			}
+
+			g.recent.Remove(oldest)
+		}
+	}
+
+	b := &bucket{at: now, key: source, tokens: g.burst, waiting: 0, logged: false}
+	g.sources[source] = g.recent.PushFront(b)
+
+	return b
 }
 
 // fillLocked adds the budget that b earned since its last change.
-func (g *Gate) fillLocked(b *bucket) {
-	now := g.now()
-
+func (g *Gate) fillLocked(b *bucket, now time.Time) {
 	elapsed := now.Sub(b.at)
 	if elapsed <= 0 {
 		return
@@ -290,29 +402,4 @@ func (g *Gate) fillLocked(b *bucket) {
 	}
 
 	b.at = now
-}
-
-// makeRoomLocked removes the sources whose budget is full again. When none
-// is full, it removes one source at random: a flood of addresses then
-// forgets old sources rather than grow.
-func (g *Gate) makeRoomLocked() {
-	if len(g.sources) < g.maxSources {
-		return
-	}
-
-	for source, b := range g.sources {
-		g.fillLocked(b)
-
-		if b.tokens >= g.burst {
-			delete(g.sources, source)
-		}
-	}
-
-	for source := range g.sources {
-		if len(g.sources) < g.maxSources {
-			return
-		}
-
-		delete(g.sources, source)
-	}
 }

@@ -179,7 +179,11 @@ decision 3 (one action for each kind of token):
 
 - `token:manage-own`: a person lists, creates, rotates and revokes its own
   personal tokens. Every authenticated person holds it, with no grant. A
-  service or a workload does not own personal tokens.
+  service or a workload does not own personal tokens. A person can list and
+  revoke its own tokens with a token. A create or a rotation of an own token
+  needs a sign-in (ADR 53, decision 10): a token that makes new tokens would
+  outlive its maximum lifetime and a revoke. Sign-in does not exist yet
+  (ADR 55), so until it does, no caller can create or rotate an own token.
 - `server:manage-tokens`: an administrator creates and rotates the personal
   tokens of other persons, and revokes any token.
 - `server:manage-service-tokens`: an administrator creates and rotates

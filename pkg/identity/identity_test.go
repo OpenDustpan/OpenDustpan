@@ -630,3 +630,29 @@ func TestChain(t *testing.T) {
 }
 
 var errStoreDown = errors.New("store down")
+
+func TestSelfAllowed(t *testing.T) {
+	t.Parallel()
+
+	authz := identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: []identity.Action{identity.ActionTokenManageOwn}}
+	person := identity.Principal{Subject: "bob", DisplayName: "Bob", Admin: false, TokenID: "tok-1"}
+	ns, err := identity.ParseObject("acme")
+	if err != nil {
+		t.Fatalf("parse object: %v", err)
+	}
+
+	caller := identity.CallerObject()
+	if authErr := authz.Authorize(t.Context(), person, identity.ActionTokenManageOwn, caller); authErr != nil {
+		t.Fatalf("self action on the caller: %v", authErr)
+	}
+
+	err = authz.Authorize(t.Context(), person, identity.ActionTokenManageOwn, ns)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("self action on a namespace: err = %v, want ErrDenied", err)
+	}
+
+	err = authz.Authorize(t.Context(), person, identity.ActionCallerRead, identity.CallerObject())
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("another action on the caller: err = %v, want ErrDenied", err)
+	}
+}

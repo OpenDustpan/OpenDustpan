@@ -33,6 +33,7 @@ func insertToken(ctx context.Context, q *db.Queries, t accesstoken.Token, d acce
 		Digest:      d.String(),
 		CreatedAtMs: codec.Millis(t.CreatedAt),
 		ExpiresAtMs: codec.Millis(t.ExpiresAt),
+		CreatedBy:   t.CreatedBy,
 		PrincipalID: t.PrincipalID,
 	})
 	if err != nil {
@@ -89,7 +90,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		Token: codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow{
 			ID: row.ID, PrincipalID: row.PrincipalID, Name: row.Name, Kind: row.Kind,
 			CreatedAtMs: row.CreatedAtMs, ExpiresAtMs: row.ExpiresAtMs, LastUsedAtMs: row.LastUsedAtMs,
-			RevokedAtMs: row.RevokedAtMs, ReplacedBy: row.ReplacedBy,
+			RevokedAtMs: row.RevokedAtMs, ReplacedBy: row.ReplacedBy, CreatedBy: row.CreatedBy,
 		})),
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
@@ -110,8 +111,14 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 
 	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListAccessTokens(ctx, db.ListAccessTokensParams{
-			PrincipalID: cols.PrincipalID, ActiveAtMs: cols.ActiveAtMs, HasAfter: cols.HasAfter,
-			AfterMs: cols.AfterMs, AfterID: cols.AfterID, RowLimit: rowLimit(tq.Limit),
+			PrincipalID: cols.PrincipalID,
+			Status:      cols.Status,
+			AtMs:        cols.AtMs,
+			SoonMs:      cols.SoonMs,
+			HasAfter:    cols.HasAfter,
+			AfterMs:     cols.AfterMs,
+			AfterID:     cols.AfterID,
+			RowLimit:    rowLimit(tq.Limit),
 		})
 		if err != nil {
 			return fmt.Errorf("select access tokens: %w", err)
@@ -122,7 +129,7 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 		})
 
 		total, err = q.CountAccessTokens(ctx, db.CountAccessTokensParams{
-			PrincipalID: cols.PrincipalID, ActiveAtMs: cols.ActiveAtMs,
+			PrincipalID: cols.PrincipalID, Status: cols.Status, AtMs: cols.AtMs, SoonMs: cols.SoonMs,
 		})
 		if err != nil {
 			return fmt.Errorf("count access tokens: %w", err)
@@ -206,6 +213,7 @@ func tokenRow(r db.ListAccessTokensRow) codec.AccessTokenRow {
 		Name:         r.Name,
 		Kind:         r.Kind,
 		ReplacedBy:   r.ReplacedBy.String,
+		CreatedBy:    r.CreatedBy,
 		CreatedAtMs:  r.CreatedAtMs,
 		ExpiresAtMs:  r.ExpiresAtMs,
 		LastUsedAtMs: r.LastUsedAtMs.Int64,

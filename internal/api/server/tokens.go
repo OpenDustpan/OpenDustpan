@@ -25,10 +25,12 @@ package server
 // closed). A refused change writes a failure entry after the fact, best
 // effort, as the principal routes do.
 //
-// The list route answers one page, newest first: the query parameters limit
+// The list routes answer one page, newest first: the query parameters limit
 // (1 to 1000; 100 when the request names none), cursor (the nextCursor of
-// the page before), principal (the ID of one principal) and include
-// (ended, to also list revoked and expired tokens).
+// the page before), principal (the ID of one principal, on the
+// administrator route) and status (active, expiring for an active token
+// with 14 days or less left, or ended for a revoked or expired token; every
+// token when the request names none).
 
 import (
 	"errors"
@@ -39,6 +41,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Body and query errors of the token routes. classify maps each to 400.
@@ -50,7 +53,9 @@ var (
 	errRotateBody = errors.New(
 		`invalid rotation body: provide {} or {"oldTokenEndsAt":"<RFC 3339 time>","expiresAt":"<RFC 3339 time>"}`,
 	)
-	errTokenQuery = errors.New("invalid token list query: include is empty or ended, limit is a number from 1 to 1000")
+	errTokenQuery = errors.New(
+		"invalid token list query: status is active, expiring or ended, and limit is a number from 1 to 1000",
+	)
 )
 
 // errNoTokenStore reports a server whose store keeps no access tokens.
@@ -64,16 +69,23 @@ var errNoTokenStore = errors.New("the store of this server keeps no access token
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
 type tokenResponse struct {
-	LastUsedAt  *string `json:"lastUsedAt"`
-	RevokedAt   *string `json:"revokedAt"`
-	ID          string  `json:"id"`
-	PrincipalID string  `json:"principalID"`
-	Name        string  `json:"name"`
-	Kind        string  `json:"kind"`
-	Status      string  `json:"status"`
-	CreatedAt   string  `json:"createdAt"`
-	ExpiresAt   string  `json:"expiresAt"`
-	ReplacedBy  string  `json:"replacedBy"`
+	LastUsedAt *string `json:"lastUsedAt"`
+	RevokedAt  *string `json:"revokedAt"`
+	// ExpiresInDays is the count of whole days until the expiry, at the
+	// time of the answer by the server clock, or null for a token that is
+	// not active. A client warns from it with no need of its own clock.
+	ExpiresInDays *int64 `json:"expiresInDays"`
+	ID            string `json:"id"`
+	PrincipalID   string `json:"principalID"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"createdAt"`
+	ExpiresAt     string `json:"expiresAt"`
+	ReplacedBy    string `json:"replacedBy"`
+	// CreatedBy is the subject of the caller that made the token: by a
+	// create, or by the rotation that issued it.
+	CreatedBy string `json:"createdBy"`
 }
 
 // newTokenResponse is the answer of a create: the token and its secret,
@@ -143,17 +155,24 @@ func optionalWireTime(t time.Time) *string {
 }
 
 func tokenOf(t accesstoken.Token, now time.Time) tokenResponse {
+	var expiresInDays *int64
+	if days, active := t.DaysLeft(now); active {
+		expiresInDays = &days
+	}
+
 	return tokenResponse{
-		LastUsedAt:  optionalWireTime(t.LastUsedAt),
-		RevokedAt:   optionalWireTime(t.RevokedAt),
-		ID:          t.ID,
-		PrincipalID: t.PrincipalID,
-		Name:        t.Name,
-		Kind:        string(t.Kind),
-		Status:      string(t.StatusAt(now)),
-		CreatedAt:   wireTime(t.CreatedAt),
-		ExpiresAt:   wireTime(t.ExpiresAt),
-		ReplacedBy:  t.ReplacedBy,
+		ExpiresInDays: expiresInDays,
+		LastUsedAt:    optionalWireTime(t.LastUsedAt),
+		RevokedAt:     optionalWireTime(t.RevokedAt),
+		ID:            t.ID,
+		PrincipalID:   t.PrincipalID,
+		Name:          t.Name,
+		Kind:          string(t.Kind),
+		Status:        string(t.StatusAt(now)),
+		CreatedAt:     wireTime(t.CreatedAt),
+		ExpiresAt:     wireTime(t.ExpiresAt),
+		ReplacedBy:    t.ReplacedBy,
+		CreatedBy:     t.CreatedBy,
 	}
 }
 
@@ -317,8 +336,13 @@ func createToken(scope accesstoken.Scope) tokenOp {
 			return failed("tokens"), err
 		}
 
+		object := "tokens"
+		if req.PrincipalID != nil {
+			object = principal.Ref(*req.PrincipalID)
+		}
+
 		if req.Name == nil || (scope == accesstoken.ScopeOwn) != (req.PrincipalID == nil) {
-			return failed("tokens"), errTokenBody
+			return failed(object), errTokenBody
 		}
 
 		in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: *req.Name}
@@ -332,7 +356,7 @@ func createToken(scope accesstoken.Scope) tokenOp {
 
 		t, secret, err := svc.Create(r.Context(), p, e, scope, in)
 		if err != nil {
-			return failed("tokens"), err
+			return failed(object), err
 		}
 
 		body := newTokenResponse{tokenResponse: tokenOf(t, svc.Now()), Secret: secret.Reveal()}
@@ -394,16 +418,15 @@ func tokenPageOf(page accesstoken.Page, now time.Time) tokenListResponse {
 func tokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 	q := r.URL.Query()
 	req := accesstoken.PageRequest{
-		PrincipalID: q.Get("principal"), Cursor: q.Get("cursor"), Limit: 0, IncludeEnded: false,
+		PrincipalID: q.Get("principal"), Cursor: q.Get("cursor"), Filter: accesstoken.FilterAll, Limit: 0,
 	}
 
-	switch q.Get("include") {
-	case "":
-	case "ended":
-		req.IncludeEnded = true
-	default:
+	filter, err := accesstoken.ParseFilter(q.Get("status"))
+	if err != nil {
 		return accesstoken.PageRequest{}, errTokenQuery
 	}
+
+	req.Filter = filter
 
 	if raw := q.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -437,7 +460,7 @@ func revokeToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
-		object := accesstoken.Ref(r.PathValue("id"))
+		object := tokenObject(r, svc)
 
 		if err := svc.Revoke(r.Context(), p, e, scope, r.PathValue("id")); err != nil {
 			return failed(object), err
@@ -456,7 +479,7 @@ func rotateToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
-		object := accesstoken.Ref(r.PathValue("id"))
+		object := tokenObject(r, svc)
 
 		var req rotateTokenRequest
 		if err := decodeStrict(w, r, &req, errRotateBody); err != nil {
@@ -485,13 +508,30 @@ func rotateToken(scope accesstoken.Scope) tokenOp {
 	}
 }
 
-// classifyToken maps the access token errors to their status and message:
+// tokenObject returns the audit object of the token in the path:
+// principal:<id>#token:<id> when the token exists, so a refused change
+// names the principal too, else token:<id>.
+func tokenObject(r *http.Request, svc *accesstoken.Service) string {
+	id := r.PathValue("id")
+
+	t, err := svc.Get(r.Context(), id)
+	if err != nil {
+		return accesstoken.Ref(id)
+	}
+
+	return accesstoken.TokenRef(t.PrincipalID, id)
+}
+
+// classifyToken maps the access token errors to their status and message.
+// A source over its failure budget answers 429 (internal/authgate). Next:
 // a bad body, query, name, expiry or page, and a principal kind that gets no
 // token, answer 400; an unknown token or principal 404; a token that ended
 // 409; and a store with no token port 501. The domain wraps each sentinel
 // with the ID or the value it acted on, never with driver text or a secret.
 func classifyToken(err error) (int, string, bool) {
 	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
 		return http.StatusBadRequest, err.Error(), true
@@ -499,7 +539,7 @@ func classifyToken(err error) (int, string, bool) {
 		return http.StatusNotFound, err.Error(), true
 	case errors.Is(err, accesstoken.ErrWrongKind):
 		return http.StatusBadRequest, err.Error(), true
-	case errors.Is(err, accesstoken.ErrNoOwnPrincipal):
+	case errors.Is(err, accesstoken.ErrNoOwnPrincipal), errors.Is(err, accesstoken.ErrSignInRequired):
 		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, accesstoken.ErrEnded), errors.Is(err, accesstoken.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true

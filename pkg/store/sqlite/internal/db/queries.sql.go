@@ -154,16 +154,25 @@ const countAccessTokens = `-- name: CountAccessTokens :one
 SELECT COUNT(*) FROM access_tokens
 WHERE (CAST(?1 AS TEXT) = '' OR principal_id = ?1)
   AND (CAST(?2 AS INTEGER) = 0
-    OR (revoked_at_ms IS NULL AND expires_at_ms > ?2))
+    OR ((CAST(?2 AS INTEGER) = 1 OR CAST(?2 AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(?3 AS INTEGER)
+      AND (CAST(?2 AS INTEGER) = 1 OR expires_at_ms <= CAST(?4 AS INTEGER)))
+    OR (CAST(?2 AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(?3 AS INTEGER))))
 `
 
 type CountAccessTokensParams struct {
 	PrincipalID string
-	ActiveAtMs  int64
+	Status      int64
+	AtMs        int64
+	SoonMs      int64
 }
 
 func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAccessTokens, arg.PrincipalID, arg.ActiveAtMs)
+	row := q.db.QueryRowContext(ctx, countAccessTokens,
+		arg.PrincipalID,
+		arg.Status,
+		arg.AtMs,
+		arg.SoonMs,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -303,11 +312,11 @@ func (q *Queries) CountStateVersions(ctx context.Context, workspaceID string) (i
 
 const createAccessToken = `-- name: CreateAccessToken :execrows
 
-INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms)
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
 SELECT ?1, p.id, ?2, ?3, ?4,
-  ?5, ?6
+  ?5, ?6, ?7
 FROM principals p
-WHERE p.id = ?7 AND p.deleted_at_ms IS NULL
+WHERE p.id = ?8 AND p.deleted_at_ms IS NULL
 ON CONFLICT DO NOTHING
 `
 
@@ -318,6 +327,7 @@ type CreateAccessTokenParams struct {
 	Digest      string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	CreatedBy   string
 	PrincipalID string
 }
 
@@ -330,6 +340,7 @@ func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenPa
 		arg.Digest,
 		arg.CreatedAtMs,
 		arg.ExpiresAtMs,
+		arg.CreatedBy,
 		arg.PrincipalID,
 	)
 	if err != nil {
@@ -1082,7 +1093,7 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 }
 
 const getAccessToken = `-- name: GetAccessToken :one
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
 FROM access_tokens WHERE id = ?
 `
 
@@ -1096,6 +1107,7 @@ type GetAccessTokenRow struct {
 	LastUsedAtMs sql.NullInt64
 	RevokedAtMs  sql.NullInt64
 	ReplacedBy   sql.NullString
+	CreatedBy    string
 }
 
 func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessTokenRow, error) {
@@ -1111,13 +1123,14 @@ func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessToken
 		&i.LastUsedAtMs,
 		&i.RevokedAtMs,
 		&i.ReplacedBy,
+		&i.CreatedBy,
 	)
 	return i, err
 }
 
 const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
-  t.revoked_at_ms, t.replaced_by, p.subject, p.display_name, p.kind AS principal_kind
+  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = ? AND p.deleted_at_ms IS NULL
@@ -1134,6 +1147,7 @@ type GetAccessTokenByDigestRow struct {
 	LastUsedAtMs  sql.NullInt64
 	RevokedAtMs   sql.NullInt64
 	ReplacedBy    sql.NullString
+	CreatedBy     string
 	Subject       string
 	DisplayName   string
 	PrincipalKind string
@@ -1153,6 +1167,7 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.LastUsedAtMs,
 		&i.RevokedAtMs,
 		&i.ReplacedBy,
+		&i.CreatedBy,
 		&i.Subject,
 		&i.DisplayName,
 		&i.PrincipalKind,
@@ -2172,21 +2187,25 @@ func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (sql.
 }
 
 const listAccessTokens = `-- name: ListAccessTokens :many
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
 FROM access_tokens
 WHERE (CAST(?1 AS TEXT) = '' OR principal_id = ?1)
   AND (CAST(?2 AS INTEGER) = 0
-    OR (revoked_at_ms IS NULL AND expires_at_ms > ?2))
-  AND (CAST(?3 AS INTEGER) = 0
-    OR created_at_ms < ?4
-    OR (created_at_ms = ?4 AND id < ?5))
+    OR ((CAST(?2 AS INTEGER) = 1 OR CAST(?2 AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(?3 AS INTEGER)
+      AND (CAST(?2 AS INTEGER) = 1 OR expires_at_ms <= CAST(?4 AS INTEGER)))
+    OR (CAST(?2 AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(?3 AS INTEGER))))
+  AND (CAST(?5 AS INTEGER) = 0
+    OR created_at_ms < ?6
+    OR (created_at_ms = ?6 AND id < ?7))
 ORDER BY created_at_ms DESC, id DESC
-LIMIT ?6
+LIMIT ?8
 `
 
 type ListAccessTokensParams struct {
 	PrincipalID string
-	ActiveAtMs  int64
+	Status      int64
+	AtMs        int64
+	SoonMs      int64
 	HasAfter    int64
 	AfterMs     int64
 	AfterID     string
@@ -2203,12 +2222,15 @@ type ListAccessTokensRow struct {
 	LastUsedAtMs sql.NullInt64
 	RevokedAtMs  sql.NullInt64
 	ReplacedBy   sql.NullString
+	CreatedBy    string
 }
 
 func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensParams) ([]ListAccessTokensRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAccessTokens,
 		arg.PrincipalID,
-		arg.ActiveAtMs,
+		arg.Status,
+		arg.AtMs,
+		arg.SoonMs,
 		arg.HasAfter,
 		arg.AfterMs,
 		arg.AfterID,
@@ -2231,6 +2253,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 			&i.LastUsedAtMs,
 			&i.RevokedAtMs,
 			&i.ReplacedBy,
+			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}

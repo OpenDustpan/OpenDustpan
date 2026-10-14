@@ -257,8 +257,16 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 	for i, seed := range seeds {
 		tok := accesstoken.Token{
-			CreatedAt: at, ExpiresAt: at.Add(48 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-			ID: seed.id, PrincipalID: seed.principalID, Name: "seed", Kind: seed.kind, ReplacedBy: "",
+			CreatedAt:   at,
+			ExpiresAt:   at.Add(48 * time.Hour),
+			LastUsedAt:  time.Time{},
+			RevokedAt:   time.Time{},
+			ID:          seed.id,
+			PrincipalID: seed.principalID,
+			Name:        "seed",
+			Kind:        seed.kind,
+			ReplacedBy:  "",
+			CreatedBy:   "admin",
 		}
 
 		d := accesstoken.Digest{byte(i + 1)}

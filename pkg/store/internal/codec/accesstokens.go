@@ -14,6 +14,7 @@ type AccessTokenRow struct {
 	Name         string
 	Kind         string
 	ReplacedBy   string
+	CreatedBy    string
 	CreatedAtMs  int64
 	ExpiresAtMs  int64
 	LastUsedAtMs int64
@@ -32,6 +33,7 @@ func FromAccessTokenRow(row AccessTokenRow) accesstoken.Token {
 		Name:        row.Name,
 		Kind:        accesstoken.Kind(row.Kind),
 		ReplacedBy:  row.ReplacedBy,
+		CreatedBy:   row.CreatedBy,
 	}
 }
 
@@ -54,23 +56,43 @@ func FromAccessTokenOwnerRow(row AccessTokenOwnerRow) accesstoken.Owner {
 	}
 }
 
+// Status codes of a token list filter in the queries.
+const (
+	accessTokenFilterAll int64 = iota
+	accessTokenFilterActive
+	accessTokenFilterExpiring
+	accessTokenFilterEnded
+)
+
 // AccessTokenListQuery is the column representation of an
-// accesstoken.Query: an ActiveAtMs of 0 keeps every token, and AfterMs and
-// AfterID count only when HasAfter is set.
+// accesstoken.Query: Status is the code of the filter, AtMs its time and
+// SoonMs the end of the expiring window. AfterMs and AfterID count only
+// when HasAfter is set.
 type AccessTokenListQuery struct {
 	PrincipalID string
 	AfterID     string
-	ActiveAtMs  int64
+	Status      int64
+	AtMs        int64
+	SoonMs      int64
 	AfterMs     int64
 	HasAfter    bool
 }
 
 // ToAccessTokenListQuery converts q into its columns.
 func ToAccessTokenListQuery(q accesstoken.Query) AccessTokenListQuery {
+	status := map[accesstoken.Filter]int64{
+		accesstoken.FilterAll:      accessTokenFilterAll,
+		accesstoken.FilterActive:   accessTokenFilterActive,
+		accesstoken.FilterExpiring: accessTokenFilterExpiring,
+		accesstoken.FilterEnded:    accessTokenFilterEnded,
+	}[q.Filter]
+
 	return AccessTokenListQuery{
 		PrincipalID: q.PrincipalID,
 		AfterID:     q.AfterID,
-		ActiveAtMs:  OptionalMillis(q.ActiveAt),
+		Status:      status,
+		AtMs:        Millis(q.At),
+		SoonMs:      Millis(q.At.Add(accesstoken.ExpiringWithin)),
 		AfterMs:     Millis(q.AfterCreatedAt),
 		HasAfter:    q.HasAfter,
 	}

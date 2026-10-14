@@ -832,9 +832,9 @@ WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
 -- Access tokens (ADR 53).
 
 -- name: CreateAccessToken :execrows
-INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms)
+INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
 SELECT sqlc.arg('id'), p.id, sqlc.arg('name'), sqlc.arg('kind'), sqlc.arg('digest'),
-  sqlc.arg('created_at_ms'), sqlc.arg('expires_at_ms')
+  sqlc.arg('created_at_ms'), sqlc.arg('expires_at_ms'), sqlc.arg('created_by')
 FROM principals p
 WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL
 ON CONFLICT DO NOTHING;
@@ -846,22 +846,24 @@ SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 SELECT COUNT(*) FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessToken :one
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
 FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
-  t.revoked_at_ms, t.replaced_by, p.subject, p.display_name, p.kind AS principal_kind
+  t.revoked_at_ms, t.replaced_by, t.created_by, p.subject, p.display_name, p.kind AS principal_kind
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
 WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
 
 -- name: ListAccessTokens :many
-SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by
+SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by
 FROM access_tokens
 WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
-  AND (CAST(sqlc.arg('active_at_ms') AS INTEGER) = 0
-    OR (revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('active_at_ms')))
+  AND (CAST(sqlc.arg('status') AS INTEGER) = 0
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+      AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))))
   AND (CAST(sqlc.arg('has_after') AS INTEGER) = 0
     OR created_at_ms < sqlc.arg('after_ms')
     OR (created_at_ms = sqlc.arg('after_ms') AND id < sqlc.arg('after_id')))
@@ -871,8 +873,10 @@ LIMIT sqlc.arg('row_limit');
 -- name: CountAccessTokens :one
 SELECT COUNT(*) FROM access_tokens
 WHERE (CAST(sqlc.arg('principal_id') AS TEXT) = '' OR principal_id = sqlc.arg('principal_id'))
-  AND (CAST(sqlc.arg('active_at_ms') AS INTEGER) = 0
-    OR (revoked_at_ms IS NULL AND expires_at_ms > sqlc.arg('active_at_ms')));
+  AND (CAST(sqlc.arg('status') AS INTEGER) = 0
+    OR ((CAST(sqlc.arg('status') AS INTEGER) = 1 OR CAST(sqlc.arg('status') AS INTEGER) = 2) AND revoked_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+      AND (CAST(sqlc.arg('status') AS INTEGER) = 1 OR expires_at_ms <= CAST(sqlc.arg('soon_ms') AS INTEGER)))
+    OR (CAST(sqlc.arg('status') AS INTEGER) = 3 AND (revoked_at_ms IS NOT NULL OR expires_at_ms <= CAST(sqlc.arg('at_ms') AS INTEGER))));
 
 -- name: RevokeAccessToken :execrows
 UPDATE access_tokens SET revoked_at_ms = CAST(sqlc.arg('revoked_at_ms') AS INTEGER)

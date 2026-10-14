@@ -22,15 +22,15 @@ const (
 
 // PageRequest asks for one page of the tokens, newest first. PrincipalID
 // keeps the tokens of one principal, or of every principal when it is
-// empty. IncludeEnded also keeps the revoked and the expired tokens. Cursor
+// empty. Filter keeps the tokens by their status. Cursor
 // is the opaque NextCursor of the page before, or empty for the first page.
 // Limit is 1 to MaxLimit. 0 means that the request names no limit, and
 // reads DefaultLimit rows.
 type PageRequest struct {
-	PrincipalID  string
-	Cursor       string
-	Limit        int
-	IncludeEnded bool
+	PrincipalID string
+	Cursor      string
+	Filter      Filter
+	Limit       int
 }
 
 // Page is one page of tokens. Total is the count of every token that
@@ -59,17 +59,18 @@ func (req PageRequest) query(now time.Time) (Query, int, error) {
 		return Query{}, 0, fmt.Errorf("%w: principal ID", ErrInvalid)
 	}
 
+	if _, err := ParseFilter(string(req.Filter)); err != nil {
+		return Query{}, 0, err
+	}
+
 	q := Query{
-		ActiveAt:       time.Time{},
+		At:             now,
 		AfterCreatedAt: time.Time{},
 		PrincipalID:    req.PrincipalID,
 		AfterID:        "",
+		Filter:         req.Filter,
 		Limit:          limit + 1,
 		HasAfter:       false,
-	}
-
-	if !req.IncludeEnded {
-		q.ActiveAt = now
 	}
 
 	if req.Cursor != "" {

@@ -19,6 +19,7 @@ type AccessToken struct {
 	LastUsedAtMs sql.NullInt64
 	RevokedAtMs  sql.NullInt64
 	ReplacedBy   sql.NullString
+	CreatedBy    string
 }
 
 type AuditEntry struct {

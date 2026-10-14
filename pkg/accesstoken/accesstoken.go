@@ -105,6 +105,8 @@ const (
 // rotation moves it to the end time of the old token. LastUsedAt is zero
 // when no request used the token. RevokedAt is zero for a token that was not
 // revoked. ReplacedBy names the token that a rotation issued for this one.
+// CreatedBy is the subject of the caller that made the token: by a create,
+// or by the rotation that issued it.
 type Token struct {
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
@@ -115,6 +117,7 @@ type Token struct {
 	Name        string
 	Kind        Kind
 	ReplacedBy  string
+	CreatedBy   string
 }
 
 // StatusAt returns the status of t at the time now.
@@ -127,6 +130,52 @@ func (t Token) StatusAt(now time.Time) Status {
 	default:
 		return StatusActive
 	}
+}
+
+// day is one day, for the days left of a token.
+const day = 24 * time.Hour
+
+// ExpiringWithin is the period before its expiry in which an active token
+// counts as expiring: the first expiry warning of the RFC 20 lead proposal
+// (ADR 53, decision 11).
+const ExpiringWithin = 14 * 24 * time.Hour
+
+// Filter keeps the tokens of a list by their status at the time of the
+// list.
+type Filter string
+
+// Filters of a token list.
+const (
+	// FilterAll keeps every token.
+	FilterAll Filter = ""
+	// FilterActive keeps the tokens that authenticate.
+	FilterActive Filter = "active"
+	// FilterExpiring keeps the active tokens that expire within
+	// ExpiringWithin.
+	FilterExpiring Filter = "expiring"
+	// FilterEnded keeps the tokens that were revoked or that expired.
+	FilterEnded Filter = "ended"
+)
+
+// ParseFilter returns the Filter that s names, or ErrInvalid.
+func ParseFilter(s string) (Filter, error) {
+	switch f := Filter(s); f {
+	case FilterAll, FilterActive, FilterExpiring, FilterEnded:
+		return f, nil
+	default:
+		return "", fmt.Errorf("%w: status %q: use active, expiring or ended", ErrInvalid, s)
+	}
+}
+
+// DaysLeft returns the whole days until the expiry of t at the time now,
+// or false when t is not active. The server answers it, so a client never
+// needs its own clock to warn.
+func (t Token) DaysLeft(now time.Time) (int64, bool) {
+	if t.StatusAt(now) != StatusActive {
+		return 0, false
+	}
+
+	return int64(t.ExpiresAt.Sub(now) / day), true
 }
 
 // Owner is the principal of a token, as the Authenticator answers it.

@@ -26,6 +26,9 @@ type e2eToken struct {
 	ExpiresAt   string  `json:"expiresAt"`
 	ReplacedBy  string  `json:"replacedBy"`
 	Secret      string  `json:"secret"`
+	CreatedBy   string  `json:"createdBy"`
+
+	ExpiresInDays *int64 `json:"expiresInDays"`
 }
 
 // TestAccessTokens drives every access token route of the installation API
@@ -156,7 +159,7 @@ func checkTokenRefusals(ctx context.Context, t *testing.T, env *e2e.Env, deploy,
 		},
 		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens?limit=0", "", http.StatusBadRequest},
-		{http.MethodGet, "/api/server/tokens?include=all", "", http.StatusBadRequest},
+		{http.MethodGet, "/api/server/tokens?status=all", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens/tok-none", "", http.StatusNotFound},
 	} {
 		principalCall(ctx, t, env, step, nil)
@@ -313,11 +316,12 @@ func checkTokenRevoke(ctx context.Context, t *testing.T, env *e2e.Env, tok e2eTo
 	}
 }
 
-// checkPersonalTokens makes a personal token of a person through the
-// administrator route, and drives the own-token routes. The bootstrap admin
-// token has no person record, so it owns no personal token (403). The
-// person signs in with its token, and until grants exist (ADR 52) the
-// authorizer refuses it token:manage-own too (403).
+// checkPersonalTokens makes two personal tokens of a person through the
+// administrator route, and drives the own-token routes. Every authenticated
+// person holds token:manage-own. The bootstrap admin token has no person
+// record, so it owns no personal token (403). The person lists its own
+// tokens with a token and revokes one, and it cannot create or rotate one
+// with a token: that needs a sign-in (403), which does not exist yet.
 func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -326,14 +330,17 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.MethodPost, "/api/server/principals", `{"subject":"bob@example.com","kind":"person"}`, http.StatusCreated,
 	}, &person)
 
-	var personal e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"laptop"}`,
-		http.StatusCreated,
-	}, &personal)
+	var personal, spare e2eToken
+	for _, out := range []*e2eToken{&personal, &spare} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"laptop"}`,
+			http.StatusCreated,
+		}, out)
+	}
 
-	if personal.Kind != "personal" || personal.PrincipalID != person.ID {
-		t.Fatalf("personal token = %+v, want a personal token of the person", personal)
+	if personal.Kind != "personal" || personal.PrincipalID != person.ID || personal.CreatedBy != "admin" ||
+		personal.ExpiresInDays == nil {
+		t.Fatalf("personal token = %+v, want a personal token of the person, made by admin, with days left", personal)
 	}
 
 	principalCall(ctx, t, env, principalStep{
@@ -344,15 +351,29 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	for _, step := range []principalStep{
 		{http.MethodGet, own, "", http.StatusForbidden},
 		{http.MethodPost, own, `{"name":"mine"}`, http.StatusForbidden},
-		{http.MethodPost, own + "/" + personal.ID + "/rotate", `{}`, http.StatusForbidden},
-		{http.MethodDelete, own + "/" + personal.ID, "", http.StatusForbidden},
 	} {
 		principalCall(ctx, t, env, step, nil)
 	}
 
-	status, body, err := env.ServerAPIStatusAs(ctx, personal.Secret, http.MethodGet, own, "")
-	if err != nil || status != http.StatusForbidden {
-		t.Fatalf("own tokens with the person's token = %d, %v (%s); want 403", status, err, body)
+	for _, step := range []struct {
+		method, path, body, total string
+		want                      int
+	}{
+		{http.MethodGet, own + "?status=active", "", `"total":2`, http.StatusOK},
+		{http.MethodPost, own, `{"name":"mine"}`, "", http.StatusForbidden},
+		{http.MethodPost, own + "/" + personal.ID + "/rotate", `{}`, "", http.StatusForbidden},
+		{http.MethodDelete, own + "/" + spare.ID, "", "", http.StatusNoContent},
+		{http.MethodGet, own + "?status=ended", "", `"total":1`, http.StatusOK},
+	} {
+		status, body, err := env.ServerAPIStatusAs(ctx, personal.Secret, step.method, step.path, step.body)
+		if err != nil || status != step.want {
+			t.Fatalf("%s %s with the person's token = %d, %v (%s); want %d",
+				step.method, step.path, status, err, body, step.want)
+		}
+
+		if !strings.Contains(body, step.total) {
+			t.Fatalf("%s %s = %s, want %s", step.method, step.path, body, step.total)
+		}
 	}
 }
 

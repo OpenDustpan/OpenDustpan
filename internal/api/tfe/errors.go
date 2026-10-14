@@ -134,11 +134,19 @@ func (h *Handler) writeJSONAPIError(
 // classifyTooLarge maps an oversized body or a budget that can never fit to
 // 413. ok is false for any other error.
 func classifyTooLarge(err error) (errorClass, bool) {
-	if errors.Is(err, workspace.ErrTooLarge) || errors.Is(err, workspace.ErrBudgetTooSmall) {
+	switch {
+	case errors.Is(err, workspace.ErrTooLarge), errors.Is(err, workspace.ErrBudgetTooSmall):
 		return errorClass{status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error()}, true
+	case errors.Is(err, identity.ErrRateLimited):
+		// A source over its failure budget (ADR 53).
+		return errorClass{
+			status: http.StatusTooManyRequests,
+			title:  "too many requests",
+			detail: "too many failed sign-ins from this address: try again later",
+		}, true
+	default:
+		return errorClass{status: 0, title: "", detail: ""}, false
 	}
-
-	return errorClass{status: 0, title: "", detail: ""}, false
 }
 
 // classify maps domain errors to a status, title and detail safe to show

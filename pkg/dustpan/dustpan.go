@@ -430,6 +430,12 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	// Every authenticated person can list and revoke its own personal
+	// tokens with no grant (ADR 53, decision 3).
+	cfg.authorizer = identity.SelfAllowed{
+		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
+	}
+
 	return assemble(cfg, base, svc, backups)
 }
 
@@ -1297,7 +1303,7 @@ func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Aut
 
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Burst: 0, Refill: 0, Penalty: 0, MaxSources: 0,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authentication gate: %w", err)

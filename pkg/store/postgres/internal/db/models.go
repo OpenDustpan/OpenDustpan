@@ -19,6 +19,7 @@ type AccessToken struct {
 	LastUsedAtMs pgtype.Int8
 	RevokedAtMs  pgtype.Int8
 	ReplacedBy   pgtype.Text
+	CreatedBy    string
 }
 
 type AuditEntry struct {

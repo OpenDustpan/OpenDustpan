@@ -179,7 +179,16 @@ func (s *Service) Create(
 		return Token{}, Secret{}, err
 	}
 
-	n, err := s.newToken(at, expiresAt, p.ID, in.Name, kind)
+	n, err := s.newToken(
+		tokenSpec{
+			at:          at,
+			expiresAt:   expiresAt,
+			principalID: p.ID,
+			name:        in.Name,
+			kind:        kind,
+			createdBy:   caller.Subject,
+		},
+	)
 	if err != nil {
 		return Token{}, Secret{}, err
 	}
@@ -329,7 +338,14 @@ func (s *Service) Rotate(
 		return Rotation{}, Secret{}, err
 	}
 
-	n, err := s.newToken(at, expiresAt, old.PrincipalID, old.Name, old.Kind)
+	n, err := s.newToken(tokenSpec{
+		at:          at,
+		expiresAt:   expiresAt,
+		principalID: old.PrincipalID,
+		name:        old.Name,
+		kind:        old.Kind,
+		createdBy:   caller.Subject,
+	})
 	if err != nil {
 		return Rotation{}, Secret{}, err
 	}
@@ -464,23 +480,34 @@ type issued struct {
 	digest Digest
 }
 
+// tokenSpec names the fields of a new token record.
+type tokenSpec struct {
+	at          time.Time
+	expiresAt   time.Time
+	principalID string
+	name        string
+	kind        Kind
+	createdBy   string
+}
+
 // newToken returns a new token record with its secret and digest.
-func (s *Service) newToken(at, expiresAt time.Time, principalID, name string, kind Kind) (issued, error) {
+func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	secret, err := newSecret()
 	if err != nil {
 		return issued{}, err
 	}
 
 	t := Token{
-		CreatedAt:   at,
-		ExpiresAt:   expiresAt,
+		CreatedAt:   spec.at,
+		ExpiresAt:   spec.expiresAt,
 		LastUsedAt:  time.Time{},
 		RevokedAt:   time.Time{},
 		ID:          s.newID(idPrefix),
-		PrincipalID: principalID,
-		Name:        name,
-		Kind:        kind,
+		PrincipalID: spec.principalID,
+		Name:        spec.name,
+		Kind:        spec.kind,
 		ReplacedBy:  "",
+		CreatedBy:   spec.createdBy,
 	}
 
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil

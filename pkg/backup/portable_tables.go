@@ -318,6 +318,7 @@ func portableSpec() []PortableTable {
 				{Name: "last_used_at_ms", Kind: KindTime},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
+				{Name: "created_by", Kind: KindText},
 			},
 		},
 		{

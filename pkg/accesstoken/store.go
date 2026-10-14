@@ -69,17 +69,20 @@ type Replacement struct {
 }
 
 // Query is a page request as a store reads it. PrincipalID keeps the tokens
-// of one principal, or of every principal when it is empty. A non-zero
-// ActiveAt keeps the tokens that are active at that time: not revoked, and
-// with an expiry after it. When HasAfter is set, the rows come after the
+// of one principal, or of every principal when it is empty. Filter keeps
+// the tokens by their status at the time At: active (not revoked, and with
+// an expiry after At), expiring (active, and with an expiry at or before At
+// plus ExpiringWithin), or ended (revoked, or with an expiry at or before
+// At). FilterAll keeps every token. When HasAfter is set, the rows come after the
 // row with the creation time AfterCreatedAt and the ID AfterID in the order
 // newest first: an earlier creation time, or the same time and a smaller
 // ID. Limit bounds the rows.
 type Query struct {
-	ActiveAt       time.Time
+	At             time.Time
 	AfterCreatedAt time.Time
 	PrincipalID    string
 	AfterID        string
+	Filter         Filter
 	Limit          int
 	HasAfter       bool
 }

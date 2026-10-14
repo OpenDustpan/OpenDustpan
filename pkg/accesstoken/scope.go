@@ -31,6 +31,11 @@ var (
 	// ErrWrongKind reports a token or a principal whose kind does not fit
 	// the scope, for example a service token through the personal routes.
 	ErrWrongKind = errors.New("access token kind does not fit the route")
+	// ErrSignInRequired reports a create or a rotation of an own personal
+	// token with an access token. A personal token comes from a sign-in
+	// (ADR 53, decision 10): a token that could make new tokens would
+	// outlive its maximum lifetime and a revoke.
+	ErrSignInRequired = errors.New("sign in to create or rotate a personal token: an access token cannot")
 	// ErrNoOwnPrincipal reports a caller that has no person record, so it
 	// cannot own personal tokens: a bootstrap admin token, a service or a
 	// workload.
@@ -46,6 +51,18 @@ type GrantCheck interface {
 	// its groups too. Otherwise it returns an error that wraps
 	// identity.ErrDenied.
 	RequireHeld(ctx context.Context, caller identity.Principal, principalID string) error
+}
+
+// requireSignIn returns ErrSignInRequired when caller authenticated with a
+// stored access token. Sign-in does not exist yet (ADR 55), so no caller
+// can create or rotate an own personal token until it does: a bootstrap
+// admin token has no person record either.
+func requireSignIn(caller identity.Principal) error {
+	if caller.TokenID != "" {
+		return ErrSignInRequired
+	}
+
+	return nil
 }
 
 // ownPrincipal returns the person record of caller, found by its subject,
@@ -76,6 +93,10 @@ func (s *Service) targetPrincipal(
 	ctx context.Context, caller identity.Principal, scope Scope, id string,
 ) (principal.Principal, error) {
 	if scope == ScopeOwn {
+		if err := requireSignIn(caller); err != nil {
+			return principal.Principal{}, err
+		}
+
 		return s.ownPrincipal(ctx, caller)
 	}
 
@@ -135,6 +156,10 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 // token acts as its principal.
 func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
 	if scope == ScopeOwn {
+		if err := requireSignIn(caller); err != nil {
+			return err
+		}
+
 		return s.checkOwner(ctx, caller, t)
 	}
 
