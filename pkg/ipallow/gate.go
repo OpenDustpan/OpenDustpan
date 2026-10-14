@@ -20,7 +20,7 @@ type Rules interface {
 // addresses outside the allowlist of the namespace of the object. It runs in
 // the authorization step of every route that calls Authorize, after
 // authentication and before the handler. The routes with a capability token
-// call CheckAddress instead.
+// call CheckAddress instead, after they check the token.
 type Gate struct {
 	Next             identity.Authorizer
 	Rules            Rules
@@ -52,8 +52,10 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 // does not contain the client address in ctx. It is the address-only check
 // for routes with no principal and no authorization object, such as the
 // update-lease and upload-capability routes: there is no bootstrap exemption
-// here because no principal exists on these routes. A store error fails
-// closed, like in Authorize.
+// here because no principal exists on these routes. Callers check the
+// capability token before they call it, so a caller without the token gets
+// the same answer with and without a list. A store error fails closed, like
+// in Authorize.
 func (g Gate) CheckAddress(ctx context.Context, ns namespace.Name) error {
 	if !g.Enabled {
 		return nil

@@ -140,6 +140,94 @@ func beginTFEUpload(t *testing.T, srv *dustpan.Server) (string, string) {
 		"/api/v2/json-state-uploads/" + id + "/" + reveal
 }
 
+// badLeaseToken returns a well-formed token that differs from lease: it
+// keeps the length and alphabet, so it reaches the lease check and fails
+// there.
+func badLeaseToken(t *testing.T, lease string) string {
+	t.Helper()
+
+	if lease == "" {
+		t.Fatal("empty lease token")
+
+		return ""
+	}
+
+	last := lease[len(lease)-1]
+	replacement := byte('A')
+
+	if last == 'A' {
+		replacement = 'B'
+	}
+
+	return lease[:len(lease)-1] + string(replacement)
+}
+
+// TestIPAllowlistLeaseTokenBeforeGate proves the Pulumi lease check runs
+// after the lease token check: a bad update token from outside the list gets
+// the same status and body as a bad token for a namespace with no list, a
+// valid lease from outside gets 403, and a valid lease from inside passes.
+func TestIPAllowlistLeaseTokenBeforeGate(t *testing.T) {
+	t.Parallel()
+
+	srv := newIPAllowlistServer(t, true)
+	inside := "198.51.100.7:1234"
+	outside := "192.0.2.10:5678"
+
+	lease, renew := startPreviewLease(t, srv, inside)
+
+	renewCall := func(remote, tok string) (int, string) {
+		return serveCap(t, srv, capRequest{
+			method: http.MethodPost,
+			path:   renew,
+			remote: remote,
+			auth:   "update-token " + tok,
+			body:   `{"duration":60}`,
+		})
+	}
+
+	if code, body := renewCall(outside, lease); code != http.StatusForbidden {
+		t.Fatalf("valid lease from outside answers %d, want %d: %s", code, http.StatusForbidden, body)
+	}
+
+	if code, body := renewCall(inside, lease); code != http.StatusOK {
+		t.Fatalf("valid lease from inside answers %d, want %d: %s", code, http.StatusOK, body)
+	}
+
+	bad := badLeaseToken(t, lease)
+
+	withListStatus, withListBody := renewCall(outside, bad)
+	if withListStatus != http.StatusUnauthorized {
+		t.Fatalf("bad token with a list answers %d, want %d: %s", withListStatus, http.StatusUnauthorized, withListBody)
+	}
+
+	deleteReq := ipAPIRequest{
+		method: http.MethodDelete,
+		path:   "/api/server/namespaces/acme/ip-allowlist",
+		remote: inside,
+		body:   "",
+	}
+
+	deleteStatus, deleteBody := serveIPAllowAPI(t, srv, deleteReq)
+	if deleteStatus != http.StatusNoContent {
+		t.Fatalf("DELETE list answers %d, want %d: %s", deleteStatus, http.StatusNoContent, deleteBody)
+	}
+
+	withoutListStatus, withoutListBody := renewCall(outside, bad)
+	if withoutListStatus != withListStatus || withoutListBody != withListBody {
+		t.Fatalf(
+			"bad token without a list answers %d %q, want %d %q",
+			withoutListStatus,
+			withoutListBody,
+			withListStatus,
+			withListBody,
+		)
+	}
+
+	if code, body := renewCall(outside, lease); code != http.StatusOK {
+		t.Fatalf("valid lease without a list answers %d, want %d: %s", code, http.StatusOK, body)
+	}
+}
+
 // TestIPAllowlistCapabilityRoutes proves the address-only checks of the
 // capability routes: with a list for acme, a Pulumi lease renewal and a TFE
 // state upload from outside answer 403, and from inside pass the gate.

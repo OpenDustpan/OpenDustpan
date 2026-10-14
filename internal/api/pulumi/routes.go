@@ -28,7 +28,7 @@ const (
 	// header instead of a signed-in principal. The lease stands in for the
 	// declared actions: start granted it after authorizing them, and it
 	// scopes to one update alone. The Authorizer does not run, but the
-	// address gate runs when one is configured.
+	// address gate runs after the token check when one is configured.
 	ScopeUpdateLease
 )
 
@@ -632,8 +632,10 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 }
 
 // enforceLease serves a lease route: the update lease token stands in for the
-// declared actions, so the Authorizer does not run. The address gate runs
-// after the object resolves, before the handler.
+// declared actions, so the Authorizer does not run. The checks run in order:
+// the scheme check, Resolve, the token check, the address gate, then the
+// handler. The address gate runs after the token check, so a caller without
+// the token gets the same answer whether or not the namespace has a list.
 func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -651,18 +653,50 @@ func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 			return
 		}
 
-		if h.addressGate != nil {
-			if gateErr := h.addressGate.CheckAddress(ctx, obj.Namespace()); gateErr != nil {
-				h.writeError(ctx, w, gateErr)
-
-				return
-			}
+		if !h.checkLeaseAddress(w, r, obj) {
+			return
 		}
 
 		var guest identity.Principal
 
 		route.Serve(w, r, guest, obj)
 	}
+}
+
+// checkLeaseAddress verifies the lease token of the update in r, then checks
+// the client address against the allowlist of the namespace of obj. It writes
+// the error answer and returns false on failure. Without a gate it returns
+// true and reads no store.
+func (h *Handler) checkLeaseAddress(w http.ResponseWriter, r *http.Request, obj identity.Object) bool {
+	if h.addressGate == nil {
+		return true
+	}
+
+	ctx := r.Context()
+
+	tok, _, ok := h.leaseToken(w, r)
+	if !ok {
+		return false
+	}
+
+	ref, id, ok := h.updateTarget(w, r)
+	if !ok {
+		return false
+	}
+
+	if err := h.updates.CheckLease(ctx, ref, id, tok); err != nil {
+		h.writeError(ctx, w, err)
+
+		return false
+	}
+
+	if err := h.addressGate.CheckAddress(ctx, obj.Namespace()); err != nil {
+		h.writeError(ctx, w, err)
+
+		return false
+	}
+
+	return true
 }
 
 // enforceAuthorized serves a route that needs a signed-in principal and the

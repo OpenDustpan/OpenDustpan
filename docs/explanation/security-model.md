@@ -200,8 +200,8 @@ The Pulumi update-lease routes and the OpenTofu upload-capability routes carry n
 They get an address-only check against the list of the namespace of the stack or workspace.
 The bootstrap exemption does not apply to them.
 For the OpenTofu uploads the check runs after the server checks the capability token and before it reads the body.
-For the Pulumi lease routes it runs before the server checks the lease token.
-A caller outside the list can thus learn that a namespace has a list.
+For the Pulumi lease routes the check runs after the server checks the lease token of the update.
+A caller without the token gets the same answer for a namespace with and without a list.
 A caller can not learn the list.
 `::/0` matches IPv6 clients only.
 `0.0.0.0/0` matches IPv4 clients only.
