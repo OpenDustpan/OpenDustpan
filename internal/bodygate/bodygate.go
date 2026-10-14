@@ -60,7 +60,9 @@ func (g *Gate) Acquire(n int64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.current+n > g.max {
+	// A negative reservation would lower the count and open the gate for the
+	// next callers. No caller asks for one, so refuse it.
+	if n < 0 || g.current+n > g.max {
 		return false
 	}
 
@@ -98,6 +100,12 @@ func Reservation(r *http.Request, limit int64) int64 {
 
 	n := r.ContentLength
 	if strings.Contains(strings.ToLower(r.Header.Get("Content-Encoding")), "gzip") {
+		// The declared length is the client's claim. Cap it before the
+		// multiplication, so a huge value cannot wrap to a negative number.
+		if n > limit/gzipExpansion {
+			return limit
+		}
+
 		n *= gzipExpansion
 	}
 

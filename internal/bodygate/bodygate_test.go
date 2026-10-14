@@ -101,6 +101,8 @@ func TestReservation(t *testing.T) {
 		{name: "40 MiB with limit 32 MiB caps at limit", length: 40 << 20, encoding: "", limit: limit, want: limit},
 		{name: "gzip with 1 MiB reserves 8 MiB", length: 1 << 20, encoding: "gzip", limit: limit, want: 8 << 20},
 		{name: "gzip with 8 MiB caps at limit", length: 8 << 20, encoding: "gzip", limit: limit, want: limit},
+		{name: "gzip length near MaxInt64 caps at limit", length: 1 << 62, encoding: "gzip", limit: limit, want: limit},
+		{name: "gzip length MaxInt64 caps at limit", length: 1<<63 - 1, encoding: "gzip", limit: limit, want: limit},
 		{name: "gzip header in upper case", length: 1024, encoding: "GZIP", limit: 1 << 20, want: 1024 * 8},
 	}
 
@@ -250,5 +252,20 @@ func TestSetRetryAfter(t *testing.T) {
 
 	if rec.Body.Len() != 0 {
 		t.Fatalf("body holds %d bytes, want none", rec.Body.Len())
+	}
+}
+
+// TestAcquireRejectsNegative proves a negative size never lowers the count.
+func TestAcquireRejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	g := bodygate.New(10)
+
+	if g.Acquire(-1) {
+		t.Fatal("Acquire(-1) succeeds, want failure")
+	}
+
+	if got := g.InFlight(); got != 0 {
+		t.Fatalf("InFlight() = %d, want 0", got)
 	}
 }
