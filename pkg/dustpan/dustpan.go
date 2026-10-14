@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
@@ -406,8 +407,11 @@ type Server struct {
 	observed        *metrics.ServerMetrics
 	chain           *chainDeps
 	chainOn         bool
-	shipper         *audit.Shipper
-	beforeServe     func(ctx context.Context) error
+	// tokens runs the inactivity disable of access tokens and accounts on a
+	// schedule (ADR 53), or is nil when the store keeps no tokens.
+	tokens      *accesstoken.Service
+	shipper     *audit.Shipper
+	beforeServe func(ctx context.Context) error
 }
 
 // services holds the domain services that NewServer wires together.
@@ -481,15 +485,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	svc, err := newServices(cfg)
+	tokens, err := newTokenService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
+	svc, err := newServices(cfg, tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	svc.tokens = tokens
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -579,6 +585,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		observed:        observed,
 		chain:           chain,
 		chainOn:         false,
+		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 	}, nil
@@ -812,10 +819,41 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 	return base, nil
 }
 
+// newUpdateService builds the update service. A nil token service leaves the
+// token checker nil, so the service fails closed for any update that an
+// access token started.
+func newUpdateService(
+	cfg *settings, namespaces *namespace.Service, journal *stack.JournalEntries, tokens *accesstoken.Service,
+) (*stack.Updates, error) {
+	var checker stack.TokenChecker
+	if tokens != nil {
+		checker = tokens
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Stacks:             cfg.stackStore,
+		Blobs:              cfg.blobStore,
+		Tokens:             checker,
+		Now:                cfg.now,
+		Logger:             cfg.logger,
+		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
+	return updates, nil
+}
+
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings) (services, error) {
+func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
 	)
@@ -828,20 +866,9 @@ func newServices(cfg *settings) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            cfg.updateStore,
-		Checkpoints:        cfg.checkpointStore,
-		Events:             cfg.eventStore,
-		Namespaces:         namespaces,
-		Stacks:             cfg.stackStore,
-		Blobs:              cfg.blobStore,
-		Now:                cfg.now,
-		Logger:             cfg.logger,
-		MaxCheckpointBytes: cfg.maxCheckpointBytes,
-		Journal:            journal,
-	})
+	updates, err := newUpdateService(cfg, namespaces, journal, tokens)
 	if err != nil {
-		return services{}, fmt.Errorf("update service: %w", err)
+		return services{}, err
 	}
 
 	stacks, err := stack.NewService(stack.Config{
@@ -945,6 +972,13 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	// The first run of the inactivity disable ends before the hook and
+	// before the server serves a request. A slow database delays the start
+	// by firstSweepLimit at most: the hourly runs try again.
+	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+	s.sweepOnce(firstCtx)
+	stopFirst()
+
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
 			return errors.Join(fmt.Errorf("before serve: %w", hookErr), closeListener(ln))
@@ -966,6 +1000,12 @@ func (s *Server) Run(ctx context.Context) error {
 	checkCtx, stopCheck := context.WithCancel(ctx)
 	waitCheck := s.startAuditChainCheck(checkCtx)
 
+	sweepCtx, stopSweeps := context.WithCancel(ctx)
+
+	var sweeps sync.WaitGroup
+
+	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
 	shipCtx, stopShipper := context.WithCancel(ctx)
@@ -976,9 +1016,64 @@ func (s *Server) Run(ctx context.Context) error {
 		waitCheck()
 		stopShipper()
 		waitShipper()
+		stopSweeps()
+		sweeps.Wait()
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// sweepEvery is the period of the inactivity disable. The inactivity period
+// counts in days by default, so one run each hour is ample.
+const sweepEvery = time.Hour
+
+// firstSweepLimit bounds the run of the inactivity disable before the
+// server serves.
+const firstSweepLimit = time.Minute
+
+// sweepInactive runs the inactivity disable of ADR 53 once each
+// sweepEvery, until ctx is done. Run makes the first run before it serves.
+func (s *Server) sweepInactive(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	ticker := time.NewTicker(sweepEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweepOnce(ctx)
+		}
+	}
+}
+
+// sweepOnce runs the inactivity disable once and counts the result. A failed
+// run logs no error text, which may hold driver detail (ADR 32 decision 7),
+// and the next run tries again. A run that the server stops (ctx canceled)
+// is not a failure. A run past its time limit is.
+func (s *Server) sweepOnce(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "inactivity disable failed")
+	case err != nil:
+	case len(res.Tokens) > 0 || len(res.Principals) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "inactivity disable",
+			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
 }
 
 // startUpResult answers the result of Run when a start-up step fails with

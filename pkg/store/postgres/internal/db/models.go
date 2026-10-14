@@ -20,6 +20,17 @@ type AccessToken struct {
 	RevokedAtMs  pgtype.Int8
 	ReplacedBy   pgtype.Text
 	CreatedBy    string
+	DisabledAtMs pgtype.Int8
+}
+
+type AccessTokenPolicy struct {
+	ID                int64
+	MaxLifetimeMs     int64
+	InactivityMs      int64
+	DisableTokens     bool
+	DisableAccounts   bool
+	DisableBreakGlass bool
+	UpdatedAtMs       int64
 }
 
 type AuditChainState struct {
@@ -147,14 +158,16 @@ type Namespace struct {
 }
 
 type Principal struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	DeletedAtMs pgtype.Int8
+	ID             string
+	Subject        string
+	DisplayName    string
+	Kind           string
+	Source         string
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+	DeletedAtMs    pgtype.Int8
+	DisabledAtMs   pgtype.Int8
+	LastActiveAtMs int64
 }
 
 type PrincipalGroup struct {
@@ -257,6 +270,7 @@ type Update struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	JournalClosed    bool
+	TokenID          string
 }
 
 type UpdateEvent struct {

@@ -61,6 +61,20 @@ func caller() audit.Entry {
 func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 	t.Helper()
 
+	return newFixtureAt(t, fresh, time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC))
+}
+
+// sweepStart is the start time of a sweep fixture: the inactivity period
+// and one hour before the time of the test. The sweep reads the database
+// clock, so a sweep test places its records relative to the real time.
+func sweepStart() time.Time {
+	return time.Now().UTC().Truncate(time.Millisecond).Add(-accesstoken.DefaultInactivity - time.Hour)
+}
+
+// newFixtureAt returns a fixture whose clock starts at start.
+func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fixture {
+	t.Helper()
+
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -72,7 +86,7 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 		}
 	})
 
-	c := &clock{now: time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
+	c := &clock{now: start, mu: sync.Mutex{}}
 
 	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
 	if err != nil {
@@ -123,7 +137,7 @@ func admin() identity.Principal {
 
 // scopeFor returns the administrator scope of the tokens of the principal
 // id: personal for the person, service for every other principal.
-func (f fixture) scopeFor(id string) accesstoken.Scope {
+func (f *fixture) scopeFor(id string) accesstoken.Scope {
 	if id == f.person.ID {
 		return accesstoken.ScopePersonal
 	}
@@ -133,13 +147,13 @@ func (f fixture) scopeFor(id string) accesstoken.Scope {
 
 // createIn creates a token as the administrator, in the scope that fits
 // the principal.
-func (f fixture) createIn(ctx context.Context, in accesstoken.Input) (accesstoken.Token, accesstoken.Secret, error) {
+func (f *fixture) createIn(ctx context.Context, in accesstoken.Input) (accesstoken.Token, accesstoken.Secret, error) {
 	return f.svc.Create(ctx, admin(), caller(), f.scopeFor(in.PrincipalID), in)
 }
 
 // rotate rotates the token id as the administrator, in the scope that
 // fits its kind.
-func (f fixture) rotate(
+func (f *fixture) rotate(
 	ctx context.Context, id string, in accesstoken.RotateInput,
 ) (accesstoken.Rotation, accesstoken.Secret, error) {
 	scope := accesstoken.ScopeService
@@ -153,11 +167,26 @@ func (f fixture) rotate(
 	return f.svc.Rotate(ctx, admin(), caller(), in)
 }
 
-func (f fixture) create(t *testing.T, p principal.Principal, name string) (accesstoken.Token, accesstoken.Secret) {
+func (f *fixture) create(t *testing.T, p principal.Principal, name string) (accesstoken.Token, accesstoken.Secret) {
 	t.Helper()
 
 	tok, secret, err := f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: p.ID, Name: name})
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	return tok, secret
+}
+
+// createLong makes a token that expires in 200 days: after the inactivity
+// period, so the sweep and not the expiry ends it.
+func (f *fixture) createLong(t *testing.T, p principal.Principal, name string) (accesstoken.Token, accesstoken.Secret) {
+	t.Helper()
+
+	tok, secret, err := f.createIn(t.Context(), accesstoken.Input{
+		ExpiresAt: f.clock.Now().Add(200 * 24 * time.Hour), PrincipalID: p.ID, Name: name,
+	})
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -269,8 +298,8 @@ func TestLifetime(t *testing.T) {
 		want    error
 	}{
 		{now.Add(time.Hour), nil},
-		{now.Add(accesstoken.MaxLifetime), nil},
-		{now.Add(accesstoken.MaxLifetime + time.Millisecond), accesstoken.ErrInvalid},
+		{now.Add(accesstoken.DefaultMaxLifetime), nil},
+		{now.Add(accesstoken.DefaultMaxLifetime + time.Millisecond), accesstoken.ErrInvalid},
 		{now, accesstoken.ErrInvalid},
 		{now.Add(-time.Hour), accesstoken.ErrInvalid},
 	}
@@ -393,6 +422,81 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 }
 
+func TestCheckActive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	live, _ := f.create(t, f.service, "live")
+
+	revoked, _ := f.create(t, f.service, "revoked")
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	expired, _, err := f.createIn(ctx,
+		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	orphan, _ := f.create(t, f.person, "laptop")
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	f.clock.Advance(time.Hour)
+
+	if err := f.svc.CheckActive(ctx, live.ID); err != nil {
+		t.Errorf("live token: err = %v, want nil", err)
+	}
+
+	for name, id := range map[string]string{
+		"revoked": revoked.ID, "expired": expired.ID, "deleted owner": orphan.ID, "unknown": "acc-unknown",
+	} {
+		if err := f.svc.CheckActive(ctx, id); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s token: err = %v, want ErrUnauthenticated", name, err)
+		}
+	}
+}
+
+func TestCheckActiveRefusesADisabledPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	// Only the account disable is on, so the sweep disables the person and
+	// not its token.
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	tok, _ := f.createLong(t, f.person, "laptop")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil || len(res.Principals) != 1 {
+		t.Fatalf("sweep = %+v, %v; want the person disabled", res, err)
+	}
+
+	if err := f.svc.CheckActive(ctx, tok.ID); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("token of a disabled person: err = %v, want ErrUnauthenticated", err)
+	}
+}
+
 func TestRotate(t *testing.T) {
 	t.Parallel()
 
@@ -508,7 +612,7 @@ func listFixture(t *testing.T) fixture {
 	return f
 }
 
-func mustList(t *testing.T, f fixture, req accesstoken.PageRequest) accesstoken.Page {
+func mustList(t *testing.T, f *fixture, req accesstoken.PageRequest) accesstoken.Page {
 	t.Helper()
 
 	page, err := f.svc.List(t.Context(), req)
@@ -524,14 +628,14 @@ func TestListPages(t *testing.T) {
 
 	f := listFixture(t)
 
-	page := mustList(t, f, accesstoken.PageRequest{
+	page := mustList(t, &f, accesstoken.PageRequest{
 		PrincipalID: "", Cursor: "", Filter: accesstoken.FilterActive, Limit: 1,
 	})
 	if len(page.Items) != 1 || page.Items[0].Name != "three" || page.Total != 2 || page.NextCursor == "" {
 		t.Fatalf("page 1 = %+v, want three, total 2 and a cursor", page)
 	}
 
-	page = mustList(t, f, accesstoken.PageRequest{
+	page = mustList(t, &f, accesstoken.PageRequest{
 		PrincipalID: "", Cursor: page.NextCursor, Filter: accesstoken.FilterActive, Limit: 1,
 	})
 	if len(page.Items) != 1 || page.Items[0].Name != "two" || page.NextCursor != "" {
@@ -553,7 +657,7 @@ func TestListEnded(t *testing.T) {
 		{accesstoken.FilterActive, 1},
 		{accesstoken.FilterExpiring, 0},
 	} {
-		page := mustList(t, f, accesstoken.PageRequest{
+		page := mustList(t, &f, accesstoken.PageRequest{
 			PrincipalID: f.service.ID, Cursor: "", Filter: tc.filter, Limit: 0,
 		})
 		if len(page.Items) != tc.want || page.Total != int64(tc.want) {
@@ -904,6 +1008,162 @@ func TestCreatedByAndDaysLeft(t *testing.T) {
 	}
 }
 
+func TestPolicyBoundsLifetime(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	p, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(time.Hour), Inactivity: nil, DisableTokens: nil, DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	if p.MaxLifetime != time.Hour || p.Inactivity != accesstoken.DefaultInactivity ||
+		!p.UpdatedAt.Equal(f.clock.Now()) {
+		t.Fatalf("policy = %+v, want a maximum of 1h and the other defaults", p)
+	}
+
+	tok, _ := f.create(t, f.service, "short")
+	if !tok.ExpiresAt.Equal(f.clock.Now().Add(time.Hour)) {
+		t.Fatalf("default expiry = %s, want the maximum lifetime of 1h", tok.ExpiresAt)
+	}
+
+	_, _, err = f.createIn(ctx, accesstoken.Input{
+		ExpiresAt: f.clock.Now().Add(2 * time.Hour), PrincipalID: f.service.ID, Name: "long",
+	})
+	if !errors.Is(err, accesstoken.ErrInvalid) {
+		t.Fatalf("create past the maximum: err = %v, want ErrInvalid", err)
+	}
+
+	for _, c := range []accesstoken.PolicyChange{
+		{MaxLifetime: new(time.Duration(0)), Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: nil},
+		{
+			MaxLifetime: nil, Inactivity: new(time.Millisecond), DisableTokens: nil, DisableAccounts: nil,
+			DisableBreakGlass: nil,
+		},
+		{
+			MaxLifetime: nil, Inactivity: new(accesstoken.MinInactivity - time.Minute), DisableTokens: nil,
+			DisableAccounts: nil, DisableBreakGlass: nil,
+		},
+		{
+			MaxLifetime: new(accesstoken.MaxPolicyDuration + time.Hour), Inactivity: nil, DisableTokens: nil,
+			DisableAccounts: nil, DisableBreakGlass: nil,
+		},
+		{MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true)},
+	} {
+		if _, err := f.svc.SetPolicy(ctx, caller(), c); !errors.Is(err, accesstoken.ErrInvalid) {
+			t.Errorf("set policy %+v: err = %v, want ErrInvalid", c, err)
+		}
+	}
+}
+
+func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	_, serviceSecret := f.createLong(t, f.service, "deploy")
+	_, personSecret := f.createLong(t, f.person, "laptop")
+	_, usedSecret := f.createLong(t, f.service, "used")
+
+	f.clock.Advance(accesstoken.DefaultInactivity - time.Hour)
+
+	if _, err := f.svc.AuthenticateToken(ctx, usedSecret.Reveal()); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	f.clock.Advance(2 * time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(res.Tokens) != 2 || len(res.Principals) != 1 || res.Principals[0] != f.person.ID {
+		t.Fatalf("sweep = %+v, want two tokens and the person", res)
+	}
+
+	for name, raw := range map[string]string{"service": serviceSecret.Reveal(), "person": personSecret.Reveal()} {
+		if _, err := f.svc.AuthenticateToken(ctx, raw); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s token after the sweep: err = %v, want ErrUnauthenticated", name, err)
+		}
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, usedSecret.Reveal()); err != nil {
+		t.Fatalf("used token after the sweep: %v", err)
+	}
+
+	// A new token of the disabled person does not sign in until an
+	// administrator enables the person again.
+	_, fresh := f.createLong(t, f.person, "new laptop")
+	if _, err := f.svc.AuthenticateToken(ctx, fresh.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("token of a disabled person: err = %v, want ErrUnauthenticated", err)
+	}
+
+	if err := f.principals.EnablePrincipal(ctx, caller(), f.person.ID); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, fresh.Reveal()); err != nil {
+		t.Fatalf("token of an enabled person: %v", err)
+	}
+}
+
+func TestSweepFollowsThePolicy(t *testing.T) {
+	t.Parallel()
+
+	off := accesstoken.PolicyChange{
+		MaxLifetime:       nil,
+		Inactivity:        new(time.Duration(0)),
+		DisableTokens:     nil,
+		DisableAccounts:   nil,
+		DisableBreakGlass: nil,
+	}
+	tokensOnly := accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
+	}
+
+	cases := []struct {
+		change         accesstoken.PolicyChange
+		name           string
+		wantTokens     int
+		wantPrincipals int
+	}{
+		{change: off, name: "off", wantTokens: 0, wantPrincipals: 0},
+		{change: tokensOnly, name: "tokens only", wantTokens: 1, wantPrincipals: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixtureAt(t, nil, sweepStart())
+			ctx := t.Context()
+
+			if _, err := f.svc.SetPolicy(ctx, caller(), tc.change); err != nil {
+				t.Fatalf("set policy: %v", err)
+			}
+
+			f.createLong(t, f.person, "laptop")
+			f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+			res, err := f.svc.SweepInactive(ctx, caller())
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+
+			if len(res.Tokens) != tc.wantTokens || len(res.Principals) != tc.wantPrincipals {
+				t.Fatalf("sweep = %+v, want %d tokens and %d principals", res, tc.wantTokens, tc.wantPrincipals)
+			}
+		})
+	}
+}
+
 func TestWarningFor(t *testing.T) {
 	t.Parallel()
 
@@ -959,5 +1219,169 @@ func TestExpiryWarningOfAnEndedToken(t *testing.T) {
 
 	if got := revoked.ExpiryWarningAt(f.clock.Now()); got != accesstoken.WarningNone {
 		t.Fatalf("warning of a revoked token = %q, want none", got)
+	}
+}
+
+func TestBreakGlassDisableIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
+	})
+	if !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) || !strings.Contains(err.Error(), "ADR 57") {
+		t.Fatalf("err = %v, want ErrBreakGlassUnavailable that names ADR 57", err)
+	}
+}
+
+func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	tok, secret := f.createLong(t, f.service, "idle")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
+
+	if _, err := f.svc.AuthenticateToken(ctx, secret.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token: err = %v, want ErrUnauthenticated", err)
+	}
+
+	// The refused request does not record a use, so it cannot keep the
+	// token alive.
+	got, err := f.svc.Get(ctx, tok.ID)
+	if err != nil || !got.LastUsedAt.IsZero() {
+		t.Fatalf("token after a refused request = %+v, %v; want no last use", got, err)
+	}
+
+	// With the token disable off, the token signs in again at once: a change
+	// through the Service drops the cached policy.
+	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, secret.Reveal()); err != nil {
+		t.Fatalf("token with the disable off: %v", err)
+	}
+}
+
+func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	_, first := f.createLong(t, f.service, "first")
+	_, second := f.createLong(t, f.service, "second")
+	_, third := f.createLong(t, f.service, "third")
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
+
+	// The first token reads the policy, and the cache keeps it.
+	if _, authErr := f.svc.AuthenticateToken(ctx, first.Reveal()); authErr != nil {
+		t.Fatalf("token with the disable off: %v", authErr)
+	}
+
+	// Another instance turns the disable on: this one sees it after the
+	// cache time at most.
+	_, err = f.store.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		old.DisableTokens = true
+		e := caller()
+		e.At, e.Namespace, e.Kind, e.Outcome, e.Object = f.clock.Now(), audit.ServerScope, audit.KindChange,
+			audit.OutcomeSuccess, accesstoken.PolicyRef
+
+		return old, e, nil
+	})
+	if err != nil {
+		t.Fatalf("update policy in the store: %v", err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); err != nil {
+		t.Fatalf("inactive token inside the cache time: %v, want the cached policy", err)
+	}
+
+	f.clock.Advance(10 * time.Second)
+
+	if _, err := f.svc.AuthenticateToken(ctx, third.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token after the cache time: err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// failingPolicy is a store whose policy read fails.
+type failingPolicy struct {
+	*sqlite.Store
+}
+
+var errPolicyRead = errors.New("policy read failed")
+
+func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
+	return accesstoken.Policy{}, errPolicyRead
+}
+
+func TestPolicyReadErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	_, secret := f.createLong(t, f.service, "deploy")
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Logger: nil,
+		Now: f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
+	if _, err := svc.AuthenticateToken(t.Context(), secret.Reveal()); !errors.Is(err, errPolicyRead) {
+		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
+	}
+}
+
+func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	// Only the account disable is on, so the token rule refuses nothing.
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	personTok, personSecret := f.createLong(t, f.person, "laptop")
+	_, serviceSecret := f.createLong(t, f.service, "deploy")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
+
+	_, authErr := f.svc.AuthenticateToken(ctx, personSecret.Reveal())
+	if !errors.Is(authErr, identity.ErrUnauthenticated) {
+		t.Fatalf("token of an inactive person: err = %v, want ErrUnauthenticated", authErr)
+	}
+
+	// The refused request records no use, so it cannot make the account
+	// active again.
+	got, err := f.svc.Get(ctx, personTok.ID)
+	if err != nil || !got.LastUsedAt.IsZero() {
+		t.Fatalf("token after a refused request = %+v, %v; want no last use", got, err)
+	}
+
+	// The account rule covers persons only.
+	if _, err := f.svc.AuthenticateToken(ctx, serviceSecret.Reveal()); err != nil {
+		t.Fatalf("token of a service: %v", err)
 	}
 }

@@ -60,6 +60,7 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			EndedAtMs:        row.EndedAtMs,
 			CreatedBy:        row.CreatedBy,
 			RestoredFrom:     row.RestoredFrom,
+			TokenID:          row.TokenID,
 		})
 		if err != nil {
 			if isForeignKeyViolation(err) {
@@ -118,6 +119,7 @@ func (s *Store) GetUpdate(ctx context.Context, ref stack.Ref, id stack.UpdateID)
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		TokenID:          row.TokenID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -223,6 +225,7 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		TokenID:          row.TokenID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}, ref)
@@ -265,6 +268,7 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 			DryRun:           rows[i].DryRun,
 			CreatedBy:        rows[i].CreatedBy,
 			RestoredFrom:     rows[i].RestoredFrom,
+			TokenID:          rows[i].TokenID,
 			JournalVersion:   rows[i].JournalVersion,
 			CheckpointBytes:  rows[i].CheckpointBytes,
 		})
@@ -689,6 +693,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
 		JournalVersion:   row.JournalVersion,
+		TokenID:          row.TokenID,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,

@@ -324,7 +324,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 	ctx := t.Context()
 
 	prn := principal.Principal{
-		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
+		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: "prn-a", Subject: "alice", DisplayName: "",
 		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
