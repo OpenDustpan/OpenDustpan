@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -93,6 +94,70 @@ func TestTurningTheAuditChainOffIsAudited(t *testing.T) {
 
 	if e := appendChainEntry(t, st, acme, "req-2"); e.Hash != "" {
 		t.Fatalf("entry after the chain went off: hash %q, want none", e.Hash)
+	}
+}
+
+// TestAStoppedRestoreRechecksTheAuditChain proves ADR 64 decision 6 for a
+// restore that stops while it applies: the next start writes the switch
+// entry of the restore, which names the requester and the backup.
+func TestAStoppedRestoreRechecksTheAuditChain(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	createChainNamespace(t, st)
+
+	stop := runChainServer(t, st, audit.ChainOn)
+	waitForChainState(t, st, audit.ChainStateOn)
+	stop()
+
+	before := len(listServer(t, st))
+
+	stopped := backup.RestoreRecord{
+		StartedAt:   time.Now().UTC(),
+		EndedAt:     time.Time{},
+		ID:          backup.RestoreID("rst-chain0000000000001"),
+		BackupID:    backup.ID("bkp-chain0000000000001"),
+		PreBackupID: "",
+		RequestedBy: "alice",
+		Error:       "",
+		State:       backup.RestoreChecking,
+	}
+
+	if err := st.CreateRestore(t.Context(), stopped); err != nil {
+		t.Fatalf("create restore: %v", err)
+	}
+
+	if err := st.MarkRestoreApplying(t.Context(), stopped.ID, ""); err != nil {
+		t.Fatalf("mark restore applying: %v", err)
+	}
+
+	stop = runChainServer(t, st, audit.ChainOn)
+	waitForServerEntries(t, st, before+1)
+	stop()
+
+	// The list answers newest first.
+	got := listServer(t, st)[0]
+	marked := len(got.Changes) == 1 && got.Changes[0].Key == audit.ChangeRestore &&
+		got.Changes[0].New == stopped.BackupID.String()
+
+	if got.Action != audit.ActionSetChain || got.Subject != "alice" || got.Hash == "" || !marked {
+		t.Fatalf("restore switch entry: got %+v, want a chained switch by alice that marks the restore", got)
+	}
+}
+
+// waitForServerEntries waits until the server scope of st holds want
+// entries.
+func waitForServerEntries(t *testing.T, st *sqlite.Store, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(chainWait)
+
+	for len(listServer(t, st)) < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("server scope after %s: got %d entries, want %d", chainWait, len(listServer(t, st)), want)
+		}
+
+		pauseChain(t)
 	}
 }
 

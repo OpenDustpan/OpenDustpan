@@ -84,9 +84,10 @@ type RestoreConfig struct {
 }
 
 // AppliedRestore names the restore that the after-apply step follows: its
-// ID and the person who requested it.
+// ID, the backup it applies and the person who requested it.
 type AppliedRestore struct {
 	ID          RestoreID
+	BackupID    ID
 	RequestedBy string
 }
 
@@ -787,7 +788,13 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 		s.trackRestore(marked)
 	}
 
-	return s.applyPinned(ctx, AppliedRestore{ID: id, RequestedBy: req.RequestedBy}, req.BackupID, pinned, pre)
+	return s.applyPinned(
+		ctx,
+		AppliedRestore{ID: id, BackupID: req.BackupID, RequestedBy: req.RequestedBy},
+		req.BackupID,
+		pinned,
+		pre,
+	)
 }
 
 // applyPinned stages the pinned backup, copies its blobs, swaps the staged

@@ -270,13 +270,27 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 // sees one snapshot of the log and takes no write lock. So a switch of the
 // chain during the check gives no false failure.
 func (s *Store) CheckEach(ctx context.Context, scopes []namespace.Name) ([]audit.CheckResult, error) {
+	return s.checkScopesWith(ctx, scopes, (*audit.TimelineBuilder).Timeline)
+}
+
+// CheckRestored implements audit.RestoreChecker as CheckEach, with the rule
+// of audit.TimelineBuilder.RestoredTimeline.
+func (s *Store) CheckRestored(ctx context.Context, scopes []namespace.Name) ([]audit.CheckResult, error) {
+	return s.checkScopesWith(ctx, scopes, (*audit.TimelineBuilder).RestoredTimeline)
+}
+
+// checkScopesWith checks each scope against the timeline that build answers, in
+// one read transaction.
+func (s *Store) checkScopesWith(
+	ctx context.Context, scopes []namespace.Name, build timelineRule,
+) ([]audit.CheckResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	out := make([]audit.CheckResult, 0, len(scopes))
 
 	err := s.inReadTx(ctx, func(q *db.Queries) error {
-		timeline, err := chainTimeline(ctx, q)
+		timeline, err := chainTimeline(ctx, q, build)
 		if err != nil {
 			return err
 		}

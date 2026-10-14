@@ -165,13 +165,17 @@ A backup does not carry that table.
 A restore keeps the state of the target installation.
 After a restore, the server writes one switch entry with a hash for that state.
 So the switch entries end in the state of this installation.
+The entry names the person who requested the restore, and holds the change `restore` with the ID of the backup.
+Before it writes the entry, the server checks the restored log.
+When that check fails, the server still serves, logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
+A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
 When the restored log holds chained entries and the chain is off, the server logs the same warning after the restore.
 
 The check reads each run of chained entries on its own.
 An entry without a hash ends a run, and the next chained entry starts a new run with an empty `prevHash`.
 An entry without a hash passes the check only when the switch entries say that the chain was off at its time.
 An instance can keep the old state for 2 seconds after a switch to on.
-So the check also accepts an entry without a hash up to 2 seconds after that switch.
+So the check also accepts an entry without a hash up to 2 seconds after the chain was off.
 So the check finds a hash that someone deleted from a chained log.
 The check reads the switch entries in the chain of `@server`, from sequence 1.
 A switch entry counts only when its hash matches its fields and links it to the entry before it.
@@ -198,6 +202,12 @@ While the chain is off, the server does not run this check.
           severity: critical
         annotations:
           summary: An OpenDustpan audit chain does not match
+      - alert: DustpanAuditRestoreCheckFailed
+        expr: increase(dustpan_audit_restore_check_failures_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A restored OpenDustpan audit log does not match its chain
 ```
 
 ## What the chain protects against

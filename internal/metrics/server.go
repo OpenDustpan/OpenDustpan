@@ -80,9 +80,12 @@ type ServerMetrics struct {
 	ready    *Counter
 	audit    *Counter
 	chainBad *Gauge
-	sinks    sinkFamilies
-	reloads  *Counter
-	reloadOK *Gauge
+	// restoreBad counts restores whose audit log failed the chain check
+	// before the switch entry of the restore.
+	restoreBad *Counter
+	sinks      sinkFamilies
+	reloads    *Counter
+	reloadOK   *Gauge
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -130,8 +133,9 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		chainBad: reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
-		sinks:    newSinkFamilies(reg),
+		chainBad:   reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		restoreBad: newRestoreCheckCounter(reg),
+		sinks:      newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
 			"Reloads of the configuration file by result.",
@@ -231,6 +235,22 @@ const chainInvalidHelp = "Audit scopes whose chain check failed in the last sche
 // scope. Operators alert when it is above zero.
 func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 	m.chainBad.Set(float64(scopes))
+}
+
+// newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
+// in reg.
+func newRestoreCheckCounter(reg *Registry) *Counter {
+	return reg.NewCounter("dustpan_audit_restore_check_failures_total",
+		"Restores whose restored audit log failed the chain check.", nil, 1)
+}
+
+// IncAuditRestoreCheckFailure adds one to the count of restores whose
+// restored audit log failed the chain check before the switch entry of the
+// restore (ADR 64 decision 6). The server still serves after such a
+// restore, so the counter and the error log are its record. Operators
+// alert when it is above zero.
+func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
+	m.restoreBad.Inc()
 }
 
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,

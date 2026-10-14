@@ -1,6 +1,7 @@
 package audittest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -56,7 +57,9 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a switch to on renamed and stripped is found", test: testChainSwitchRenamed},
 		{name: "a switch to on with another action and stripped is found", test: testChainSwitchActionChanged},
 		{name: "a start on rewritten to off without a hash is found", test: testChainStartRewritten},
-		{name: "a second start entry is skipped", test: testChainSecondStartSkipped},
+		{name: "a write after a stale read of the record is refused", test: testChainStaleReadRefused},
+		{name: "a race of two starts with the same setting keeps the timeline", test: testChainRaceSameSetting},
+		{name: "a race of a first start with on and auto keeps the timeline", test: testChainRaceFirstStart},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
@@ -142,12 +145,25 @@ type switchSpec struct {
 func (tl *timeline) record(spec switchSpec) {
 	tl.t.Helper()
 
-	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained, Start: false}
+	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained}
 	rec := audit.ChainRecord{State: spec.state, EverChained: spec.ever}
 
-	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
+	if err := writeChain(tl.t, tl.s, rec, entry); err != nil {
 		tl.t.Fatalf("record chain %s: %v", spec.state, err)
 	}
+}
+
+// writeChain records rec and appends entries in s, with the record that s
+// holds now as the record the caller read.
+func writeChain(t *testing.T, s audit.ChainSwitch, rec audit.ChainRecord, entries ...audit.ChainEntry) error {
+	t.Helper()
+
+	read, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	return s.RecordChain(t.Context(), audit.ChainWrite{Now: nil, Entries: entries, Read: read, Record: rec})
 }
 
 // stateOf answers the state of a chain that is on or off.
@@ -338,10 +354,10 @@ func testChainSwitchLag(t *testing.T, ts ChainTestStore) {
 func (tl *timeline) forgeOff(at time.Time) {
 	tl.t.Helper()
 
-	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false, Start: false}
+	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false}
 	rec := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
 
-	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
+	if err := writeChain(tl.t, tl.s, rec, entry); err != nil {
 		tl.t.Fatalf("forge a switch to off: %v", err)
 	}
 }
@@ -514,18 +530,20 @@ func testChainStartRewritten(t *testing.T, ts ChainTestStore) {
 	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
 }
 
-func testChainSecondStartSkipped(t *testing.T, ts ChainTestStore) {
+func testChainStaleReadRefused(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	s := ts.Store
-	rec := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	none := audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}
+	off := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	start := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, now()), Chained: false}
 
 	// Two instances read no record at the same time, and both write the
-	// start entry of a new installation.
-	for range 2 {
-		start := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, now()), Chained: false, Start: true}
-		if err := s.RecordChain(t.Context(), rec, []audit.ChainEntry{start}); err != nil {
-			t.Fatalf("record start: %v", err)
+	// start entry of a new installation. The second write is refused.
+	for i, want := range []error{nil, audit.ErrChainRecordChanged} {
+		w := audit.ChainWrite{Now: nil, Entries: []audit.ChainEntry{start}, Read: none, Record: off}
+		if err := s.RecordChain(t.Context(), w); !errors.Is(err, want) {
+			t.Fatalf("record start %d: got %v, want %v", i+1, err, want)
 		}
 	}
 
@@ -541,6 +559,136 @@ func testChainSecondStartSkipped(t *testing.T, ts ChainTestStore) {
 	if got := check(t, s, audit.ServerScope); !got.Valid {
 		t.Fatalf("check @server: got %+v, want valid", got)
 	}
+}
+
+// racingSwitch is the switch of one instance whose read of the chain record
+// lets another instance start once, right after the read. So the write of
+// the instance follows a record that changed.
+type racingSwitch struct {
+	ChainStore
+
+	other func()
+	raced bool
+}
+
+// ChainRecord reads the record, then lets the other instance start the
+// first time.
+func (r *racingSwitch) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
+	rec, err := r.ChainStore.ChainRecord(ctx)
+	if !r.raced {
+		r.raced = true
+		r.other()
+	}
+
+	return rec, err
+}
+
+// raceStart starts instance B with setting b at the time b and instance A
+// with setting a at the time a in the order of the race: A starts after B
+// read the record and before B writes it. It answers the chain of B.
+func raceStart(t *testing.T, s ChainStore, a, b raceInstance) bool {
+	t.Helper()
+
+	other := func() {
+		ports := audit.ChainPorts{Switch: s, Logger: nil}
+		if _, err := audit.ResolveChain(t.Context(), ports, a.setting, a.clock); err != nil {
+			t.Fatalf("start instance A: %v", err)
+		}
+	}
+
+	sw := &racingSwitch{ChainStore: s, other: other, raced: false}
+
+	on, err := audit.ResolveChain(t.Context(), audit.ChainPorts{Switch: sw, Logger: nil}, b.setting, b.clock)
+	if err != nil {
+		t.Fatalf("start instance B: %v", err)
+	}
+
+	return on
+}
+
+// raceInstance is one instance of a race: its setting and its clock.
+type raceInstance struct {
+	clock   func() time.Time
+	setting audit.ChainSetting
+}
+
+// at answers a clock that always answers t.
+func at(t time.Time) func() time.Time {
+	return func() time.Time { return t }
+}
+
+// wantRaceResult fails the test unless the record is want, @server holds
+// entries switch entries, and every scope checks valid.
+func wantRaceResult(t *testing.T, s ChainStore, want audit.ChainRecord, entries int64, scopes ...namespace.Name) {
+	t.Helper()
+
+	got, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	if got != want {
+		t.Fatalf("chain record after the race: got %+v, want %+v", got, want)
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list @server: %v", err)
+	}
+
+	if listing.Total != entries {
+		t.Fatalf("@server holds %d entries after the race, want %d", listing.Total, entries)
+	}
+
+	for _, scope := range append([]namespace.Name{audit.ServerScope}, scopes...) {
+		if result := check(t, s, scope); !result.Valid {
+			t.Fatalf("check %s after the race: got %+v, want valid", scope, result)
+		}
+	}
+}
+
+func testChainRaceSameSetting(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	tl := newTimeline(t, s)
+	tl.start(false)
+	tl.append(1)
+
+	// Both instances start with on. B reads the record off first, A
+	// commits its switch to on, then B, whose clock is earlier, writes.
+	b := raceInstance{clock: at(tl.at.Add(chainStep)), setting: audit.ChainOn}
+	a := raceInstance{clock: at(tl.at.Add(2 * chainStep)), setting: audit.ChainOn}
+
+	if on := raceStart(t, s, a, b); !on {
+		t.Fatal("instance B: chain off, want on")
+	}
+
+	tl.at = tl.at.Add(2 * chainStep)
+	tl.append(1)
+
+	wantRaceResult(t, s, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}, 2, tl.ns.Name)
+}
+
+func testChainRaceFirstStart(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	tl := newTimeline(t, s)
+
+	// A new installation: A starts with on, B with auto. B reads no record
+	// first, A commits the start and its switch to on, then B writes.
+	b := raceInstance{clock: at(tl.at.Add(chainStep)), setting: audit.ChainAuto}
+	a := raceInstance{clock: at(tl.at.Add(2 * chainStep)), setting: audit.ChainOn}
+
+	if on := raceStart(t, s, a, b); !on {
+		t.Fatal("instance B: chain off, want on, as A recorded")
+	}
+
+	tl.at = tl.at.Add(2 * chainStep)
+	tl.append(1)
+
+	wantRaceResult(t, s, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}, 2, tl.ns.Name)
 }
 
 func testChainCheckEach(t *testing.T, ts ChainTestStore) {
@@ -628,7 +776,7 @@ func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 		{State: audit.ChainStateOn, EverChained: true},
 		{State: audit.ChainStateOff, EverChained: true},
 	} {
-		if err := s.RecordChain(t.Context(), want, nil); err != nil {
+		if err := writeChain(t, s, want); err != nil {
 			t.Fatalf("record chain %+v: %v", want, err)
 		}
 
@@ -647,8 +795,8 @@ func testRecordChainIsAtomic(t *testing.T, ts ChainTestStore) {
 	bad := good
 	bad.Namespace = "acme"
 
-	err := s.RecordChain(t.Context(), audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
-		[]audit.ChainEntry{{Entry: good, Chained: false, Start: false}, {Entry: bad, Chained: false, Start: false}})
+	err := writeChain(t, s, audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
+		audit.ChainEntry{Entry: good, Chained: false}, audit.ChainEntry{Entry: bad, Chained: false})
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("record chain with an entry of another scope: got %v, want ErrInvalidEntry", err)
 	}

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // fakeSwitch is an in-memory audit.ChainSwitch. It keeps the switch
@@ -19,8 +21,11 @@ type fakeSwitch struct {
 	rec     audit.ChainRecord
 	records int
 	scans   int
-	chained bool
-	on      bool
+	// conflicts is the count of writes to refuse with
+	// audit.ErrChainRecordChanged, as when another instance writes first.
+	conflicts int
+	chained   bool
+	on        bool
 }
 
 func (f *fakeSwitch) SetChain(on bool) { f.on = on }
@@ -33,18 +38,44 @@ func (f *fakeSwitch) HasChainedEntries(context.Context) (bool, error) {
 
 func (f *fakeSwitch) ChainRecord(context.Context) (audit.ChainRecord, error) { return f.rec, nil }
 
-func (f *fakeSwitch) RecordChain(_ context.Context, rec audit.ChainRecord, entries []audit.ChainEntry) error {
-	for i := range entries {
-		if err := entries[i].Entry.Validate(); err != nil {
+func (f *fakeSwitch) RecordChain(_ context.Context, w audit.ChainWrite) error {
+	if f.conflicts > 0 || w.Read != f.rec {
+		f.conflicts--
+
+		return audit.ErrChainRecordChanged
+	}
+
+	entries := make([]audit.ChainEntry, 0, len(w.Entries))
+
+	for i := range w.Entries {
+		e := w.Entries[i]
+		if w.Now != nil {
+			e.Entry.At = w.Now()
+		}
+
+		if err := e.Entry.Validate(); err != nil {
 			return err
 		}
+
+		entries = append(entries, e)
 	}
 
 	f.entries = append(f.entries, entries...)
-	f.rec = rec
+	f.rec = w.Record
 	f.records++
 
 	return nil
+}
+
+// newFake answers a fake switch with rec and a log that holds chained
+// entries when chained.
+func newFake(rec audit.ChainRecord, chained bool) *fakeSwitch {
+	return &fakeSwitch{entries: nil, rec: rec, records: 0, scans: 0, conflicts: 0, chained: chained, on: true}
+}
+
+// clockAt answers a clock that always answers t.
+func clockAt(t time.Time) func() time.Time {
+	return func() time.Time { return t }
 }
 
 // wantSwitch is one switch entry a start must write: its value path and
@@ -124,13 +155,13 @@ func runResolveCase(t *testing.T, tc resolveCase) {
 	// A record holds whether the log was ever chained; without a record the
 	// resolve reads the log.
 	rec := audit.ChainRecord{State: tc.recorded, EverChained: tc.recorded != audit.ChainUnknown && tc.chained}
-	f := &fakeSwitch{entries: nil, rec: rec, records: 0, scans: 0, chained: tc.chained, on: true}
+	f := newFake(rec, tc.chained)
 
 	var logs bytes.Buffer
 
 	ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
 
-	got, err := audit.ResolveChain(t.Context(), ports, tc.setting, time.Unix(0, 0))
+	got, err := audit.ResolveChain(t.Context(), ports, tc.setting, clockAt(time.Unix(0, 0)))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -201,67 +232,179 @@ func checkSwitches(t *testing.T, f *fakeSwitch, want []wantSwitch) {
 	}
 }
 
+func TestResolveChainReadsAgainOnce(t *testing.T) {
+	t.Parallel()
+
+	off := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+
+	// One write that another instance changed first: the start reads the
+	// record again and records the switch.
+	f := newFake(off, false)
+	f.conflicts = 1
+
+	ports := audit.ChainPorts{Switch: f, Logger: nil}
+
+	on, err := audit.ResolveChain(t.Context(), ports, audit.ChainOn, clockAt(walkAt(0, 0)))
+	if err != nil || !on || f.records != 1 {
+		t.Fatalf("resolve after one change: on %v, err %v, records %d, want on, nil, 1", on, err, f.records)
+	}
+
+	// Two such writes fail the start.
+	f = newFake(off, false)
+	f.conflicts = 2
+	ports.Switch = f
+
+	_, err = audit.ResolveChain(t.Context(), ports, audit.ChainOn, clockAt(walkAt(0, 0)))
+	if !errors.Is(err, audit.ErrChainRecordChanged) {
+		t.Fatalf("resolve after two changes: got %v, want ErrChainRecordChanged", err)
+	}
+
+	if f.records != 0 {
+		t.Fatalf("resolve after two changes: %d records, want 0", f.records)
+	}
+}
+
+// fakeChecker is an audit.RestoreChecker that answers results, or err.
+type fakeChecker struct {
+	err     error
+	results []audit.CheckResult
+}
+
+func (c fakeChecker) CheckRestored(context.Context, []namespace.Name) ([]audit.CheckResult, error) {
+	return c.results, c.err
+}
+
+// recheckCase is one restore of TestRecheckChainAfterARestore.
+type recheckCase struct {
+	check       fakeChecker
+	name        string
+	rec         audit.ChainRecord
+	wantInvalid int
+	chained     bool
+	wantEver    bool
+	wantWarn    bool
+	wantError   bool
+}
+
 func TestRecheckChainAfterARestore(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name     string
-		rec      audit.ChainRecord
-		chained  bool
-		wantEver bool
-		wantWarn bool
-	}{
+	valid := fakeChecker{
+		err: nil,
+		results: []audit.CheckResult{
+			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
+			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
+		},
+	}
+	stripped := fakeChecker{
+		err: nil,
+		results: []audit.CheckResult{
+			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
+			{Checked: 1, BadSequence: 1, Unchained: 0, Valid: false},
+		},
+	}
+	failed := fakeChecker{err: io.ErrUnexpectedEOF, results: nil}
+	off := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+
+	cases := []recheckCase{
 		{
-			name:     "a chained log on a chain that is off warns",
-			rec:      audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
-			chained:  true,
-			wantEver: true,
-			wantWarn: true,
+			name: "a chained log on a chain that is off warns", rec: off, check: valid,
+			chained: true, wantEver: true, wantWarn: true, wantInvalid: 0, wantError: false,
 		},
 		{
-			name:     "a chained log on a chain that is on is quiet",
-			rec:      audit.ChainRecord{State: audit.ChainStateOn, EverChained: false},
-			chained:  true,
-			wantEver: true,
-			wantWarn: false,
+			name:        "a chained log on a chain that is on is quiet",
+			rec:         audit.ChainRecord{State: audit.ChainStateOn, EverChained: false},
+			check:       valid,
+			chained:     true,
+			wantEver:    true,
+			wantWarn:    false,
+			wantInvalid: 0,
+			wantError:   false,
 		},
 		{
-			name:     "an unchained log changes nothing",
-			rec:      audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
-			chained:  false,
-			wantEver: false,
-			wantWarn: false,
+			name: "an unchained log changes nothing", rec: off, check: valid,
+			chained: false, wantEver: false, wantWarn: false, wantInvalid: 0, wantError: false,
+		},
+		{
+			name: "a restored log that fails the check logs an error", rec: off, check: stripped,
+			chained: false, wantEver: false, wantWarn: false, wantInvalid: 1, wantError: true,
+		},
+		{
+			name: "a check that cannot read counts every scope", rec: off, check: failed,
+			chained: false, wantEver: false, wantWarn: false, wantInvalid: 2, wantError: true,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			f := &fakeSwitch{entries: nil, rec: tc.rec, records: 0, scans: 0, chained: tc.chained, on: true}
-
-			var logs bytes.Buffer
-
-			ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
-
-			if err := audit.RecheckChain(t.Context(), ports, walkAt(0, 0), "alice"); err != nil {
-				t.Fatalf("recheck: %v", err)
-			}
-
-			// A restore ends the restored timeline with one chained switch
-			// entry for the recorded state, so the record notes a chained
-			// log.
-			if f.rec.State != tc.rec.State || !f.rec.EverChained || len(f.entries) != 1 ||
-				!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(tc.rec.State) ||
-				f.entries[0].Entry.Subject != "alice" {
-				t.Fatalf("record %+v with entries %+v, want state %q, ever and one chained switch entry",
-					f.rec, f.entries, tc.rec.State)
-			}
-
-			if warned := strings.Contains(logs.String(), "audit chain is off"); warned != tc.wantWarn {
-				t.Fatalf("warning: got %v, want %v", warned, tc.wantWarn)
-			}
+			runRecheckCase(t, tc)
 		})
+	}
+}
+
+// runRecheckCase rechecks tc against a fake switch and checks the switch
+// entry, the count of failed scopes and the logs.
+func runRecheckCase(t *testing.T, tc recheckCase) {
+	t.Helper()
+
+	f := newFake(tc.rec, tc.chained)
+
+	var logs bytes.Buffer
+
+	ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	restore := audit.ChainRestore{
+		Checker:   tc.check,
+		Now:       clockAt(walkAt(0, 0)),
+		BackupID:  "bkp-1",
+		Requester: "alice",
+		Scopes:    []namespace.Name{audit.ServerScope, "acme"},
+	}
+
+	invalid, err := audit.RecheckChain(t.Context(), ports, restore)
+	if err != nil {
+		t.Fatalf("recheck: %v", err)
+	}
+
+	if invalid != tc.wantInvalid {
+		t.Fatalf("failed scopes: got %d, want %d", invalid, tc.wantInvalid)
+	}
+
+	checkRestoreSwitch(t, f, tc.rec)
+	checkRecheckLogs(t, logs.String(), tc)
+}
+
+// checkRestoreSwitch proves that f holds one chained switch entry for the
+// state of rec by alice that marks the restore of bkp-1.
+func checkRestoreSwitch(t *testing.T, f *fakeSwitch, rec audit.ChainRecord) {
+	t.Helper()
+
+	// A restore ends the restored timeline with one chained switch entry
+	// for the recorded state, so the record notes a chained log. The entry
+	// names the requester and marks the restore of the backup.
+	if f.rec.State != rec.State || !f.rec.EverChained || len(f.entries) != 1 ||
+		!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(rec.State) ||
+		f.entries[0].Entry.Subject != "alice" {
+		t.Fatalf("record %+v with entries %+v, want state %q, ever and one chained switch entry",
+			f.rec, f.entries, rec.State)
+	}
+
+	if got := f.entries[0].Entry.Changes; len(got) != 1 || got[0].Key != audit.ChangeRestore || got[0].New != "bkp-1" {
+		t.Fatalf("switch entry changes: got %+v, want restore = bkp-1", got)
+	}
+}
+
+// checkRecheckLogs proves that logs hold the warning and the error that tc
+// wants.
+func checkRecheckLogs(t *testing.T, logs string, tc recheckCase) {
+	t.Helper()
+
+	if warned := strings.Contains(logs, "audit chain is off"); warned != tc.wantWarn {
+		t.Fatalf("warning: got %v, want %v", warned, tc.wantWarn)
+	}
+
+	if logged := strings.Contains(logs, "level=ERROR"); logged != tc.wantError {
+		t.Fatalf("error log: got %v, want %v in %q", logged, tc.wantError, logs)
 	}
 }
 
@@ -381,6 +524,32 @@ func TestChainWalkSwitchLag(t *testing.T) {
 
 	if walkOK(timeline, walkEntry(1), walkEntry(2), tooLate) {
 		t.Fatal("the walk accepts an unchained entry after the lag")
+	}
+}
+
+func TestChainWalkShortOffWindow(t *testing.T) {
+	t.Parallel()
+
+	// The chain was on, went off at entry 2, and on again a quarter of the
+	// lag later. An instance could still hold the state off for the lag.
+	timeline := []audit.ChainPoint{
+		{At: walkAt(0, 0), On: true},
+		{At: walkAt(2, 0), On: false},
+		{At: walkAt(2, audit.ChainSwitchLag/4), On: true},
+	}
+
+	within := walkEntry(2)
+	within.At = walkAt(2, audit.ChainSwitchLag/2)
+
+	if !walkOK(timeline, walkChained(1, ""), within) {
+		t.Fatal("the walk refuses an unchained entry within the lag after a short off window")
+	}
+
+	after := walkEntry(2)
+	after.At = walkAt(2, audit.ChainSwitchLag+audit.ChainSwitchLag/2)
+
+	if walkOK(timeline, walkChained(1, ""), after) {
+		t.Fatal("the walk accepts an unchained entry after the lag of a short off window")
 	}
 }
 
@@ -610,6 +779,33 @@ func TestTimelineAgainstTheRecord(t *testing.T) {
 		if got := build(tc.rec, tc.entries); got.Broken != tc.broken {
 			t.Fatalf("%s: broken %v, want %v", tc.name, got.Broken, tc.broken)
 		}
+	}
+}
+
+func TestRestoredTimeline(t *testing.T) {
+	t.Parallel()
+
+	startOn := walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0))
+	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
+	off := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
+	chained := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
+
+	// The backup ends on and the target records off: the log of the
+	// backup is whole.
+	b := audit.NewTimelineBuilder()
+	b.Add(serverLink(startOn)[0])
+
+	if got := b.RestoredTimeline(off); got.Broken {
+		t.Fatalf("a backup that ends in another state: %+v, want not broken", got)
+	}
+
+	// A backup without a hashed switch, and a target that records a
+	// chained log: someone removed the hashes.
+	b = audit.NewTimelineBuilder()
+	b.Add(serverLink(startOff)[0])
+
+	if got := b.RestoredTimeline(chained); !got.Broken {
+		t.Fatalf("a backup without a hashed switch: %+v, want broken", got)
 	}
 }
 

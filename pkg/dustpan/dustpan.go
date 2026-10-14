@@ -1143,8 +1143,6 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 		state := running[i].State
 		if state == backup.RestoreChecking || state == backup.RestoreApplying {
 			crashed = true
-
-			break
 		}
 	}
 
@@ -1154,6 +1152,10 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 
 	if !crashed {
 		return nil
+	}
+
+	if err := s.recheckStoppedRestores(ctx, running); err != nil {
+		return err
 	}
 
 	fencer, ok := s.restoreRegistry.(backup.Fencer)
@@ -1667,9 +1669,13 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, cfg.logger, cfg.now)),
-		Now:         cfg.now,
-		Logger:      cfg.logger,
+		AfterApply: afterRestore(sealAfterRestore(deps), recheckChainAfterRestore(chain, restoreChain{
+			logger:   cfg.logger,
+			now:      cfg.now,
+			observed: deps.observed,
+		})),
+		Now:    cfg.now,
+		Logger: cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)
@@ -1682,17 +1688,46 @@ func newRestoreService(
 // restore that it follows.
 type restoreStep func(ctx context.Context, restore backup.AppliedRestore) error
 
-// afterRestore returns the after-apply step of a restore that runs steps in
-// order and stops at the first error.
+// recheckStoppedRestores runs the after-apply step of the audit chain for
+// each restore of running that stopped while it applied: the swap may have
+// replaced the log, and the step never ran (ADR 64 decision 6).
+func (s *Server) recheckStoppedRestores(ctx context.Context, running []backup.RestoreRecord) error {
+	recheck := recheckChainAfterRestore(s.chain, restoreChain{logger: s.logger, now: s.now, observed: s.observed})
+
+	for i := range running {
+		if running[i].State != backup.RestoreApplying {
+			continue
+		}
+
+		restore := backup.AppliedRestore{
+			ID:          running[i].ID,
+			BackupID:    running[i].BackupID,
+			RequestedBy: running[i].RequestedBy,
+		}
+
+		if err := recheck(ctx, restore); err != nil {
+			return fmt.Errorf("stopped restore %s: %w", running[i].ID, err)
+		}
+	}
+
+	return nil
+}
+
+// afterRestore returns the after-apply step of a restore that runs every
+// step in order, also after a step fails, and joins their errors. So a
+// failed seal never skips the switch entry of the audit chain, which the
+// check needs after a restore.
 func afterRestore(steps ...restoreStep) restoreStep {
 	return func(ctx context.Context, restore backup.AppliedRestore) error {
+		var errs []error
+
 		for _, step := range steps {
 			if err := step(ctx, restore); err != nil {
-				return err
+				errs = append(errs, err)
 			}
 		}
 
-		return nil
+		return errors.Join(errs...)
 	}
 }
 

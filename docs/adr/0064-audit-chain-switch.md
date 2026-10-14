@@ -39,8 +39,9 @@ A review of the first build found three gaps:
    entries. It is off, without a hash, when the log holds none. So the
    switch entries describe the whole history of the chain.
 3. **The check follows the timeline.** The check accepts an entry without a
-   hash only when the chain was off at the time of the entry, or at that
-   time minus the switch lag of decision 4. The state at a time is the
+   hash only when the chain was off at some time from the time of the entry
+   minus the switch lag of decision 4 to the time of the entry. So an off
+   window shorter than the switch lag counts too. The state at a time is the
    state of the latest switch entry at or before that time. Before the
    first switch entry, the state is the state of that entry. A store with no
    switch entry and no recorded state keeps the rule of the first build: an
@@ -76,21 +77,42 @@ A review of the first build found three gaps:
    instance within 2 seconds, and the check accepts an entry without a hash
    that an instance writes within 2 seconds after a switch to on.
 5. **One transaction for a switch.** The switch entries and the recorded
-   state commit together in one store transaction, or neither does.
+   state commit together in one store transaction, or neither does. In
+   that transaction, the store compares the record with the record that
+   the instance read before it decided. When another instance changed the
+   record first, the store refuses the write. The instance then reads the
+   record and decides again, one time. A second refusal fails the start, so
+   the server does not serve with a state that it could not record. The
+   store takes the time of the switch entries in the transaction, so the
+   switch entries never go back in time.
 6. **A backup does not carry the state.** The state is bookkeeping of the
    installation, like `schema_migrations`. A restore keeps the state of the
    target installation. The restored log holds the switch entries of the
    backup, so after a restore the server writes one switch entry with a
-   hash for the recorded state, in the name of the person who requested
-   the restore. The timeline then ends in the state of the target
-   installation. Without this entry, a backup with another chain state
-   would make every scope fail the check, because the last switch entry
-   must hold the recorded state (decision 3). After a restore, the server also logs the warning
-   of a start when the restored log holds chained entries and the chain is
-   off.
+   hash for the recorded state. Without this entry, a backup with another
+   chain state would make every scope fail the check, because the last
+   switch entry must hold the recorded state (decision 3).
+   - The entry names the person who requested the restore as its subject,
+     and holds the change `restore` with the ID of the backup. So an
+     auditor can tell it from a switch of an administrator.
+   - Before it writes the entry, the server checks the restored log with
+     the rules of decision 3, except that the last switch entry may hold
+     another state than the recorded one. The entry makes the timeline
+     agree again, so only this check can find a backup whose hashes
+     someone removed. When the check fails, the server still writes the
+     entry, so it can serve. It logs an error and counts the restore in
+     `dustpan_audit_restore_check_failures_total`.
+   - A restore that stops while it applies gets its entry at the next
+     start. A failure of another step after the apply does not skip the
+     entry.
+   - A restore trusts the audit log in the backup. Signed audit checkpoints
+     (ADR 60 decision 18) are what protect a backup.
+   - After a restore, the server also logs the warning of a start when the
+     restored log holds chained entries and the chain is off.
 7. **One start entry.** Two instances can start for the first time at the
-   same time. Each one marks its start entry, and the store writes it only
-   when the installation holds no record in the transaction of the write.
+   same time. Both read no record. The compare of decision 5 refuses the
+   write of the second one, which then reads the record of the first one
+   and writes no start entry.
 8. **One timeline for each check.** The scheduled check builds the
    timeline once and checks every scope against it, in one read
    transaction. A switch of the chain during the check gives no false
@@ -116,8 +138,10 @@ A review of the first build found three gaps:
   their times into an off window that started after that chained entry,
   and the check still answers valid. Signed audit checkpoints cover this
   case.
-- A person who removes the tail of `@server`, for example a last switch
-  to on, makes the log shorter and leaves a valid chain. The check cannot
+- A person who removes the last switch entry of `@server` makes the
+  timeline disagree with the record, so the check finds the cut (decision
+  3). A person who removes the entries of `@server` after its last switch
+  entry makes the log shorter and leaves a valid chain. The check cannot
   see such a cut. Signed audit checkpoints catch it.
 - A person who can compute SHA-256 can write a switch entry with a hash
   that matches its fields. The chain does not stop such a person (ADR 60
@@ -125,3 +149,12 @@ A review of the first build found three gaps:
 - A person who changes the record of the chain too, next to the switch
   entries and the entries of a scope, can make the timeline agree with the
   changed log. Signed audit checkpoints catch such a change.
+- A person who removes the row of the record (`audit_chain_state`) has the
+  same effect as a person who changes it: the check then follows the
+  switch entries alone. The check does not catch this. Signed audit
+  checkpoints catch it.
+- A restore trusts the audit log in the backup (decision 6). The check
+  before the switch entry of the restore finds a backup without switch
+  entries or hashes when the target recorded a chained log, but a backup
+  that someone changed with care can pass it. Signed audit checkpoints
+  protect a backup.
