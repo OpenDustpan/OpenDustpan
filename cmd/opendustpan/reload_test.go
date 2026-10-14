@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -274,13 +275,15 @@ func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 		`{"region": "us-east", "public-url": "https://user:` + `pw@dustpan.example"}`,
 		`{"region": "us-east", "tls-cert": "/a.crt"}`,
 		`{"region": "us-east", "database": "mysql://x"}`,
+		`{"region": "us-east", "trusted-proxies": "0.0.0.0/0"}`,
+		`{"region": "us-east", "trusted-proxy-header": "x-real-ip"}`,
 	} {
 		fx.write(t, bad)
 		fx.r.reload(t.Context(), triggerPoll)
 	}
 
-	if got := fx.results.list(); len(got) != 5 || got[0] || got[4] {
-		t.Fatalf("results = %v, want five failures", got)
+	if got := fx.results.list(); len(got) != 7 || slices.Contains(got, true) {
+		t.Fatalf("results = %v, want seven failures", got)
 	}
 
 	if got := fx.region(); got != "eu-west" {
@@ -298,7 +301,7 @@ func TestReloadKeepsTheOldConfigurationForABadFile(t *testing.T) {
 	// The same bad content is refused once, not at each poll.
 	fx.r.reload(t.Context(), triggerPoll)
 
-	if got := fx.results.list(); len(got) != 5 {
+	if got := fx.results.list(); len(got) != 7 {
 		t.Fatalf("a poll of the same bad content reported %v", got)
 	}
 

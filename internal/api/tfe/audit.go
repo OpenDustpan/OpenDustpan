@@ -2,10 +2,10 @@ package tfe
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -43,7 +43,7 @@ func (h *Handler) appendToolOperationAudit(
 		ValuePath:  valuePath,
 		ValueCount: nil,
 		Changes:    nil,
-		SourceIP:   sourceIP(r),
+		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       audit.KindToolOperation,
@@ -81,7 +81,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		ValuePath:  "",
 		ValueCount: nil,
 		Changes:    nil,
-		SourceIP:   sourceIP(r),
+		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       audit.KindChange,
@@ -117,15 +117,4 @@ func truncateUserAgent(s string) string {
 	}
 
 	return s[:cut]
-}
-
-// sourceIP returns the remote address that the server sees, without the
-// port. A value without a port reads back unchanged.
-func sourceIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-
-	return host
 }

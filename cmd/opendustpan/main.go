@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/instance"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -258,6 +259,8 @@ type serveFlags struct {
 	tlsCert                 string
 	tlsKey                  string
 	publicURL               string
+	trustedProxies          string
+	trustedProxyHeader      string
 	blobDir                 string
 	blobStore               string
 	s3Endpoint              string
@@ -276,7 +279,8 @@ type serveFlags struct {
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
-// pair, the log level and format, the size limits and the delta cutoff.
+// pair, the log level and format, the size limits, the delta cutoff and the
+// trusted proxies.
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
@@ -300,6 +304,27 @@ func (f *serveFlags) check() error {
 
 	if f.checkpointDeltaCutoff < 0 {
 		return errDeltaCutoff
+	}
+
+	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+}
+
+// checkProxyFlags refuses a trusted proxy list or header that the server
+// refuses, with the rules of internal/clientip, so a reload of the
+// configuration file refuses the same values as the start.
+func checkProxyFlags(list, header string) error {
+	prefixes, err := clientip.ParseList(list)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
+	}
+
+	parsed, err := clientip.ParseHeader(header)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxy-header: %w", err)
+	}
+
+	if _, err := clientip.NewResolver(prefixes, parsed); err != nil {
+		return fmt.Errorf("invalid --trusted-proxies: %w", err)
 	}
 
 	return nil
@@ -369,6 +394,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-cert").String(fs, &f.tlsCert)
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
+	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
+	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -881,7 +908,11 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
-	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
+	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
+	if optErr != nil {
+		return optErr
+	}
+
 	opts = append(opts, f.backupOptions(backupTarget)...)
 
 	// After the start-up checks and before serving, write the start entry
@@ -993,7 +1024,12 @@ func (f *serveFlags) serverOptions(
 	authn *identity.StaticTokens,
 	wrapper secret.Wrapper,
 	logger *slog.Logger,
-) []dustpan.Option {
+) ([]dustpan.Option, error) {
+	proxies, parseErr := clientip.ParseList(f.trustedProxies)
+	if parseErr != nil {
+		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
+	}
+
 	return []dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
@@ -1012,6 +1048,8 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithListenAddr(f.listen),
 		dustpan.WithConsoleDir(f.consoleDir),
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
+		dustpan.WithTrustedProxies(proxies...),
+		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
 		dustpan.WithVersion(version),
@@ -1021,7 +1059,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
-	}
+	}, nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

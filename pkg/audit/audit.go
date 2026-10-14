@@ -129,9 +129,10 @@ var (
 // and stays nil for every other entry. Changes holds the keys of the entry
 // with their old and new values, for example the settings of a
 // ChannelStartup or ChannelConfigFile entry (ADR 63), and stays nil for an
-// entry without them. At is the time of the action in UTC. SourceIP is the remote
-// address that the server sees. UserAgent is the client user agent, capped
-// at MaxUserAgentLen bytes. Channel is where the request came from.
+// entry without them. At is the time of the action in UTC. SourceIP is the
+// client address (internal/clientip): the TCP peer, or the address that a
+// trusted proxy forwarded. UserAgent is the client user agent, capped at
+// MaxUserAgentLen bytes. Channel is where the request came from.
 // RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).

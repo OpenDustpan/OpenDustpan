@@ -80,6 +80,10 @@ _Avoid_: Level, tier
 A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
 _Avoid_: Secret setting, private setting
 
+**Client address**:
+The address of the client that sent a request, as the server records it in the request log and in audit entries. Without trusted proxies it is the address of the TCP peer. With `--trusted-proxies` it is the address that a trusted proxy forwarded.
+_Avoid_: Remote address, source IP (except for the audit field name `SourceIP` and the wire name `source`)
+
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot

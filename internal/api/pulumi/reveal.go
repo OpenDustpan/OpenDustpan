@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -297,7 +298,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		ValuePath:  a.path,
 		ValueCount: nil,
 		Changes:    nil,
-		SourceIP:   sourceIP(a.request),
+		SourceIP:   clientip.String(a.request),
 		UserAgent:  truncateUserAgent(a.request.UserAgent()),
 		Channel:    audit.NormalizeChannel(a.request.Header.Get(channelHeader)),
 		Kind:       audit.KindReveal,
