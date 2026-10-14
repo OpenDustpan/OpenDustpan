@@ -113,9 +113,15 @@ var Settings = []*Setting{
 	),
 	stringSetting(
 		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
-		"comma-separated CIDRs of proxies whose X-Forwarded-For and Forwarded headers the server trusts, "+
+		"comma-separated CIDRs of trusted proxies, "+
 			"empty means none (DUSTPAN_TRUSTED_PROXIES)",
 		"(none: the server uses the address of the TCP peer only)",
+	),
+	stringSetting(
+		"trusted-proxy-header", "DUSTPAN_TRUSTED_PROXY_HEADER", "x-forwarded-for",
+		"forwarding header the server reads from trusted proxies: x-forwarded-for or forwarded "+
+			"(DUSTPAN_TRUSTED_PROXY_HEADER)",
+		"`x-forwarded-for` (or `forwarded`)",
 	),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",

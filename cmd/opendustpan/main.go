@@ -239,6 +239,7 @@ type serveFlags struct {
 	tlsKey                  string
 	publicURL               string
 	trustedProxies          string
+	trustedProxyHeader      string
 	blobDir                 string
 	blobStore               string
 	s3Endpoint              string
@@ -291,6 +292,7 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("tls-key").String(fs, &f.tlsKey)
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
+	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -904,6 +906,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithConsoleDir(f.consoleDir),
 		dustpan.WithAllowedOrigins(splitList(f.origins)...),
 		dustpan.WithTrustedProxies(proxies...),
+		dustpan.WithTrustedProxyHeader(f.trustedProxyHeader),
 		dustpan.WithTLS(f.tlsCert, f.tlsKey),
 		dustpan.WithPublicURL(f.publicURL),
 		dustpan.WithVersion(version),
