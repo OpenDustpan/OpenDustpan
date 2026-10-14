@@ -185,7 +185,7 @@ type DeletedCursor struct {
 // DeletedQuery selects deleted units of one namespace. An empty Tool or
 // NamePrefix and a zero PurgeBefore match every unit. PurgeBefore keeps the
 // units whose retention ends at or before it, so that a client can ask which
-// units the server purges in the next days. After starts the page after a
+// retention periods end in the next days. After starts the page after a
 // cursor. Limit is the page size: zero means DefaultDeletedPageSize, and a
 // value above MaxDeletedPageSize means MaxDeletedPageSize.
 //

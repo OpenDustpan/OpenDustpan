@@ -6,7 +6,12 @@ inventory API. It follows ADR 47.
 A delete is a soft delete. `pulumi stack rm` and `tofu workspace delete`
 take the unit out of every list and free its name at once. OpenDustpan keeps
 the state, the history and the secrets of the unit until its retention
-period ends. Then the server purges the unit.
+period ends.
+
+The server does not purge a unit on its own yet. The automatic purge at the
+end of the retention period comes in a later change (ADR 47). Until then, a
+deleted unit stays until an admin purges it through the API, also after its
+retention period ends.
 
 ## Set the retention period
 
@@ -19,8 +24,11 @@ already deleted keeps its purge time.
 
 `GET /api/inventory/deleted-units?organization=<namespace>` lists one page of
 the deleted units of the namespace, ordered by tool, then name, then unit ID.
-It needs the action `namespace:read` on the namespace. The list omits each
-unit that you cannot read (`unit:read`).
+It needs the action `namespace:read` on the namespace. The list holds only
+the units that you can read: a grant of `unit:read` on the installation or
+on the namespace shows every deleted unit of the namespace. A grant on one
+unit shows nothing after the unit is deleted, because a grant on a unit
+follows a unit that exists.
 
 These query values filter and page the list:
 
@@ -28,8 +36,9 @@ These query values filter and page the list:
   work).
 - `namePrefix`: the start of the unit name, case-sensitive. For a Pulumi
   stack the name is `<project>/<stack>`.
-- `purgeWithinDays`: only units that the server purges in this number of
-  days or less, from 0 to 3650.
+- `purgeWithinDays`: only units whose retention period ends in this number
+  of days or less, from 0 to 3650. A unit whose retention period has ended
+  also matches.
 - `limit`: the page size, from 1 to 500. The default (missing or 0) is 50.
 - `cursor`: the `nextCursor` value of the previous page.
 
@@ -40,8 +49,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 
 The answer has `units`, `total` and `nextCursor`. Each unit has `tool`,
 `reference`, `namespace`, `name`, `unitID`, `deletedAt` and `purgeAfter`
-(RFC 3339 times in UTC). `total` counts every deleted unit that matches the filters,
-before the read check of each unit. `nextCursor` is empty on the last page.
+(RFC 3339 times in UTC). `total` counts the deleted units that match the
+filters and that you can read. `nextCursor` is empty on the last page.
 
 ## Restore a deleted unit
 

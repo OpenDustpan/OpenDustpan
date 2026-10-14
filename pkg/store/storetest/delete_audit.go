@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -643,4 +645,79 @@ func testAppendFillsWorkspaceID(t *testing.T, s WorkspaceStore) {
 		w.ID.String(),
 	)
 	checkAppendedObjectID(t, appender, ns.Fence(), unitEntry(ns.Name, "opentofu:acme/unknown"), "")
+}
+
+// seedPurgedWorkspace makes the workspace "doomed" in acme with a finalized
+// state version and a data key, unlocks it, deletes it and purges it. It
+// returns the stable ID of the workspace.
+func seedPurgedWorkspace(t *testing.T, s PortableStore, acme namespace.Namespace) string {
+	t.Helper()
+
+	ctx := t.Context()
+	w := createTestWorkspace(t, s, acme, "doomed")
+	locked := lockTestWorkspace(t, s, acme, w, "alice")
+	declared := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l9", "v9", 1))
+	createPendingVersion(t, s, acme, declared)
+
+	current := finalizedVersion(declared, now().Add(2*time.Hour), "v9")
+	if _, err := s.RecordUploadAttempt(ctx, current.ID, current.Content, acme.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	if err := s.FinalizeStateVersion(ctx, current, acme.Fence()); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	unlockTestWorkspace(t, s, acme, w.Ref)
+
+	scope, err := secret.NewScope(acme.Name, w.ID.String())
+	if err != nil {
+		t.Fatalf("scope of the workspace: %v", err)
+	}
+
+	key := secret.WrappedKey{CreatedAt: now(), Scope: scope, WrapperID: "kek-1", Ciphertext: []byte("wrapped-doomed")}
+	if _, err := s.CreateKey(ctx, key, acme.Fence()); err != nil {
+		t.Fatalf("create key of the workspace: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: workspaceDeleteEntry(acme.Name), PurgeAfter: purgeAt()}
+	d.Entry.Object = "opentofu:" + acme.Name.String() + "/doomed"
+
+	if err := s.DeleteWorkspace(ctx, w.Ref, acme.Fence(), d); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if err := s.PurgeWorkspace(ctx, w.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+		t.Fatalf("purge workspace: %v", err)
+	}
+
+	return w.ID.String()
+}
+
+// testPortablePurgeRemovesWorkspaceRows deletes and purges a workspace that
+// has a finalized state version and a data key (ADR 23, decision 5): no
+// table of a portable export holds a row of the workspace any more, and the
+// other workspace keeps its state versions.
+func testPortablePurgeRemovesWorkspaceRows(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seed := seedBackupStore(t, s)
+	id := seedPurgedWorkspace(t, s, seed.acme)
+
+	after, sum, _ := exportPortable(t, s)
+
+	for _, table := range []string{"workspaces", "state_versions", "secret_keys", "inventory", "inventory_deleted"} {
+		path := backup.PortablePath(table)
+
+		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {
+			if row["id"] == id || row["workspace_id"] == id || row["stack_id"] == id || row["unit_id"] == id {
+				t.Fatalf("table %s still holds a row of the purged workspace %s: %v", table, id, row)
+			}
+		}
+	}
+
+	if sum.RowCounts["state_versions"] == 0 || sum.RowCounts["secret_keys"] == 0 {
+		t.Fatal("export lost the state versions or the data keys of the other units")
+	}
 }

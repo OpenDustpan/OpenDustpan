@@ -636,3 +636,97 @@ func checkBlobPurge(t *testing.T, s any, tool, unitID string, ns namespace.Name)
 		t.Fatalf("blob purges of %s %s after the finish = %+v, want none", tool, unitID, left)
 	}
 }
+
+// testRestoreRacesPurgeWorkspace is testRestoreRacesPurge for a workspace:
+// exactly one wins, and the other answers ErrNotFound and changes nothing.
+func testRestoreRacesPurgeWorkspace(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	gone := deleteTestWorkspace(t, s, ns)
+	entry := lifecycleEntry(ns.Name, "unit:restore")
+
+	var (
+		wg                   sync.WaitGroup
+		restoreErr, purgeErr error
+	)
+
+	wg.Go(func() {
+		_, restoreErr = s.RestoreWorkspace(t.Context(), gone.ID, "", ns.Fence(), entry)
+	})
+
+	wg.Go(func() {
+		purgeErr = s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), entry)
+	})
+
+	wg.Wait()
+
+	got, getErr := s.GetWorkspace(t.Context(), gone.Ref)
+
+	switch {
+	case restoreErr == nil && errors.Is(purgeErr, workspace.ErrNotFound):
+		if getErr != nil || got.ID != gone.ID {
+			t.Fatalf("workspace after a winning restore = %+v, %v, want %s", got, getErr, gone.ID)
+		}
+	case purgeErr == nil && errors.Is(restoreErr, workspace.ErrNotFound):
+		if !errors.Is(getErr, workspace.ErrNotFound) {
+			t.Fatalf("workspace after a winning purge: err = %v, want ErrNotFound", getErr)
+		}
+	default:
+		t.Fatalf("restore err = %v, purge err = %v, want exactly one to win and the other ErrNotFound",
+			restoreErr, purgeErr)
+	}
+}
+
+// testRestoreOrPurgeStackInAnotherNamespace deletes a stack of acme, then
+// restores and purges its ID with the fence of the namespace beta: each
+// answers ErrNotFound and changes nothing, and the stack stays restorable
+// in acme.
+func testRestoreOrPurgeStackInAnotherNamespace(t *testing.T, f fixture) {
+	t.Helper()
+
+	before := deleteFixtureStack(t, f)
+	beta := newNamespace(t, f.s, "beta")
+	entry := lifecycleEntry(beta.Name, "unit:purge")
+
+	if _, err := f.s.RestoreStack(t.Context(), before.ID, "", beta.Fence(), entry); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("restore with the fence of beta: err = %v, want ErrNotFound", err)
+	}
+
+	if err := f.s.PurgeStack(t.Context(), before.ID, beta.Fence(), entry); !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", err)
+	}
+
+	checkDeletedStackEntries(t, f.s, f.ref.Namespace, before.ID.String())
+
+	restore := lifecycleEntry(f.ref.Namespace, "unit:restore")
+	if _, err := f.s.RestoreStack(t.Context(), before.ID, "", f.fence, restore); err != nil {
+		t.Fatalf("restore in acme: %v", err)
+	}
+}
+
+// testRestoreOrPurgeWorkspaceInAnotherNamespace is
+// testRestoreOrPurgeStackInAnotherNamespace for a workspace.
+func testRestoreOrPurgeWorkspaceInAnotherNamespace(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	gone := deleteTestWorkspace(t, s, ns)
+	beta := newWorkspaceNamespace(t, s, "beta")
+	entry := lifecycleEntry(beta.Name, "unit:purge")
+
+	if _, err := s.RestoreWorkspace(t.Context(), gone.ID, "", beta.Fence(), entry); !errors.Is(
+		err, workspace.ErrNotFound,
+	) {
+		t.Fatalf("restore with the fence of beta: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.PurgeWorkspace(t.Context(), gone.ID, beta.Fence(), entry); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", err)
+	}
+
+	restore := lifecycleEntry(ns.Name, "unit:restore")
+	if _, err := s.RestoreWorkspace(t.Context(), gone.ID, "", ns.Fence(), restore); err != nil {
+		t.Fatalf("restore in acme: %v", err)
+	}
+}
