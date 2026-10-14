@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	var created e2eToken
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"deploy"}`,
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `","name":"deploy"}`,
 		http.StatusCreated,
 	}, &created)
 
@@ -100,6 +101,8 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	checkTokenRefusals(ctx, t, env, deploy, robot)
+	checkPersonalTokens(ctx, t, env)
+	checkNoLockout(ctx, t, env, created.Secret)
 	checkTokenSignIn(ctx, t, env, created.Secret, http.StatusForbidden)
 	checkTokenReads(ctx, t, env, deploy, created)
 
@@ -140,17 +143,18 @@ func checkTokenRefusals(ctx context.Context, t *testing.T, env *e2e.Env, deploy,
 	far := time.Now().Add(400 * 24 * time.Hour).UTC().Format(time.RFC3339)
 
 	for _, step := range []principalStep{
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + robot.ID + `","name":"x"}`, http.StatusBadRequest},
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"prn-none","name":"x"}`, http.StatusNotFound},
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + robot.ID + `","name":"x"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"prn-none","name":"x"}`, http.StatusNotFound},
+		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `"}`, http.StatusBadRequest},
 		{
-			http.MethodPost, "/api/server/tokens",
+			http.MethodPost, "/api/server/service-tokens",
 			`{"principalID":"` + deploy.ID + `","name":"x","expiresAt":"` + past + `"}`, http.StatusBadRequest,
 		},
 		{
-			http.MethodPost, "/api/server/tokens",
+			http.MethodPost, "/api/server/service-tokens",
 			`{"principalID":"` + deploy.ID + `","name":"x","expiresAt":"` + far + `"}`, http.StatusBadRequest,
 		},
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens?limit=0", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens?include=all", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens/tok-none", "", http.StatusNotFound},
@@ -207,7 +211,7 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 	}
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens/" + created.ID + "/rotate", `{}`, http.StatusCreated,
+		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusCreated,
 	}, &rot)
 
 	if rot.Previous.ReplacedBy != rot.Token.ID || !strings.HasPrefix(rot.Token.Secret, "odp_") ||
@@ -219,7 +223,10 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 	checkTokenSignIn(ctx, t, env, rot.Token.Secret, http.StatusForbidden)
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
+		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
+	}, nil)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens/" + rot.Token.ID + "/rotate", `{}`, http.StatusBadRequest,
 	}, nil)
 
 	// An end time of now ends the old token of a second rotation at once.
@@ -230,7 +237,7 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 	}
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens/" + rot.Token.ID + "/rotate", `{"oldTokenEndsAt":"` + now + `"}`,
+		http.MethodPost, "/api/server/service-tokens/" + rot.Token.ID + "/rotate", `{"oldTokenEndsAt":"` + now + `"}`,
 		http.StatusCreated,
 	}, &second)
 
@@ -273,7 +280,7 @@ func checkDeletedOwner(ctx context.Context, t *testing.T, env *e2e.Env, deploy e
 
 	var other e2eToken
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"other"}`,
+		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `","name":"other"}`,
 		http.StatusCreated,
 	}, &other)
 	checkTokenSignIn(ctx, t, env, other.Secret, http.StatusForbidden)
@@ -304,4 +311,67 @@ func checkTokenRevoke(ctx context.Context, t *testing.T, env *e2e.Env, tok e2eTo
 	if revoked.Status != "revoked" || revoked.RevokedAt == nil || revoked.Secret != "" {
 		t.Fatalf("revoked token = %+v, want the status revoked, a revoke time and no secret", revoked)
 	}
+}
+
+// checkPersonalTokens makes a personal token of a person through the
+// administrator route, and drives the own-token routes. The bootstrap admin
+// token has no person record, so it owns no personal token (403). The
+// person signs in with its token, and until grants exist (ADR 52) the
+// authorizer refuses it token:manage-own too (403).
+func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var person e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"bob@example.com","kind":"person"}`, http.StatusCreated,
+	}, &person)
+
+	var personal e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"laptop"}`,
+		http.StatusCreated,
+	}, &personal)
+
+	if personal.Kind != "personal" || personal.PrincipalID != person.ID {
+		t.Fatalf("personal token = %+v, want a personal token of the person", personal)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusBadRequest,
+	}, nil)
+
+	own := "/api/server/caller/tokens"
+	for _, step := range []principalStep{
+		{http.MethodGet, own, "", http.StatusForbidden},
+		{http.MethodPost, own, `{"name":"mine"}`, http.StatusForbidden},
+		{http.MethodPost, own + "/" + personal.ID + "/rotate", `{}`, http.StatusForbidden},
+		{http.MethodDelete, own + "/" + personal.ID, "", http.StatusForbidden},
+	} {
+		principalCall(ctx, t, env, step, nil)
+	}
+
+	status, body, err := env.ServerAPIStatusAs(ctx, personal.Secret, http.MethodGet, own, "")
+	if err != nil || status != http.StatusForbidden {
+		t.Fatalf("own tokens with the person's token = %d, %v (%s); want 403", status, err, body)
+	}
+}
+
+// checkNoLockout spends the failure budget of the address of the harness
+// with 35 unknown secret-shaped tokens. The misses over the budget wait a
+// penalty and answer 401, and still the bootstrap admin token and a valid
+// stored token pass: an attacker behind a shared address locks out nobody.
+func checkNoLockout(ctx context.Context, t *testing.T, env *e2e.Env, valid string) {
+	t.Helper()
+
+	for i := range 35 {
+		bogus := fmt.Sprintf("odp_%043d", i)
+
+		status, _, err := env.ServerAPIStatusAs(ctx, bogus, http.MethodGet, "/api/server/principals", "")
+		if err != nil || status != http.StatusUnauthorized {
+			t.Fatalf("unknown token %d = %d, %v; want 401", i, status, err)
+		}
+	}
+
+	principalCall(ctx, t, env, principalStep{http.MethodGet, "/api/server/principals", "", http.StatusOK}, nil)
+	checkTokenSignIn(ctx, t, env, valid, http.StatusForbidden)
 }

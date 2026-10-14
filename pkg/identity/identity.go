@@ -110,10 +110,21 @@ const (
 	// ActionServerReadTokens allows reading the access tokens of every
 	// principal, never their secrets (ADR 53). Its object is ServerObject.
 	ActionServerReadTokens Action = "server:read-tokens"
-	// ActionServerManageTokens allows creating, revoking and rotating the
-	// access tokens of every principal (ADR 53). Its object is
-	// ServerObject.
+	// ActionServerManageTokens allows creating and rotating the personal
+	// tokens of other persons, and revoking any access token (ADR 53,
+	// decision 3). Its object is ServerObject. A create or a rotation also
+	// runs the escalation check against the grants of the person.
 	ActionServerManageTokens Action = "server:manage-tokens"
+	// ActionServerManageServiceTokens allows creating and rotating service
+	// tokens (ADR 53, decisions 3 and 7). Its object is ServerObject. A
+	// create or a rotation also runs the escalation check against the
+	// grants of the service principal.
+	ActionServerManageServiceTokens Action = "server:manage-service-tokens"
+	// ActionTokenManageOwn allows a person to list, create, rotate and
+	// revoke its own personal tokens (ADR 53, decisions 3 and 10). Its
+	// object is CallerObject. Every authenticated person holds it with no
+	// grant.
+	ActionTokenManageOwn Action = "token:manage-own"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

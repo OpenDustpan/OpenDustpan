@@ -273,6 +273,13 @@ func ValidateName(s string) error {
 // invalidRef names a malformed ID in an audit object.
 const invalidRef = "invalid"
 
+// TokenRef returns the audit object of a change of the token tokenID of the
+// principal principalID: "principal:<id>#token:<id>", so the entry names the
+// principal that the token acts as.
+func TokenRef(principalID, tokenID string) string {
+	return principal.Ref(principalID) + "#" + Ref(tokenID)
+}
+
 // Ref returns the audit object of the token id: "token:<id>". An id that is
 // not a token ID gives "token:invalid", so request text never reaches the
 // audit log.

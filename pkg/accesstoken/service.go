@@ -37,6 +37,9 @@ type PrincipalReader interface {
 	// GetPrincipal returns the principal with the ID id, or
 	// principal.ErrNotFound when no such principal exists or it was deleted.
 	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
+	// GetPrincipalBySubject returns the principal that exists with the
+	// subject subject, or principal.ErrNotFound.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 }
 
 // Freshness asks for a recent MFA step before an operation that shows a
@@ -57,6 +60,10 @@ type Config struct {
 	// Freshness checks the MFA step before a create or a rotation. Nil
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
+	// Grants runs the escalation check of a token for another principal.
+	// Nil lets only an administrator act for another principal (fail
+	// closed) until the grants of ADR 52 can answer the check.
+	Grants GrantCheck
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
@@ -77,6 +84,7 @@ type Service struct {
 	store      Store
 	principals PrincipalReader
 	freshness  Freshness
+	grants     GrantCheck
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
@@ -109,7 +117,7 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
+		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
 		logger: logger, now: now, newID: newID,
 	}, nil
 }
@@ -128,11 +136,14 @@ type Input struct {
 	Name        string
 }
 
-// Create issues a new token for the principal in.PrincipalID, with the
-// entry e. It returns the token and its secret: the only time the server
-// shows the secret. The kind of the token follows the kind of the
-// principal.
-func (s *Service) Create(ctx context.Context, e audit.Entry, in Input) (Token, Secret, error) {
+// Create issues a new token for a principal in scope, with the entry e
+// of caller. For ScopeOwn the principal is the person of caller, and
+// in.PrincipalID is ignored. For the other scopes it is in.PrincipalID, its
+// kind must fit the scope, and the escalation check runs. It returns the
+// token and its secret: the only time the server shows the secret.
+func (s *Service) Create(
+	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
+) (Token, Secret, error) {
 	if err := s.requireFresh(ctx, e.Subject); err != nil {
 		return Token{}, Secret{}, err
 	}
@@ -141,18 +152,24 @@ func (s *Service) Create(ctx context.Context, e audit.Entry, in Input) (Token, S
 		return Token{}, Secret{}, err
 	}
 
-	p, err := s.principals.GetPrincipal(ctx, in.PrincipalID)
-	if errors.Is(err, principal.ErrNotFound) {
-		return Token{}, Secret{}, fmt.Errorf("create access token: %w: %q", ErrPrincipalNotFound, in.PrincipalID)
-	}
-
+	p, err := s.targetPrincipal(ctx, caller, scope, in.PrincipalID)
 	if err != nil {
-		return Token{}, Secret{}, fmt.Errorf("create access token: read principal: %w", err)
+		return Token{}, Secret{}, fmt.Errorf("create access token: %w", err)
 	}
 
 	kind, err := KindFor(p.Kind)
 	if err != nil {
 		return Token{}, Secret{}, err
+	}
+
+	if kindErr := checkKind(scope, kind); kindErr != nil {
+		return Token{}, Secret{}, kindErr
+	}
+
+	if scope != ScopeOwn {
+		if heldErr := s.requireHeld(ctx, caller, p.ID); heldErr != nil {
+			return Token{}, Secret{}, heldErr
+		}
 	}
 
 	at := s.Now()
@@ -167,7 +184,7 @@ func (s *Service) Create(ctx context.Context, e audit.Entry, in Input) (Token, S
 		return Token{}, Secret{}, err
 	}
 
-	if err := s.store.CreateToken(ctx, n.token, n.digest, change(e, at, Ref(n.token.ID))); err != nil {
+	if err := s.store.CreateToken(ctx, n.token, n.digest, change(e, at, TokenRef(p.ID, n.token.ID))); err != nil {
 		return Token{}, Secret{}, fmt.Errorf("create access token %q: %w", in.Name, err)
 	}
 
@@ -220,21 +237,49 @@ func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 	return pageOf(rows, total, limit), nil
 }
 
-// Revoke ends the token id at once, with the entry e.
-func (s *Service) Revoke(ctx context.Context, e audit.Entry, id string) error {
-	if err := s.store.RevokeToken(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+// Revoke ends the token id at once, with the entry e of caller. For
+// ScopeOwn the token must belong to the person of caller. An administrator
+// can revoke any token: a revoke never raises access, so it needs no
+// escalation check.
+func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, id string) error {
+	t, err := s.store.GetToken(ctx, id)
+	if err != nil {
+		return fmt.Errorf("revoke access token %q: %w", id, err)
+	}
+
+	if err := s.authorizeRevoke(ctx, caller, scope, t); err != nil {
+		return fmt.Errorf("revoke access token %q: %w", id, err)
+	}
+
+	if err := s.store.RevokeToken(ctx, id, change(e, s.Now(), TokenRef(t.PrincipalID, id))); err != nil {
 		return fmt.Errorf("revoke access token %q: %w", id, err)
 	}
 
 	return nil
 }
 
-// RotateInput names the fields of a rotation. A nil OldEndsAt keeps the
-// old token for DefaultRotationOverlap, or until its expiry when that is
-// earlier. A zero ExpiresAt gives the new token DefaultLifetime.
+// ListOwn returns one page of the tokens of the person of caller, newest
+// first. req.PrincipalID is ignored.
+func (s *Service) ListOwn(ctx context.Context, caller identity.Principal, req PageRequest) (Page, error) {
+	own, err := s.ownPrincipal(ctx, caller)
+	if err != nil {
+		return Page{}, fmt.Errorf("list own access tokens: %w", err)
+	}
+
+	req.PrincipalID = own.ID
+
+	return s.List(ctx, req)
+}
+
+// RotateInput names a rotation: the token ID, the scope of the caller, and
+// the times. A nil OldEndsAt keeps the old token for
+// DefaultRotationOverlap, or until its expiry when that is earlier. A zero
+// ExpiresAt gives the new token DefaultLifetime.
 type RotateInput struct {
 	OldEndsAt *time.Time
 	ExpiresAt time.Time
+	ID        string
+	Scope     Scope
 }
 
 // Rotation is the result of a rotation: the old token with its new end
@@ -244,18 +289,29 @@ type Rotation struct {
 	New Token
 }
 
-// Rotate issues a new token for the owner of the token id and sets an end
-// time for the old token (ADR 53, decision 8), with the entry e. The new
-// token keeps the name and the kind. It returns the secret of the new
-// token: the only time the server shows it.
-func (s *Service) Rotate(ctx context.Context, e audit.Entry, id string, in RotateInput) (Rotation, Secret, error) {
+// Rotate issues a new token for the owner of the token in.ID and sets an end
+// time for the old token (ADR 53, decision 8), with the entry e of caller.
+// The new token keeps the name and the kind. For in.Scope ScopeOwn the token must
+// belong to the person of caller. For the other scopes its kind must fit
+// the scope, and the escalation check runs: the new token acts as its
+// principal. It returns the secret of the new token: the only time the
+// server shows it.
+func (s *Service) Rotate(
+	ctx context.Context, caller identity.Principal, e audit.Entry, in RotateInput,
+) (Rotation, Secret, error) {
 	if err := s.requireFresh(ctx, e.Subject); err != nil {
 		return Rotation{}, Secret{}, err
 	}
 
+	id := in.ID
+
 	old, err := s.store.GetToken(ctx, id)
 	if err != nil {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
+	}
+
+	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, authErr)
 	}
 
 	at := s.Now()
@@ -279,7 +335,7 @@ func (s *Service) Rotate(ctx context.Context, e audit.Entry, id string, in Rotat
 	}
 
 	r := Replacement{OldEndsAt: oldEndsAt, OldID: id, Next: n.token, Digest: n.digest}
-	if err := s.store.RotateToken(ctx, r, change(e, at, Ref(id))); err != nil {
+	if err := s.store.RotateToken(ctx, r, change(e, at, TokenRef(old.PrincipalID, id))); err != nil {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, err)
 	}
 

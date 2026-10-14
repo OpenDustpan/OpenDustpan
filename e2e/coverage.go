@@ -772,6 +772,12 @@ func tokenAllowEntries() []AllowEntry {
 		{http.MethodGet, one},
 		{http.MethodDelete, one},
 		{http.MethodPost, one + "/rotate"},
+		{http.MethodPost, "/api/server/service-tokens"},
+		{http.MethodPost, "/api/server/service-tokens/{id}/rotate"},
+		{http.MethodGet, "/api/server/caller/tokens"},
+		{http.MethodPost, "/api/server/caller/tokens"},
+		{http.MethodDelete, "/api/server/caller/tokens/{id}"},
+		{http.MethodPost, "/api/server/caller/tokens/{id}/rotate"},
 	}
 
 	out := make([]AllowEntry, 0, len(routes))

@@ -1273,7 +1273,7 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
@@ -1283,26 +1283,27 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the
-// request log use: the configured authenticator, then the stored access
-// tokens when the store keeps them, behind a gate that limits the failed
-// lookups of each source and resolves a token once for each request. The
-// bootstrap admin tokens keep working (ADR 6).
+// request log use: the configured authenticator first, so the bootstrap
+// admin tokens (ADR 6) never meet the failure budget, then the stored access
+// tokens when the store keeps them, behind a gate. The gate resolves a
+// token once for each request and slows the misses of secret-shaped values
+// from one source. It never refuses a valid token.
 //
 //nolint:ireturn // The adapters take the port.
 func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
-	next := cfg.authenticator
-	if tokens != nil {
-		next = identity.Chain{cfg.authenticator, tokens}
+	if tokens == nil {
+		return cfg.authenticator, nil
 	}
 
 	gate, err := authgate.New(authgate.Config{
-		Next: next, Logger: cfg.logger, Now: cfg.now, Burst: 0, Refill: 0, MaxSources: 0,
+		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Burst: 0, Refill: 0, Penalty: 0, MaxSources: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authentication gate: %w", err)
 	}
 
-	return gate, nil
+	return identity.Chain{cfg.authenticator, gate}, nil
 }
 
 // schemaReporterOf returns the schema reporter of the namespace store, or

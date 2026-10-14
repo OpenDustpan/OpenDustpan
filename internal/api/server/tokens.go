@@ -1,11 +1,21 @@
 package server
 
-// Access token routes of the installation API (ADR 53). Tokens belong to
-// principals of the installation, so every route acts on the object
-// @server:
+// Access token routes of the installation API (ADR 53). Each kind of token
+// has its own action (decision 3):
 //
-//   - server:read-tokens lists and reads tokens, never their secrets,
-//   - server:manage-tokens creates, revokes and rotates tokens.
+//   - token:manage-own lets a person list, create, rotate and revoke its own
+//     personal tokens under /api/server/caller/tokens. Its object is
+//     @caller, and every authenticated person holds it with no grant.
+//   - server:read-tokens lists and reads the tokens of every principal,
+//     never their secrets. Its object is @server.
+//   - server:manage-tokens creates and rotates the personal tokens of other
+//     persons, and revokes any token. Its object is @server.
+//   - server:manage-service-tokens creates and rotates service tokens under
+//     /api/server/service-tokens. Its object is @server.
+//
+// A token acts as its principal, so a create or a rotation for another
+// principal runs the escalation check: the caller must hold what that
+// principal holds. A revoke never raises access and needs no check.
 //
 // A create and a rotation answer the secret of the new token once, with
 // Cache-Control: no-store. No other answer holds a secret, and the server
@@ -34,7 +44,8 @@ import (
 // Body and query errors of the token routes. classify maps each to 400.
 var (
 	errTokenBody = errors.New(
-		`invalid access token body: provide {"principalID":"prn-...","name":"...","expiresAt":"<RFC 3339 time>"}`,
+		`invalid access token body: provide {"principalID":"prn-...","name":"...","expiresAt":"<RFC 3339 time>"}, ` +
+			`or {"name":"...","expiresAt":"..."} with no principalID for an own token`,
 	)
 	errRotateBody = errors.New(
 		`invalid rotation body: provide {} or {"oldTokenEndsAt":"<RFC 3339 time>","expiresAt":"<RFC 3339 time>"}`,
@@ -111,8 +122,12 @@ type rotateTokenRequest struct {
 //
 //nolint:gosec // G101 reads "token" in the names: the values are route paths, not credentials.
 const (
-	tokensPath = "/api/server/tokens"
-	tokenPath  = "/api/server/tokens/{id}"
+	tokensPath        = "/api/server/tokens"
+	tokenPath         = "/api/server/tokens/{id}"
+	serviceTokensPath = "/api/server/service-tokens"
+	serviceTokenPath  = "/api/server/service-tokens/{id}"
+	ownTokensPath     = "/api/server/caller/tokens"
+	ownTokenPath      = "/api/server/caller/tokens/{id}"
 )
 
 // optionalWireTime formats t for the wire, or answers nil for the zero
@@ -143,18 +158,18 @@ func tokenOf(t accesstoken.Token, now time.Time) tokenResponse {
 }
 
 // tokenOp is one token operation. It answers its result, or an error with
-// the result so far: a change names its record in both. e is the audit
-// entry of the caller, which a change hands to the Service.
+// the result so far: a change names its record in both. p is the caller,
+// and e is its audit entry, which a change hands to the Service.
 type tokenOp func(
-	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, e audit.Entry,
+	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 ) (principalResult, error)
 
 // serveTokenRead adapts a read to a route handler.
 func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
-	return func(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runTokenOp(w, r, op, none); ok {
+		if res, ok := h.runTokenOp(w, r, op, p, none); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -166,7 +181,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 // carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runTokenOp(w, r, op, callerEntry(r, p, action))
+		res, ok := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
 		if !ok && res.object != "" && h.tokens != nil {
 			h.appendServerChange(r, p, serverChange{
@@ -184,10 +199,7 @@ func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHand
 // runTokenOp runs op and writes its error. It reports whether op succeeded,
 // with the result in both cases.
 func (h *Handler) runTokenOp(
-	w http.ResponseWriter,
-	r *http.Request,
-	op tokenOp,
-	e audit.Entry,
+	w http.ResponseWriter, r *http.Request, op tokenOp, p identity.Principal, e audit.Entry,
 ) (principalResult, bool) {
 	ctx := r.Context()
 
@@ -197,7 +209,7 @@ func (h *Handler) runTokenOp(
 		return principalResult{body: nil, object: "", status: 0}, false
 	}
 
-	res, err := op(w, r, h.tokens, e)
+	res, err := op(w, r, h.tokens, p, e)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -207,19 +219,21 @@ func (h *Handler) runTokenOp(
 	return res, true
 }
 
+// resolveCaller resolves the object of the own-token routes: the caller.
+func resolveCaller(_ http.ResponseWriter, _ *http.Request) (identity.Object, error) {
+	return identity.CallerObject(), nil
+}
+
 // tokenRoutes returns the access token rows of the route table.
 func (h *Handler) tokenRoutes() []Route {
 	read := []identity.Action{identity.ActionServerReadTokens}
 	manage := []identity.Action{identity.ActionServerManageTokens}
+	service := []identity.Action{identity.ActionServerManageServiceTokens}
 
 	return []Route{
 		{
-			Method:  http.MethodPost,
-			Path:    tokensPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokens, createToken),
+			Method: http.MethodPost, Path: tokensPath, Scope: ScopeAuthorized, Actions: manage, Resolve: resolveServer,
+			Serve: h.serveTokenChange(identity.ActionServerManageTokens, createToken(accesstoken.ScopePersonal)),
 		},
 		{
 			Method: http.MethodGet, Path: tokensPath, Scope: ScopeAuthorized,
@@ -230,58 +244,106 @@ func (h *Handler) tokenRoutes() []Route {
 			Actions: read, Resolve: resolveServer, Serve: h.serveTokenRead(getToken),
 		},
 		{
-			Method:  http.MethodDelete,
-			Path:    tokenPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
+			Method: http.MethodDelete, Path: tokenPath, Scope: ScopeAuthorized, Actions: manage, Resolve: resolveServer,
+			Serve: h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
+		},
+		{
+			Method: http.MethodPost, Path: tokenPath + "/rotate", Scope: ScopeAuthorized, Actions: manage,
 			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokens, revokeToken),
+			Serve:   h.serveTokenChange(identity.ActionServerManageTokens, rotateToken(accesstoken.ScopePersonal)),
 		},
 		{
 			Method:  http.MethodPost,
-			Path:    tokenPath + "/rotate",
+			Path:    serviceTokensPath,
 			Scope:   ScopeAuthorized,
-			Actions: manage,
+			Actions: service,
 			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokens, rotateToken),
+			Serve: h.serveTokenChange(
+				identity.ActionServerManageServiceTokens,
+				createToken(accesstoken.ScopeService),
+			),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    serviceTokenPath + "/rotate",
+			Scope:   ScopeAuthorized,
+			Actions: service,
+			Resolve: resolveServer,
+			Serve: h.serveTokenChange(
+				identity.ActionServerManageServiceTokens,
+				rotateToken(accesstoken.ScopeService),
+			),
 		},
 	}
 }
 
-// createToken serves POST /api/server/tokens: it issues a token for the
-// principal of the body and answers 201 with the token and its secret. An
-// unknown principal answers 404. A workload, a bad name or a bad expiry
-// answers 400.
-func createToken(
-	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, e audit.Entry,
-) (principalResult, error) {
-	var req createTokenRequest
-	if err := decodeStrict(w, r, &req, errTokenBody); err != nil {
-		return failed("tokens"), err
+// ownTokenRoutes returns the rows of the own personal tokens of a person.
+func (h *Handler) ownTokenRoutes() []Route {
+	own := []identity.Action{identity.ActionTokenManageOwn}
+
+	return []Route{
+		{
+			Method: http.MethodGet, Path: ownTokensPath, Scope: ScopeAuthorized,
+			Actions: own, Resolve: resolveCaller, Serve: h.serveTokenRead(listOwnTokens),
+		},
+		{
+			Method: http.MethodPost, Path: ownTokensPath, Scope: ScopeAuthorized, Actions: own, Resolve: resolveCaller,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
+		},
+		{
+			Method: http.MethodDelete, Path: ownTokenPath, Scope: ScopeAuthorized, Actions: own, Resolve: resolveCaller,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+		},
+		{
+			Method: http.MethodPost, Path: ownTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: own,
+			Resolve: resolveCaller,
+			Serve:   h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
+		},
 	}
+}
 
-	if req.PrincipalID == nil || req.Name == nil {
-		return failed("tokens"), errTokenBody
+// createToken returns the op of a token create in scope: it issues a token
+// and answers 201 with the token and its secret. For ScopeOwn the body
+// names no principal: the token belongs to the person of the caller. An
+// unknown principal answers 404. A principal whose kind does not fit the
+// route, a bad name or a bad expiry answers 400. A failed escalation check
+// answers 403.
+func createToken(scope accesstoken.Scope) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		var req createTokenRequest
+		if err := decodeStrict(w, r, &req, errTokenBody); err != nil {
+			return failed("tokens"), err
+		}
+
+		if req.Name == nil || (scope == accesstoken.ScopeOwn) != (req.PrincipalID == nil) {
+			return failed("tokens"), errTokenBody
+		}
+
+		in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: *req.Name}
+		if req.PrincipalID != nil {
+			in.PrincipalID = *req.PrincipalID
+		}
+
+		if req.ExpiresAt != nil {
+			in.ExpiresAt = *req.ExpiresAt
+		}
+
+		t, secret, err := svc.Create(r.Context(), p, e, scope, in)
+		if err != nil {
+			return failed("tokens"), err
+		}
+
+		body := newTokenResponse{tokenResponse: tokenOf(t, svc.Now()), Secret: secret.Reveal()}
+
+		return ok(http.StatusCreated, body, accesstoken.TokenRef(t.PrincipalID, t.ID)), nil
 	}
-
-	in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: *req.PrincipalID, Name: *req.Name}
-	if req.ExpiresAt != nil {
-		in.ExpiresAt = *req.ExpiresAt
-	}
-
-	t, secret, err := svc.Create(r.Context(), e, in)
-	if err != nil {
-		return failed("tokens"), err
-	}
-
-	body := newTokenResponse{tokenResponse: tokenOf(t, svc.Now()), Secret: secret.Reveal()}
-
-	return ok(http.StatusCreated, body, accesstoken.Ref(t.ID)), nil
 }
 
 // listTokens serves GET /api/server/tokens: one page, newest first.
 func listTokens(
-	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ identity.Principal, _ audit.Entry,
 ) (principalResult, error) {
 	req, err := tokenPageRequest(r)
 	if err != nil {
@@ -293,7 +355,30 @@ func listTokens(
 		return failed(""), err
 	}
 
-	now := svc.Now()
+	return ok(http.StatusOK, tokenPageOf(page, svc.Now()), ""), nil
+}
+
+// listOwnTokens serves GET /api/server/caller/tokens: one page of the
+// tokens of the person of the caller, newest first. The principal query
+// parameter is ignored.
+func listOwnTokens(
+	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, _ audit.Entry,
+) (principalResult, error) {
+	req, err := tokenPageRequest(r)
+	if err != nil {
+		return failed(""), err
+	}
+
+	page, err := svc.ListOwn(r.Context(), p, req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, tokenPageOf(page, svc.Now()), ""), nil
+}
+
+// tokenPageOf maps one page of tokens to the wire at the time now.
+func tokenPageOf(page accesstoken.Page, now time.Time) tokenListResponse {
 	out := tokenListResponse{
 		Tokens: make([]tokenResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
@@ -302,10 +387,10 @@ func listTokens(
 		out.Tokens = append(out.Tokens, tokenOf(page.Items[i], now))
 	}
 
-	return ok(http.StatusOK, out, ""), nil
+	return out
 }
 
-// tokenPageRequest reads the query parameters of the list route.
+// tokenPageRequest reads the query parameters of the list routes.
 func tokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 	q := r.URL.Query()
 	req := accesstoken.PageRequest{
@@ -334,7 +419,7 @@ func tokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 
 // getToken serves GET /api/server/tokens/{id}. An unknown ID answers 404.
 func getToken(
-	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ audit.Entry,
+	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ identity.Principal, _ audit.Entry,
 ) (principalResult, error) {
 	t, err := svc.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -344,51 +429,60 @@ func getToken(
 	return ok(http.StatusOK, tokenOf(t, svc.Now()), ""), nil
 }
 
-// revokeToken serves DELETE /api/server/tokens/{id}: it ends the token at
+// revokeToken returns the op of a revoke in scope: it ends the token at
 // once and answers 204. The record stays for the history. A token that was
-// revoked answers 409.
-func revokeToken(
-	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, e audit.Entry,
-) (principalResult, error) {
-	object := accesstoken.Ref(r.PathValue("id"))
+// revoked answers 409. For ScopeOwn, a token of another principal answers
+// 404.
+func revokeToken(scope accesstoken.Scope) tokenOp {
+	return func(
+		_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		object := accesstoken.Ref(r.PathValue("id"))
 
-	if err := svc.Revoke(r.Context(), e, r.PathValue("id")); err != nil {
-		return failed(object), err
+		if err := svc.Revoke(r.Context(), p, e, scope, r.PathValue("id")); err != nil {
+			return failed(object), err
+		}
+
+		return ok(http.StatusNoContent, nil, object), nil
 	}
-
-	return ok(http.StatusNoContent, nil, object), nil
 }
 
-// rotateToken serves POST /api/server/tokens/{id}/rotate: it issues a new
-// token for the owner, sets an end time for the old one, and answers 201
-// with both (ADR 53, decision 8). A token that is not active answers 409.
-func rotateToken(
-	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, e audit.Entry,
-) (principalResult, error) {
-	object := accesstoken.Ref(r.PathValue("id"))
+// rotateToken returns the op of a rotation in scope: it issues a new token
+// for the owner, sets an end time for the old one, and answers 201 with
+// both (ADR 53, decision 8). A token that is not active answers 409, a
+// token whose kind does not fit the route 400, and a failed escalation
+// check 403.
+func rotateToken(scope accesstoken.Scope) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		object := accesstoken.Ref(r.PathValue("id"))
 
-	var req rotateTokenRequest
-	if err := decodeStrict(w, r, &req, errRotateBody); err != nil {
-		return failed(object), err
+		var req rotateTokenRequest
+		if err := decodeStrict(w, r, &req, errRotateBody); err != nil {
+			return failed(object), err
+		}
+
+		in := accesstoken.RotateInput{
+			OldEndsAt: req.OldTokenEndsAt, ExpiresAt: time.Time{}, ID: r.PathValue("id"), Scope: scope,
+		}
+		if req.ExpiresAt != nil {
+			in.ExpiresAt = *req.ExpiresAt
+		}
+
+		rot, secret, err := svc.Rotate(r.Context(), p, e, in)
+		if err != nil {
+			return failed(object), err
+		}
+
+		now := svc.Now()
+		body := rotationResponse{
+			Token:    newTokenResponse{tokenResponse: tokenOf(rot.New, now), Secret: secret.Reveal()},
+			Previous: tokenOf(rot.Old, now),
+		}
+
+		return ok(http.StatusCreated, body, accesstoken.TokenRef(rot.Old.PrincipalID, rot.Old.ID)), nil
 	}
-
-	in := accesstoken.RotateInput{OldEndsAt: req.OldTokenEndsAt, ExpiresAt: time.Time{}}
-	if req.ExpiresAt != nil {
-		in.ExpiresAt = *req.ExpiresAt
-	}
-
-	rot, secret, err := svc.Rotate(r.Context(), e, r.PathValue("id"), in)
-	if err != nil {
-		return failed(object), err
-	}
-
-	now := svc.Now()
-	body := rotationResponse{
-		Token:    newTokenResponse{tokenResponse: tokenOf(rot.New, now), Secret: secret.Reveal()},
-		Previous: tokenOf(rot.Old, now),
-	}
-
-	return ok(http.StatusCreated, body, object), nil
 }
 
 // classifyToken maps the access token errors to their status and message:
@@ -403,6 +497,10 @@ func classifyToken(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):
 		return http.StatusNotFound, err.Error(), true
+	case errors.Is(err, accesstoken.ErrWrongKind):
+		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, accesstoken.ErrNoOwnPrincipal):
+		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, accesstoken.ErrEnded), errors.Is(err, accesstoken.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, errNoTokenStore):

@@ -174,4 +174,21 @@ Accepted in part on 2026-10-13:
   mTLS client certificates, with trust rules per namespace. Static tokens
   are discouraged for machines.
 
-The questions in "Open questions" have no outcome yet.
+Lead decision on 2026-10-14, under the delegation of the owner, for ADR 53
+decision 3 (one action for each kind of token):
+
+- `token:manage-own`: a person lists, creates, rotates and revokes its own
+  personal tokens. Every authenticated person holds it, with no grant. A
+  service or a workload does not own personal tokens.
+- `server:manage-tokens`: an administrator creates and rotates the personal
+  tokens of other persons, and revokes any token.
+- `server:manage-service-tokens`: an administrator creates and rotates
+  service tokens.
+- `server:read-tokens`: an administrator reads the tokens of every
+  principal, never their secrets.
+- A token acts as its principal. So a create or a rotation for another
+  principal is a grant by proxy: the caller must hold, on each object,
+  every action that the principal holds (the escalation check of ADR 52).
+  A revoke never raises access and needs only `server:manage-tokens`.
+
+The other questions in "Open questions" have no outcome yet.

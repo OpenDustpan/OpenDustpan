@@ -40,6 +40,7 @@ func (c *clock) Advance(d time.Duration) {
 // fixture is a token service over a fresh SQLite store with two principals:
 // a person and a service. The workload has no token.
 type fixture struct {
+	store      *sqlite.Store
 	svc        *accesstoken.Service
 	principals *principal.Service
 	clock      *clock
@@ -79,7 +80,7 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: fresh, Logger: nil, Now: c.Now, NewID: nil,
+		Store: st, Principals: st, Freshness: fresh, Grants: nil, Logger: nil, Now: c.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -87,7 +88,7 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 
 	var none principal.Principal
 
-	f := fixture{svc: svc, principals: principals, clock: c, person: none, service: none, workload: none}
+	f := fixture{store: st, svc: svc, principals: principals, clock: c, person: none, service: none, workload: none}
 
 	for _, p := range []struct {
 		dst     *principal.Principal
@@ -108,10 +109,48 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 	return f
 }
 
+// admin is the bootstrap administrator: it passes the escalation check
+// with no GrantCheck wired.
+func admin() identity.Principal {
+	return identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true, TokenID: ""}
+}
+
+// scopeFor returns the administrator scope of the tokens of the principal
+// id: personal for the person, service for every other principal.
+func (f fixture) scopeFor(id string) accesstoken.Scope {
+	if id == f.person.ID {
+		return accesstoken.ScopePersonal
+	}
+
+	return accesstoken.ScopeService
+}
+
+// createIn creates a token as the administrator, in the scope that fits
+// the principal.
+func (f fixture) createIn(ctx context.Context, in accesstoken.Input) (accesstoken.Token, accesstoken.Secret, error) {
+	return f.svc.Create(ctx, admin(), caller(), f.scopeFor(in.PrincipalID), in)
+}
+
+// rotate rotates the token id as the administrator, in the scope that
+// fits its kind.
+func (f fixture) rotate(
+	ctx context.Context, id string, in accesstoken.RotateInput,
+) (accesstoken.Rotation, accesstoken.Secret, error) {
+	scope := accesstoken.ScopeService
+
+	if tok, err := f.svc.Get(ctx, id); err == nil && tok.Kind == accesstoken.KindPersonal {
+		scope = accesstoken.ScopePersonal
+	}
+
+	in.ID, in.Scope = id, scope
+
+	return f.svc.Rotate(ctx, admin(), caller(), in)
+}
+
 func (f fixture) create(t *testing.T, p principal.Principal, name string) (accesstoken.Token, accesstoken.Secret) {
 	t.Helper()
 
-	tok, secret, err := f.svc.Create(t.Context(), caller(),
+	tok, secret, err := f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: p.ID, Name: name})
 	if err != nil {
 		t.Fatalf("create token: %v", err)
@@ -124,7 +163,7 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
-		Store: nil, Principals: nil, Freshness: nil, Logger: nil, Now: nil, NewID: nil,
+		Store: nil, Principals: nil, Freshness: nil, Grants: nil, Logger: nil, Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -195,13 +234,13 @@ func TestKindFollowsPrincipal(t *testing.T) {
 		t.Fatalf("kinds = %q, %q; want personal, service", personal.Kind, service.Kind)
 	}
 
-	_, _, err := f.svc.Create(t.Context(), caller(),
+	_, _, err := f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.workload.ID, Name: "x"})
 	if !errors.Is(err, accesstoken.ErrNoTokenForKind) {
 		t.Fatalf("workload token: err = %v, want ErrNoTokenForKind", err)
 	}
 
-	_, _, err = f.svc.Create(t.Context(), caller(),
+	_, _, err = f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "prn-none", Name: "x"})
 	if !errors.Is(err, accesstoken.ErrPrincipalNotFound) {
 		t.Fatalf("token of a missing principal: err = %v, want ErrPrincipalNotFound", err)
@@ -231,7 +270,7 @@ func TestLifetime(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		_, _, err := f.svc.Create(t.Context(), caller(),
+		_, _, err := f.createIn(t.Context(),
 			accesstoken.Input{ExpiresAt: tc.expires, PrincipalID: f.service.ID, Name: "x"})
 		if !errors.Is(err, tc.want) {
 			t.Errorf("expiry %s: err = %v, want %v", tc.expires, err, tc.want)
@@ -309,11 +348,11 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	ctx := t.Context()
 
 	revoked, revokedSecret := f.create(t, f.service, "revoked")
-	if err := f.svc.Revoke(ctx, caller(), revoked.ID); err != nil {
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, revoked.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	_, expiredSecret, err := f.svc.Create(ctx, caller(),
+	_, expiredSecret, err := f.createIn(ctx,
 		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -342,11 +381,9 @@ func TestRotate(t *testing.T) {
 	ctx := t.Context()
 	old, oldSecret := f.create(t, f.service, "deploy")
 
-	rot, secret, err := f.svc.Rotate(
-		ctx,
-		caller(),
+	rot, secret, err := f.rotate(ctx,
 		old.ID,
-		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: "", Scope: 0},
 	)
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
@@ -367,7 +404,7 @@ func TestRotate(t *testing.T) {
 		}
 	}
 
-	_, _, err = f.svc.Rotate(ctx, caller(), old.ID, accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}})
+	_, _, err = f.rotate(ctx, old.ID, accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: "", Scope: 0})
 	if !errors.Is(err, accesstoken.ErrEnded) {
 		t.Fatalf("second rotation: err = %v, want ErrEnded", err)
 	}
@@ -390,17 +427,15 @@ func TestRotationEnd(t *testing.T) {
 	ctx := t.Context()
 	now := f.clock.Now()
 
-	short, _, err := f.svc.Create(ctx, caller(),
+	short, _, err := f.createIn(ctx,
 		accesstoken.Input{ExpiresAt: now.Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	rot, _, err := f.svc.Rotate(
-		ctx,
-		caller(),
+	rot, _, err := f.rotate(ctx,
 		short.ID,
-		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: "", Scope: 0},
 	)
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
@@ -423,11 +458,9 @@ func TestRotationEnd(t *testing.T) {
 		tok, _ := f.create(t, f.service, "case")
 
 		end := tc.end
-		_, _, err := f.svc.Rotate(
-			ctx,
-			caller(),
+		_, _, err := f.rotate(ctx,
 			tok.ID,
-			accesstoken.RotateInput{OldEndsAt: &end, ExpiresAt: time.Time{}},
+			accesstoken.RotateInput{OldEndsAt: &end, ExpiresAt: time.Time{}, ID: "", Scope: 0},
 		)
 
 		if !errors.Is(err, tc.want) {
@@ -449,7 +482,7 @@ func listFixture(t *testing.T) fixture {
 	f.clock.Advance(time.Second)
 	f.create(t, f.person, "three")
 
-	if err := f.svc.Revoke(t.Context(), caller(), first.ID); err != nil {
+	if err := f.svc.Revoke(t.Context(), admin(), caller(), accesstoken.ScopePersonal, first.ID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -528,17 +561,15 @@ func TestFreshnessHook(t *testing.T) {
 
 	f := newFixture(t, staleMFA{})
 
-	_, _, err := f.svc.Create(t.Context(), caller(),
+	_, _, err := f.createIn(t.Context(),
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
 	if !errors.Is(err, errStale) {
 		t.Fatalf("create: err = %v, want the freshness error", err)
 	}
 
-	_, _, err = f.svc.Rotate(
-		t.Context(),
-		caller(),
+	_, _, err = f.rotate(t.Context(),
 		"tok-any",
-		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}},
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: "", Scope: 0},
 	)
 	if !errors.Is(err, errStale) {
 		t.Fatalf("rotate: err = %v, want the freshness error", err)
@@ -577,5 +608,201 @@ func TestDigest(t *testing.T) {
 		if _, err := accesstoken.ParseDigest(bad); !errors.Is(err, accesstoken.ErrInvalid) {
 			t.Errorf("ParseDigest(%q) err = %v, want ErrInvalid", bad, err)
 		}
+	}
+}
+
+// as returns the caller with the subject of p, not an administrator.
+func as(p principal.Principal) identity.Principal {
+	return identity.Principal{Subject: p.Subject, DisplayName: p.DisplayName, Admin: false, TokenID: ""}
+}
+
+func TestOwnTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	alice := as(f.person)
+
+	own, _, err := f.svc.Create(ctx, alice, caller(), accesstoken.ScopeOwn,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "ignored", Name: "laptop"})
+	if err != nil {
+		t.Fatalf("create own token: %v", err)
+	}
+
+	if own.PrincipalID != f.person.ID || own.Kind != accesstoken.KindPersonal {
+		t.Fatalf("own token = %+v, want a personal token of the person", own)
+	}
+
+	page, err := f.svc.ListOwn(ctx, alice, accesstoken.PageRequest{
+		PrincipalID: f.service.ID, Cursor: "", Limit: 0, IncludeEnded: false,
+	})
+	if err != nil || page.Total != 1 || page.Items[0].ID != own.ID {
+		t.Fatalf("own list = %+v, %v; want the own token only", page, err)
+	}
+
+	rotateOwn := accesstoken.RotateInput{
+		OldEndsAt: nil,
+		ExpiresAt: time.Time{},
+		ID:        own.ID,
+		Scope:     accesstoken.ScopeOwn,
+	}
+	if _, _, rotErr := f.svc.Rotate(ctx, alice, caller(), rotateOwn); rotErr != nil {
+		t.Fatalf("rotate own token: %v", rotErr)
+	}
+
+	// A token of another principal is not found through the own routes.
+	other, _ := f.create(t, f.service, "deploy")
+
+	err = f.svc.Revoke(ctx, alice, caller(), accesstoken.ScopeOwn, other.ID)
+	if !errors.Is(err, accesstoken.ErrNotFound) {
+		t.Fatalf("revoke of another principal's token as own: err = %v, want ErrNotFound", err)
+	}
+
+	// A service, a workload and the bootstrap admin own no personal token.
+	for name, c := range map[string]identity.Principal{
+		"service": as(f.service), "workload": as(f.workload), "bootstrap admin": admin(),
+	} {
+		_, _, err := f.svc.Create(ctx, c, caller(), accesstoken.ScopeOwn,
+			accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: "x"})
+		if !errors.Is(err, accesstoken.ErrNoOwnPrincipal) {
+			t.Errorf("own token of the %s: err = %v, want ErrNoOwnPrincipal", name, err)
+		}
+	}
+}
+
+func TestScopesFitTheKind(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	cases := []struct {
+		target principal.Principal
+		scope  accesstoken.Scope
+	}{
+		{f.service, accesstoken.ScopePersonal},
+		{f.person, accesstoken.ScopeService},
+	}
+
+	for _, tc := range cases {
+		_, _, err := f.svc.Create(ctx, admin(), caller(), tc.scope,
+			accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: tc.target.ID, Name: "x"})
+		if !errors.Is(err, accesstoken.ErrWrongKind) {
+			t.Errorf("create for %s in scope %d: err = %v, want ErrWrongKind", tc.target.Kind, tc.scope, err)
+		}
+	}
+
+	service, _ := f.create(t, f.service, "deploy")
+
+	_, _, err := f.svc.Rotate(
+		ctx,
+		admin(),
+		caller(),
+		accesstoken.RotateInput{
+			OldEndsAt: nil,
+			ExpiresAt: time.Time{},
+			ID:        service.ID,
+			Scope:     accesstoken.ScopePersonal,
+		},
+	)
+	if !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Fatalf("rotate a service token in the personal scope: err = %v, want ErrWrongKind", err)
+	}
+
+	// A revoke never raises access: an administrator revokes any kind.
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, service.ID); err != nil {
+		t.Fatalf("revoke a service token: %v", err)
+	}
+}
+
+func TestEscalationCheck(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	alice := as(f.person)
+
+	// With no GrantCheck, only an administrator can act for another
+	// principal: the check fails closed.
+	_, _, err := f.svc.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("create for another principal with no grant check: err = %v, want ErrDenied", err)
+	}
+
+	tok, _ := f.create(t, f.service, "deploy")
+
+	_, _, err = f.svc.Rotate(
+		ctx,
+		alice,
+		caller(),
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeService},
+	)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("rotate for another principal with no grant check: err = %v, want ErrDenied", err)
+	}
+
+	if err := f.svc.Revoke(ctx, alice, caller(), accesstoken.ScopePersonal, tok.ID); err != nil {
+		t.Fatalf("revoke needs no escalation check: %v", err)
+	}
+}
+
+// recordGrants answers the escalation check from a set of allowed
+// principals and records each principal it checks.
+type recordGrants struct {
+	allowed map[string]bool
+	checked []string
+	mu      sync.Mutex
+}
+
+func (g *recordGrants) RequireHeld(_ context.Context, _ identity.Principal, principalID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.checked = append(g.checked, principalID)
+
+	if !g.allowed[principalID] {
+		return fmt.Errorf("%w: holds less than %s", identity.ErrDenied, principalID)
+	}
+
+	return nil
+}
+
+func TestEscalationCheckUsesTheGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	grants := &recordGrants{allowed: map[string]bool{f.service.ID: true}, checked: nil, mu: sync.Mutex{}}
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: f.store, Freshness: nil, Grants: grants, Logger: nil, Now: f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	alice := as(f.person)
+
+	allowed := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"}
+	if _, _, createErr := svc.Create(ctx, alice, caller(), accesstoken.ScopeService, allowed); createErr != nil {
+		t.Fatalf("create for an allowed principal: %v", createErr)
+	}
+
+	other, err := f.principals.CreatePrincipal(ctx, caller(),
+		principal.Input{Subject: "ops-bot", DisplayName: "", Kind: principal.KindService})
+	if err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+
+	_, _, err = svc.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: other.ID, Name: "x"})
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("create for a principal that holds more: err = %v, want ErrDenied", err)
+	}
+
+	if len(grants.checked) != 2 || grants.checked[1] != other.ID {
+		t.Fatalf("checked = %q, want both principals", grants.checked)
 	}
 }

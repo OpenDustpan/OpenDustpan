@@ -206,37 +206,69 @@ func newServiceBackedHandler(
 	return handler
 }
 
-// Principal and group IDs that the handler builders seed, so the routes with
-// an ID in the path answer their success status in the generic enforcement
-// tests. testPrincipalID is a member of testGroupID, and testOtherPrincipalID
-// is in no group, so the member add answers 201 and the member remove 204.
+// Principal, group and token IDs that the handler builders seed, so the
+// routes with an ID in the path answer their success status in the generic
+// enforcement tests. testPrincipalID is a member of testGroupID, and
+// testOtherPrincipalID is in no group, so the member add answers 201 and the
+// member remove 204. testTokenID is a personal token of testPrincipalID,
+// testServiceTokenID a service token of testOtherPrincipalID, and
+// testOwnTokenID a personal token of the test caller, whose subject is
+// tester.
 const (
 	testPrincipalID      = "prn-routes0000000000001"
 	testOtherPrincipalID = "prn-routes0000000000002"
+	testCallerID         = "prn-routes0000000000003"
 	testGroupID          = "grp-routes0000000000001"
 	testTokenID          = "tok-routes0000000000001"
+	testServiceTokenID   = "tok-routes0000000000002"
+	testOwnTokenID       = "tok-routes0000000000003"
 )
 
-// seedRouteTokens writes an active token of testOtherPrincipalID, so the
-// token routes with an ID answer their success status, and returns the
-// service over st. seedRoutePrincipals runs first.
+// allowGrants passes every escalation check, so the routes that create or
+// rotate a token for another principal answer their success status.
+type allowGrants struct{}
+
+func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
+
+// seedRouteTokens writes the person record of the test caller and one
+// token of each kind, so the token routes with an ID answer their success
+// status, and returns the service over st. seedRoutePrincipals runs first.
 func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	t.Helper()
 
+	ctx := t.Context()
 	at := time.Now().UTC().Truncate(time.Millisecond)
-	tok := accesstoken.Token{
-		CreatedAt: at, ExpiresAt: at.Add(48 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-		ID: testTokenID, PrincipalID: testOtherPrincipalID, Name: "deploy", Kind: accesstoken.KindService,
-		ReplacedBy: "",
+
+	caller := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, ID: testCallerID, Subject: "tester",
+		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+	}
+	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
+		t.Fatalf("seed caller: %v", err)
 	}
 
-	err := st.CreateToken(t.Context(), tok, accesstoken.Digest{1}, storetest.ServerChange(at, accesstoken.Ref(tok.ID)))
-	if err != nil {
-		t.Fatalf("seed token: %v", err)
+	seeds := []struct {
+		id, principalID string
+		kind            accesstoken.Kind
+	}{
+		{testTokenID, testPrincipalID, accesstoken.KindPersonal},
+		{testServiceTokenID, testOtherPrincipalID, accesstoken.KindService},
+		{testOwnTokenID, testCallerID, accesstoken.KindPersonal},
+	}
+	for i, seed := range seeds {
+		tok := accesstoken.Token{
+			CreatedAt: at, ExpiresAt: at.Add(48 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
+			ID: seed.id, PrincipalID: seed.principalID, Name: "seed", Kind: seed.kind, ReplacedBy: "",
+		}
+
+		d := accesstoken.Digest{byte(i + 1)}
+		if err := st.CreateToken(ctx, tok, d, storetest.ServerChange(at, accesstoken.Ref(seed.id))); err != nil {
+			t.Fatalf("seed token %s: %v", seed.id, err)
+		}
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -294,7 +326,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 // routeBodies holds the body of each route that needs one in the generic
 // enforcement tests, by method and path.
 //
-//nolint:gochecknoglobals // A constant table of request bodies for the route tests.
+//nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
@@ -304,8 +336,12 @@ var routeBodies = map[string]string{
 	"POST /api/server/groups":                                  `{"name":"dev"}`,
 	"PATCH /api/server/groups/{id}":                            `{"description":"Runs the platform"}`,
 	"POST /api/server/groups/{id}/members":                     `{"principalID":"` + testOtherPrincipalID + `"}`,
-	"POST /api/server/tokens":                                  `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
+	"POST /api/server/tokens":                                  `{"principalID":"` + testPrincipalID + `","name":"ci"}`,
 	"POST /api/server/tokens/{id}/rotate":                      `{}`,
+	"POST /api/server/service-tokens":                          `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
+	"POST /api/server/service-tokens/{id}/rotate":              `{}`,
+	"POST /api/server/caller/tokens":                           `{"name":"laptop"}`,
+	"POST /api/server/caller/tokens/{id}/rotate":               `{}`,
 }
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
@@ -581,6 +617,10 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		id = testGroupID
 	case strings.HasPrefix(route.Path, "/api/server/tokens"):
 		id = testTokenID
+	case strings.HasPrefix(route.Path, "/api/server/service-tokens"):
+		id = testServiceTokenID
+	case strings.HasPrefix(route.Path, "/api/server/caller/tokens"):
+		id = testOwnTokenID
 	default:
 	}
 
@@ -620,8 +660,8 @@ func wantSuccessStatus(route apiserver.Route) int {
 
 	if route.Method == http.MethodPost && (route.Path == "/api/server/namespaces" ||
 		route.Path == "/api/server/principals" || route.Path == "/api/server/groups" ||
-		route.Path == "/api/server/groups/{id}/members" || route.Path == "/api/server/tokens" ||
-		route.Path == "/api/server/tokens/{id}/rotate") {
+		route.Path == "/api/server/groups/{id}/members" || strings.HasSuffix(route.Path, "tokens") ||
+		strings.HasSuffix(route.Path, "/rotate")) {
 		return http.StatusCreated
 	}
 
