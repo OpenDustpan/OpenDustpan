@@ -1189,13 +1189,20 @@ func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
+	purges, ok := cfg.inventoryReader.(inventory.BlobPurges)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader keeps no blob purges: %w", ErrMissingOption)
+	}
+
+	blobs := blobPurger{purges: purges, logger: cfg.logger}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
 		Lifecycles: map[string]inventory.Lifecycle{
-			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates},
-			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces},
+			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Authenticator: cfg.authenticator,

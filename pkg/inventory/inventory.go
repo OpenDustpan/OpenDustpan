@@ -147,6 +147,27 @@ type Lifecycle interface {
 	Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error
 }
 
+// BlobPurge is a purged unit whose blobs may still exist (ADR 47). A purge
+// records it in its own transaction. The caller deletes the blobs of the
+// unit after the commit and finishes the record only when every blob is
+// gone, so a failed delete leaves the record for the sweep.
+type BlobPurge struct {
+	PurgedAt  time.Time
+	Namespace namespace.Name
+	Tool      string
+	UnitID    string
+}
+
+// BlobPurges reads and finishes the records of purged units whose blobs may
+// still exist.
+type BlobPurges interface {
+	// ListBlobPurges returns at most limit records, the oldest first.
+	ListBlobPurges(ctx context.Context, limit int) ([]BlobPurge, error)
+	// FinishBlobPurge removes the record of the unit unitID of tool. A
+	// missing record is not an error.
+	FinishBlobPurge(ctx context.Context, tool, unitID string) error
+}
+
 // DefaultDeletedPageSize is the page size of a query that asks for none.
 const DefaultDeletedPageSize = 50
 

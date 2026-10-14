@@ -16,7 +16,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-var _ inventory.Reader = (*Store)(nil)
+var (
+	_ inventory.Reader     = (*Store)(nil)
+	_ inventory.BlobPurges = (*Store)(nil)
+)
 
 // inventoryTool names the Pulumi CLI in inventory entries.
 const inventoryTool = "pulumi"

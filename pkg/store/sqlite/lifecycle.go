@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -104,14 +105,8 @@ func (s *Store) PurgeStack(ctx context.Context, id stack.ID, fence namespace.Fen
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		e.ObjectID = id.String()
-
-		if err := purgeStackRows(ctx, q, fence.Namespace, id); err != nil {
-			return err
-		}
-
-		return revokeUnitGrants(ctx, q, id.String(), e)
+	return s.purgeUnit(ctx, fence, e, purgedUnit{tool: inventoryTool, id: id.String()}, func(q *db.Queries) error {
+		return purgeStackRows(ctx, q, fence.Namespace, id)
 	})
 }
 
@@ -251,15 +246,15 @@ func (s *Store) PurgeWorkspace(ctx context.Context, id workspace.ID, fence names
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		e.ObjectID = id.String()
-
-		if err := purgeWorkspaceRows(ctx, q, fence.Namespace, id); err != nil {
-			return err
-		}
-
-		return revokeUnitGrants(ctx, q, id.String(), e)
-	})
+	return s.purgeUnit(
+		ctx,
+		fence,
+		e,
+		purgedUnit{tool: workspaceInventoryTool, id: id.String()},
+		func(q *db.Queries) error {
+			return purgeWorkspaceRows(ctx, q, fence.Namespace, id)
+		},
+	)
 }
 
 // purgeWorkspaceRows checks that the namespace has the deleted workspace id,
@@ -314,6 +309,71 @@ func revokeUnitGrants(ctx context.Context, q *db.Queries, id string, e audit.Ent
 	})
 	if err != nil {
 		return fmt.Errorf("revoke grants of the purged unit: %w", err)
+	}
+
+	return nil
+}
+
+// purgedUnit names the unit of a purge: its stored tool code and its stable
+// ID.
+type purgedUnit struct {
+	tool string
+	id   string
+}
+
+// purgeUnit runs the purge of the unit u in one fenced transaction with the
+// audit entry e (ADR 47): rows deletes the rows of the unit, then the purge
+// records the blob purge and ends the grants on the unit. The audit entry
+// carries the stable ID of the unit.
+func (s *Store) purgeUnit(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, u purgedUnit, rows func(q *db.Queries) error,
+) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		e.ObjectID = u.id
+
+		if err := rows(q); err != nil {
+			return err
+		}
+
+		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{
+			Tool: u.tool, UnitID: u.id, Namespace: fence.Namespace.String(), PurgedAtMs: codec.Millis(e.At),
+		})
+		if err != nil {
+			return fmt.Errorf("record blob purge: %w", err)
+		}
+
+		return revokeUnitGrants(ctx, q, u.id, e)
+	})
+}
+
+// ListBlobPurges implements inventory.BlobPurges.
+func (s *Store) ListBlobPurges(ctx context.Context, limit int) ([]inventory.BlobPurge, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListBlobPurges(ctx, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list blob purges: %w", err)
+	}
+
+	out := make([]inventory.BlobPurge, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, inventory.BlobPurge{
+			PurgedAt: codec.FromMillis(r.PurgedAtMs), Namespace: namespace.Name(r.Namespace), Tool: r.Tool,
+			UnitID: r.UnitID,
+		})
+	}
+
+	return out, nil
+}
+
+// FinishBlobPurge implements inventory.BlobPurges.
+func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if err := s.queries.DeleteBlobPurge(ctx, db.DeleteBlobPurgeParams{Tool: tool, UnitID: unitID}); err != nil {
+		return fmt.Errorf("finish blob purge: %w", err)
 	}
 
 	return nil

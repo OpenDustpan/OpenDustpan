@@ -21,6 +21,9 @@ import (
 var (
 	// ErrNotFound reports that a stack does not exist.
 	ErrNotFound = errors.New("stack not found")
+	// ErrBlobsRemain reports that a blob of a purged unit may remain after a
+	// delete (ADR 47). The blob purge record stays for the sweep.
+	ErrBlobsRemain = errors.New("blobs of the purged unit remain")
 	// ErrAlreadyExists reports that a stack with the same reference exists.
 	ErrAlreadyExists = errors.New("stack already exists")
 	// ErrInvalidName reports a project or stack name that fails validation.
@@ -246,7 +249,9 @@ type DeletedStore interface {
 	// PurgeStack removes the deleted stack id of the namespace of fence for
 	// good (ADR 47): its updates, checkpoints, events, journal, tags, data
 	// key and deleted inventory entry, in one fenced transaction with the
-	// audit entry e. The caller removes its blobs after the commit. It
+	// audit entry e. It ends the grants on the stack and records the blob
+	// purge (inventory.BlobPurge) in that transaction. The caller removes
+	// its blobs after the commit and then finishes the record. It
 	// returns ErrNotFound if the namespace has no deleted stack id, which
 	// also covers a live stack: a purge acts on deleted stacks only.
 	PurgeStack(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error

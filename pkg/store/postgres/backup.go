@@ -174,6 +174,11 @@ func pgCopyScopeTables() []pgCopyTable {
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
 		},
+		{
+			table:   "blob_purges",
+			columns: []string{pgColTool, pgColUnitID, pgColNamespace, "purged_at_ms"},
+			orderBy: []string{pgColTool, pgColUnitID},
+		},
 	}
 }
 

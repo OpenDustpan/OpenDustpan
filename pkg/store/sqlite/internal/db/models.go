@@ -54,6 +54,13 @@ type Backup struct {
 	Error       string
 }
 
+type BlobPurge struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
+}
+
 type Checkpoint struct {
 	StackID       string
 	UpdateID      string

@@ -1155,3 +1155,20 @@ WHERE tool = $1 AND unit_id = $2;
 -- access-review history (ADR 52, decision 10).
 UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
 WHERE target = $3 AND revoked_at_ms IS NULL;
+
+-- name: InsertBlobPurge :exec
+-- Records a purged unit whose blobs may still exist (ADR 47). A second
+-- purge of the same unit cannot happen, but the row stays as it is.
+INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (tool, unit_id) DO NOTHING;
+
+-- name: DeleteBlobPurge :exec
+DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2;
+
+-- name: ListBlobPurges :many
+-- The oldest rows first, so the sweep finishes the oldest purges first.
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $1;

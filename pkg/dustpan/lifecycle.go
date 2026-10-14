@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -21,14 +23,54 @@ const (
 	opentofuTool = "opentofu"
 )
 
+// purgeBlobTimeout bounds the blob deletes of one purge. They run on a
+// context that the request cannot cancel, so a client that disconnects does
+// not stop them halfway.
+const purgeBlobTimeout = 5 * time.Minute
+
+// blobPurger deletes the blobs of one purged unit after its rows are gone,
+// and finishes the blob purge record only when every blob is gone (ADR 47).
+// A record that stays is for the sweep, so no blob of a purged unit outlives
+// it for good.
+type blobPurger struct {
+	purges inventory.BlobPurges
+	logger *slog.Logger
+}
+
+// finish deletes the blobs of the unit unitID of tool with deleteBlobs and
+// then finishes its record. It never fails the purge: the rows are already
+// gone, and the record keeps the work for the sweep. No log line names a
+// blob key.
+func (b blobPurger) finish(
+	ctx context.Context, tool, unitID string, deleteBlobs func(context.Context) error,
+) {
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), purgeBlobTimeout)
+	defer cancel()
+
+	if err := deleteBlobs(detached); err != nil {
+		b.logger.WarnContext(ctx, "blobs of a purged unit remain for the sweep",
+			slog.String("tool", tool), slog.String("unit_id", unitID))
+
+		return
+	}
+
+	if err := b.purges.FinishBlobPurge(detached, tool, unitID); err != nil {
+		b.logger.WarnContext(ctx, "finish blob purge record",
+			slog.String("tool", tool), slog.String("unit_id", unitID))
+	}
+}
+
 // pulumiLifecycle implements inventory.Lifecycle for Pulumi stacks. A purge
 // removes the checkpoint blobs after the rows.
 type pulumiLifecycle struct {
 	stacks  *stack.Service
 	updates *stack.Updates
+	blobs   blobPurger
 }
 
-var _ inventory.Lifecycle = pulumiLifecycle{stacks: nil, updates: nil}
+var _ inventory.Lifecycle = pulumiLifecycle{
+	stacks: nil, updates: nil, blobs: blobPurger{purges: nil, logger: nil},
+}
 
 // Restore implements inventory.Lifecycle. name is the stack name: the stack
 // keeps its project. The answer is the inventory name, project/stack.
@@ -62,7 +104,9 @@ func (l pulumiLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID st
 		return lifecycleError(err, stack.ErrNotFound, stack.ErrAlreadyExists)
 	}
 
-	l.updates.DeleteStackBlobs(ctx, stack.Ref{Namespace: ns, Project: "", Stack: ""}, id)
+	l.blobs.finish(ctx, pulumiTool, unitID, func(c context.Context) error {
+		return l.updates.DeleteStackBlobs(c, id)
+	})
 
 	return nil
 }
@@ -70,9 +114,10 @@ func (l pulumiLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID st
 // opentofuLifecycle implements inventory.Lifecycle for OpenTofu workspaces.
 type opentofuLifecycle struct {
 	workspaces *workspace.Service
+	blobs      blobPurger
 }
 
-var _ inventory.Lifecycle = opentofuLifecycle{workspaces: nil}
+var _ inventory.Lifecycle = opentofuLifecycle{workspaces: nil, blobs: blobPurger{purges: nil, logger: nil}}
 
 // Restore implements inventory.Lifecycle.
 func (l opentofuLifecycle) Restore(
@@ -99,9 +144,15 @@ func (l opentofuLifecycle) Restore(
 
 // Purge implements inventory.Lifecycle.
 func (l opentofuLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error {
-	if err := l.workspaces.PurgeDeleted(ctx, ns, workspace.ID(unitID), e); err != nil {
+	id := workspace.ID(unitID)
+
+	if err := l.workspaces.PurgeDeleted(ctx, ns, id, e); err != nil {
 		return lifecycleError(err, workspace.ErrNotFound, workspace.ErrAlreadyExists)
 	}
+
+	l.blobs.finish(ctx, opentofuTool, unitID, func(c context.Context) error {
+		return l.workspaces.DeletePurgedBlobs(c, id)
+	})
 
 	return nil
 }

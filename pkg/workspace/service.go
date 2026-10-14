@@ -92,9 +92,11 @@ type DeletedStore interface {
 	RestoreWorkspace(ctx context.Context, id ID, newName Name, fence namespace.Fence, e audit.Entry) (Ref, error)
 	// PurgeWorkspace removes the deleted workspace id of the namespace of
 	// fence for good (ADR 47): its state versions, data key and deleted
-	// inventory entry, in one fenced transaction with the audit entry e. The
-	// caller removes its blobs after the commit. It returns ErrNotFound if
-	// the namespace has no deleted workspace id.
+	// inventory entry, in one fenced transaction with the audit entry e. It
+	// ends the grants on the workspace and records the blob purge
+	// (inventory.BlobPurge) in that transaction. The caller removes its
+	// blobs after the commit and then finishes the record. It returns
+	// ErrNotFound if the namespace has no deleted workspace id.
 	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error
 }
 
@@ -404,10 +406,10 @@ func (s *Service) RestoreDeleted(
 }
 
 // PurgeDeleted removes the deleted workspace id of ns for good, before its
-// retention period ends (ADR 47). The store removes its rows and appends the
-// audit entry e in one fenced transaction; then the service removes its state
-// blobs, best effort. A blob that stays is logged by count, never by key. It
-// returns ErrNotFound if ns has no deleted workspace id.
+// retention period ends (ADR 47). The store removes its rows, records the
+// blob purge and appends the audit entry e in one fenced transaction. The
+// caller then removes the state blobs with DeletePurgedBlobs. It returns
+// ErrNotFound if ns has no deleted workspace id.
 func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
@@ -420,7 +422,31 @@ func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e 
 		return fmt.Errorf("purge workspace %s: %w", id, err)
 	}
 
-	s.deleteWorkspaceBlobs(ctx, id)
+	return nil
+}
+
+// DeletePurgedBlobs removes every state blob of the purged workspace id,
+// with a retry for each blob (ADR 47). The purge runs it after the rows are
+// gone, so no upload can still commit a row that names these blobs. It
+// returns an error when a blob may remain, so the caller keeps the blob
+// purge record for the sweep. No log line and no error names a blob key.
+func (s *Service) DeletePurgedBlobs(ctx context.Context, id ID) error {
+	listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
+	if err != nil {
+		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
+	}
+
+	failed := 0
+
+	for _, obj := range listed {
+		if deleteErr := s.deleteBlobRetried(ctx, obj.Key); deleteErr != nil {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("%w: %d state blobs of workspace %s", ErrBlobsRemain, failed, id)
+	}
 
 	return nil
 }
@@ -1287,31 +1313,6 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
-}
-
-// deleteWorkspaceBlobs removes every state blob of the workspace id. The
-// purge runs it after the rows are gone, so no upload can still commit a row
-// that names these blobs. It is best effort.
-func (s *Service) deleteWorkspaceBlobs(ctx context.Context, id ID) {
-	listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
-	if err != nil {
-		s.logger.WarnContext(ctx, "delete state blobs of a purged workspace", slog.String("workspace", id.String()))
-
-		return
-	}
-
-	failed := 0
-
-	for _, obj := range listed {
-		if err := s.blobs.Delete(ctx, obj.Key); err != nil {
-			failed++
-		}
-	}
-
-	if failed > 0 {
-		s.logger.WarnContext(ctx, "delete state blobs of a purged workspace",
-			slog.String("workspace", id.String()), slog.Int("failed", failed))
-	}
 }
 
 // followedState returns the current state version of the unit, and whether the

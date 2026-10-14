@@ -966,6 +966,20 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return result.RowsAffected(), nil
 }
 
+const deleteBlobPurge = `-- name: DeleteBlobPurge :exec
+DELETE FROM blob_purges WHERE tool = $1 AND unit_id = $2
+`
+
+type DeleteBlobPurgeParams struct {
+	Tool   string
+	UnitID string
+}
+
+func (q *Queries) DeleteBlobPurge(ctx context.Context, arg DeleteBlobPurgeParams) error {
+	_, err := q.db.Exec(ctx, deleteBlobPurge, arg.Tool, arg.UnitID)
+	return err
+}
+
 const deleteCheckpointsOfStack = `-- name: DeleteCheckpointsOfStack :exec
 DELETE FROM checkpoints
 WHERE stack_id = $1
@@ -2610,6 +2624,31 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 	return err
 }
 
+const insertBlobPurge = `-- name: InsertBlobPurge :exec
+INSERT INTO blob_purges (tool, unit_id, namespace, purged_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (tool, unit_id) DO NOTHING
+`
+
+type InsertBlobPurgeParams struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
+}
+
+// Records a purged unit whose blobs may still exist (ADR 47). A second
+// purge of the same unit cannot happen, but the row stays as it is.
+func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams) error {
+	_, err := q.db.Exec(ctx, insertBlobPurge,
+		arg.Tool,
+		arg.UnitID,
+		arg.Namespace,
+		arg.PurgedAtMs,
+	)
+	return err
+}
+
 const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
 INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -3067,6 +3106,39 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 			&i.EndedAtMs,
 			&i.Target,
 			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBlobPurges = `-- name: ListBlobPurges :many
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $1
+`
+
+// The oldest rows first, so the sweep finishes the oldest purges first.
+func (q *Queries) ListBlobPurges(ctx context.Context, limit int32) ([]BlobPurge, error) {
+	rows, err := q.db.Query(ctx, listBlobPurges, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BlobPurge
+	for rows.Next() {
+		var i BlobPurge
+		if err := rows.Scan(
+			&i.Tool,
+			&i.UnitID,
+			&i.Namespace,
+			&i.PurgedAtMs,
 		); err != nil {
 			return nil, err
 		}

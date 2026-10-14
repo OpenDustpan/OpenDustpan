@@ -416,15 +416,15 @@ func (s *Updates) SaveCheckpoint(
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the stack. The purge of a
-// deleted stack runs it after the rows are gone (ADR 47), so no save can
-// still commit a row naming these blobs. It is best effort and logs no key.
-func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
+// DeleteStackBlobs removes every checkpoint blob of the purged stack, with
+// a retry for each blob (ADR 47). The purge runs it after the rows are gone,
+// so no save can still commit a row naming these blobs. It returns an error
+// when a blob may remain, so the caller keeps the blob purge record for the
+// sweep. No log line and no error names a blob key.
+func (s *Updates) DeleteStackBlobs(ctx context.Context, stackID ID) error {
 	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
 	if err != nil {
-		s.logger.WarnContext(ctx, "delete checkpoint blobs", slog.String("stack", ref.String()))
-
-		return
+		return fmt.Errorf("list checkpoint blobs of stack %s: %w", stackID, err)
 	}
 
 	failed := 0
@@ -436,13 +436,10 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	}
 
 	if failed > 0 {
-		s.logger.WarnContext(
-			ctx,
-			"delete checkpoint blobs",
-			slog.String("stack", ref.String()),
-			slog.Int("failed", failed),
-		)
+		return fmt.Errorf("%w: %d checkpoint blobs of stack %s", ErrBlobsRemain, failed, stackID)
 	}
+
+	return nil
 }
 
 // AppendEvents stores a batch of engine events for the update.

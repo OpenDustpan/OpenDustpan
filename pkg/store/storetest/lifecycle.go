@@ -145,6 +145,8 @@ func testPurgeStack(t *testing.T, f fixture) {
 		t.Fatalf("purge stack: %v", err)
 	}
 
+	checkBlobPurge(t, f.s, "pulumi", before.ID.String(), f.ref.Namespace)
+
 	deleted, err := f.s.ListDeletedUnits(t.Context(), f.ref.Namespace)
 	if err != nil || len(deleted) != 0 {
 		t.Fatalf("deleted units after the purge = %+v, %v, want none", deleted, err)
@@ -301,6 +303,8 @@ func testPurgeWorkspace(t *testing.T, s WorkspaceStore) {
 	if err := s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), entry); err != nil {
 		t.Fatalf("purge workspace: %v", err)
 	}
+
+	checkBlobPurge(t, s, "opentofu", gone.ID.String(), ns.Name)
 
 	deleted, err := s.ListDeletedUnits(t.Context(), ns.Name)
 	if err != nil || len(deleted) != 0 {
@@ -584,4 +588,51 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 	}
 
 	checkUnitGrant(t, as, access.ErrNotFound)
+}
+
+// blobPurgesOf returns the blob purge records of the unit unitID of tool.
+func blobPurgesOf(t *testing.T, purges inventory.BlobPurges, tool, unitID string) []inventory.BlobPurge {
+	t.Helper()
+
+	listed, err := purges.ListBlobPurges(t.Context(), 100)
+	if err != nil {
+		t.Fatalf("list blob purges: %v", err)
+	}
+
+	var out []inventory.BlobPurge
+
+	for _, p := range listed {
+		if p.Tool == tool && p.UnitID == unitID {
+			out = append(out, p)
+		}
+	}
+
+	return out
+}
+
+// checkBlobPurge checks that the store holds exactly one blob purge record
+// for the unit unitID of tool in ns, at the time of the purge, finishes it,
+// and checks that a second finish is not an error.
+func checkBlobPurge(t *testing.T, s any, tool, unitID string, ns namespace.Name) {
+	t.Helper()
+
+	purges, ok := storeAs[inventory.BlobPurges](s)
+	if !ok {
+		return
+	}
+
+	found := blobPurgesOf(t, purges, tool, unitID)
+	if len(found) != 1 || found[0].Namespace != ns || !found[0].PurgedAt.Equal(deletedAt()) {
+		t.Fatalf("blob purges of %s %s = %+v, want one in %s at %v", tool, unitID, found, ns, deletedAt())
+	}
+
+	for range 2 {
+		if err := purges.FinishBlobPurge(t.Context(), tool, unitID); err != nil {
+			t.Fatalf("finish blob purge: %v", err)
+		}
+	}
+
+	if left := blobPurgesOf(t, purges, tool, unitID); len(left) != 0 {
+		t.Fatalf("blob purges of %s %s after the finish = %+v, want none", tool, unitID, left)
+	}
 }
