@@ -153,6 +153,8 @@ type settings struct {
 	auditChain       audit.ChainSetting
 	backupTarget     blob.Store
 	backupTargetName string
+	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
+	auditSinks []audit.ShipSink
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
@@ -404,6 +406,7 @@ type Server struct {
 	observed        *metrics.ServerMetrics
 	chain           *chainDeps
 	chainOn         bool
+	shipper         *audit.Shipper
 	beforeServe     func(ctx context.Context) error
 }
 
@@ -420,8 +423,8 @@ type services struct {
 }
 
 // defaultSettings answers the settings of a server before its options.
-func defaultSettings() settings {
-	return settings{
+func defaultSettings() *settings {
+	return &settings{
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -457,6 +460,7 @@ func defaultSettings() settings {
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainAuto,
+		auditSinks:              nil,
 	}
 }
 
@@ -465,15 +469,15 @@ func NewServer(opts ...Option) (*Server, error) {
 	cfg := defaultSettings()
 
 	for _, opt := range opts {
-		opt(&cfg)
+		opt(cfg)
 	}
 
-	base, err := checkSettings(&cfg)
+	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
+	if authzErr := setDefaultAuthorizer(cfg); authzErr != nil {
 		return nil, authzErr
 	}
 
@@ -492,7 +496,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	if tokensErr := wireTokens(&cfg, svc.tokens); tokensErr != nil {
+	if tokensErr := wireTokens(cfg, svc.tokens); tokensErr != nil {
 		return nil, tokensErr
 	}
 
@@ -503,7 +507,7 @@ func NewServer(opts ...Option) (*Server, error) {
 // authenticator, and lets every authenticated person list and revoke its
 // own personal tokens with no grant (ADR 53, decision 3).
 func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
-	authn, err := gatedAuthenticator(*cfg, tokens)
+	authn, err := gatedAuthenticator(cfg, tokens)
 	if err != nil {
 		return err
 	}
@@ -519,7 +523,7 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 // assemble mounts the adapters and routes around the services. backups is
 // the installation backup service, or nil when no backup target is
 // configured.
-func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
+func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
@@ -550,6 +554,11 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		return nil, err
 	}
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -570,6 +579,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		observed:        observed,
 		chain:           chain,
 		chainOn:         false,
+		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 	}, nil
 }
@@ -592,7 +602,7 @@ type adapters struct {
 // readiness probe counts its failures on it.
 func newAdapters(
 	svc services,
-	cfg settings,
+	cfg *settings,
 	base baseurl.Resolver,
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
@@ -663,7 +673,7 @@ func newAdapters(
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -687,7 +697,7 @@ func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuh
 
 // newMaintenance builds the maintenance service and the watcher that reads
 // the maintenance state for every request.
-func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintenance.Watcher, error) {
+func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *maintenance.Watcher, error) {
 	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
 	if !ok {
 		return nil, nil, errMaintenanceNeedsStore
@@ -718,7 +728,7 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 // output route fail closed with a 500 when the append fails, so the counter
 // is the alert for lost entries.
 func newTFEHandler(
-	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	cfg *settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (*tfe.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -805,7 +815,7 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg settings) (services, error) {
+func newServices(cfg *settings) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
 	)
@@ -956,9 +966,16 @@ func (s *Server) Run(ctx context.Context) error {
 	checkCtx, stopCheck := context.WithCancel(ctx)
 	waitCheck := s.startAuditChainCheck(checkCtx)
 
+	// The shipper stops when Run returns, also after a serve error, and Run
+	// returns only after it stopped.
+	shipCtx, stopShipper := context.WithCancel(ctx)
+	waitShipper := s.startAuditShipper(shipCtx)
+
 	defer func() {
 		stopCheck()
 		waitCheck()
+		stopShipper()
+		waitShipper()
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
@@ -1209,7 +1226,7 @@ func isLoopbackListenAddr(addr string) bool {
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	svc services, cfg *settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (http.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -1245,7 +1262,7 @@ func newPulumiHandler(
 // service and the audit store. The store comes from the namespace store:
 // every SQL adapter serves all ports from one database connection. A custom
 // store that keeps no audit entries fails here with a clear error.
-func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
+func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
@@ -1267,7 +1284,7 @@ func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
 
 // newInventoryHandler builds the tool-neutral inventory API from the
 // namespace service and the inventory reader.
-func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
+func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces:    svc.namespaces,
 		Units:         cfg.inventoryReader,
@@ -1293,7 +1310,7 @@ type installationDeps struct {
 // newInstallationAPI builds the restore service and the tool-neutral
 // installation API from the backup service and the maintenance service.
 func newInstallationAPI(
-	cfg settings, deps installationDeps,
+	cfg *settings, deps installationDeps,
 ) (http.Handler, *backup.RestoreService, error) {
 	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
@@ -1316,7 +1333,7 @@ func newInstallationAPI(
 // the upgrade check reads, and the principal service when the store keeps
 // principals (ADR 52).
 func newServerHandler(
-	cfg settings, deps installationDeps, restores *backup.RestoreService,
+	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	grants, err := newAccessService(cfg)
 	if err != nil {
@@ -1389,7 +1406,7 @@ func adminSubjectsOf(authn identity.Authenticator) []string {
 // namespace store is the principal store too. The access service, when the
 // store keeps grants, guards the membership changes and the deletes: each
 // one gives or takes the grants of a principal or a group.
-func newPrincipalService(cfg settings, grants *access.Service) (*principal.Service, error) {
+func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Service, error) {
 	store, ok := cfg.namespaceStore.(principal.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
@@ -1472,7 +1489,7 @@ func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
 // otherwise.
-func newAccessService(cfg settings) (*access.Service, error) {
+func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return nil, nil //nolint:nilnil // No access store is a valid setup: the routes answer 501.
@@ -1504,7 +1521,7 @@ func newAccessService(cfg settings) (*access.Service, error) {
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
 // no principals. Every SQL adapter keeps both.
-func newTokenService(cfg settings) (*accesstoken.Service, error) {
+func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1533,7 +1550,7 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 // from one source. It never refuses a valid token.
 //
 //nolint:ireturn // The adapters take the port.
-func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
+func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
 	if tokens == nil {
 		return cfg.authenticator, nil
 	}
@@ -1569,7 +1586,7 @@ func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
 // database connection. A nil target means no backup target is configured.
-func newBackupService(cfg settings, svc services) (*backup.Service, error) {
+func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
@@ -1615,7 +1632,7 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 // backup of the live data before the apply. A nil target means no backup
 // target is configured.
 func newRestoreService(
-	cfg settings, deps installationDeps, maint *maintenance.Service,
+	cfg *settings, deps installationDeps, maint *maintenance.Service,
 ) (*backup.RestoreService, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
@@ -1959,7 +1976,7 @@ func appendClientIP(attrs []slog.Attr, addr netip.Addr) []slog.Attr {
 	return append(attrs, slog.String("client_ip", addr.String()))
 }
 
-func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Handler, error) {
+func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory units route, the OpenTofu routes and the
@@ -2022,7 +2039,7 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 // newClientIPResolver builds the client address resolver of the server from
 // the trusted proxy settings. An unknown header or a refused proxy list
 // fails the build, so the server never starts with them.
-func newClientIPResolver(cfg settings) (*clientip.Resolver, error) {
+func newClientIPResolver(cfg *settings) (*clientip.Resolver, error) {
 	header, err := clientip.ParseHeader(cfg.proxies.header)
 	if err != nil {
 		return nil, fmt.Errorf("trusted proxy header: %w", err)

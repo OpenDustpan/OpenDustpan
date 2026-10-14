@@ -51,6 +51,13 @@ type AuditEntry struct {
 	Changes    sql.NullString
 }
 
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string

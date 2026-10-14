@@ -277,6 +277,7 @@ type serveFlags struct {
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
 	auditChain              string
+	auditSinks              []string
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -390,6 +391,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
+	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 }
 
 // registerNet registers the network and console flags.
@@ -914,20 +916,26 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := sinks.close(); closeErr != nil {
+			logger.WarnContext(ctx, "close audit sinks", slog.String("error", closeErr.Error()))
+		}
+	}()
+
+	stopHangup := sinks.reopenOnHangup(ctx, logger)
+	defer stopHangup()
+
 	opts, optErr := f.serverOptions(st, blobs, authn, wrapper, logger)
 	if optErr != nil {
 		return optErr
 	}
-
 	opts = append(opts, f.backupOptions(backupTarget)...)
-
-	// serveWithIO checked the value, so the parse cannot fail here.
-	chain, err := audit.ParseChainSetting(f.auditChain)
-	if err != nil {
-		return fmt.Errorf("--audit-chain: %w", err)
-	}
-
-	opts = append(opts, dustpan.WithAuditChain(chain))
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
@@ -1031,7 +1039,8 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 }
 
 // serverOptions returns the NewServer options for the opened store, blob
-// store, authenticator, key wrapper and logger.
+// store, authenticator, key wrapper and logger, with the audit chain
+// setting.
 func (f *serveFlags) serverOptions(
 	st store,
 	blobs blob.Store,
@@ -1042,6 +1051,12 @@ func (f *serveFlags) serverOptions(
 	proxies, parseErr := clientip.ParseList(f.trustedProxies)
 	if parseErr != nil {
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
+	}
+
+	// check refused a bad value, so the parse fails only on a bug.
+	chain, chainErr := audit.ParseChainSetting(f.auditChain)
+	if chainErr != nil {
+		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
 	}
 
 	return []dustpan.Option{
@@ -1073,6 +1088,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
+		dustpan.WithAuditChain(chain),
 	}, nil
 }
 

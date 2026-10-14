@@ -28,6 +28,9 @@ const (
 	maxRequestSeries = 1024
 	maxInFlightCount = 16
 	maxBuildCount    = 4
+	// maxSinkSeries caps the series of the audit sink families: one per
+	// configured sink.
+	maxSinkSeries = MaxSinkSeries
 	// maxReloadSeries holds one series for each reload result.
 	maxReloadSeries = 2
 )
@@ -40,7 +43,10 @@ const (
 	labelMethod  = "method"
 	labelCode    = "code"
 	labelVersion = "version"
-	labelResult  = "result"
+	// labelSink names a configured audit sink, for example "siem". The
+	// operator sets the name; it never holds an address or a secret.
+	labelSink   = "sink"
+	labelResult = "result"
 )
 
 // Results of a reload of the configuration file (ADR 63 decision 5).
@@ -49,11 +55,15 @@ const (
 	ReloadFailure = "failure"
 )
 
+// MaxSinkSeries is the count of sinks that the audit sink families label.
+// The metrics of a sink past this count go to no series.
+const MaxSinkSeries = 16
+
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5) and the audit chain
-// gauge (ADR 60 decision 17). All
+// audit append failure counter (ADR 41 decision 5), the audit chain gauge
+// (ADR 60 decision 17) and the audit sink counters (ADR 60 decision 13). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -69,6 +79,7 @@ type ServerMetrics struct {
 	ready    *Counter
 	audit    *Counter
 	chainBad *Gauge
+	sinks    sinkFamilies
 	reloads  *Counter
 	reloadOK *Gauge
 }
@@ -119,6 +130,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			1,
 		),
 		chainBad: reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		sinks:    newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
 			"Reloads of the configuration file by result.",
@@ -218,6 +230,55 @@ const chainInvalidHelp = "Audit scopes whose chain check failed in the last sche
 // scope. Operators alert when it is above zero.
 func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 	m.chainBad.Set(float64(scopes))
+}
+
+// sinkFamilies holds the audit sink families: counters labeled by sink,
+// with one series for each configured sink.
+type sinkFamilies struct {
+	shipped  *Counter
+	sinkFail *Counter
+	sinkSkip *Counter
+}
+
+// newSinkFamilies registers the audit sink families in reg.
+func newSinkFamilies(reg *Registry) sinkFamilies {
+	family := func(name, help string) *Counter {
+		return reg.NewCounter(name, help, []string{labelSink}, maxSinkSeries)
+	}
+
+	return sinkFamilies{
+		shipped:  family("dustpan_audit_sink_entries_total", "Audit entries that a sink accepted, by sink."),
+		sinkFail: family("dustpan_audit_sink_failures_total", "Failed delivery rounds of an audit sink, by sink."),
+		sinkSkip: family(
+			"dustpan_audit_sink_skipped_total",
+			"Audit entries that a sink skipped because it cannot hold them, by sink.",
+		),
+	}
+}
+
+// AddAuditShipped adds entries to the count of audit entries that the sink
+// named sink accepted.
+func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
+	if entries > 0 {
+		m.sinks.shipped.Add(uint64(entries), sink)
+	}
+}
+
+// IncAuditSinkFailure adds one to the failed delivery rounds of the sink
+// named sink. The shipper retries, so a failure loses no entry, but a count
+// that keeps growing means the sink falls behind. Operators alert on it.
+func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
+	m.sinks.sinkFail.Inc(sink)
+}
+
+// AddAuditSkipped adds entries to the count of audit entries that the sink
+// named sink skipped because it cannot hold them, for example an entry
+// above the message size cap of a syslog sink. The sink never receives
+// such an entry. Operators alert when it is above zero.
+func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
+	if entries > 0 {
+		m.sinks.sinkSkip.Add(uint64(entries), sink)
+	}
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63

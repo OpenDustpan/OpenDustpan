@@ -159,6 +159,7 @@ var embeddedMigrationNames = []string{
 	"0035_access_tokens.sql",
 	"0042_roles_and_grants.sql",
 	"0048_audit_changes.sql",
+	"0049_audit_sink_cursors.sql",
 	"0053_audit_chain_state.sql",
 }
 

@@ -1125,3 +1125,18 @@ SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE name
 -- name: HasChainedAuditEntries :one
 -- Whether any scope holds an audit entry with a hash.
 SELECT EXISTS (SELECT 1 FROM audit_entries WHERE hash <> '');
+-- name: GetAuditSinkCursor :one
+-- The highest sequence of a namespace that a log sink holds (ADR 60
+-- decision 13). A sink with no row holds no entry of the namespace.
+SELECT sequence FROM audit_sink_cursors
+WHERE sink = ? AND namespace = ?;
+
+-- name: AdvanceAuditSinkCursor :exec
+-- Moves the cursor of a sink in a namespace up to a sequence. A cursor that
+-- is already at the sequence or higher stays, so two instances that ship
+-- the same batch never move it back.
+INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (sink, namespace) DO UPDATE
+SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
+WHERE excluded.sequence > audit_sink_cursors.sequence;

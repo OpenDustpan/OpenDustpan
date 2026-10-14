@@ -258,8 +258,8 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 }
 
 // finishSwap ends the swap in tx: it keeps the audit chain state of this
-// installation, drops the schema previous, and fences every namespace of
-// the restored schema live.
+// installation, drops the schema previous, and fences the restored schema
+// live (see fenceRestored).
 func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
 		return err
@@ -269,10 +269,23 @@ func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 		return fmt.Errorf("drop previous schema: %w", err)
 	}
 
+	return fenceRestored(ctx, tx, live)
+}
+
+// fenceRestored increments the failover version of every namespace of the
+// restored schema live and resets the audit sink cursors, in tx.
+func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
 	if _, err := tx.Exec(ctx, fenceNamespaces); err != nil {
 		return fmt.Errorf("fence namespaces after restore: %w", err)
+	}
+
+	// The restored log can reuse sequences that a sink already holds, and
+	// a restored cursor can point past the restored entries. A reset makes
+	// every sink receive the restored log again from its first entry.
+	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_sink_cursors"); err != nil {
+		return fmt.Errorf("reset audit sink cursors after restore: %w", err)
 	}
 
 	return nil

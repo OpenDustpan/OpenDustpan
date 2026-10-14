@@ -250,6 +250,13 @@ var Settings = []*Setting{
 		"`auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone",
 	).WithFile("audit-chain"),
 	stringSetting(
+		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
+		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
+			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
+			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
+		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
+	).WithFile("audit-sink").WithSensitive(),
+	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,
@@ -287,6 +294,16 @@ var Settings = []*Setting{
 		"A file that holds the tokens, one per line or comma-separated. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_ADMIN_TOKEN` wins.",
 	).WithFile("admin-token-file"),
+	envSetting(
+		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
+		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+
+			"Required when `--audit-sink` names a webhook and you set no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE",
+		"A file that holds the webhook secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins.",
+	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",

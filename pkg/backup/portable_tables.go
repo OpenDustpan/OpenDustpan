@@ -359,6 +359,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "audit_sink_cursors",
+			OrderBy: []string{"sink", portColNamespace},
+			Columns: []Column{
+				{Name: "sink", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColSequence, Kind: KindInteger},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table:   "backups",
 			OrderBy: []string{"id"},
 			Columns: []Column{

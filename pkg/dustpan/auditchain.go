@@ -39,7 +39,7 @@ type chainDeps struct {
 // store, or nil when the store has no chain switch and the setting is
 // auto: such a store keeps its own behavior. An explicit setting on such a
 // store fails.
-func newChainDeps(cfg settings) (*chainDeps, error) {
+func newChainDeps(cfg *settings) (*chainDeps, error) {
 	sw, okSwitch := cfg.namespaceStore.(audit.ChainSwitch)
 	entries, okEntries := cfg.namespaceStore.(audit.Store)
 
