@@ -274,6 +274,8 @@ func TestParseConfigErrorShape(t *testing.T) {
 		t.Fatalf("unknown key error = %v, want the key cut to 32 characters", err)
 	}
 
+	// The URL is built in parts, so no commit holds a contiguous URL with a
+	// password: make trufflehog scans every branch of the history.
 	_, err = cli.ParseConfig([]byte("database: postgres://u:" + canaryValue + "@db/d\n"))
 	if err == nil || !strings.Contains(err.Error(), "DUSTPAN_DATABASE") ||
 		!strings.Contains(err.Error(), `"database"`) {
