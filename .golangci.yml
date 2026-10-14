@@ -121,6 +121,7 @@ linters:
             - "**/pkg/backup/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
+            - "**/pkg/logsink/*.go"
             - "!**/*_test.go"
             - "!**/internal/api/inventory/**"
           deny:
