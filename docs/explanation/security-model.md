@@ -150,12 +150,31 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
 - **TLS.** `--tls-cert` and `--tls-key` turn on HTTPS, with TLS 1.2 or later.
   On plain HTTP on an address that is not loopback, the server logs a warning
   and serves anyway. OpenTofu needs HTTPS.
-- **Behind a reverse proxy.** The server never reads `X-Forwarded-*`
-  headers. Set `--public-url` to the external URL.
+- **Behind a reverse proxy.** By default the server reads no forwarding
+  header. Set `--public-url` to the external URL, and `--trusted-proxies`
+  when the proxy adds one. The next section says how the server reads it.
 - **Browsers.** Only origins in `--allowed-origins` get CORS headers.
 - **Response headers.** The server sets no `Content-Security-Policy`,
   `Strict-Transport-Security`, `X-Content-Type-Options` or `X-Frame-Options`
   header. Set them in a reverse proxy if you need them.
+
+## Client address and trusted proxies
+
+The server uses the client address of each request for the request log, the source of each audit entry, and limits.
+By default the address is the address of the TCP peer, and the server reads no forwarding header.
+With `--trusted-proxies` the server reads only the header that `--trusted-proxy-header` names: `x-forwarded-for` (the default) or `forwarded`.
+It ignores the other header, so the proxy needs no step to strip it.
+The proxy must overwrite or append the named header on each request it forwards.
+The server walks the header from the right and takes the first address outside the trusted list.
+A value that a client prepends never wins over the value that the proxy added.
+List proxies narrowly, by address where you can, not by a wide network that clients can use.
+The trusted list is for proxies only: a direct internal client is not a proxy and must not be on the list.
+The server refuses to start with a list that covers every address or that holds host bits: write the network or one address.
+A header that the server cannot read gives an unknown address, never the address of the proxy.
+A trusted peer that sends no forwarding header also gives an unknown address, and the server writes a warning.
+A wrong setup would otherwise make every client read as an internal address.
+Allowlists and limits treat an unknown address as denied.
+A wrong list records wrong audit sources, so review the list when entries name addresses that you do not expect.
 
 ## Logs
 
@@ -173,7 +192,8 @@ through each API and check that the log and the metrics do not hold them.
 - Large bodies of the Pulumi CLI and of OpenTofu share 128 MiB at the same time. Over that, the server
   answers 503 with `Retry-After`. An upload with large outputs asks for more budget as the outputs grow. It answers 503 with a Retry-After of 1 to 3 seconds when the budget has no room. It answers 413 when the upload can never fit the budget. Raise `--max-body-bytes-in-flight` to fit such an upload.
 - The server waits at most 10 seconds for the request headers.
-- No rate limit exists today. Planned in a new RFC (ADR 32).
+- **Failed token lookups have a limit for each client address.** The server counts the failed lookups of secret-shaped token values for each client address. The address is the resolved client address. An IPv6 address counts by its /64 network. Behind a proxy that is not in `--trusted-proxies`, every client shares the address of the proxy. A request with an unknown address counts in one shared bucket named `unknown`.
+- No other rate limit exists today. Planned in a new RFC (ADR 32).
 
 ## Outbound connections
 
