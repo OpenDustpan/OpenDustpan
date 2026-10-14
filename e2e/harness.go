@@ -1767,6 +1767,19 @@ func (e *Env) StatusWithHeader(
 	return StatusResponse{Status: resp.StatusCode, Header: resp.Header, Body: string(respBody)}, nil
 }
 
+// Home returns the home directory of the harness: the CLI configuration files
+// and the saved logins live there.
+func (e *Env) Home() string {
+	return e.home
+}
+
+// WriteFile writes content to name, creating its directory, and fails the
+// test on error.
+func (e *Env) WriteFile(tb testing.TB, name, content string) {
+	tb.Helper()
+	e.write(tb, name, content)
+}
+
 // stepInWith runs spec in dir through run and records it for the report.
 // StepIn passes RunIn; the saved-login steps pass RunSavedLogin.
 func (e *Env) stepInWith(

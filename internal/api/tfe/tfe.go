@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/token"
@@ -225,10 +226,13 @@ type Handler struct {
 	baseURL        baseurl.Resolver
 	audit          audit.Store
 	onAuditFailure func()
-	gate           *bodygate.Gate
-	maxState       int64
-	mux            *patternMux
-	routes         []Route
+	// guard checks the declared actions of the routes and writes the entry of
+	// each refusal (ADR 60, decision 3).
+	guard    *refusal.Recorder
+	gate     *bodygate.Gate
+	maxState int64
+	mux      *patternMux
+	routes   []Route
 }
 
 // NewHandler returns a Handler. Every Config field is required.
@@ -255,10 +259,12 @@ func NewHandler(cfg Config) (*Handler, error) {
 		baseURL:        cfg.BaseURL,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		gate:           cfg.Gate,
-		maxState:       cfg.MaxStateBytes,
-		mux:            newPatternMux(),
-		routes:         nil,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
+			cfg.OnAuditFailure),
+		gate:     cfg.Gate,
+		maxState: cfg.MaxStateBytes,
+		mux:      newPatternMux(),
+		routes:   nil,
 	}
 
 	if h.gate == nil {
