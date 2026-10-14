@@ -224,7 +224,9 @@ func seedBenchGrants(b *testing.B, s BenchStore, nss []namespace.Name, units []i
 
 		// A repeated tuple is refused, as the API refuses it. The bench
 		// keeps the first.
-		if err := s.CreateGrant(b.Context(), g, entry()); err != nil && !errors.Is(err, access.ErrAlreadyExists) {
+		fence := newNamespace(obj.Namespace()).Fence()
+		if err := s.CreateGrant(b.Context(), g, fence, scoped(entry(), obj.Namespace())); err != nil &&
+			!errors.Is(err, access.ErrAlreadyExists) {
 			b.Fatalf("seed grant: %v", err)
 		}
 	}

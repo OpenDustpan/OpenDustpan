@@ -349,6 +349,30 @@ func ServerChange(at time.Time, object string) audit.Entry {
 	}
 }
 
+// GrantWrite returns the fence and the audit entry that a grant write on
+// obj takes in s, for the record object at the time at: the zero fence and
+// an entry in @server for the installation, the fence of the namespace of
+// obj and an entry in that namespace otherwise.
+func GrantWrite(
+	tb testing.TB, s namespace.Store, obj identity.Object, at time.Time, object string,
+) (namespace.Fence, audit.Entry) {
+	tb.Helper()
+
+	e := ServerChange(at, object)
+	if obj.Namespace() == "" {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}, e
+	}
+
+	ns, err := s.GetNamespace(tb.Context(), obj.Namespace())
+	if err != nil {
+		tb.Fatalf("namespace of grant on %q: %v", obj.String(), err)
+	}
+
+	e.Namespace = ns.Name
+
+	return ns.Fence(), e
+}
+
 // seedBackupAccess writes a custom role, an ended role, two current grants
 // (one with a condition) and a revoked one when s keeps roles and grants
 // (ADR 52), so the round trip carries the nullable end times. A store with
@@ -410,16 +434,15 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 		},
 	}
 	for i := range grants {
-		if err := as.CreateGrant(ctx, grants[i], ServerChange(now(), "grant:"+grants[i].ID)); err != nil {
+		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
+		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}
 
-	err := as.RevokeGrant(
-		ctx,
-		"grt-revoked",
-		ServerChange(now().Add(2*time.Hour), "grant:grt-revoked"),
-	)
+	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
+
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}

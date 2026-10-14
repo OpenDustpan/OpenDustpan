@@ -304,7 +304,8 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		return Grant{}, err
 	}
 
-	if err := s.checkGrant(ctx, granter, in, role); err != nil {
+	fence, err := s.checkGrant(ctx, granter, in, role)
+	if err != nil {
 		return Grant{}, err
 	}
 
@@ -313,7 +314,7 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		Role: role.ID, CreatedBy: granter.Subject, Subject: in.Subject,
 	}
 
-	if err := s.store.CreateGrant(ctx, g, change(e, g.CreatedAt, GrantRef(g))); err != nil {
+	if err := s.store.CreateGrant(ctx, g, fence, grantChange(e, g.CreatedAt, fence, GrantRef(g))); err != nil {
 		return Grant{}, fmt.Errorf("create grant: %w", err)
 	}
 
@@ -342,11 +343,16 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
 	}
 
-	if err := s.checkGrantHeld(ctx, caller, g); err != nil {
-		return Grant{}, err
+	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
+		return Grant{}, heldErr
 	}
 
-	if err := s.store.RevokeGrant(ctx, id, change(e, s.Now(), GrantRef(g))); err != nil {
+	fence, err := s.fenceOf(ctx, g.Object)
+	if err != nil {
+		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
@@ -515,6 +521,18 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
+// grantChange completes the entry of the caller for one change of the
+// grant record object at the time at, in the audit scope of fence: the
+// namespace of the grant, or audit.ServerScope for the installation.
+func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object string) audit.Entry {
+	e = change(e, at, object)
+	if fence.Namespace != "" {
+		e.Namespace = fence.Namespace
+	}
+
+	return e
+}
+
 // CheckGroupGrants implements principal.Guard: caller must hold every action
 // that the current grants of the group give, on each of their objects.
 func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principal, groupID string) error {
@@ -554,31 +572,53 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 	return nil
 }
 
-// checkGrant runs the checks of Grant.
-func (s *Service) checkGrant(ctx context.Context, granter identity.Principal, in GrantInput, role Role) error {
+// checkGrant runs the checks of Grant. It returns the fence of the
+// namespace of the object, or the zero fence for the installation.
+func (s *Service) checkGrant(
+	ctx context.Context, granter identity.Principal, in GrantInput, role Role,
+) (namespace.Fence, error) {
+	var none namespace.Fence
+
 	kind, ok := KindOf(in.Object)
 	if !ok {
-		return fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
+		return none, fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
 	}
 
 	if err := s.checkSubject(ctx, in.Subject); err != nil {
-		return err
+		return none, err
+	}
+
+	fence, err := s.fenceOf(ctx, in.Object)
+	if err != nil {
+		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
 	if kind != ObjectInstallation {
-		if _, err := s.namespaces.GetNamespace(ctx, in.Object.Namespace()); err != nil {
-			return fmt.Errorf("grant on %q: %w", in.Object.String(), err)
-		}
-
 		for _, a := range role.Actions {
 			if family, _ := FamilyOf(a); family != FamilyData {
-				return fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
+				return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
 					ErrInvalid, role.ID, a)
 			}
 		}
 	}
 
-	return s.checkEscalation(ctx, granter, in.Object, role)
+	return fence, s.checkEscalation(ctx, granter, in.Object, role)
+}
+
+// fenceOf returns the fence of the namespace of obj, or the zero fence for
+// the installation. It returns namespace.ErrNotFound when the namespace
+// does not exist.
+func (s *Service) fenceOf(ctx context.Context, obj identity.Object) (namespace.Fence, error) {
+	if obj.Namespace() == "" {
+		return namespace.Fence{Namespace: "", FailoverVersion: 0}, nil
+	}
+
+	ns, err := s.namespaces.GetNamespace(ctx, obj.Namespace())
+	if err != nil {
+		return namespace.Fence{}, err
+	}
+
+	return ns.Fence(), nil
 }
 
 // checkEscalation refuses a role with an action that granter does not hold

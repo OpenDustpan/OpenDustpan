@@ -66,6 +66,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
 		{name: "a role granted below the installation is reported", test: testRoleGrantedBelow},
 		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
+		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
 	for _, tc := range slices.Concat(cases, unitCases()) {
@@ -187,7 +188,7 @@ func mustCreateRole(t *testing.T, s access.Store, r access.Role) {
 func mustCreateGrant(t *testing.T, s access.Store, g access.Grant) {
 	t.Helper()
 
-	if err := s.CreateGrant(t.Context(), g, entry()); err != nil {
+	if err := createGrant(t, s, g, entry()); err != nil {
 		t.Fatalf("create grant %q: %v", g.ID, err)
 	}
 }
@@ -375,7 +376,7 @@ func testDeleteRoleInUse(t *testing.T, s access.Store) {
 		t.Fatalf("delete role in use = %v, want ErrInUse", err)
 	}
 
-	if err := s.RevokeGrant(ctx, "grt-one", entry()); err != nil {
+	if err := revokeGrant(t, s, "grt-one", "acme", entry()); err != nil {
 		t.Fatalf("delete grant: %v", err)
 	}
 
@@ -438,7 +439,7 @@ func testDuplicateGrant(t *testing.T, s access.Store) {
 	obj := identity.NamespaceObject("acme")
 	mustCreateGrant(t, s, newGrant("grt-one", principalSubject("prn-a"), access.RoleViewer, obj))
 
-	err := s.CreateGrant(t.Context(), newGrant("grt-two", principalSubject("prn-a"), access.RoleViewer, obj), entry())
+	err := createGrant(t, s, newGrant("grt-two", principalSubject("prn-a"), access.RoleViewer, obj), entry())
 	if !errors.Is(err, access.ErrAlreadyExists) {
 		t.Fatalf("create duplicate grant = %v, want ErrAlreadyExists", err)
 	}
@@ -451,8 +452,12 @@ func testDuplicateGrantID(t *testing.T, s access.Store) {
 
 	mustCreateGrant(t, s, newGrant("grt-one", principalSubject("prn-a"), access.RoleViewer, identity.ServerObject()))
 
-	err := s.CreateGrant(t.Context(),
-		newGrant("grt-one", principalSubject("prn-b"), access.RoleViewer, identity.ServerObject()), entry())
+	err := createGrant(
+		t,
+		s,
+		newGrant("grt-one", principalSubject("prn-b"), access.RoleViewer, identity.ServerObject()),
+		entry(),
+	)
 	if !errors.Is(err, access.ErrAlreadyExists) {
 		t.Fatalf("create grant with taken ID = %v, want ErrAlreadyExists", err)
 	}
@@ -461,8 +466,12 @@ func testDuplicateGrantID(t *testing.T, s access.Store) {
 func testGrantOnCaller(t *testing.T, s access.Store) {
 	t.Helper()
 
-	err := s.CreateGrant(t.Context(),
-		newGrant("grt-one", principalSubject("prn-a"), access.RoleViewer, identity.CallerObject()), entry())
+	err := createGrant(
+		t,
+		s,
+		newGrant("grt-one", principalSubject("prn-a"), access.RoleViewer, identity.CallerObject()),
+		entry(),
+	)
 	if !errors.Is(err, access.ErrInvalid) {
 		t.Fatalf("grant on the caller object = %v, want ErrInvalid", err)
 	}
@@ -475,7 +484,7 @@ func testMissingGrant(t *testing.T, s access.Store) {
 		t.Fatalf("get missing grant = %v, want ErrNotFound", err)
 	}
 
-	if err := s.RevokeGrant(t.Context(), "grt-missing", entry()); !errors.Is(err, access.ErrNotFound) {
+	if err := revokeGrant(t, s, "grt-missing", "", entry()); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("delete missing grant = %v, want ErrNotFound", err)
 	}
 }
@@ -708,7 +717,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	// A grant to a deleted subject is refused in the transaction of the
 	// grant, so a delete that commits first wins.
-	err = s.CreateGrant(ctx, newGrant("grt-4", opsGroup(), access.RoleViewer, acme), entry())
+	err = createGrant(t, s, newGrant("grt-4", opsGroup(), access.RoleViewer, acme), entry())
 	if !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("grant to a deleted group = %v, want ErrNotFound", err)
 	}
@@ -722,11 +731,11 @@ func testRevokedGrant(t *testing.T, s access.Store) {
 	g := newGrant("grt-1", principalSubject("prn-a"), access.RoleViewer, acme)
 	mustCreateGrant(t, s, g)
 
-	if err := s.RevokeGrant(ctx, "grt-1", entry()); err != nil {
+	if err := revokeGrant(t, s, "grt-1", "acme", entry()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	err := s.RevokeGrant(ctx, "grt-1", entry())
+	err := revokeGrant(t, s, "grt-1", "acme", entry())
 	if !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("revoke a revoked grant = %v, want ErrNotFound", err)
 	}
@@ -907,7 +916,7 @@ func testRefusedEntry(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	acme := identity.NamespaceObject("acme")
 
-	err := s.CreateGrant(ctx, newGrant("grt-x", principalSubject("prn-a"), access.RoleViewer, acme), refused())
+	err := createGrant(t, s, newGrant("grt-x", principalSubject("prn-a"), access.RoleViewer, acme), refused())
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("grant with a refused entry = %v, want audit.ErrInvalidEntry", err)
 	}
@@ -925,7 +934,7 @@ func testRefusedEntry(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-1", principalSubject("prn-a"), access.RoleViewer, acme))
 	mustCreateRole(t, s, newRole("rol-1", "kept", identity.ActionUnitRead))
 
-	err = s.RevokeGrant(ctx, "grt-1", refused())
+	err = revokeGrant(t, s, "grt-1", "acme", refused())
 	if !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("revoke with a refused entry = %v, want audit.ErrInvalidEntry", err)
 	}
@@ -970,7 +979,7 @@ func testGrantsOf(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-3", principalSubject("prn-a"), access.RoleViewer, acme))
 	mustCreateGrant(t, s, newGrant("grt-4", opsGroup(), access.RoleAdmin, identity.NamespaceObject("beta")))
 
-	if err := s.RevokeGrant(ctx, "grt-4", entry()); err != nil {
+	if err := revokeGrant(t, s, "grt-4", "beta", entry()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -1002,7 +1011,7 @@ func testRoleGrantedBelow(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), "rol-b", identity.NamespaceObject("acme")))
 	mustCreateGrant(t, s, newGrant("grt-3", opsGroup(), "rol-c", identity.NamespaceObject("acme")))
 
-	if err := s.RevokeGrant(ctx, "grt-3", entry()); err != nil {
+	if err := revokeGrant(t, s, "grt-3", "acme", entry()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -1037,7 +1046,7 @@ func testUnitTarget(t *testing.T, s access.Store) {
 
 	noID := web.WithUnitID("")
 
-	err = s.CreateGrant(ctx, newGrant("grt-2", opsGroup(), access.RoleWriter, noID), entry())
+	err = createGrant(t, s, newGrant("grt-2", opsGroup(), access.RoleWriter, noID), entry())
 	if !errors.Is(err, access.ErrInvalid) {
 		t.Fatalf("grant on a unit with no stable ID = %v, want ErrInvalid", err)
 	}

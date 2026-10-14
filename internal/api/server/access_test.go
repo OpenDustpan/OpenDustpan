@@ -163,7 +163,8 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-seed-" + subject, Role: role, CreatedBy: "admin",
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},
 	}
-	if err := f.store.CreateGrant(t.Context(), grt, storetest.ServerChange(at, "grant:"+grt.ID)); err != nil {
+	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:"+grt.ID)
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 }
@@ -391,9 +392,11 @@ func TestGrantChangesWriteAuditEntries(t *testing.T) {
 		nil,
 	)
 
-	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	// A grant on a namespace writes its entries in that namespace, so the
+	// auditor of the namespace sees them.
+	listing, err := f.store.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.DefaultPageSize})
 	if err != nil {
-		t.Fatalf("list server entries: %v", err)
+		t.Fatalf("list acme entries: %v", err)
 	}
 
 	tuple := "grant:" + g.ID + " principal:prn-bob viewer acme"
@@ -408,7 +411,7 @@ func TestGrantChangesWriteAuditEntries(t *testing.T) {
 
 	// Newest first. The seeds come before these entries.
 	if len(listing.Entries) < len(want) {
-		t.Fatalf("server entries = %+v, want at least %d", listing.Entries, len(want))
+		t.Fatalf("acme entries = %+v, want at least %d", listing.Entries, len(want))
 	}
 
 	for i, w := range want {

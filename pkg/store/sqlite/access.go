@@ -21,11 +21,11 @@ var (
 )
 
 // CreateGrant implements access.GrantStore.
-func (s *Store) CreateGrant(ctx context.Context, g access.Grant, e audit.Entry) error {
+func (s *Store) CreateGrant(ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	return s.inGrantTx(ctx, g.Object.Namespace(), fence, e, func(q *db.Queries) error {
 		return insertGrant(ctx, q, g)
 	})
 }
@@ -101,12 +101,17 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 }
 
 // RevokeGrant implements access.GrantStore. It ends the grant in the
-// transaction of the entry.
-func (s *Store) RevokeGrant(ctx context.Context, id string, e audit.Entry) error {
+// transaction of the entry, after it checks that the grant is in the
+// namespace of fence.
+func (s *Store) RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	return s.inGrantTx(ctx, fence.Namespace, fence, e, func(q *db.Queries) error {
+		if err := grantInNamespace(ctx, q, id, fence.Namespace); err != nil {
+			return err
+		}
+
 		n, err := q.RevokeGrant(ctx, db.RevokeGrantParams{
 			RevokedAtMs: nullMillis(codec.Millis(e.At)), RevokedBy: e.Subject, ID: id,
 		})
@@ -614,4 +619,58 @@ func toNullString(s *string) sql.NullString {
 	}
 
 	return sql.NullString{String: *s, Valid: true}
+}
+
+// inGrantTx runs fn, a grant write on an object in the namespace ns, with
+// its entry e. A write on the installation (ns "") takes the zero fence and
+// appends e in the scope @server. Any other write takes the fence of ns, and
+// appends e to the chain of ns in the same fenced transaction. Writes are
+// serialized (_txlock=immediate), so a delete of a subject or a role that
+// commits first wins.
+func (s *Store) inGrantTx(
+	ctx context.Context, ns namespace.Name, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+) error {
+	if err := grantFence(ns, fence); err != nil {
+		return err
+	}
+
+	if ns == "" {
+		return s.inAuditedTx(ctx, e, fn)
+	}
+
+	return s.inFencedAuditedTx(ctx, fence, e, fn)
+}
+
+// grantInNamespace returns access.ErrNotFound when no current grant with
+// the ID id is in the namespace ns ("" for the installation).
+func grantInNamespace(ctx context.Context, q *db.Queries, id string, ns namespace.Name) error {
+	row, err := q.GetGrant(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return access.ErrNotFound
+	}
+
+	if err != nil {
+		return fmt.Errorf("select grant: %w", err)
+	}
+
+	if row.Namespace != ns.String() {
+		return access.ErrNotFound
+	}
+
+	return nil
+}
+
+// grantFence returns access.ErrInvalid when fence is not the fence of a
+// grant write in the namespace ns: the zero fence for the installation (ns
+// ""), and a fence of ns for any other object.
+func grantFence(ns namespace.Name, fence namespace.Fence) error {
+	if ns == "" && fence != (namespace.Fence{Namespace: "", FailoverVersion: 0}) {
+		return fmt.Errorf("%w: a grant on the installation takes no fence", access.ErrInvalid)
+	}
+
+	if ns != "" && fence.Namespace != ns {
+		return fmt.Errorf("%w: the fence names %q, the grant is in %q", access.ErrInvalid, fence.Namespace, ns)
+	}
+
+	return nil
 }

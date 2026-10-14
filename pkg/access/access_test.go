@@ -179,11 +179,13 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		obj = f.unit(tb, obj)
 	}
 
+	fence, e := storetest.GrantWrite(tb, f.store, obj, time.Unix(0, 0), "grant:test")
+
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
 		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
 		Role: role, CreatedBy: "admin", Subject: subject,
-	}, storetest.ServerChange(time.Unix(0, 0), "grant:test"))
+	}, fence, e)
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}

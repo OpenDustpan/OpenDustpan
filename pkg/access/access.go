@@ -275,12 +275,18 @@ type GrantQuery struct {
 
 // GrantStore keeps the grants.
 //
-// Each write takes the audit entry of the change, in the scope
-// audit.ServerScope, and appends it in the same transaction as the write
-// (ADR 60, fail closed): both commit, or neither. A write returns
-// audit.ErrInvalidEntry, and changes nothing, when the entry fails
-// validation. The time of the change is e.At, and its author is e.Subject.
-// A revoke ends a grant and keeps its row for the history.
+// Each write takes the fence of the namespace of the grant and the audit
+// entry of the change, and appends the entry in the same transaction as the
+// write (ADR 60, fail closed): both commit, or neither. A grant on the
+// installation takes the zero fence, and its entry is in the scope
+// audit.ServerScope. A grant on a namespace, a collection or a unit takes the
+// fence of its namespace, and its entry is in that namespace, so the store
+// checks the fence in the transaction of the write. A write returns
+// audit.ErrInvalidEntry when the entry fails validation or names another
+// scope, ErrInvalid when the fence is not the fence of the grant, and
+// namespace.ErrNotFound or namespace.ErrFenced from the fence check. Such a
+// write changes nothing. The time of the change is e.At, and its author is
+// e.Subject. A revoke ends a grant and keeps its row for the history.
 type GrantStore interface {
 	// CreateGrant persists g. It returns ErrAlreadyExists when a current
 	// grant of the same subject, role and object exists, or when the ID is
@@ -289,12 +295,14 @@ type GrantStore interface {
 	// or the custom role, has ended: the write reads them in its own
 	// transaction, so a delete that commits first wins. A subject or a role
 	// with no record at all is the Service's to check.
-	CreateGrant(ctx context.Context, g Grant, e audit.Entry) error
+	CreateGrant(ctx context.Context, g Grant, fence namespace.Fence, e audit.Entry) error
 	// GetGrant returns the current grant with the ID id, or ErrNotFound.
 	GetGrant(ctx context.Context, id string) (Grant, error)
-	// RevokeGrant ends the current grant with the ID id at e.At. It
-	// returns ErrNotFound when no such grant exists.
-	RevokeGrant(ctx context.Context, id string, e audit.Entry) error
+	// RevokeGrant ends the current grant with the ID id at e.At. fence
+	// names the namespace of the grant (the zero fence for the
+	// installation). It returns ErrNotFound when no such grant exists in
+	// that namespace.
+	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 	// ListGrantsOn returns one page of the current grants on obj, ordered
 	// by subject then role, and the count of every current grant on obj. A
 	// unit obj matches by its stable ID, and returns ErrInvalid with none.

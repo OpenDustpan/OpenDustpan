@@ -24,8 +24,9 @@ package server
 // nextCursor.
 //
 // Each change writes its audit entry in the transaction of the change (fail
-// closed). A refused change writes a failure entry after the fact, as well
-// as possible.
+// closed): in the namespace of a grant on a namespace, a collection or a
+// unit, and in @server otherwise. A refused change writes a failure entry
+// after the fact in the same scope, as well as possible.
 
 import (
 	"errors"
@@ -167,7 +168,7 @@ func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHa
 		res, ok := h.runAccessOp(w, r, call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
 
 		if !ok && res.object != "" && h.access != nil {
-			h.appendServerChange(r, p, serverChange{
+			h.appendObjectChange(r, p, obj, serverChange{
 				at: h.access.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
 			})
 		}

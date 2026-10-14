@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // channelHeader is the request header that declares where a request comes
@@ -71,6 +72,43 @@ func (h *Handler) appendServerChange(r *http.Request, p identity.Principal, c se
 	entry.Object = c.object
 
 	if _, err := h.audit.AppendServer(r.Context(), entry); err != nil {
+		h.failAudit(r.Context())
+	}
+}
+
+// namespaceAppender appends the entries of a namespace. Both SQL adapters
+// meet it with audit.Store.
+type namespaceAppender interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
+// appendObjectChange writes the failure entry of a change on obj: in the
+// namespace of obj, so that the auditor of the namespace sees it, or in
+// @server for an object of the installation. When the namespace does not
+// exist, or the audit store keeps only @server, the entry goes to @server.
+func (h *Handler) appendObjectChange(r *http.Request, p identity.Principal, obj identity.Object, c serverChange) {
+	entries, ok := h.audit.(namespaceAppender)
+	if !ok || obj.Namespace() == "" {
+		h.appendServerChange(r, p, c)
+
+		return
+	}
+
+	ns, err := h.namespaces.Get(r.Context(), obj.Namespace())
+	if err != nil {
+		h.appendServerChange(r, p, c)
+
+		return
+	}
+
+	entry := callerEntry(r, p, c.action)
+	entry.At = c.at
+	entry.Namespace = ns.Name
+	entry.Kind = audit.KindChange
+	entry.Outcome = c.outcome
+	entry.Object = c.object
+
+	if _, err := entries.Append(r.Context(), ns.Fence(), entry); err != nil {
 		h.failAudit(r.Context())
 	}
 }

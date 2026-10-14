@@ -289,11 +289,9 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		},
 	}
 	for i := range grants {
-		seedErr := st.CreateGrant(
-			ctx,
-			grants[i],
-			storetest.ServerChange(at, "grant:"+grants[i].ID),
-		)
+		fence, e := storetest.GrantWrite(t, st, grants[i].Object, at, "grant:"+grants[i].ID)
+
+		seedErr := st.CreateGrant(ctx, grants[i], fence, e)
 		if seedErr != nil {
 			t.Fatalf("seed grant %q: %v", grants[i].ID, seedErr)
 		}
