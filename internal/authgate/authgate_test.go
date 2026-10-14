@@ -182,14 +182,26 @@ func TestWaitingCapAnswers429WithNoStoreRead(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
+	hold := func() { go func() { done <- attempt(ctx, g, "192.0.2.1", "badgood") }() }
 
-	go func() { done <- attempt(ctx, g, "192.0.2.1", "badgood") }()
+	hold()
 
-	// The first request holds the one waiting place. A second one gets
-	// ErrLimited at once, with no store read.
-	deadline := time.Now().Add(5 * time.Second)
+	// The holder takes the one waiting place. A probe then gets ErrLimited
+	// at once, with no store read. A probe can also take the place for a
+	// moment, and the holder then gets ErrLimited: start it again.
+	deadline := time.Now().Add(10 * time.Second)
 
 	for {
+		select {
+		case err := <-done:
+			if !errors.Is(err, authgate.ErrLimited) {
+				t.Fatalf("holder: err = %v, want it to wait", err)
+			}
+
+			hold()
+		default:
+		}
+
 		before := next.lookups.Load()
 
 		err := attempt(canceled(t), g, "192.0.2.1", "badgood")
@@ -202,7 +214,7 @@ func TestWaitingCapAnswers429WithNoStoreRead(t *testing.T) {
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("no request over the waiting cap after 5s: last err = %v", err)
+			t.Fatalf("no request over the waiting cap after 10s: last err = %v", err)
 		}
 	}
 
