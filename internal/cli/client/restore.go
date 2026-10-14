@@ -130,7 +130,7 @@ func RestoreCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, fmt.Sprintf(restoreRerunHelp, server, id))
+	client, err := newBackupHTTPClient(f.caFile, fmt.Sprintf(restoreRerunHelp, server, id), stderr)
 	if err != nil {
 		return err
 	}

@@ -25,7 +25,13 @@ func (c *countingAuthenticator) AuthenticateToken(_ context.Context, token strin
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "ci", DisplayName: "CI", Admin: false, TokenID: "tok-1"}, nil
+	return identity.Principal{
+		Subject:        "ci",
+		DisplayName:    "CI",
+		Admin:          false,
+		TokenID:        "tok-1",
+		TokenExpiresAt: time.Time{},
+	}, nil
 }
 
 // clock is a settable test clock for the budget.

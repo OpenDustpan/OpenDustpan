@@ -1524,6 +1524,17 @@ func debugRoute(pattern string) bool {
 	}
 }
 
+// warnTokenExpiry sets accesstoken.ExpiryHeader on the answer when the
+// stored access token of caller expires within the warning period (ADR 53,
+// decision 11). A bootstrap admin token has no expiry and gets no header.
+func warnTokenExpiry(w http.ResponseWriter, caller identity.Principal, now time.Time) {
+	if caller.TokenID == "" || accesstoken.WarningFor(caller.TokenExpiresAt, now) == accesstoken.WarningNone {
+		return
+	}
+
+	w.Header().Set(accesstoken.ExpiryHeader, caller.TokenExpiresAt.UTC().Format(time.RFC3339))
+}
+
 // remoteHost returns the remote address of r without the port: the source
 // that the authentication gate counts failures for.
 func remoteHost(r *http.Request) string {
@@ -1535,10 +1546,12 @@ func remoteHost(r *http.Request) string {
 	return host
 }
 
-// subjectForRequest returns the subject of the signed-in principal, or false
-// when the request carries no valid access token. Lease and upload requests
-// carry no access token, so they log with no subject.
-func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *http.Request) (string, bool) {
+// callerForRequest returns the signed-in principal, or false when the
+// request carries no valid access token. Lease and upload requests carry no
+// access token, so they log with no subject.
+func callerForRequest(ctx context.Context, authn identity.Authenticator, r *http.Request) (identity.Principal, bool) {
+	var none identity.Principal
+
 	header := r.Header.Get("Authorization")
 
 	var raw string
@@ -1549,19 +1562,19 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 	case strings.HasPrefix(header, "Bearer "):
 		raw = strings.TrimPrefix(header, "Bearer ")
 	default:
-		return "", false
+		return none, false
 	}
 
 	if raw == "" {
-		return "", false
+		return none, false
 	}
 
 	caller, err := authn.AuthenticateToken(ctx, raw)
 	if err != nil || caller.Subject == "" {
-		return "", false
+		return none, false
 	}
 
-	return caller.Subject, true
+	return caller, true
 }
 
 // withRequestLog mints a request ID, stores it in the context, records the
@@ -1595,7 +1608,10 @@ func withRequestLog(
 
 		r = r.WithContext(ctx)
 
-		subject, signedIn := subjectForRequest(ctx, authn, r)
+		caller, signedIn := callerForRequest(ctx, authn, r)
+		if signedIn {
+			warnTokenExpiry(w, caller, time.Now())
+		}
 
 		// The route pattern is not known until the handler returns, so the
 		// in-flight gauge tracks the adapter from the path only. The gauge
@@ -1641,7 +1657,7 @@ func withRequestLog(
 		}
 
 		if signedIn {
-			attrs = append(attrs, slog.String("subject", subject))
+			attrs = append(attrs, slog.String("subject", caller.Subject))
 		}
 
 		level := slog.LevelInfo

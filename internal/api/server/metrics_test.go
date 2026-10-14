@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -23,7 +24,13 @@ func (adminAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
-	return identity.Principal{Subject: "admin", DisplayName: "Admin", Admin: true, TokenID: ""}, nil
+	return identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "Admin",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}, nil
 }
 
 // expositionWriter writes one fixed exposition, so the format test proves
