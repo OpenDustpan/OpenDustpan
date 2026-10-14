@@ -99,7 +99,7 @@ func newChainDeps(cfg *settings) (*chainDeps, error) {
 // newCheckpoints answers the signed checkpoints of cfg, or nil while they
 // are off. They need a blob store and a store that reads one entry at a
 // sequence.
-func newCheckpoints(cfg settings) (*audit.Checkpoints, error) {
+func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
 	if cfg.auditSigner == nil {
 		return nil, nil //nolint:nilnil // Nil without an error means signed checkpoints are off.
 	}
@@ -392,6 +392,7 @@ func epochEntry(epoch int64, at time.Time) audit.Entry {
 		Version:    "",
 		ValuePath:  "/audit/checkpoints/epoch/" + strconv.FormatInt(epoch, 10),
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "",
 		UserAgent:  "",
 		Channel:    audit.ChannelAPI,
@@ -408,7 +409,7 @@ func epochEntry(epoch int64, at time.Time) audit.Entry {
 // API, or nil while signed checkpoints are off.
 //
 //nolint:ireturn // A nil *audit.Checkpoints in the interface is not nil, so the route would call it; answer a nil interface.
-func checkpointEpochsOf(cfg settings) serverapi.CheckpointEpochs {
+func checkpointEpochsOf(cfg *settings) serverapi.CheckpointEpochs {
 	checkpoints, err := newCheckpoints(cfg)
 	if err != nil || checkpoints == nil {
 		return nil

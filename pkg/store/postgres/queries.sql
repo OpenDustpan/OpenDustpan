@@ -678,7 +678,7 @@ ORDER BY content_key;
 -- The entry of a scope at one sequence, for the check of signed
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2;
 

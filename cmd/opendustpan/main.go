@@ -956,13 +956,6 @@ func (f *serveFlags) serveWithStores(
 	opts = append(opts, f.backupOptions(backupTarget)...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
 
-	checkpoints, err := f.checkpointOptions()
-	if err != nil {
-		return err
-	}
-
-	opts = append(opts, checkpoints...)
-
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks
 	// writes no entry, and no reload entry comes before the start entry
@@ -1070,7 +1063,7 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 
 // serverOptions returns the NewServer options for the opened store, blob
 // store, authenticator, key wrapper and logger, with the audit chain
-// setting.
+// setting and the signed audit checkpoints.
 func (f *serveFlags) serverOptions(
 	st store,
 	blobs blob.Store,
@@ -1089,7 +1082,12 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
 	}
 
-	return []dustpan.Option{
+	checkpoints, cpErr := f.checkpointOptions()
+	if cpErr != nil {
+		return nil, cpErr
+	}
+
+	return append([]dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -1119,7 +1117,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),
-	}, nil
+	}, checkpoints...), nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

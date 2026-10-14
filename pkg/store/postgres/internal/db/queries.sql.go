@@ -1684,7 +1684,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2
 `
@@ -1694,33 +1694,11 @@ type GetAuditEntryParams struct {
 	Sequence  int64
 }
 
-type GetAuditEntryRow struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount pgtype.Int8
-}
-
 // The entry of a scope at one sequence, for the check of signed
 // checkpoints. A missing entry matches no row.
-func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (GetAuditEntryRow, error) {
+func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (AuditEntry, error) {
 	row := q.db.QueryRow(ctx, getAuditEntry, arg.Namespace, arg.Sequence)
-	var i GetAuditEntryRow
+	var i AuditEntry
 	err := row.Scan(
 		&i.Namespace,
 		&i.Sequence,
@@ -1741,6 +1719,7 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (G
 		&i.PrevHash,
 		&i.Hash,
 		&i.ValueCount,
+		&i.Changes,
 	)
 	return i, err
 }

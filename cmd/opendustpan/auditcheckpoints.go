@@ -41,7 +41,7 @@ func (f *serveFlags) checkCheckpointFlags() error {
 		return errCheckpointsNeedKey
 	case !f.auditCheckpoints && f.auditSigningKeyFile != "":
 		return errKeyWithoutCheckpoints
-	case f.auditCheckpoints && f.auditChain != string(audit.ChainOn):
+	case f.auditCheckpoints && f.auditChain != audit.ChainOn.String():
 		return errCheckpointsNeedChain
 	case !f.auditCheckpoints && f.auditVerifyKeysFile != "":
 		return errVerifyKeysWithoutCheckpoints
