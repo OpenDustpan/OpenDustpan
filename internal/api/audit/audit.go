@@ -152,11 +152,13 @@ type listEntriesResponse struct {
 // checkResponse is the answered document of the chain check.
 //
 // Contract: never remove or rename these fields. BadSequence is omitted
-// when the chain is valid.
+// when the chain is valid. EntriesUnchained counts the entries without a
+// hash: the chain was off when they were appended (ADR 60 decision 17).
 type checkResponse struct {
-	EntriesChecked int64 `json:"entriesChecked"`
-	BadSequence    int64 `json:"badSequence,omitempty"`
-	Valid          bool  `json:"valid"`
+	EntriesChecked   int64 `json:"entriesChecked"`
+	EntriesUnchained int64 `json:"entriesUnchained"`
+	BadSequence      int64 `json:"badSequence,omitempty"`
+	Valid            bool  `json:"valid"`
 }
 
 // listEntries answers GET /api/audit/entries with one page of the entries
@@ -219,9 +221,10 @@ func (h *Handler) checkChain(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, checkResponse{
-		EntriesChecked: result.Checked,
-		BadSequence:    result.BadSequence,
-		Valid:          result.Valid,
+		EntriesChecked:   result.Checked,
+		EntriesUnchained: result.Unchained,
+		BadSequence:      result.BadSequence,
+		Valid:            result.Valid,
 	})
 }
 

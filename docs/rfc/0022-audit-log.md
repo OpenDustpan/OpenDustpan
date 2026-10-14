@@ -137,5 +137,12 @@ namespace wait 1.1 ms less at p50), and a retention anchor for the check.
 ## Outcome
 
 Partly accepted: ADR 60 (the port, the entry fields, query and export, the
-log sinks, and opt-in tamper evidence that is off by default). Retention and
-the existing chain of an installation wait for the owner.
+log sinks, and opt-in tamper evidence that is off by default). Retention
+waits for the owner.
+
+The existing chain of an installation: on 2026-10-14 the lead accepted the
+lead proposal under the delegation of the owner. An installation with
+chained entries keeps the chain on until an administrator turns it off on
+purpose. That change is an audit entry of the kind `change` in `@server`,
+and the server warns at each start while chained entries exist and the
+chain is off.

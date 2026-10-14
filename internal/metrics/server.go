@@ -43,7 +43,8 @@ const (
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5). All
+// audit append failure counter (ADR 41 decision 5) and the audit chain
+// gauge (ADR 60 decision 17). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
@@ -57,6 +58,7 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	chainBad *Gauge
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -101,6 +103,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		audit: reg.NewCounter(
 			"dustpan_audit_append_failures_total",
 			"Audit entries lost because the append failed.",
+			nil,
+			1,
+		),
+		chainBad: reg.NewGauge(
+			"dustpan_audit_chain_invalid",
+			"Audit scopes whose chain check failed in the last scheduled check.",
 			nil,
 			1,
 		),
@@ -177,6 +185,13 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// SetAuditChainInvalid sets the count of audit scopes whose chain check
+// failed in the last scheduled check (ADR 60 decision 17). No label names a
+// scope. Operators alert when it is above zero.
+func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
+	m.chainBad.Set(float64(scopes))
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

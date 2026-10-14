@@ -332,6 +332,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColState,
+				"audit_chain",
 			},
 		},
 	}

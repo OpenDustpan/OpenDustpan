@@ -36,7 +36,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 	txErr := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		var err error
 
-		stored, err = appendAuditEntry(ctx, q, e)
+		stored, err = s.appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -61,7 +61,7 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 	txErr := s.inTx(ctx, func(q *db.Queries) error {
 		var err error
 
-		stored, err = appendAuditEntry(ctx, q, e)
+		stored, err = s.appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -86,7 +86,7 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -142,7 +142,7 @@ func validServerEntry(e audit.Entry) error {
 // appendAuditEntry reads the last entry of the scope of e and inserts e as
 // the next one, with its sequence, previous hash and hash. The caller runs
 // it in a transaction that orders the appends of the scope.
-func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
 	var prevHash string
 
 	var seq int64 = 1
@@ -158,8 +158,14 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 	}
 
 	e.Sequence = seq
-	e.PrevHash = prevHash
-	e.Hash = audit.ComputeHash(e, prevHash)
+	e.PrevHash, e.Hash = "", ""
+
+	// With the chain off, the entry holds no hash (ADR 60 decision 17). A
+	// chained entry after an unchained one links to an empty previous hash.
+	if !s.chainOff.Load() {
+		e.PrevHash = prevHash
+		e.Hash = audit.ComputeHash(e, prevHash)
+	}
 
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
 		Namespace:  e.Namespace.String(),
@@ -223,7 +229,7 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 // grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	var prevHash string
+	walk := audit.NewChainWalk()
 
 	var wantSeq int64 = 1
 
@@ -244,22 +250,19 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 		for i := range rows {
 			e := fromAuditRow(rows[i])
 
-			if e.Sequence != wantSeq || e.PrevHash != prevHash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
+			if !walk.Step(e) {
+				return audit.CheckResult{
+					Checked: read, BadSequence: e.Sequence, Unchained: walk.Unchained(), Valid: false,
+				}, nil
 			}
 
-			if got := audit.ComputeHash(e, e.PrevHash); got != e.Hash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
-			}
-
-			prevHash = e.Hash
 			wantSeq++
 		}
 
 		checked += int64(len(rows))
 
 		if len(rows) < audit.CheckPageSize {
-			return audit.CheckResult{Checked: checked, BadSequence: 0, Valid: true}, nil
+			return audit.CheckResult{Checked: checked, BadSequence: 0, Unchained: walk.Unchained(), Valid: true}, nil
 		}
 	}
 }

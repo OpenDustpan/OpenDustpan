@@ -37,6 +37,7 @@ import (
 	"syscall"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
@@ -224,6 +225,10 @@ func serveWithIO(
 		return errDeltaCutoff
 	}
 
+	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
+		return fmt.Errorf("--audit-chain: %w", err)
+	}
+
 	return f.run(ctx, stdin, stderr, terminal)
 }
 
@@ -252,6 +257,7 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
+	auditChain              string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -278,6 +284,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 }
 
 // registerNet registers the network and console flags.
@@ -783,6 +790,14 @@ func (f *serveFlags) serveWithStores(
 
 	opts := f.serverOptions(st, blobs, authn, wrapper, logger)
 	opts = append(opts, f.backupOptions(backupTarget)...)
+
+	// serveWithIO checked the value, so the parse cannot fail here.
+	chain, err := audit.ParseChainSetting(f.auditChain)
+	if err != nil {
+		return fmt.Errorf("--audit-chain: %w", err)
+	}
+
+	opts = append(opts, dustpan.WithAuditChain(chain))
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {

@@ -132,14 +132,19 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 	for i := range chain {
 		e := &chain[i]
 		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
-			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+			return audit.CheckResult{
+				Checked:     int64(len(chain)),
+				BadSequence: e.Sequence,
+				Unchained:   0,
+				Valid:       false,
+			}, nil
 		}
 
 		prevHash = e.Hash
 		wantSeq++
 	}
 
-	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // changeEntrySubject rewrites the subject of one stored entry behind the

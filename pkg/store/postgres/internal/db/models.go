@@ -79,8 +79,9 @@ type GroupMember struct {
 }
 
 type Installation struct {
-	ID    int64
-	State string
+	ID         int64
+	State      string
+	AuditChain string
 }
 
 type Inventory struct {

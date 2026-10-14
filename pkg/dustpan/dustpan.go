@@ -147,6 +147,8 @@ type settings struct {
 	disablePulumiJournaling bool
 	backupTarget            blob.Store
 	backupTargetName        string
+	// auditChain is the hash chain setting. See WithAuditChain.
+	auditChain audit.ChainSetting
 }
 
 // Option configures a Server.
@@ -350,6 +352,8 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	chain           *chainDeps
+	chainOn         bool
 }
 
 // services holds the domain services that NewServer wires together.
@@ -399,6 +403,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		backupTarget:            nil,
 		backupTargetName:        "",
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		auditChain:              audit.ChainAuto,
 	}
 
 	for _, opt := range opts {
@@ -468,6 +473,11 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		restoreRegistry = reg
 	}
 
+	chain, err := newChainDeps(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -486,6 +496,8 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		chain:           chain,
+		chainOn:         false,
 	}, nil
 }
 
@@ -860,6 +872,16 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
+	// The chain check stops when Run returns, also after a serve error, and
+	// Run returns only after it stopped.
+	checkCtx, stopCheck := context.WithCancel(ctx)
+	waitCheck := s.startAuditChainCheck(checkCtx)
+
+	defer func() {
+		stopCheck()
+		waitCheck()
+	}()
+
 	return s.serveUntilDone(ctx, srv, ln)
 }
 
@@ -978,6 +1000,10 @@ func (s *Server) runStartUp(ctx context.Context) error {
 
 	if startErr == nil {
 		startErr = s.sealUnsealedStates(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.resolveAuditChain(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {

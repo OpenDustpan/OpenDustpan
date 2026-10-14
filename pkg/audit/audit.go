@@ -309,13 +309,17 @@ type Listing struct {
 }
 
 // CheckResult reports the chain check of a namespace. Valid is true when
-// every entry matches its stored hash and links to its predecessor. When
-// Valid is false, BadSequence holds the sequence of the first entry that
-// does not match: a changed field, a broken link or a gap after a deleted
-// entry. Checked counts the entries the check read.
+// every chained entry matches its stored hash and links to its
+// predecessor. When Valid is false, BadSequence holds the sequence of the
+// first entry that does not match: a changed field, a broken link or a gap
+// after a deleted entry. Checked counts the entries the check read.
+// Unchained counts the entries without a hash: the chain was off when they
+// were appended (ADR 60 decision 17). The check cannot prove such an entry
+// unchanged.
 type CheckResult struct {
 	Checked     int64
 	BadSequence int64
+	Unchained   int64
 	Valid       bool
 }
 

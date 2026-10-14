@@ -195,6 +195,42 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		s, err := postgres.Open(t.Context(), schemaURL)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), schemaURL, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+		}
+	})
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 

@@ -223,7 +223,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		},
 		{
 			table:   "installation",
-			columns: []string{"id", pgColState},
+			columns: []string{"id", pgColState, "audit_chain"},
 			orderBy: []string{"id"},
 		},
 	}

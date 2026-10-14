@@ -84,13 +84,48 @@ namespace oldest first and answers whether it is valid.
 It needs the same action.
 The check reads the chain in pages of 100 entries, so a large log never
 grows the check without a bound.
-A valid chain answers `{"valid":true,"entriesChecked":N}`.
-A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N}`,
+A valid chain answers `{"valid":true,"entriesChecked":N,"entriesUnchained":U}`.
+A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N,"entriesUnchained":U}`,
 where `S` is the first entry that does not match.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/check?organization=acme"
+```
+
+## Turn the chain on or off
+
+The hash chain is opt-in (ADR 60 decisions 17 and 19).
+`--audit-chain` (`DUSTPAN_AUDIT_CHAIN`) takes `auto`, `on` or `off`.
+The default is `auto`.
+
+- `auto` keeps the state that the installation recorded last.
+  With no record, the chain is on when the log holds chained entries, and off otherwise.
+  So a new installation starts with the chain off, and an installation that already holds chained entries keeps the chain on.
+- `on` turns the chain on.
+- `off` turns the chain off.
+
+With the chain off, a new entry holds an empty `prevHash` and an empty `hash`.
+When the chain changes, the server writes one entry in the scope `@server` before it serves.
+The entry has the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
+The server writes this entry while the chain is still on, so a chain that goes off ends with a chained entry.
+While the log holds chained entries and the chain is off, the server logs a warning at each start.
+
+The check reads each run of chained entries on its own.
+An entry without a hash ends a run, and the next chained entry starts a new run with an empty `prevHash`.
+The check answers `entriesUnchained`: the count of entries without a hash.
+The check cannot prove that such an entry is unchanged.
+
+While the chain is on, the server checks the chain of every namespace and of `@server` at start and every hour.
+`dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
+
+```yaml
+      - alert: DustpanAuditChainInvalid
+        expr: dustpan_audit_chain_invalid > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit chain does not match
 ```
 
 ## What the chain protects against

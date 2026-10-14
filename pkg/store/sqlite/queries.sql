@@ -893,3 +893,18 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
 UPDATE access_tokens SET last_used_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id')
   AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
+
+-- name: GetAuditChainState :one
+-- The audit chain state that the installation recorded last (ADR 60
+-- decision 19): '', 'on' or 'off'. A missing row reads as no record.
+SELECT audit_chain FROM installation WHERE id = 1;
+
+-- name: SetAuditChainState :exec
+-- Records the audit chain state, creating the row when it is missing.
+INSERT INTO installation (id, audit_chain)
+VALUES (1, ?)
+ON CONFLICT (id) DO UPDATE SET audit_chain = excluded.audit_chain;
+
+-- name: HasChainedAuditEntries :one
+-- Whether any scope holds an audit entry with a hash.
+SELECT EXISTS (SELECT 1 FROM audit_entries WHERE hash <> '');

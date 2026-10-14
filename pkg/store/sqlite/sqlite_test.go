@@ -98,6 +98,41 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), path, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+		}
+	})
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 

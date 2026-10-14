@@ -547,7 +547,7 @@ func (coverageAuditStore) List(
 }
 
 func (coverageAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // coverageMetrics writes nothing: the route table needs a metrics writer,

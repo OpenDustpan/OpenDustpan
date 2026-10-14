@@ -1269,6 +1269,19 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 	return i, err
 }
 
+const getAuditChainState = `-- name: GetAuditChainState :one
+SELECT audit_chain FROM installation WHERE id = 1
+`
+
+// The audit chain state that the installation recorded last (ADR 60
+// decision 19): ”, 'on' or 'off'. A missing row reads as no record.
+func (q *Queries) GetAuditChainState(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, getAuditChainState)
+	var audit_chain string
+	err := row.Scan(&audit_chain)
+	return audit_chain, err
+}
+
 const getBackup = `-- name: GetBackup :one
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
@@ -2044,6 +2057,18 @@ func (q *Queries) GroupSource(ctx context.Context, id string) (string, error) {
 	var source string
 	err := row.Scan(&source)
 	return source, err
+}
+
+const hasChainedAuditEntries = `-- name: HasChainedAuditEntries :one
+SELECT EXISTS (SELECT 1 FROM audit_entries WHERE hash <> '')
+`
+
+// Whether any scope holds an audit entry with a hash.
+func (q *Queries) HasChainedAuditEntries(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, hasChainedAuditEntries)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const highestUpdateVersion = `-- name: HighestUpdateVersion :one
@@ -4002,6 +4027,18 @@ func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setAuditChainState = `-- name: SetAuditChainState :exec
+INSERT INTO installation (id, audit_chain)
+VALUES (1, $1)
+ON CONFLICT (id) DO UPDATE SET audit_chain = EXCLUDED.audit_chain
+`
+
+// Records the audit chain state, creating the row when it is missing.
+func (q *Queries) SetAuditChainState(ctx context.Context, auditChain string) error {
+	_, err := q.db.Exec(ctx, setAuditChainState, auditChain)
+	return err
 }
 
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows

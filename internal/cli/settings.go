@@ -197,6 +197,12 @@ var Settings = []*Setting{
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	),
 	stringSetting(
+		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "auto",
+		"hash chain of the audit log: auto keeps it on when the log holds chained entries, "+
+			"on or off decide alone (DUSTPAN_AUDIT_CHAIN)",
+		"`auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone",
+	),
+	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,
