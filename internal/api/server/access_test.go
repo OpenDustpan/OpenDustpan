@@ -564,3 +564,62 @@ func TestAccountAdministratorCannotReachOperatorActions(t *testing.T) {
 
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/metrics", "", http.StatusForbidden}, nil)
 }
+
+// TestGrantListNamesHoldersAndFilters lists the grants on acme with the
+// holder of each, and with the holder and role filters.
+func TestGrantListNamesHoldersAndFilters(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var all listedGrantListDoc
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/acme/grants", "", http.StatusOK}, &all)
+
+	if len(all.Grants) != 1 || all.Grants[0].HolderName != "alice" || all.Grants[0].HolderKind != "person" {
+		t.Fatalf("grants on acme = %+v, want the grant of alice, a person", all)
+	}
+
+	for _, c := range []struct {
+		query string
+		want  int
+	}{
+		{"holder=principal:prn-alice", 1},
+		{"holder=principal:prn-bob", 0},
+		{"role=admin", 1},
+		{"role=viewer", 0},
+		{"holder=principal:prn-alice&role=admin", 1},
+	} {
+		var page listedGrantListDoc
+		f.as(
+			t,
+			"ann",
+			apiCall{http.MethodGet, "/api/server/namespaces/acme/grants?" + c.query, "", http.StatusOK},
+			&page,
+		)
+
+		if len(page.Grants) != c.want || page.Total != int64(c.want) {
+			t.Errorf("grants with %s = %+v, want %d", c.query, page, c.want)
+		}
+	}
+
+	for _, query := range []string{
+		"holder=alice", "holder=group:x", "role=" + strings.Repeat("r", 129), "role=bad%20role", "role=.viewer",
+	} {
+		f.as(t, "ann", apiCall{
+			http.MethodGet, "/api/server/namespaces/acme/grants?" + query, "", http.StatusBadRequest,
+		}, nil)
+	}
+}
+
+// listedGrantDoc and listedGrantListDoc decode a grant list with the
+// holders.
+type listedGrantDoc struct {
+	ID         string `json:"id"`
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
+}
+
+type listedGrantListDoc struct {
+	Grants []listedGrantDoc `json:"grants"`
+	Total  int64            `json:"total"`
+}

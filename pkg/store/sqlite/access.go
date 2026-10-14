@@ -131,12 +131,12 @@ func (s *Store) RevokeGrant(ctx context.Context, id string, fence namespace.Fenc
 // total in one transaction.
 func (s *Store) ListGrantsOn(
 	ctx context.Context, obj identity.Object, gq access.GrantQuery,
-) ([]access.Grant, int64, error) {
+) ([]access.ListedGrant, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var (
-		out   []access.Grant
+		out   []access.ListedGrant
 		total int64
 	)
 
@@ -147,17 +147,18 @@ func (s *Store) ListGrantsOn(
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		rows, err := q.ListGrantsOn(ctx, db.ListGrantsOnParams{
-			Target: target, AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole, RowLimit: int64(gq.Limit),
+			Target: target, Subject: gq.Subject, Role: gq.Role, AfterSubject: gq.AfterSubject, AfterRole: gq.AfterRole,
+			RowLimit: int64(gq.Limit),
 		})
 		if err != nil {
 			return fmt.Errorf("select grants on object: %w", err)
 		}
 
-		if out, err = fromGrantRows(rows); err != nil {
+		if out, err = listedGrants(rows); err != nil {
 			return err
 		}
 
-		total, err = q.CountGrantsOn(ctx, target)
+		total, err = q.CountGrantsOn(ctx, db.CountGrantsOnParams{Target: target, Subject: gq.Subject, Role: gq.Role})
 		if err != nil {
 			return fmt.Errorf("count grants on object: %w", err)
 		}
@@ -478,7 +479,38 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 // grantReadRow is each generated grant row. The grant reads select the same
 // columns, so sqlc generates one type for each of them.
 type grantReadRow interface {
-	db.GetGrantRow | db.ListGrantsOnRow | db.GrantsOnRow | db.GrantsWithRolesRow | db.GrantsOfSubjectRow
+	db.GetGrantRow | db.GrantsOnRow | db.GrantsWithRolesRow | db.GrantsOfSubjectRow
+}
+
+// listedGrants maps the rows of a grant list, with their holders.
+func listedGrants(rows []db.ListGrantsOnRow) ([]access.ListedGrant, error) {
+	out := make([]access.ListedGrant, 0, len(rows))
+
+	for i := range rows {
+		r := &rows[i]
+
+		g, err := fromGrantRow(db.GetGrantRow{
+			ID:          r.ID,
+			Subject:     r.Subject,
+			SubjectKind: r.SubjectKind,
+			SubjectID:   r.SubjectID,
+			Role:        r.Role,
+			Object:      r.Object,
+			Target:      r.Target,
+			ObjectKind:  r.ObjectKind,
+			Namespace:   r.Namespace,
+			Condition:   r.Condition,
+			CreatedAtMs: r.CreatedAtMs,
+			CreatedBy:   r.CreatedBy,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, access.ListedGrant{Holder: access.Holder{Name: r.HolderName, Kind: r.HolderKind}, Grant: g})
+	}
+
+	return out, nil
 }
 
 // grantRow maps any generated grant row to the row of GetGrant.

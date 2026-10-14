@@ -969,15 +969,29 @@ SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind,
 FROM grants WHERE id = $1 AND revoked_at_ms IS NULL;
 
 -- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants
-WHERE target = @target AND revoked_at_ms IS NULL
-  AND (subject > @after_subject OR (subject = @after_subject AND role > @after_role))
-ORDER BY subject, role
+-- One page of the current grants on a target, with the name and the kind of
+-- each holder: the display name (else the subject) and the kind of a
+-- principal, or the name of a group and the kind "group". An empty subject
+-- or role filter keeps every grant.
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
+  g.condition, g.created_at_ms, g.created_by,
+  COALESCE(NULLIF(p.display_name, ''), p.subject, pg.name, '')::text AS holder_name,
+  COALESCE(p.kind, CASE WHEN pg.id IS NOT NULL THEN 'group' END, '')::text AS holder_kind
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+WHERE g.target = @target AND g.revoked_at_ms IS NULL
+  AND (@subject::text = '' OR g.subject = @subject::text)
+  AND (@role::text = '' OR g.role = @role::text)
+  AND (g.subject > @after_subject OR (g.subject = @after_subject AND g.role > @after_role))
+ORDER BY g.subject, g.role
 LIMIT @row_limit;
 
 -- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE target = @target AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants
+WHERE target = @target AND revoked_at_ms IS NULL
+  AND (@subject::text = '' OR subject = @subject::text)
+  AND (@role::text = '' OR role = @role::text);
 
 -- name: RevokeGrant :execrows
 UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL;
