@@ -2,6 +2,7 @@ package accesstest
 
 import (
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -25,11 +26,11 @@ func testListGrantHolders(t *testing.T, s access.Store) {
 	people := []principal.Principal{
 		{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "Alice A.",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0, DisabledAt: time.Time{},
 		},
 		{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-ci", Subject: "ci-deploy", DisplayName: "",
-			Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+			Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0, DisabledAt: time.Time{},
 		},
 	}
 	for i := range people {
