@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -130,11 +131,29 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard, audit.Entry) error {
+func (*fakeStacks) DeleteStack(
+	context.Context,
+	stack.Ref,
+	namespace.Fence,
+	stack.DeleteGuard,
+	inventory.Deletion,
+) error {
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, audit.Entry) error {
+func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, inventory.Deletion) error {
+	return stack.ErrNotFound
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeStacks) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeStacks) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -300,7 +319,21 @@ func (f *fakeWorkspaces) SaveWorkspace(
 }
 
 // DeleteWorkspace implements workspace.Store.
-func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, audit.Entry) error {
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, inventory.Deletion) error {
+	return workspace.ErrNotFound
+}
+
+// RestoreWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeWorkspaces) RestoreWorkspace(
+	_ context.Context, _ workspace.ID, _ workspace.Name, _ namespace.Fence, _ audit.Entry,
+) (workspace.Ref, error) {
+	return workspace.Ref{}, workspace.ErrNotFound
+}
+
+// PurgeWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeWorkspaces) PurgeWorkspace(_ context.Context, _ workspace.ID, _ namespace.Fence, _ audit.Entry) error {
 	return workspace.ErrNotFound
 }
 
@@ -453,7 +486,7 @@ func newFixtureWith(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -486,6 +519,7 @@ func newFixtureWith(
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -598,7 +632,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -631,6 +665,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)

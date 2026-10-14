@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -211,17 +212,17 @@ func checkEqualAdmins(t *testing.T, f *fixture) {
 		t.Fatalf("namespace admin grants admin: %v", err)
 	}
 
-	page, err := f.svc.ListGrants(ctx, acme, access.PageRequest{Cursor: "", Limit: 0})
+	page, err := f.svc.ListGrants(ctx, acme, access.PageRequest{Cursor: "", Holder: "", Role: "", Limit: 0})
 	if err != nil {
 		t.Fatalf("list grants: %v", err)
 	}
 
 	for i := range page.Grants {
-		if page.Grants[i].Subject != prn("alice") {
+		if page.Grants[i].Grant.Subject != prn("alice") {
 			continue
 		}
 
-		if _, revokeErr := f.svc.Revoke(ctx, testEntry(), bob, acme, page.Grants[i].ID); revokeErr != nil {
+		if _, revokeErr := f.svc.Revoke(ctx, testEntry(), bob, acme, page.Grants[i].Grant.ID); revokeErr != nil {
 			t.Fatalf("an admin revokes the grant of an admin of equal power: %v", revokeErr)
 		}
 	}
@@ -255,7 +256,14 @@ func TestUnitGrantsFollowTheStableID(t *testing.T) {
 	gone.At, gone.Namespace, gone.Action = time.Unix(1, 0), "acme", "unit:manage"
 	gone.Object, gone.Kind, gone.Outcome = web.String(), audit.KindChange, audit.OutcomeSuccess
 
-	if deleteErr := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), gone); deleteErr != nil {
+	deleteErr := f.store.DeleteStack(
+		ctx,
+		ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(inventory.DeletedRetention)},
+	)
+	if deleteErr != nil {
 		t.Fatalf("delete stack: %v", deleteErr)
 	}
 
@@ -274,7 +282,7 @@ func TestUnitGrantsFollowTheStableID(t *testing.T) {
 		t.Fatalf("scope after the new unit = %+v, %v; want no unit", scope, err)
 	}
 
-	page, err := f.svc.ListGrants(ctx, web, access.PageRequest{Cursor: "", Limit: 0})
+	page, err := f.svc.ListGrants(ctx, web, access.PageRequest{Cursor: "", Holder: "", Role: "", Limit: 0})
 	if err != nil || len(page.Grants) != 0 {
 		t.Fatalf("grants on the new unit = %+v, %v; want none", page.Grants, err)
 	}

@@ -97,10 +97,12 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 // inFencedAuditedTx runs fn and appends e to the chain of the namespace of
 // fence in one fenced transaction: the change and its audit entry commit
 // together, or neither does (ADR 60, fail closed). An entry that fails
-// validation or names another namespace changes nothing. The write lock of the
+// validation or names another namespace changes nothing. fn may set fields
+// of e that only the transaction knows, such as the object ID, before the
+// append. The write lock of the
 // transaction orders the appends.
 func (s *Store) inFencedAuditedTx(
-	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -116,7 +118,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -140,9 +142,19 @@ func validServerEntry(e audit.Entry) error {
 }
 
 // appendAuditEntry reads the last entry of the scope of e and inserts e as
-// the next one, with its sequence, previous hash and hash. The caller runs
+// the next one, with its sequence, previous hash and hash. An entry with no
+// ObjectID gets the stable ID of the live unit that its Object names. The caller runs
 // it in a transaction that orders the appends of the scope.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	if e.ObjectID == "" {
+		id, err := auditObjectID(ctx, q, e.Object)
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		e.ObjectID = id
+	}
+
 	var prevHash string
 
 	var seq int64 = 1
@@ -182,6 +194,7 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 		Hash:       e.Hash,
 		ValueCount: toNullInt64(e.ValueCount),
 		Changes:    toChangesText(e.Changes),
+		ObjectID:   e.ObjectID,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -287,6 +300,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		ValuePath:  row.ValuePath,
 		Changes:    changes,
 		ValueCount: fromNullInt64(row.ValueCount),
+		ObjectID:   row.ObjectID,
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
 		Channel:    audit.Channel(row.Channel),
