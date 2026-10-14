@@ -371,7 +371,13 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 
 	_, personSecret := f.create(t, f.person, "laptop")
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
