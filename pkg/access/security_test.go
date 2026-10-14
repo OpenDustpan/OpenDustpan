@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 // principals returns a principal service over the fixture store, guarded by
@@ -330,5 +331,97 @@ func TestGrantRacesADelete(t *testing.T) {
 		if len(grants) != 0 {
 			t.Fatalf("run %d: the deleted principal holds %d current grants, want 0", i, len(grants))
 		}
+	}
+}
+
+// TestGrantBelowInstallationGivesDataActionsOnly proves the second line of
+// the placement rule: a grant on a namespace whose role holds an action of
+// another family gives the data actions of the role only. The Service
+// refuses such a role below the installation, so the test stores the row
+// directly, as a role change that races a grant could leave it.
+func TestGrantBelowInstallationGivesDataActionsOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	p := f.person(t, "mixed")
+
+	at := time.Unix(0, 0)
+	r := access.Role{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		ID:          "rol-mixed",
+		Name:        "mixed",
+		Description: "",
+		BuiltIn:     false,
+		Actions: []identity.Action{
+			identity.ActionServerBackup,
+			identity.ActionServerManageAccess,
+			identity.ActionUnitRead,
+		},
+	}
+	if err := f.store.CreateRole(ctx, r, storetest.ServerChange(at, "role:rol-mixed")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	acme := identity.NamespaceObject("acme")
+	f.grant(t, prn("mixed"), r.ID, acme)
+
+	assertChecks(t, f.authz, p, []check{
+		{acme, identity.ActionUnitRead, true},
+		{acme, identity.ActionServerBackup, false},
+		{acme, identity.ActionServerManageAccess, false},
+	})
+
+	got, err := f.authz.Explain(ctx, p, acme)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	if len(got.Actions) != 1 || got.Actions[0] != identity.ActionUnitRead {
+		t.Fatalf("actions on acme = %v, want unit:read only", got.Actions)
+	}
+
+	scope, err := f.authz.ListObjects(ctx, p, identity.ActionServerBackup)
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if scope.All || len(scope.Namespaces) != 0 {
+		t.Fatalf("scope of server:backup = %+v, want nothing", scope)
+	}
+}
+
+// TestUpdateRoleNeedsTheActionsItRemoves proves that a role change takes
+// away only what its maker holds: each current grant of the role loses the
+// removed actions at once, as a revoke would.
+func TestUpdateRoleNeedsTheActionsItRemoves(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	acct := f.accountAdministrator(t, "remover")
+
+	r, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "ops", Description: "",
+		Actions: []identity.Action{identity.ActionServerBackup, identity.ActionNamespaceRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	_, err = f.svc.UpdateRole(ctx, testEntry(), acct, r.ID, access.RoleInput{
+		Name: "ops", Description: "", Actions: []identity.Action{identity.ActionNamespaceRead},
+	})
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("remove an operator action without holding it = %v, want ErrEscalation", err)
+	}
+
+	// The bootstrap admin holds every action, so it can take any away.
+	_, err = f.svc.UpdateRole(ctx, testEntry(), admin(), r.ID, access.RoleInput{
+		Name: "ops", Description: "", Actions: []identity.Action{identity.ActionNamespaceRead},
+	})
+	if err != nil {
+		t.Fatalf("remove an operator action as the bootstrap admin: %v", err)
 	}
 }

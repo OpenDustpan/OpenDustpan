@@ -181,9 +181,10 @@ func (s *Service) CreateRole(
 // UpdateRole replaces the fields of the custom role with the ID id, with
 // the entry e. A built-in role answers ErrBuiltIn. caller must hold every
 // action of the new set on the installation, because each current grant of
-// the role gives the new set at once. A role that a current grant gives on
-// an object other than the installation keeps data actions only
-// (ErrInUse).
+// the role gives the new set at once. caller must also hold every action
+// that the change takes away, because each current grant of the role loses
+// it at once, as a revoke would. A role that a current grant gives on an
+// object other than the installation keeps data actions only (ErrInUse).
 func (s *Service) UpdateRole(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string, in RoleInput,
 ) (Role, error) {
@@ -196,6 +197,7 @@ func (s *Service) UpdateRole(
 		return Role{}, fmt.Errorf("update role %q: %w", id, err)
 	}
 
+	before := r.Actions
 	r.Name = in.Name
 	r.Description = in.Description
 	r.Actions = normalizeActions(in.Actions)
@@ -206,6 +208,15 @@ func (s *Service) UpdateRole(
 	}
 
 	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), r); err != nil {
+		return Role{}, err
+	}
+
+	removed := r
+	removed.Actions = slices.DeleteFunc(slices.Clone(before), func(a identity.Action) bool {
+		return slices.Contains(r.Actions, a)
+	})
+
+	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), removed); err != nil {
 		return Role{}, err
 	}
 

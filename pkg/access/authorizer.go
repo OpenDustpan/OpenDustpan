@@ -222,6 +222,10 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 			continue
 		}
 
+		if !givenOn(action, grants[i].Object) {
+			continue
+		}
+
 		out.add(grants[i].Object)
 	}
 
@@ -297,11 +301,28 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		}
 
 		for _, action := range role.Actions {
-			out.set[action] = true
+			if givenOn(action, grants[i].Object) {
+				out.set[action] = true
+			}
 		}
 	}
 
 	return out, nil
+}
+
+// givenOn reports whether a grant on obj gives action. A grant on the
+// installation gives every action of its role. A grant on any other object
+// gives the data actions of its role only. The Service refuses a role with
+// another action below the installation, and this rule holds also when a
+// role change races a grant.
+func givenOn(action identity.Action, obj identity.Object) bool {
+	if kind, _ := KindOf(obj); kind == ObjectInstallation {
+		return true
+	}
+
+	family, _ := FamilyOf(action)
+
+	return family == FamilyData
 }
 
 // subjectsOf returns the subjects of p: its principal and each of its
