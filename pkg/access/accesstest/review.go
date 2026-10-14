@@ -76,7 +76,7 @@ func grantAt(minute int, id string, subject access.Subject, role string, obj ide
 func seedReview(t *testing.T, s access.Store) {
 	t.Helper()
 
-	collection := identity.CollectionObject("acme", "payments")
+	collection := identity.CollectionObject("acme", "payments").WithCollectionID("col-payments")
 
 	grants := []access.Grant{
 		grantAt(1, "grt-1", principalSubject("prn-a"), access.RoleInstallationOperator, identity.ServerObject()),
@@ -151,8 +151,11 @@ func testReviewScopes(t *testing.T, s access.Store) {
 	}), "grt-2", "grt-3", "grt-4", "grt-5")
 
 	review(t, rs, "collection acme/payments", everyRow(access.ReviewScope{
-		Namespace: "", Object: identity.CollectionObject("acme", "payments"), Containers: []string{"@server", "acme"},
-		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter}, All: false,
+		Namespace:      "",
+		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
+		Containers:     []string{"@server", "acme"},
+		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter},
+		All:            false,
 	}), "grt-2", "grt-3", "grt-4")
 
 	// A container grant with a role outside ContainerRoles stays out.
