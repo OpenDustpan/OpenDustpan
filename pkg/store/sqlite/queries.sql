@@ -906,13 +906,11 @@ INSERT INTO audit_chain_state (id, state, ever_chained)
 VALUES (1, ?, ?)
 ON CONFLICT (id) DO UPDATE SET state = excluded.state, ever_chained = excluded.ever_chained;
 
--- name: ListAuditChainOffTimes :many
--- The times of the chained entries of the scope @server that turned the
--- audit chain off, oldest first. The chain check accepts an entry without
--- a hash after a chained entry only when one of these comes between them.
-SELECT at_ms FROM audit_entries
+-- name: ListAuditChainSwitches :many
+-- The switch entries of the audit chain in the scope @server, oldest
+-- first: the timeline of the chain for the chain check.
+SELECT at_ms, value_path FROM audit_entries
 WHERE namespace = '@server' AND action = 'server:set-audit-chain'
-  AND value_path = '/audit/chain/off' AND hash <> ''
 ORDER BY sequence ASC;
 
 -- name: HasChainedAuditEntries :one

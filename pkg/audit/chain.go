@@ -10,21 +10,28 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// The hash chain of the audit log is opt-in (ADR 60 decisions 17 and 19).
-// When it is on, each append computes the hash of the entry over its fields
-// and the hash of the previous entry of its scope. When it is off, an entry
-// holds an empty previous hash and an empty hash. The check reads each run
-// of chained entries on its own: an entry without a hash ends a run, and
-// the next chained entry starts a new run with an empty previous hash. An
-// entry without a hash after a chained entry of its scope is valid only
-// when a chained entry of ServerScope that turned the chain off comes
-// between the two in time. So a hash that someone removes from a chained
-// log fails the check.
+// The hash chain of the audit log is opt-in (ADR 60 decisions 17 and 19,
+// ADR 64). When it is on, each append computes the hash of the entry over
+// its fields and the hash of the previous entry of its scope. When it is
+// off, an entry holds an empty previous hash and an empty hash. The check
+// reads each run of chained entries on its own: an entry without a hash
+// ends a run, and the next chained entry starts a new run with an empty
+// previous hash.
+//
+// Each change of the chain writes a switch entry in ServerScope: the kind
+// change, the action ActionSetChain, and the value path /audit/chain/on or
+// /audit/chain/off. The first start of an installation writes a switch
+// entry for the state before it, so the switch entries are the whole
+// timeline of the chain. The check accepts an entry without a hash only
+// when the timeline says the chain was off at its time, or within
+// ChainSwitchLag before it. So a hash that someone removes fails the check.
+//
+// Every instance reads the state from the store and keeps it for at most
+// ChainSwitchLag, so a change reaches every instance within that time.
 //
 // A new installation starts with the chain off. An installation that
 // already holds chained entries keeps the chain on until an administrator
-// turns it off on purpose. A change of the chain writes an entry of the
-// kind change in ServerScope. While chained entries exist and the chain is
+// turns it off on purpose. While chained entries exist and the chain is
 // off, the server logs a warning at each start.
 
 // ChainSetting is the operator setting of the chain.
@@ -60,10 +67,11 @@ const (
 	ChainStateOff ChainState = "off"
 )
 
-// Action and object of the entry that records a change of the chain.
+// Action, subject and value path prefix of a switch entry.
 const (
-	ActionSetChain = "server:set-audit-chain"
-	chainSubject   = "opendustpan serve"
+	ActionSetChain  = "server:set-audit-chain"
+	chainSubject    = "opendustpan serve"
+	chainPathPrefix = "/audit/chain/"
 )
 
 // ErrInvalidChainSetting reports a chain setting other than auto, on or off.
@@ -82,12 +90,26 @@ func ParseChainSetting(raw string) (ChainSetting, error) {
 	}
 }
 
+// ChainSwitchLag is the longest time an instance keeps the chain state it
+// read, so a change of the chain reaches every instance within it. The
+// check accepts an entry without a hash that an instance appended within
+// this time after the chain went on.
+const ChainSwitchLag = 2 * time.Second
+
+// ChainEntry is one switch entry that RecordChain appends in ServerScope,
+// and whether it holds a hash.
+type ChainEntry struct {
+	Entry   Entry
+	Chained bool
+}
+
 // ChainSwitch is the port that turns the chain on and off. The SQL stores
 // implement it next to Store.
 type ChainSwitch interface {
 	// SetChain makes later appends of this store handle compute the chain
-	// (on) or write entries without a hash (off). A new handle computes the
-	// chain until the server sets it.
+	// (on) or write entries without a hash (off) until the handle reads the
+	// recorded state again, at most ChainSwitchLag later. A handle with no
+	// recorded state computes the chain.
 	SetChain(on bool)
 	// HasChainedEntries reports whether any scope holds an entry with a
 	// hash. It reads the whole log, so the server calls it only without a
@@ -96,16 +118,18 @@ type ChainSwitch interface {
 	// ChainRecord answers what the installation recorded about its chain.
 	// Without a record its State is ChainUnknown.
 	ChainRecord(ctx context.Context) (ChainRecord, error)
-	// SaveChainRecord records rec for the installation. rec.State is
-	// ChainStateOn or ChainStateOff.
-	SaveChainRecord(ctx context.Context, rec ChainRecord) error
+	// RecordChain appends entries in ServerScope, each with a hash only
+	// when it is Chained, and records rec for the installation, in one
+	// transaction. rec.State is ChainStateOn or ChainStateOff. It returns
+	// ErrInvalidEntry when an entry fails validation or names another
+	// scope, and then changes nothing.
+	RecordChain(ctx context.Context, rec ChainRecord, entries []ChainEntry) error
 }
 
-// ChainPorts holds what ResolveChain needs: the switch, the server scope
-// for the change entry, and the logger for the warning.
+// ChainPorts holds what ResolveChain needs: the switch and the logger for
+// the warning.
 type ChainPorts struct {
 	Switch ChainSwitch
-	Server ServerStore
 	Logger *slog.Logger
 }
 
@@ -116,11 +140,11 @@ type ChainPorts struct {
 //   - ChainAuto keeps the state the installation recorded. With no record,
 //     the chain is on when the installation holds chained entries.
 //
-// When the decision differs from the state before it, ResolveChain appends
-// one entry of the kind change in ServerScope. It appends
-// that entry while the chain is still on, so a chain that goes off ends
-// with a chained entry. It then records the state, and logs a warning when
-// the chain is off while chained entries exist.
+// Without a record, it first writes a switch entry for the state before the
+// start. When the decision differs from the state before it, it writes a
+// switch entry with a hash, so a chain that goes off ends with a chained
+// entry. It writes the entries and the state in one transaction, and logs a
+// warning when the chain is off while chained entries exist.
 func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, now time.Time) (bool, error) {
 	sw := ports.Switch
 
@@ -146,10 +170,11 @@ func ResolveChain(ctx context.Context, ports ChainPorts, setting ChainSetting, n
 		return false, err
 	}
 
-	change := chainChange{at: now, before: before, after: on, everChained: chained}
-	if err := applyChain(ctx, sw, ports.Server, change); err != nil {
+	if err := recordStart(ctx, sw, rec, chainStart{at: now, chained: chained, before: before, after: on}); err != nil {
 		return false, err
 	}
+
+	sw.SetChain(on)
 
 	if !on && chained {
 		warnChainOff(ctx, ports.Logger)
@@ -182,7 +207,7 @@ func RecheckChain(ctx context.Context, ports ChainPorts) error {
 	if !rec.EverChained && rec.State != ChainUnknown {
 		rec.EverChained = true
 
-		if err := sw.SaveChainRecord(ctx, rec); err != nil {
+		if err := sw.RecordChain(ctx, rec, nil); err != nil {
 			return fmt.Errorf("save audit chain state: %w", err)
 		}
 	}
@@ -218,47 +243,45 @@ func decideChain(setting ChainSetting, before bool) (bool, error) {
 	}
 }
 
-// chainChange is the state of the chain before and after a start, and
-// whether the log held chained entries before it.
-type chainChange struct {
-	at          time.Time
-	before      bool
-	after       bool
-	everChained bool
+// chainStart is what a start knows: its time, whether the log holds
+// chained entries, and the state of the chain before and after it.
+type chainStart struct {
+	at      time.Time
+	chained bool
+	before  bool
+	after   bool
 }
 
-// applyChain sets the chain, appends the change entry when the state
-// changes, and records the state.
-func applyChain(ctx context.Context, sw ChainSwitch, server ServerStore, c chainChange) error {
-	state := ChainStateOff
-	if c.after {
-		state = ChainStateOn
+// recordStart writes the switch entries of a start and the new record in
+// one call, when either changes: the start state of an installation with
+// no record, and a switch when the state changes.
+func recordStart(ctx context.Context, sw ChainSwitch, rec ChainRecord, c chainStart) error {
+	states := map[bool]ChainState{true: ChainStateOn, false: ChainStateOff}
+
+	var entries []ChainEntry
+
+	if rec.State == ChainUnknown {
+		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.before], c.at), Chained: c.before})
 	}
 
 	if c.before != c.after {
-		// The entry is chained when the chain was on before or is on after.
-		sw.SetChain(true)
-
-		if _, err := server.AppendServer(ctx, chainEntry(state, c.at)); err != nil {
-			return fmt.Errorf("record audit chain change: %w", err)
-		}
+		entries = append(entries, ChainEntry{Entry: chainEntry(states[c.after], c.at), Chained: true})
 	}
 
-	sw.SetChain(c.after)
+	next := ChainRecord{State: states[c.after], EverChained: c.chained || c.after || c.before != c.after}
+	if len(entries) == 0 && next == rec {
+		return nil
+	}
 
-	// The change entry is chained, and a chain that is on chains the next
-	// entry, so either makes the log hold a chained entry.
-	rec := ChainRecord{State: state, EverChained: c.everChained || c.after || c.before != c.after}
-
-	if err := sw.SaveChainRecord(ctx, rec); err != nil {
-		return fmt.Errorf("save audit chain state: %w", err)
+	if err := sw.RecordChain(ctx, next, entries); err != nil {
+		return fmt.Errorf("record audit chain: %w", err)
 	}
 
 	return nil
 }
 
-// chainEntry returns the entry that records the chain turning on or off.
-// The value path holds the new state.
+// chainEntry returns the switch entry that records the chain as state. The
+// value path holds the state.
 func chainEntry(state ChainState, at time.Time) Entry {
 	return Entry{
 		At:         at,
@@ -269,7 +292,7 @@ func chainEntry(state ChainState, at time.Time) Entry {
 		Action:     ActionSetChain,
 		Object:     ServerScope.String(),
 		Version:    "",
-		ValuePath:  "/audit/chain/" + string(state),
+		ValuePath:  chainPathPrefix + string(state),
 		ValueCount: nil,
 		SourceIP:   "",
 		UserAgent:  "",
@@ -310,38 +333,48 @@ func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int
 	return invalid, errors.Join(errs...)
 }
 
+// ChainPoint is one switch entry of the timeline: when the chain went on
+// or off.
+type ChainPoint struct {
+	At time.Time
+	On bool
+}
+
+// ChainPointFromPath answers the point of a switch entry with the time at
+// and the value path path, and false when the path names no state.
+func ChainPointFromPath(at time.Time, path string) (ChainPoint, bool) {
+	switch path {
+	case chainPathPrefix + string(ChainStateOn):
+		return ChainPoint{At: at, On: true}, true
+	case chainPathPrefix + string(ChainStateOff):
+		return ChainPoint{At: at, On: false}, true
+	default:
+		return ChainPoint{At: at, On: false}, false
+	}
+}
+
 // ChainWalk checks the entries of one scope in order of sequence. The
 // stores use it in Check, so both dialects read the chain the same way.
 // The zero value is not ready: use NewChainWalk.
 type ChainWalk struct {
-	offTimes    []time.Time
-	lastChained time.Time
+	points      []ChainPoint
 	prevHash    string
 	next        int64
 	unchained   int64
 	seenChained bool
 }
 
-// NewChainWalk returns a walk that expects sequence 1 first. offTimes holds
-// the times of the chained entries of ServerScope that turned the chain off
-// (ActionSetChain with the value path /audit/chain/off).
-func NewChainWalk(offTimes []time.Time) *ChainWalk {
-	return &ChainWalk{
-		offTimes:    offTimes,
-		lastChained: time.Time{},
-		prevHash:    "",
-		next:        1,
-		unchained:   0,
-		seenChained: false,
-	}
+// NewChainWalk returns a walk that expects sequence 1 first. points is the
+// timeline of the chain, oldest first: the switch entries of ServerScope.
+func NewChainWalk(points []ChainPoint) *ChainWalk {
+	return &ChainWalk{points: points, prevHash: "", next: 1, unchained: 0, seenChained: false}
 }
 
 // Step checks e and answers false at the first entry that does not match:
 // a gap in the sequence, a broken link, or a hash that does not match the
-// fields. An entry without a hash must have no previous hash. It ends the
-// run, so the next chained entry links to an empty previous hash. After a
-// chained entry of the scope, an entry without a hash matches only when the
-// chain was turned off between the two.
+// fields. An entry without a hash must have no previous hash, and the chain
+// must have been off at its time (see offAt). It ends the run, so the next
+// chained entry links to an empty previous hash.
 func (w *ChainWalk) Step(e Entry) bool {
 	if e.Sequence != w.next {
 		return false
@@ -350,7 +383,7 @@ func (w *ChainWalk) Step(e Entry) bool {
 	w.next++
 
 	if e.Hash == "" {
-		if e.PrevHash != "" || (w.seenChained && !w.offBetween(w.lastChained, e.At)) {
+		if e.PrevHash != "" || !w.offAt(e.At) {
 			return false
 		}
 
@@ -365,7 +398,6 @@ func (w *ChainWalk) Step(e Entry) bool {
 	}
 
 	w.prevHash = e.Hash
-	w.lastChained = e.At
 	w.seenChained = true
 
 	return true
@@ -376,17 +408,34 @@ func (w *ChainWalk) Unchained() int64 {
 	return w.unchained
 }
 
-// offBetween reports whether the chain was turned off at a time in the
-// range from start to end, at millisecond precision, as entries store
-// their time.
-func (w *ChainWalk) offBetween(start, end time.Time) bool {
-	startMs, endMs := start.UnixMilli(), end.UnixMilli()
-
-	for _, t := range w.offTimes {
-		if ms := t.UnixMilli(); ms >= startMs && ms <= endMs {
-			return true
-		}
+// offAt reports whether an entry without a hash at t matches the timeline:
+// the chain was off at t, or at t minus ChainSwitchLag, when an instance
+// could still hold the state before a switch to on. Without a timeline, an
+// entry without a hash matches only before the first chained entry of its
+// scope.
+func (w *ChainWalk) offAt(t time.Time) bool {
+	if len(w.points) == 0 {
+		return !w.seenChained
 	}
 
-	return false
+	return !w.onAt(t) || !w.onAt(t.Add(-ChainSwitchLag))
+}
+
+// onAt answers the state of the chain at t: the state of the latest point
+// at or before t, at millisecond precision. Before the first point, the
+// first point holds the state, because the first start writes a point for
+// the state before it.
+func (w *ChainWalk) onAt(t time.Time) bool {
+	ms := t.UnixMilli()
+	state := w.points[0].On
+
+	for _, p := range w.points {
+		if p.At.UnixMilli() > ms {
+			break
+		}
+
+		state = p.On
+	}
+
+	return state
 }

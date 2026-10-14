@@ -2461,36 +2461,6 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 	return items, nil
 }
 
-const listAuditChainOffTimes = `-- name: ListAuditChainOffTimes :many
-SELECT at_ms FROM audit_entries
-WHERE namespace = '@server' AND action = 'server:set-audit-chain'
-  AND value_path = '/audit/chain/off' AND hash <> ''
-ORDER BY sequence ASC
-`
-
-// The times of the chained entries of the scope @server that turned the
-// audit chain off, oldest first. The chain check accepts an entry without
-// a hash after a chained entry only when one of these comes between them.
-func (q *Queries) ListAuditChainOffTimes(ctx context.Context) ([]int64, error) {
-	rows, err := q.db.Query(ctx, listAuditChainOffTimes)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var at_ms int64
-		if err := rows.Scan(&at_ms); err != nil {
-			return nil, err
-		}
-		items = append(items, at_ms)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
@@ -2540,6 +2510,39 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.Hash,
 			&i.ValueCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAuditChainSwitches = `-- name: ListAuditChainSwitches :many
+SELECT at_ms, value_path FROM audit_entries
+WHERE namespace = '@server' AND action = 'server:set-audit-chain'
+ORDER BY sequence ASC
+`
+
+type ListAuditChainSwitchesRow struct {
+	AtMs      int64
+	ValuePath string
+}
+
+// The switch entries of the audit chain in the scope @server, oldest
+// first: the timeline of the chain for the chain check.
+func (q *Queries) ListAuditChainSwitches(ctx context.Context) ([]ListAuditChainSwitchesRow, error) {
+	rows, err := q.db.Query(ctx, listAuditChainSwitches)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditChainSwitchesRow
+	for rows.Next() {
+		var i ListAuditChainSwitchesRow
+		if err := rows.Scan(&i.AtMs, &i.ValuePath); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

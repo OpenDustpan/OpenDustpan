@@ -20,7 +20,8 @@ const chainWait = 10 * time.Second
 
 // TestAuditChainOnANewInstallationStartsOff proves ADR 60 decision 17: a
 // new installation with the default setting appends entries without a
-// hash, and records the state with no change entry.
+// hash. Its first start writes one switch entry without a hash for the
+// start state (ADR 64).
 func TestAuditChainOnANewInstallationStartsOff(t *testing.T) {
 	t.Parallel()
 
@@ -35,14 +36,13 @@ func TestAuditChainOnANewInstallationStartsOff(t *testing.T) {
 		t.Fatalf("entry on a new installation: hash %q, want none", e.Hash)
 	}
 
-	if got := listServer(t, st); len(got) != 0 {
-		t.Fatalf("server scope: got %d entries, want no change entry", len(got))
-	}
+	checkStartSwitch(t, st, startSwitch{path: "/audit/chain/off", chained: false})
 }
 
 // TestAuditChainStaysOnWhenTheLogHoldsChainedEntries proves ADR 60 decision
-// 19: an installation with chained entries keeps the chain on, and the
-// scheduled check sets the metric.
+// 19: an installation with chained entries keeps the chain on, writes one
+// chained switch entry for the start state (ADR 64), and the scheduled
+// check sets the metric.
 func TestAuditChainStaysOnWhenTheLogHoldsChainedEntries(t *testing.T) {
 	t.Parallel()
 
@@ -62,9 +62,7 @@ func TestAuditChainStaysOnWhenTheLogHoldsChainedEntries(t *testing.T) {
 		t.Fatal("entry after the start: no hash, want the chain on")
 	}
 
-	if got := listServer(t, st); len(got) != 0 {
-		t.Fatalf("server scope: got %d entries, want no change entry", len(got))
-	}
+	checkStartSwitch(t, st, startSwitch{path: "/audit/chain/on", chained: true})
 }
 
 // TestTurningTheAuditChainOffIsAudited proves the lead decision recorded in
@@ -81,9 +79,10 @@ func TestTurningTheAuditChainOffIsAudited(t *testing.T) {
 	waitForChainState(t, st, audit.ChainStateOff)
 	stop()
 
+	// The list answers newest first: the change after the start switch.
 	server := listServer(t, st)
-	if len(server) != 1 {
-		t.Fatalf("server scope: got %d entries, want one change entry", len(server))
+	if len(server) != 2 {
+		t.Fatalf("server scope: got %d entries, want the start switch and one change", len(server))
 	}
 
 	change := server[0]
@@ -94,6 +93,29 @@ func TestTurningTheAuditChainOffIsAudited(t *testing.T) {
 
 	if e := appendChainEntry(t, st, acme, "req-2"); e.Hash != "" {
 		t.Fatalf("entry after the chain went off: hash %q, want none", e.Hash)
+	}
+}
+
+// startSwitch is the switch entry of a first start: its value path and
+// whether it holds a hash.
+type startSwitch struct {
+	path    string
+	chained bool
+}
+
+// checkStartSwitch proves that the server scope of st holds only the switch
+// entry want.
+func checkStartSwitch(t *testing.T, st *sqlite.Store, want startSwitch) {
+	t.Helper()
+
+	server := listServer(t, st)
+	if len(server) != 1 {
+		t.Fatalf("server scope: got %d entries, want the start switch only", len(server))
+	}
+
+	got := startSwitch{path: server[0].ValuePath, chained: server[0].Hash != ""}
+	if server[0].Action != audit.ActionSetChain || got != want {
+		t.Fatalf("start switch: got %+v, want %+v", got, want)
 	}
 }
 

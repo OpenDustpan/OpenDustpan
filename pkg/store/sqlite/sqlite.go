@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	// Registers the "sqlite" database/sql driver.
@@ -31,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/internal/chaincache"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -204,9 +204,9 @@ type Store struct {
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
-	// chainOff turns the audit hash chain off for later appends (ADR 60
-	// decision 17). The zero value keeps the chain on.
-	chainOff atomic.Bool
+	// chain keeps the audit chain state of this handle for at most
+	// audit.ChainSwitchLag (ADR 64).
+	chain chaincache.Cache
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -273,7 +273,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		logger:              slog.New(slog.DiscardHandler),
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
-		chainOff:            atomic.Bool{},
+		chain:               chaincache.Cache{},
 	}
 	for _, opt := range opts {
 		opt(s)

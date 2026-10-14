@@ -524,12 +524,12 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 	}
 
 	source := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
-	if err := srcChain.SaveChainRecord(ctx, source); err != nil {
+	if err := srcChain.RecordChain(ctx, source, nil); err != nil {
 		t.Fatalf("save source chain record: %v", err)
 	}
 
 	want := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
-	if err := dstChain.SaveChainRecord(ctx, want); err != nil {
+	if err := dstChain.RecordChain(ctx, want, nil); err != nil {
 		t.Fatalf("save target chain record: %v", err)
 	}
 

@@ -95,7 +95,7 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 
 ## Turn the chain on or off
 
-The hash chain is opt-in (ADR 60 decisions 17 and 19).
+The hash chain is opt-in (ADR 60 decisions 17 and 19, ADR 64).
 `--audit-chain` (`DUSTPAN_AUDIT_CHAIN`) takes `auto`, `on` or `off`.
 The default is `auto`.
 
@@ -106,9 +106,13 @@ The default is `auto`.
 - `off` turns the chain off.
 
 With the chain off, a new entry holds an empty `prevHash` and an empty `hash`.
-When the chain changes, the server writes one entry in the scope `@server` before it serves.
-The entry has the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
-The server writes this entry while the chain is still on, so a chain that goes off ends with a chained entry.
+Each change of the chain writes a switch entry in the scope `@server` before the server serves.
+A switch entry has the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
+A switch to off holds a hash, so a chain that goes off ends with a chained entry.
+The first start of an installation also writes a switch entry for the state before that start.
+So the switch entries are the whole history of the chain.
+The server writes the switch entries and the state in one transaction.
+Every instance reads the state again at least every 2 seconds, so a change reaches every instance within 2 seconds.
 While the log holds chained entries and the chain is off, the server logs a warning at each start.
 
 The installation keeps the state of the chain, and whether its log ever held a chained entry, in a table of its own.
@@ -118,9 +122,11 @@ When the restored log holds chained entries and the chain is off, the server log
 
 The check reads each run of chained entries on its own.
 An entry without a hash ends a run, and the next chained entry starts a new run with an empty `prevHash`.
-Take a chained entry of a scope, and a later entry without a hash.
-The later entry passes the check only when an entry `/audit/chain/off` in `@server` comes between the two in time.
+An entry without a hash passes the check only when the switch entries say that the chain was off at its time.
+An instance can keep the old state for 2 seconds after a switch to on.
+So the check also accepts an entry without a hash up to 2 seconds after that switch.
 So the check finds a hash that someone deleted from a chained log.
+Keep the clocks of the instances synchronized.
 The check answers `entriesUnchained`: the count of entries without a hash.
 The check cannot prove that such an entry is unchanged.
 

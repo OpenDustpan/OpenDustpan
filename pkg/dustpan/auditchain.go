@@ -26,11 +26,10 @@ func WithAuditChain(setting audit.ChainSetting) Option {
 	return func(o *settings) { o.auditChain = setting }
 }
 
-// chainDeps holds the ports of the chain switch: the switch, the server
-// scope, the audit store and the namespace list.
+// chainDeps holds the ports of the chain switch: the switch, the audit
+// store and the namespace list.
 type chainDeps struct {
 	sw         audit.ChainSwitch
-	server     audit.ServerStore
 	entries    audit.Store
 	namespaces namespace.Store
 	setting    audit.ChainSetting
@@ -42,10 +41,9 @@ type chainDeps struct {
 // store fails.
 func newChainDeps(cfg settings) (*chainDeps, error) {
 	sw, okSwitch := cfg.namespaceStore.(audit.ChainSwitch)
-	server, okServer := cfg.namespaceStore.(audit.ServerStore)
 	entries, okEntries := cfg.namespaceStore.(audit.Store)
 
-	if !okSwitch || !okServer || !okEntries {
+	if !okSwitch || !okEntries {
 		if cfg.auditChain != audit.ChainAuto {
 			return nil, fmt.Errorf("namespace store cannot turn the audit chain on or off: %w", ErrMissingOption)
 		}
@@ -55,7 +53,6 @@ func newChainDeps(cfg settings) (*chainDeps, error) {
 
 	return &chainDeps{
 		sw:         sw,
-		server:     server,
 		entries:    entries,
 		namespaces: cfg.namespaceStore,
 		setting:    cfg.auditChain,
@@ -68,7 +65,7 @@ func (s *Server) resolveAuditChain(ctx context.Context) error {
 		return nil
 	}
 
-	ports := audit.ChainPorts{Switch: s.chain.sw, Server: s.chain.server, Logger: s.logger}
+	ports := audit.ChainPorts{Switch: s.chain.sw, Logger: s.logger}
 
 	on, err := audit.ResolveChain(ctx, ports, s.chain.setting, s.now())
 	if err != nil {
@@ -156,7 +153,7 @@ func recheckChainAfterRestore(chain *chainDeps, logger *slog.Logger) func(ctx co
 			return nil
 		}
 
-		ports := audit.ChainPorts{Switch: chain.sw, Server: chain.server, Logger: logger}
+		ports := audit.ChainPorts{Switch: chain.sw, Logger: logger}
 		if err := audit.RecheckChain(ctx, ports); err != nil {
 			return fmt.Errorf("audit chain after restore: %w", err)
 		}

@@ -153,8 +153,30 @@ func validServerEntry(e audit.Entry) error {
 
 // appendAuditEntry reads the last entry of the scope of e and inserts e as
 // the next one, with its sequence, previous hash and hash. The caller runs
-// it in a transaction that orders the appends of the scope.
+// it in a transaction that orders the appends of the scope. The entry holds
+// a hash when the chain is on (ADR 64): the state this handle read at most
+// audit.ChainSwitchLag ago, or else the state the transaction reads.
 func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	chained, err := s.chain.On(func() (audit.ChainState, bool, error) {
+		return readChainState(ctx, q)
+	})
+	if err != nil {
+		return audit.Entry{}, fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	state := audit.ChainStateOff
+	if chained {
+		state = audit.ChainStateOn
+	}
+
+	return s.insertAuditEntry(ctx, q, e, state)
+}
+
+// insertAuditEntry inserts e as the next entry of its scope, with a hash
+// only when chain is audit.ChainStateOn.
+func (s *Store) insertAuditEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, chain audit.ChainState,
+) (audit.Entry, error) {
 	var prevHash string
 
 	var seq int64 = 1
@@ -174,7 +196,7 @@ func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Ent
 
 	// With the chain off, the entry holds no hash (ADR 60 decision 17). A
 	// chained entry after an unchained one links to an empty previous hash.
-	if !s.chainOff.Load() {
+	if chain == audit.ChainStateOn {
 		e.PrevHash = prevHash
 		e.Hash = audit.ComputeHash(e, prevHash)
 	}
@@ -269,12 +291,12 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 // grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	offTimes, err := chainOffTimes(ctx, s.queries)
+	points, err := chainPoints(ctx, s.queries)
 	if err != nil {
 		return audit.CheckResult{}, err
 	}
 
-	walk := audit.NewChainWalk(offTimes)
+	walk := audit.NewChainWalk(points)
 
 	var wantSeq int64 = 1
 

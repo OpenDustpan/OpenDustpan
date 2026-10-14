@@ -1,8 +1,10 @@
 package audittest
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -28,7 +30,7 @@ type ChainFactory func(t *testing.T) ChainTestStore
 
 // RunChain executes the conformance cases of audit.ChainSwitch and of the
 // chain check across runs of chained and unchained entries (ADR 60
-// decision 17) against stores produced by newStore.
+// decision 17, ADR 64) against stores produced by newStore.
 func RunChain(t *testing.T, newStore ChainFactory) {
 	t.Helper()
 
@@ -39,10 +41,13 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "with the chain off an entry holds no hash", test: testChainOff},
 		{name: "a chained run after an unchained run checks as valid", test: testChainRuns},
 		{name: "a changed field in a later chained run is found", test: testChainLaterRunTamper},
-		{name: "a hash removed from a chained log is found", test: testChainStrippedHash},
-		{name: "a chain turned off without a change entry is found", test: testChainOffWithoutEntry},
+		{name: "hashes removed from a chain that was never off are found", test: testChainStrippedAlwaysOn},
+		{name: "hashes removed after the chain went on again are found", test: testChainStrippedAfterOn},
+		{name: "a chain turned off without a switch entry is found", test: testChainOffWithoutEntry},
+		{name: "an unchained entry within the switch lag checks as valid", test: testChainSwitchLag},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
+		{name: "a refused switch entry records nothing", test: testRecordChainIsAtomic},
 	}
 
 	for _, tc := range cases {
@@ -53,40 +58,110 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 	}
 }
 
-// appendRun appends n entries to ns with request IDs that start at first.
-func appendRun(t *testing.T, s ChainStore, ns namespace.Namespace, first, n int) []audit.Entry {
+// chainStep is the time between two events of a timeline: longer than
+// audit.ChainSwitchLag, so the lag never hides a case.
+const chainStep = 10 * time.Second
+
+// timeline writes the events of one case at fixed times, one chainStep
+// apart, so the switch lag of the check is under the control of the case.
+type timeline struct {
+	at  time.Time
+	t   *testing.T
+	s   ChainStore
+	ns  namespace.Namespace
+	req int
+}
+
+// newTimeline creates the namespace acme in s and starts the clock.
+func newTimeline(t *testing.T, s ChainStore) *timeline {
 	t.Helper()
+
+	return &timeline{at: now(), t: t, s: s, ns: newNamespace(t, s), req: 0}
+}
+
+// tick advances the clock by one step and answers the new time.
+func (tl *timeline) tick() time.Time {
+	tl.at = tl.at.Add(chainStep)
+
+	return tl.at
+}
+
+// append appends n entries to acme, one step apart.
+func (tl *timeline) append(n int) []audit.Entry {
+	tl.t.Helper()
 
 	out := make([]audit.Entry, 0, n)
 
-	for i := range n {
-		out = append(
-			out,
-			appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", fmt.Sprintf("req-%d", first+i), now())),
-		)
+	for range n {
+		tl.req++
+		e := newEntry(tl.ns.Name, "admin", fmt.Sprintf("req-%d", tl.req), tl.tick())
+		out = append(out, appendEntry(tl.t, tl.s, tl.ns.Fence(), e))
 	}
 
 	return out
 }
 
-// turnOff turns the chain of s off as the server does: it first appends a
-// chained entry in ServerScope that records the change.
-func turnOff(t *testing.T, s ChainStore) {
-	t.Helper()
+// start records the state of a new installation as the server does at its
+// first start: a switch entry for the state, with a hash only when on.
+func (tl *timeline) start(on bool) {
+	tl.t.Helper()
 
-	s.SetChain(true)
+	tl.record(switchSpec{state: stateOf(on), chained: on, ever: on})
+}
 
-	e := newEntry(audit.ServerScope, "opendustpan serve", "", now())
+// turn records a change of the chain as the server does: a switch entry
+// with a hash, and a record that the log was ever chained.
+func (tl *timeline) turn(on bool) {
+	tl.t.Helper()
+
+	tl.record(switchSpec{state: stateOf(on), chained: true, ever: true})
+}
+
+// switchSpec is one switch of a timeline: the new state, whether the
+// switch entry holds a hash, and whether the log was ever chained.
+type switchSpec struct {
+	state   audit.ChainState
+	chained bool
+	ever    bool
+}
+
+// record appends the switch entry of spec and records its state.
+func (tl *timeline) record(spec switchSpec) {
+	tl.t.Helper()
+
+	entry := audit.ChainEntry{Entry: switchEntry(spec.state, tl.tick()), Chained: spec.chained}
+	rec := audit.ChainRecord{State: spec.state, EverChained: spec.ever}
+
+	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
+		tl.t.Fatalf("record chain %s: %v", spec.state, err)
+	}
+}
+
+// stateOf answers the state of a chain that is on or off.
+func stateOf(on bool) audit.ChainState {
+	return map[bool]audit.ChainState{true: audit.ChainStateOn, false: audit.ChainStateOff}[on]
+}
+
+// switchEntry returns the switch entry of ServerScope for state at at.
+func switchEntry(state audit.ChainState, at time.Time) audit.Entry {
+	e := newEntry(audit.ServerScope, "opendustpan serve", "", at)
 	e.Kind = audit.KindChange
 	e.Action = audit.ActionSetChain
 	e.Object = audit.ServerScope.String()
-	e.ValuePath = "/audit/chain/off"
+	e.ValuePath = "/audit/chain/" + string(state)
 
-	if _, err := s.AppendServer(t.Context(), e); err != nil {
-		t.Fatalf("append the change entry: %v", err)
+	return e
+}
+
+// strip removes the hash and the previous hash of the entries of acme at
+// the sequences seqs.
+func strip(t *testing.T, ts ChainTestStore, ns namespace.Name, seqs ...int64) {
+	t.Helper()
+
+	for _, seq := range seqs {
+		ts.TamperEntry(t, ns, seq, "hash", "")
+		ts.TamperEntry(t, ns, seq, "prev_hash", "")
 	}
-
-	s.SetChain(false)
 }
 
 // check runs Check on ns and fails the test on error.
@@ -101,15 +176,22 @@ func check(t *testing.T, s ChainStore, ns namespace.Name) audit.CheckResult {
 	return got
 }
 
+// wantInvalidAt fails the test unless got is invalid at seq.
+func wantInvalidAt(t *testing.T, got audit.CheckResult, seq int64) {
+	t.Helper()
+
+	if got.Valid || got.BadSequence != seq {
+		t.Fatalf("check: got %+v, want invalid at sequence %d", got, seq)
+	}
+}
+
 func testChainOff(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
-	s := ts.Store
-	ns := newNamespace(t, s)
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
 
-	s.SetChain(false)
-
-	run := appendRun(t, s, ns, 1, 2)
+	run := tl.append(2)
 	for i := range run {
 		if run[i].Hash != "" || run[i].PrevHash != "" {
 			t.Fatalf("entry %d with the chain off: hash %q, previous hash %q, want both empty",
@@ -117,24 +199,27 @@ func testChainOff(t *testing.T, ts ChainTestStore) {
 		}
 	}
 
-	got := check(t, s, ns.Name)
+	got := check(t, ts.Store, tl.ns.Name)
 	if !got.Valid || got.Unchained != 2 || got.Checked != 2 {
 		t.Fatalf("check: got %+v, want valid with 2 checked and 2 unchained", got)
+	}
+
+	if server := check(t, ts.Store, audit.ServerScope); !server.Valid {
+		t.Fatalf("check of the server scope: got %+v, want valid", server)
 	}
 }
 
 func testChainRuns(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
-	s := ts.Store
-	ns := newNamespace(t, s)
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(2)
+	tl.turn(false)
+	tl.append(2)
+	tl.turn(true)
 
-	appendRun(t, s, ns, 1, 2)
-	turnOff(t, s)
-	appendRun(t, s, ns, 3, 2)
-	s.SetChain(true)
-
-	run := appendRun(t, s, ns, 5, 2)
+	run := tl.append(2)
 	if run[0].PrevHash != "" || run[0].Hash == "" {
 		t.Fatalf("first entry of the new run: previous hash %q, hash %q, want an empty link and a hash",
 			run[0].PrevHash, run[0].Hash)
@@ -144,7 +229,7 @@ func testChainRuns(t *testing.T, ts ChainTestStore) {
 		t.Fatal("second entry of the new run does not link to the first")
 	}
 
-	got := check(t, s, ns.Name)
+	got := check(t, ts.Store, tl.ns.Name)
 	if !got.Valid || got.Unchained != 2 || got.Checked != 6 {
 		t.Fatalf("check: got %+v, want valid with 6 checked and 2 unchained", got)
 	}
@@ -153,55 +238,85 @@ func testChainRuns(t *testing.T, ts ChainTestStore) {
 func testChainLaterRunTamper(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
-	s := ts.Store
-	ns := newNamespace(t, s)
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
+	tl.append(1)
+	tl.turn(true)
+	tl.append(2)
 
-	s.SetChain(false)
-	appendRun(t, s, ns, 1, 1)
-	s.SetChain(true)
-	appendRun(t, s, ns, 2, 2)
+	ts.TamperEntry(t, tl.ns.Name, 3, "subject", "mallory")
 
-	ts.TamperEntry(t, ns.Name, 3, "subject", "mallory")
-
-	got := check(t, s, ns.Name)
-	if got.Valid || got.BadSequence != 3 {
-		t.Fatalf("check after a changed field: got %+v, want invalid at sequence 3", got)
-	}
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
 }
 
-func testChainStrippedHash(t *testing.T, ts ChainTestStore) {
+func testChainStrippedAlwaysOn(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
-	s := ts.Store
-	ns := newNamespace(t, s)
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(3)
 
-	appendRun(t, s, ns, 1, 3)
+	// Someone removes every hash of a scope whose chain was never off.
+	strip(t, ts, tl.ns.Name, 1, 2, 3)
 
-	// Someone removes the hash of the last entry of a log whose chain was
-	// always on. No change entry turned the chain off.
-	ts.TamperEntry(t, ns.Name, 3, "hash", "")
-	ts.TamperEntry(t, ns.Name, 3, "prev_hash", "")
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
 
-	got := check(t, s, ns.Name)
-	if got.Valid || got.BadSequence != 3 {
-		t.Fatalf("check after a removed hash: got %+v, want invalid at sequence 3", got)
-	}
+func testChainStrippedAfterOn(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(1)
+	tl.turn(false)
+	tl.append(1)
+	tl.turn(true)
+	tl.append(2)
+
+	// Someone removes the hashes after the chain went on again.
+	strip(t, ts, tl.ns.Name, 3, 4)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
 }
 
 func testChainOffWithoutEntry(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
-	s := ts.Store
-	ns := newNamespace(t, s)
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.append(2)
 
-	appendRun(t, s, ns, 1, 2)
-	s.SetChain(false)
-	appendRun(t, s, ns, 3, 1)
+	// A handle that turns the chain off with no switch entry.
+	ts.Store.SetChain(false)
+	tl.append(1)
 
-	got := check(t, s, ns.Name)
-	if got.Valid || got.BadSequence != 3 {
-		t.Fatalf("check after the chain went off with no change entry: got %+v, want invalid at sequence 3", got)
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
+}
+
+func testChainSwitchLag(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
+	tl.append(1)
+	tl.turn(true)
+
+	// Another instance still holds the state from before the switch to on,
+	// and appends within the lag.
+	ts.Store.SetChain(false)
+
+	late := newEntry(tl.ns.Name, "admin", "req-late", tl.at.Add(audit.ChainSwitchLag/2))
+	appendEntry(t, ts.Store, tl.ns.Fence(), late)
+
+	if got := check(t, ts.Store, tl.ns.Name); !got.Valid || got.Unchained != 2 {
+		t.Fatalf("check with an entry within the lag: got %+v, want valid with 2 unchained", got)
 	}
+
+	// After the lag, an entry without a hash does not match.
+	after := newEntry(tl.ns.Name, "admin", "req-after", tl.at.Add(2*audit.ChainSwitchLag))
+	appendEntry(t, ts.Store, tl.ns.Fence(), after)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
 }
 
 func testHasChainedEntries(t *testing.T, ts ChainTestStore) {
@@ -223,27 +338,18 @@ func testHasChainedEntries(t *testing.T, ts ChainTestStore) {
 		t.Fatal("an empty store reports chained entries")
 	}
 
-	ns := newNamespace(t, s)
-
-	s.SetChain(false)
-	appendRun(t, s, ns, 1, 1)
+	tl := newTimeline(t, s)
+	tl.start(false)
+	tl.append(1)
 
 	if has() {
 		t.Fatal("a store with only unchained entries reports chained entries")
 	}
 
-	s.SetChain(true)
-
-	e := newEntry(audit.ServerScope, "admin", "req-server", now())
-	e.Kind = audit.KindChange
-	e.Object = audit.ServerScope.String()
-
-	if _, err := s.AppendServer(t.Context(), e); err != nil {
-		t.Fatalf("append server entry: %v", err)
-	}
+	tl.turn(true)
 
 	if !has() {
-		t.Fatal("a chained entry in the server scope is not found")
+		t.Fatal("a chained switch entry in the server scope is not found")
 	}
 }
 
@@ -272,12 +378,46 @@ func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 		{State: audit.ChainStateOn, EverChained: true},
 		{State: audit.ChainStateOff, EverChained: true},
 	} {
-		if err := s.SaveChainRecord(t.Context(), want); err != nil {
-			t.Fatalf("save chain record %+v: %v", want, err)
+		if err := s.RecordChain(t.Context(), want, nil); err != nil {
+			t.Fatalf("record chain %+v: %v", want, err)
 		}
 
 		if got := read(); got != want {
 			t.Fatalf("chain record: got %+v, want %+v", got, want)
 		}
+	}
+}
+
+func testRecordChainIsAtomic(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+
+	good := switchEntry(audit.ChainStateOff, now())
+	bad := good
+	bad.Namespace = "acme"
+
+	err := s.RecordChain(t.Context(), audit.ChainRecord{State: audit.ChainStateOff, EverChained: false},
+		[]audit.ChainEntry{{Entry: good, Chained: false}, {Entry: bad, Chained: false}})
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("record chain with an entry of another scope: got %v, want ErrInvalidEntry", err)
+	}
+
+	rec, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	if rec.State != audit.ChainUnknown {
+		t.Fatalf("chain record after a refused switch: got %+v, want no record", rec)
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 1})
+	if err != nil {
+		t.Fatalf("list server scope: %v", err)
+	}
+
+	if listing.Total != 0 {
+		t.Fatalf("server entries after a refused switch: got %d, want 0", listing.Total)
 	}
 }
