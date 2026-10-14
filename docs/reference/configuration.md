@@ -16,6 +16,7 @@ same list.
 | `--tls-cert` | `DUSTPAN_TLS_CERT` | (none, with `--tls-key`) |
 | `--tls-key` | `DUSTPAN_TLS_KEY` | (none, with `--tls-cert`) |
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | (none) |
+| `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | (none: the server uses the address of the TCP peer only) |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `json` (or `text`) |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |

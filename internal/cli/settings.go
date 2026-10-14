@@ -112,6 +112,12 @@ var Settings = []*Setting{
 		referenceNone,
 	),
 	stringSetting(
+		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
+		"comma-separated CIDRs of proxies whose X-Forwarded-For and Forwarded headers the server trusts, "+
+			"empty means none (DUSTPAN_TRUSTED_PROXIES)",
+		"(none: the server uses the address of the TCP peer only)",
+	),
+	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
 		"`info` (or `debug`, `warn`, `error`)",

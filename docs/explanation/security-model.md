@@ -150,12 +150,23 @@ Encryption of a whole backup is not decided (ADR 30, RFC 8).
 - **TLS.** `--tls-cert` and `--tls-key` turn on HTTPS, with TLS 1.2 or later.
   On plain HTTP on an address that is not loopback, the server logs a warning
   and serves anyway. OpenTofu needs HTTPS.
-- **Behind a reverse proxy.** The server never reads `X-Forwarded-*`
-  headers. Set `--public-url` to the external URL.
+- **Behind a reverse proxy.** By default the server reads no forwarding
+  header. Set `--public-url` to the external URL, and `--trusted-proxies`
+  when the proxy adds one. The next section says how the server reads it.
 - **Browsers.** Only origins in `--allowed-origins` get CORS headers.
 - **Response headers.** The server sets no `Content-Security-Policy`,
   `Strict-Transport-Security`, `X-Content-Type-Options` or `X-Frame-Options`
   header. Set them in a reverse proxy if you need them.
+
+## Client address and trusted proxies
+
+The server uses the client address of each request for the request log, the source of each audit entry, and limits.
+By default the address is the address of the TCP peer, and the server reads no forwarding header.
+With `--trusted-proxies` the server reads the `X-Forwarded-For` and `Forwarded` headers of a request from a listed proxy.
+It takes the rightmost address outside the list, so a value that a client prepends never wins over the value of the proxy.
+List a proxy only when it always overwrites or appends the header.
+When it does not, a client can name any address, and the server records that address.
+A wrong list records wrong audit sources, so review the list when entries name addresses that you do not expect.
 
 ## Logs
 

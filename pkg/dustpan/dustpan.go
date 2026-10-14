@@ -38,6 +38,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -129,6 +131,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
+	trustedProxies       []netip.Prefix
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -270,6 +273,14 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// WithTrustedProxies names the proxies whose X-Forwarded-For and Forwarded
+// headers the server trusts. Empty means none: every request reads as its
+// TCP peer. List a proxy only when it always overwrites or appends the
+// header, so a client cannot name any address.
+func WithTrustedProxies(prefixes ...netip.Prefix) Option {
+	return func(o *settings) { o.trustedProxies = prefixes }
+}
+
 // WithClock overrides the time source, for tests.
 func WithClock(now func() time.Time) Option {
 	return func(o *settings) { o.now = now }
@@ -383,6 +394,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
+		trustedProxies:          nil,
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -1482,11 +1494,12 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 	return caller.Subject, true
 }
 
-// withRequestLog mints a request ID, stores it in the context, records the
-// request in the metrics registry, and writes one log line for each request.
-// The line holds the method, the route, the status, the duration, the size,
-// the ID, the adapter and, for a signed-in request, the subject. It holds
-// nothing else.
+// withRequestLog resolves the client address, mints a request ID, stores
+// both in the context, records the request in the metrics registry, and
+// writes one log line for each request. The line holds the method, the
+// route, the status, the duration, the size, the ID, the adapter, the client
+// address when known and, for a signed-in request, the subject. It holds
+// nothing else, in particular no header value.
 //
 // Go's ServeMux stores the matched pattern in Request.Pattern. The root mux
 // matches a prefix such as /api/ and forwards the request to an adapter
@@ -1498,17 +1511,21 @@ func subjectForRequest(ctx context.Context, authn identity.Authenticator, r *htt
 // use the same pattern and adapter, so no label holds a path value.
 func withRequestLog(
 	next http.Handler,
+	resolver *clientip.Resolver,
 	logger *slog.Logger,
 	authn identity.Authenticator,
 	observed *metrics.ServerMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addr := resolver.Resolve(r)
+		ctx := clientip.WithAddr(r.Context(), addr)
+
 		id := newRequestID()
 		// A direct assignment keeps the header name of ADR 32. The key is already
 		// in canonical form, so http.Header reads it with Get.
 		w.Header()[requestIDHeader] = []string{id}
 
-		ctx := requestid.WithContext(r.Context(), id)
+		ctx = requestid.WithContext(ctx, id)
 
 		r = r.WithContext(ctx)
 
@@ -1557,6 +1574,8 @@ func withRequestLog(
 			slog.String("adapter", adapter),
 		}
 
+		attrs = appendClientIP(attrs, addr)
+
 		if signedIn {
 			attrs = append(attrs, slog.String("subject", subject))
 		}
@@ -1568,6 +1587,16 @@ func withRequestLog(
 
 		logger.LogAttrs(ctx, level, "request", attrs...)
 	})
+}
+
+// appendClientIP adds the client address to attrs when it is known. It adds
+// the resolved address only, never a header value.
+func appendClientIP(attrs []slog.Attr, addr netip.Addr) []slog.Attr {
+	if !addr.IsValid() {
+		return attrs
+	}
+
+	return append(attrs, slog.String("client_ip", addr.String()))
 }
 
 func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Handler, error) {
@@ -1620,5 +1649,5 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		mux.Handle("/", console)
 	}
 
-	return withRequestLog(mux, cfg.logger, cfg.authenticator, observed), nil
+	return withRequestLog(mux, clientip.NewResolver(cfg.trustedProxies), cfg.logger, cfg.authenticator, observed), nil
 }

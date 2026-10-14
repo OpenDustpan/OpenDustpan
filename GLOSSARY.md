@@ -64,6 +64,10 @@ _Avoid_: Origin, legacy backend
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
+**Client address**:
+The address of the client that sent a request, as the server records it in the request log and in audit entries. Without trusted proxies it is the address of the TCP peer. With `--trusted-proxies` it is the address that a trusted proxy forwarded.
+_Avoid_: Remote address, source IP (except for the audit field name `SourceIP` and the wire name `source`)
+
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot

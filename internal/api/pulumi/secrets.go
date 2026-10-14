@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -437,7 +437,7 @@ func (h *Handler) newAuditEntry(
 		Version:    detail.version,
 		ValuePath:  detail.valuePath,
 		ValueCount: detail.valueCount,
-		SourceIP:   sourceIP(r),
+		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       detail.kind,
@@ -486,17 +486,6 @@ func (h *Handler) failAudit(ctx context.Context) {
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()
 	}
-}
-
-// sourceIP returns the remote address that the server sees, without the
-// port. A value without a port reads back unchanged.
-func sourceIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-
-	return host
 }
 
 // secretScope resolves the stack in the path to the scope its values are
