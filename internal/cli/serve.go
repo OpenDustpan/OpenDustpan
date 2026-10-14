@@ -4,9 +4,11 @@ package cli
 const ServeSynopsis = "Run the server with the built-in adapters."
 
 // ServeFlags holds the flag names of the serve command in reference order:
-// the database, region, network, storage, key and limit settings.
+// the configuration file, then the database, region, network, storage, key
+// and limit settings.
 func ServeFlags() []*Setting {
 	return SettingsFor(
+		"config",
 		"database", "region",
 		"listen", "console-dir", "allowed-origins", "tls-cert", "tls-key", "public-url",
 		"log-level", "log-format", "log-sink",
@@ -27,4 +29,16 @@ func ServeCommand(run RunFunc) Command {
 		Settings: ServeFlags(),
 		Run:      run,
 	}
+}
+
+// ServeSettings answers every setting that serve reads, in log order: the
+// serve flags, then the settings that only an environment variable or the
+// configuration file sets. Serve logs each of them at start (ADR 63
+// decision 7).
+func ServeSettings() []*Setting {
+	return append(ServeFlags(),
+		mustEnv("DUSTPAN_ADMIN_TOKEN"),
+		mustEnv("DUSTPAN_ADMIN_TOKEN_FILE"),
+		mustEnv("DUSTPAN_KEY_ENCRYPTION_KEY"),
+	)
 }

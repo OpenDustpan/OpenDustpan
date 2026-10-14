@@ -38,3 +38,59 @@ func TestListFlag(t *testing.T) {
 		t.Fatalf("items of the flags: got %q, want %q", got, want)
 	}
 }
+
+// TestListFlagThroughResolve proves that Resolve gives a List flag each item
+// of its variable, never the whole value as one item, that a flag on the
+// command line wins, and that the log value of the audit sinks is only set:
+// a webhook URL can hold a token.
+func TestListFlagThroughResolve(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{"DUSTPAN_AUDIT_SINK": "file:/a  blob:audit"}
+
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"env", nil, []string{"file:/a", "blob:audit"}},
+		{"flag", []string{"--audit-sink", "file:/b"}, []string{"file:/b"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setting := cli.ByFlag("audit-sink")
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+
+			var items []string
+
+			setting.List(fs, &items)
+
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatalf("parse %v: %v", tc.args, err)
+			}
+
+			lookup := func(key string) (string, bool) {
+				value, ok := env[key]
+
+				return value, ok
+			}
+
+			resolved, err := cli.Resolve(fs, []*cli.Setting{setting}, lookup, nil)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			if !slices.Equal(items, tc.want) {
+				t.Errorf("items: got %q, want %q", items, tc.want)
+			}
+
+			if got := resolved[0].Value; got != "set" {
+				t.Errorf("log value: got %q, want set", got)
+			}
+		})
+	}
+}

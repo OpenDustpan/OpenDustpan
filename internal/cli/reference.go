@@ -13,6 +13,7 @@ func Reference() string {
 	var out strings.Builder
 
 	writeServeSettings(&out)
+	writeConfigFile(&out)
 	writeSecrets(&out)
 	writeClients(&out)
 
@@ -24,19 +25,107 @@ func Reference() string {
 func writeServeSettings(out *strings.Builder) {
 	out.WriteString("# Configuration\n")
 	out.WriteString("\n")
-	out.WriteString("`opendustpan serve` reads each setting from a flag or from an environment\n")
-	out.WriteString("variable. A flag wins over its variable. `opendustpan serve --help` prints the\n")
-	out.WriteString("same list.\n")
+	out.WriteString("`opendustpan serve` reads each setting from a flag, from an environment\n")
+	out.WriteString("variable or from the configuration file. A flag wins over its variable, and\n")
+	out.WriteString("a variable wins over the file. A variable that is empty or holds only\n")
+	out.WriteString("spaces is not set, so the next layer wins. `opendustpan serve --help` prints\n")
+	out.WriteString("the same list.\n")
 	out.WriteString("\n")
 	out.WriteString("## Server settings\n")
 	out.WriteString("\n")
-	out.WriteString("| Flag | Environment | Default |\n")
-	out.WriteString("| --- | --- | --- |\n")
+	out.WriteString("| Flag | Environment | File key | Default |\n")
+	out.WriteString("| --- | --- | --- | --- |\n")
 
 	for _, s := range ServeFlags() {
-		out.WriteString("| `--" + s.Flag + "` | `" + s.Env + "` | " + s.Reference + " |\n")
+		file := "(none)"
+		if s.File != "" {
+			file = "`" + s.File + "`"
+		}
+
+		out.WriteString("| `--" + s.Flag + "` | `" + s.Env + "` | " + file + " | " + s.Reference + " |\n")
 	}
 
+	out.WriteString("\n")
+}
+
+// ConfigExample is the example configuration file of the reference: the
+// JSON shape with # comments, which is valid YAML (ADR 63 decision 2). A
+// test decodes it with ParseConfig.
+const ConfigExample = `# opendustpan serve --config /etc/opendustpan/config.yaml
+{
+  # The region that this server is authoritative for.
+  "region": "eu-west",
+  "listen": ":8443",
+  "public-url": "https://dustpan.example",
+  "tls-cert": "/etc/opendustpan/tls.crt",
+  "tls-key": "/etc/opendustpan/tls.key",
+  "log-level": "info",
+  "log-format": "json",
+  # A bool is only true or false.
+  "disable-pulumi-journaling": false,
+  # An int is a decimal integer. 0 means the built-in limit.
+  "max-state-bytes": 0,
+  # The file holds the name of the token file, never a token.
+  "admin-token-file": "/run/secrets/dustpan-admin-tokens"
+}
+`
+
+// writeConfigFile writes the configuration file section: the rules of the
+// decoder, the start log and the example.
+func writeConfigFile(out *strings.Builder) {
+	out.WriteString("## Configuration file\n")
+	out.WriteString("\n")
+	out.WriteString("`--config` (`DUSTPAN_CONFIG`) names one YAML file. Each key in the file is\n")
+	out.WriteString("the file key of a setting in the table above, or `admin-token-file` for\n")
+	out.WriteString("`DUSTPAN_ADMIN_TOKEN_FILE`. A secret is never in the file: the file can\n")
+	out.WriteString("only name the file that holds it.\n")
+	out.WriteString("\n")
+	out.WriteString("The server refuses a file that:\n")
+	out.WriteString("\n")
+	out.WriteString("- is larger than 64 KiB,\n")
+	out.WriteString("- has an anchor or an alias,\n")
+	out.WriteString("- has a key two times,\n")
+	out.WriteString("- has a key that no setting declares,\n")
+	out.WriteString("- has a value of the wrong type.\n")
+	out.WriteString("\n")
+	out.WriteString("A bool is only `true` or `false`. A string setting takes only a string, so\n")
+	out.WriteString("`no` stays the string `no`. An int setting takes only a decimal integer of\n")
+	out.WriteString("0 or more. A refused file stops the start. The error names the key and the\n")
+	out.WriteString("rule, never the value.\n")
+	out.WriteString("\n")
+	writeConfigValues(out)
+
+	out.WriteString("At start, the server writes one INFO line for each setting, with its key,\n")
+	out.WriteString("its value and its layer: `flag`, `env`, `file` or `default`. When more than\n")
+	out.WriteString("one of `flag`, `env` and `file` sets a key, the server writes one WARN line\n")
+	out.WriteString("for that key, also when the values are equal. For a sensitive setting, a\n")
+	out.WriteString("line shows only `set` or `not set`, never the value. The sensitive settings\n")
+	out.WriteString("are the database URL and the secrets. Each other URL setting refuses a URL\n")
+	out.WriteString("with a user name or a password, so the log can show its value.\n")
+	out.WriteString("\n")
+	out.WriteString("At the log level `warn` or `error`, the server does not write these INFO\n")
+	out.WriteString("lines: the level that the operator sets wins.\n")
+	out.WriteString("\n")
+	out.WriteString("This example uses the JSON shape with `#` comments. That text is valid\n")
+	out.WriteString("YAML.\n")
+	out.WriteString("\n")
+	out.WriteString("```yaml\n")
+	out.WriteString(ConfigExample)
+	out.WriteString("```\n")
+	out.WriteString("\n")
+}
+
+// writeConfigValues writes the rules for quoted strings and for a database
+// URL with a password.
+func writeConfigValues(out *strings.Builder) {
+	out.WriteString("A string value that YAML reads as a number, a bool or a date needs quotes,\n")
+	out.WriteString("for example `\"8080\"`, `\"true\"` or `\"2026-10-14\"`. The JSON shape of\n")
+	out.WriteString("the example below quotes each string.\n")
+	out.WriteString("\n")
+	out.WriteString("The file refuses a `database` URL with a password. Set such a URL in\n")
+	out.WriteString("`DUSTPAN_DATABASE`, because a secret comes only from a variable or from a\n")
+	out.WriteString("file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag\n")
+	out.WriteString("still takes a URL with a password, as before. Issue #511 deprecates that.\n")
 	out.WriteString("\n")
 }
 

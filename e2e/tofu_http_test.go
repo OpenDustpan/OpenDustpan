@@ -318,6 +318,7 @@ func setSwitches(t *testing.T, env *e2e.Env, path, body string) {
 		Body:      body,
 		Want:      http.StatusOK,
 		Check:     nil,
+		Scheme:    "",
 	})
 }
 

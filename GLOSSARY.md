@@ -64,6 +64,18 @@ _Avoid_: Origin, legacy backend
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
+**Setting**:
+One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
+_Avoid_: Option, parameter, config value
+
+**Layer**:
+A source of the value of a setting: `flag`, `env`, `file` or `default`, in that order of precedence (ADR 63 decision 1). The layer that wins gives the effective value.
+_Avoid_: Level, tier
+
+**Sensitive setting**:
+A setting that can hold a credential: a secret or the database URL. A log line or an audit entry shows it only as `set` or `not set` (ADR 63 decision 6).
+_Avoid_: Secret setting, private setting
+
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
@@ -111,6 +123,13 @@ _Avoid_: User (when the caller can be a machine), actor
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
+
+**Personal token**:
+An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
+_Avoid_: PAT, user token
+
+**Token rotation**:
+A call that issues a new access token for the same principal and sets an end time for the old one. The old token works until that end time (ADR 53).
 
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).

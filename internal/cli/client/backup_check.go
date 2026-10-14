@@ -97,12 +97,16 @@ func BackupCheck(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := BackupToken()
 	if err != nil {
 		return err
 	}
 
-	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup check again")
+	client, err := newBackupHTTPClient(f.caFile, "run opendustpan backup check again", stderr)
 	if err != nil {
 		return err
 	}

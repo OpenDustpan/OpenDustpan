@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -196,9 +197,21 @@ func (concurrentAuthenticator) AuthenticateToken(
 ) (identity.Principal, error) {
 	switch raw {
 	case "test-token-a":
-		return identity.Principal{Subject: "alice", DisplayName: "Alice", Admin: false}, nil
+		return identity.Principal{
+			Subject:        "alice",
+			DisplayName:    "Alice",
+			Admin:          false,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, nil
 	case "test-token-b":
-		return identity.Principal{Subject: "bob", DisplayName: "Bob", Admin: false}, nil
+		return identity.Principal{
+			Subject:        "bob",
+			DisplayName:    "Bob",
+			Admin:          false,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, nil
 	default:
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}

@@ -110,7 +110,8 @@ Values are `json` and `text`.
 The server writes its log to stderr by default.
 `--log-sink` (`DUSTPAN_LOG_SINK`) sends it to other targets instead (ADR 60 decision 14).
 Give `--log-sink` once for each target.
-In `DUSTPAN_LOG_SINK`, separate the targets with spaces or line breaks.
+In `DUSTPAN_LOG_SINK` and in the key `log-sink` of the configuration file, separate the targets with spaces or line breaks.
+The start log shows only whether `log-sink` is set, because a webhook URL can hold a token.
 Each target is `[<name>=]<target>`:
 
 | Target | Example |

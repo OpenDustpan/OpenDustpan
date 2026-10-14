@@ -8,6 +8,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AccessToken struct {
+	ID           string
+	PrincipalID  string
+	Name         string
+	Kind         string
+	Digest       string
+	CreatedAtMs  int64
+	ExpiresAtMs  int64
+	LastUsedAtMs pgtype.Int8
+	RevokedAtMs  pgtype.Int8
+	ReplacedBy   pgtype.Text
+	CreatedBy    string
+}
+
 type AuditEntry struct {
 	Namespace  string
 	Sequence   int64
