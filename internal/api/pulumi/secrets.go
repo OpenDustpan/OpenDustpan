@@ -437,6 +437,7 @@ func (h *Handler) newAuditEntry(
 		Version:    detail.version,
 		ValuePath:  detail.valuePath,
 		ValueCount: detail.valueCount,
+		Changes:    nil,
 		SourceIP:   sourceIP(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),

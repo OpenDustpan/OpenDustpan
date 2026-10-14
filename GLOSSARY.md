@@ -64,6 +64,10 @@ _Avoid_: Origin, legacy backend
 One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API (`/api/server/...`) acts on the whole installation.
 _Avoid_: Cluster, instance (one server process), deployment
 
+**Instance**:
+One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
+_Avoid_: Node, replica, host
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value

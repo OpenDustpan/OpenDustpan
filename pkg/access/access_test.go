@@ -750,6 +750,7 @@ func testEntry() audit.Entry {
 	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: "tester", IDPSubject: "", TokenID: "",
 		Action: "server:manage-access", Object: "", Version: "", ValuePath: "", ValueCount: nil,
+		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 	}

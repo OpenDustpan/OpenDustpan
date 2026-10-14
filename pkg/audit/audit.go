@@ -67,7 +67,18 @@ const (
 	ChannelAPI Channel = "api"
 	// ChannelConsole is a request from the web console.
 	ChannelConsole Channel = "console"
+	// ChannelStartup is the entry that an instance writes at each start with
+	// its settings (ADR 63 decision 10).
+	ChannelStartup Channel = "startup"
+	// ChannelConfigFile is the entry of a reload of the configuration file
+	// that changed a setting (ADR 63 decision 9).
+	ChannelConfigFile Channel = "config-file"
 )
+
+// ActionManageSettings is the action of the entries of ChannelStartup and
+// ChannelConfigFile (ADR 63). RFC 68 can rename it when it decides the
+// settings API.
+const ActionManageSettings = "server:manage-settings"
 
 // Outcome names how the recorded action ended.
 type Outcome string
@@ -116,7 +127,10 @@ var (
 // ("<tool>:<namespace>/<name>") or a namespace. Version and ValuePath name
 // the state version and the value path of a state read and stay empty
 // otherwise. ValueCount holds the count of secret values of a decrypt call
-// and stays nil for every other entry. At is the time of the action in UTC. SourceIP is the remote
+// and stays nil for every other entry. Changes holds the keys of the entry
+// with their old and new values, for example the settings of a
+// ChannelStartup or ChannelConfigFile entry (ADR 63), and stays nil for an
+// entry without them. At is the time of the action in UTC. SourceIP is the remote
 // address that the server sees. UserAgent is the client user agent, capped
 // at MaxUserAgentLen bytes. Channel is where the request came from.
 // RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
@@ -133,6 +147,7 @@ type Entry struct {
 	Version    string
 	ValuePath  string
 	ValueCount *int64
+	Changes    []Change
 	SourceIP   string
 	UserAgent  string
 	Channel    Channel
@@ -191,10 +206,14 @@ func (e Entry) validateWhat() error {
 	}
 }
 
-// validateHow checks the channel, kind and outcome of the entry.
+// validateHow checks the channel, kind, outcome and changes of the entry.
 func (e Entry) validateHow() error {
+	if err := validateChanges(e.Changes); err != nil {
+		return err
+	}
+
 	switch {
-	case e.Channel != ChannelAPI && e.Channel != ChannelConsole:
+	case !knownChannel(e.Channel):
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
 	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
@@ -202,6 +221,16 @@ func (e Entry) validateHow() error {
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)
 	default:
 		return nil
+	}
+}
+
+// knownChannel reports whether c is one of the channels of this package.
+func knownChannel(c Channel) bool {
+	switch c {
+	case ChannelAPI, ChannelConsole, ChannelStartup, ChannelConfigFile:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -226,11 +255,12 @@ const hashFieldSeparator = 0x1F
 // subject, identity provider subject, token ID, action, object, version,
 // value path, time (Unix milliseconds, decimal), source IP, user agent,
 // channel, kind, outcome, request ID, previous hash. Numeric fields use
-// decimal text. When the value count of e is set, the encoding appends one
-// more field after the previous hash: the text "value_count=" followed by
-// the decimal count, with the same separator. When the value count is nil,
-// the encoding is unchanged, so an entry written before the count keeps its
-// hash. The separator never appears in a validated field except the
+// decimal text. After the previous hash, the encoding appends the optional
+// fields that e sets, each as "<name>=<value>" with the same separator, in
+// this fixed order: value_count (the decimal count), then changes (the
+// canonical JSON of EncodeChanges). An optional field that e does not set
+// adds nothing, so an entry written before the field keeps its hash. The separator never appears in a validated field
+// except the
 // user agent and free-form names, where it is kept as is: the encoding is
 // fixed and documented, not ambiguous-free, and its only use is the chain
 // check of the same code.
@@ -262,6 +292,10 @@ func ComputeHash(e Entry, prevHash string) string {
 
 	if e.ValueCount != nil {
 		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+	}
+
+	if len(e.Changes) > 0 {
+		write("changes=" + EncodeChanges(e.Changes))
 	}
 
 	sum := sha256.Sum256([]byte(sb.String()))

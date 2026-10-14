@@ -35,7 +35,7 @@ type Store interface {
 type TestStore struct {
 	Store Store
 	// TamperEntry changes one stored field of the entry with seq in ns.
-	// Field names one of: subject, action, object, outcome, kind.
+	// Field names one of: subject, action, object, outcome, kind, changes.
 	TamperEntry func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error
 	// DeleteEntry removes the entry with seq in ns.
 	DeleteEntry func(ctx context.Context, ns namespace.Name, seq int64) error
@@ -67,6 +67,18 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a namespace append refuses the server scope", test: testNamespaceRefusesServerScope},
 		{name: "concurrent server scope appends form one valid chain", test: testConcurrentServerAppends},
 		{name: "an unknown kind is refused and change is accepted", test: testChangeKind},
+		{name: "changes round-trip in canonical order with a valid chain", test: testChangesRoundTrip},
+		{name: "check finds a changed value", test: testCheckChangedChanges(
+			`[{"key":"database","new":"set","layer":"env"},` +
+				`{"key":"log-level","old":"info","new":"warn","layer":"file","takesEffect":"next start"},` +
+				`{"key":"region","new":"eu-west","layer":"file"}]`,
+		)},
+		{name: "check finds changes in another order", test: testCheckChangedChanges(
+			`[{"key":"region","new":"eu-west","layer":"file"},` +
+				`{"key":"database","new":"set","layer":"env"},` +
+				`{"key":"log-level","old":"info","new":"debug","layer":"file","takesEffect":"next start"}]`,
+		)},
+		{name: "check finds changes that are not JSON", test: testCheckChangedChanges(`{`)},
 	}
 
 	for _, tc := range cases {
@@ -116,6 +128,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,
@@ -811,5 +824,122 @@ func testChangeKind(t *testing.T, ts TestStore) {
 
 	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("append with an unknown kind = %v, want ErrInvalidEntry", err)
+	}
+}
+
+// newChangesEntry answers a config-file entry of ADR 63 with three changes
+// in no particular order: one sensitive value, one plain value and one with
+// an old value.
+func newChangesEntry(requestID string) audit.Entry {
+	old := "info"
+
+	e := newEntry(audit.ServerScope, "ins-aaaaaaaaaaaaaaaaaaaa", requestID, now())
+	e.Action = audit.ActionManageSettings
+	e.Object = audit.ServerScope.String()
+	e.Kind = audit.KindChange
+	e.Channel = audit.ChannelConfigFile
+	e.Changes = []audit.Change{
+		{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""},
+		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
+		{Key: "log-level", Old: &old, New: "debug", Layer: "file", TakesEffect: "next start"},
+	}
+
+	return e
+}
+
+// testChangesRoundTrip proves the changes of an entry read back sorted by
+// key with their values, that an entry without changes reads back nil, and
+// that the chain checks as valid.
+func testChangesRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+
+	if _, err := s.AppendServer(t.Context(), newServerEntry("admin", "req-1")); err != nil {
+		t.Fatalf("append server entry: %v", err)
+	}
+
+	if _, err := s.AppendServer(t.Context(), newChangesEntry("req-2")); err != nil {
+		t.Fatalf("append changes entry: %v", err)
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	if len(listing.Entries) != 2 {
+		t.Fatalf("listing = %+v, want 2 entries", listing)
+	}
+
+	if got := listing.Entries[1].Changes; got != nil {
+		t.Fatalf("changes of the entry without changes = %+v, want nil", got)
+	}
+
+	checkChangesFixture(t, listing.Entries[0].Changes)
+
+	check, err := s.Check(t.Context(), audit.ServerScope)
+	if err != nil {
+		t.Fatalf("check server chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 2 {
+		t.Fatalf("check = %+v, want valid with 2 entries", check)
+	}
+}
+
+// checkChangesFixture proves got holds the changes of newChangesEntry,
+// sorted by key.
+func checkChangesFixture(t *testing.T, got []audit.Change) {
+	t.Helper()
+
+	want := []string{"database=set@env", "log-level=debug@file(old info, next start)", "region=eu-west@file"}
+
+	if len(got) != len(want) {
+		t.Fatalf("changes = %+v, want %v", got, want)
+	}
+
+	for i, setting := range got {
+		text := setting.Key + "=" + setting.New + "@" + setting.Layer
+		if setting.Old != nil {
+			text += "(old " + *setting.Old + ", " + setting.TakesEffect + ")"
+		}
+
+		if text != want[i] {
+			t.Errorf("setting %d = %s, want %s", i, text, want[i])
+		}
+	}
+}
+
+// testCheckChangedChanges answers a test that proves Check finds the
+// changes of an entry changed to tampered behind the back of the store.
+func testCheckChangedChanges(tampered string) func(t *testing.T, ts TestStore) {
+	return func(t *testing.T, ts TestStore) {
+		t.Helper()
+
+		if ts.TamperEntry == nil {
+			t.Skip("the store has no tamper hook")
+		}
+
+		s := ts.Store
+
+		stored, err := s.AppendServer(t.Context(), newChangesEntry("req-1"))
+		if err != nil {
+			t.Fatalf("append changes entry: %v", err)
+		}
+
+		tamperErr := ts.TamperEntry(t.Context(), audit.ServerScope, stored.Sequence, "changes", tampered)
+		if tamperErr != nil {
+			t.Fatalf("tamper settings: %v", tamperErr)
+		}
+
+		check, err := s.Check(t.Context(), audit.ServerScope)
+		if err != nil {
+			t.Fatalf("check server chain: %v", err)
+		}
+
+		if check.Valid || check.BadSequence != stored.Sequence {
+			t.Fatalf("check = %+v, want bad sequence %d", check, stored.Sequence)
+		}
 	}
 }

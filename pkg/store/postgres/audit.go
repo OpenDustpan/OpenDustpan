@@ -232,6 +232,7 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 		ValueCount: toInt8(e.ValueCount),
+		Changes:    toChangesText(e.Changes),
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -299,8 +300,14 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	}
 
 	entries := make([]audit.Entry, 0, len(rows))
+
 	for i := range rows {
-		entries = append(entries, fromAuditRow(rows[i]))
+		e, rowErr := fromAuditRow(rows[i])
+		if rowErr != nil {
+			return audit.Listing{}, rowErr
+		}
+
+		entries = append(entries, e)
 	}
 
 	return audit.Listing{Entries: entries, Total: total}, nil
@@ -332,14 +339,9 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 		read := checked + int64(len(rows))
 
 		for i := range rows {
-			e := fromAuditRow(rows[i])
-
-			if e.Sequence != wantSeq || e.PrevHash != prevHash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
-			}
-
-			if got := audit.ComputeHash(e, e.PrevHash); got != e.Hash {
-				return audit.CheckResult{Checked: read, BadSequence: e.Sequence, Valid: false}, nil
+			e, ok := chainEntry(rows[i], wantSeq, prevHash)
+			if !ok {
+				return audit.CheckResult{Checked: read, BadSequence: rows[i].Sequence, Valid: false}, nil
 			}
 
 			prevHash = e.Hash
@@ -356,9 +358,16 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
 // without validation: it was validated on write and the foreign key holds.
-// A NULL value count reads as nil: only a decrypt call stores a count.
-func fromAuditRow(row db.AuditEntry) audit.Entry {
+// A NULL value count reads as nil: only a decrypt call stores a count. A
+// NULL changes column reads as nil. A changes text that does not decode
+// answers an error: the chain check counts that entry as changed.
+func fromAuditRow(row db.AuditEntry) (audit.Entry, error) {
 	ns := namespace.Name(row.Namespace)
+
+	changes, err := audit.DecodeChanges(row.Changes.String)
+	if err != nil {
+		return audit.Entry{}, fmt.Errorf("audit entry %d: %w", row.Sequence, err)
+	}
 
 	return audit.Entry{
 		At:         codec.FromMillis(row.AtMs),
@@ -370,6 +379,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Object:     row.Object,
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
+		Changes:    changes,
 		ValueCount: fromInt8(row.ValueCount),
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
@@ -380,7 +390,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		PrevHash:   row.PrevHash,
 		Hash:       row.Hash,
 		Sequence:   row.Sequence,
-	}
+	}, nil
 }
 
 // toInt8 maps a nil count to NULL: only a decrypt call stores a count.
@@ -401,4 +411,34 @@ func fromInt8(count pgtype.Int8) *int64 {
 	out := count.Int64
 
 	return &out
+}
+
+// toChangesText maps the changes of an entry to their canonical JSON, and
+// no changes to NULL.
+func toChangesText(changes []audit.Change) pgtype.Text {
+	text := audit.EncodeChanges(changes)
+
+	return pgtype.Text{String: text, Valid: text != ""}
+}
+
+// chainEntry answers the entry of row and true when row is the next link of
+// the chain: it decodes, it has the sequence wantSeq, it links to prevHash
+// and its hash matches its fields. It answers false for any other row.
+func chainEntry(row db.AuditEntry, wantSeq int64, prevHash string) (audit.Entry, bool) {
+	var none audit.Entry
+
+	e, err := fromAuditRow(row)
+	if err != nil {
+		return none, false
+	}
+
+	if e.Sequence != wantSeq || e.PrevHash != prevHash {
+		return none, false
+	}
+
+	if audit.ComputeHash(e, e.PrevHash) != e.Hash {
+		return none, false
+	}
+
+	return e, true
 }

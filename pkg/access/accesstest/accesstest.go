@@ -127,6 +127,7 @@ func entry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "accesstest",
 		Channel:    audit.ChannelAPI,

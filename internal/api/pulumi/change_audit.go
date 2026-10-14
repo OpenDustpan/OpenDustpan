@@ -35,6 +35,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   sourceIP(a.request),
 		UserAgent:  truncateUserAgent(a.request.UserAgent()),
 		Channel:    audit.NormalizeChannel(a.request.Header.Get(channelHeader)),

@@ -476,3 +476,46 @@ func TestLayeredLookup(t *testing.T) {
 		t.Errorf("AWS_SECRET_ACCESS_KEY = %q, want unset", got)
 	}
 }
+
+// TestChanges proves Changes answers each setting whose value changed, with
+// the old and the new value, and that a changed sensitive value shows only
+// set, with no text of either value.
+func TestChanges(t *testing.T) {
+	t.Parallel()
+
+	resolve := func(file cli.ConfigFile) []cli.Resolved {
+		t.Helper()
+
+		resolved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(nil), file)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+
+		return resolved
+	}
+
+	old := resolve(cli.ConfigFile{"region": "eu-west", "database": "sqlite:" + canaryValue + "-a", "listen": ":1"})
+	current := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+
+	changes := cli.Changes(old, current)
+
+	got := make([]string, 0, len(changes))
+	for _, c := range changes {
+		got = append(got, c.Key+":"+*c.Old+">"+c.New+"@"+c.Layer+"/"+c.TakesEffect)
+	}
+
+	want := []string{"database:set>set@file/next start", "region:eu-west>us-east@file/next start"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("Changes = %v, want %v", got, want)
+	}
+
+	if strings.Contains(fmt.Sprintf("%+v", changes), canaryValue) {
+		t.Fatal("a change holds a sensitive value")
+	}
+
+	same := resolve(cli.ConfigFile{"region": "us-east", "database": "sqlite:" + canaryValue + "-b", "listen": ":1"})
+
+	if again := cli.Changes(current, same); len(again) != 0 {
+		t.Fatalf("Changes of equal values = %+v, want none", again)
+	}
+}

@@ -2,11 +2,17 @@ package cli
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
+
+	"opendustpan.org/opendustpan/pkg/audit"
 )
 
 // Source is the layer that gives a setting its value (ADR 63 decision 7).
@@ -41,11 +47,17 @@ type LookupFunc func(key string) (string, bool)
 // the layers that hold a value, highest first. For a sensitive setting,
 // Value is only set or not set, and the value of each layer is only set:
 // no text of a sensitive value leaves Resolve (ADR 63 decision 6).
+//
+// The fingerprint is an HMAC of the effective value under a random key of
+// this process. It lets Changes see that a sensitive value changed without
+// keeping the value. It never leaves the process: no log line and no audit
+// entry holds it.
 type Resolved struct {
-	Setting *Setting
-	Source  Source
-	Value   string
-	Layers  []Layer
+	Setting     *Setting
+	Source      Source
+	Value       string
+	Layers      []Layer
+	fingerprint [sha256.Size]byte
 }
 
 // Layer is one layer that holds a value for a setting.
@@ -92,7 +104,13 @@ func Resolve(fs *flag.FlagSet, settings []*Setting, lookup LookupFunc, file Conf
 
 		out = append(
 			out,
-			redact(Resolved{Setting: setting, Source: winner.Source, Value: winner.Value, Layers: layers}),
+			redact(Resolved{
+				Setting:     setting,
+				Source:      winner.Source,
+				Value:       winner.Value,
+				Layers:      layers,
+				fingerprint: fingerprint(winner.Value),
+			}),
 		)
 	}
 
@@ -120,6 +138,86 @@ func collectLayers(
 	}
 
 	return layers
+}
+
+// fingerprintKey is the random HMAC key of this process. A fingerprint
+// never leaves the process, and a new process makes a new key, so a
+// fingerprint cannot be compared with a guess outside the process.
+//
+//nolint:gochecknoglobals // One key for the life of the process: each Resolve must use the same key.
+var fingerprintKey = func() []byte {
+	key := make([]byte, sha256.Size)
+	_, _ = rand.Read(key) // crypto/rand.Read never fails: it panics.
+
+	return key
+}()
+
+// fingerprint answers the HMAC of value under fingerprintKey.
+func fingerprint(value string) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, fingerprintKey)
+	mac.Write([]byte(value))
+
+	var out [sha256.Size]byte
+
+	copy(out[:], mac.Sum(nil))
+
+	return out
+}
+
+// TakesEffectNextStart is when a changed setting applies. No setting is
+// live yet (RFC 68 keeps that open), so each change applies at the next
+// start.
+const TakesEffectNextStart = "next start"
+
+// Changes answers the settings whose effective value differs between old and
+// current, sorted by key, as audit changes with the old and the new value,
+// the new layer and TakesEffectNextStart (ADR 63 decision 9). A sensitive setting shows only set
+// or not set, also when its value changed from one secret to another. A
+// setting that only one of the two lists holds is not a change.
+func Changes(old, current []Resolved) []audit.Change {
+	before := make(map[string]Resolved, len(old))
+	for _, r := range old {
+		before[r.Setting.Name()] = r
+	}
+
+	var out []audit.Change
+
+	for _, r := range current {
+		prev, ok := before[r.Setting.Name()]
+		if !ok || prev.fingerprint == r.fingerprint {
+			continue
+		}
+
+		oldValue := prev.Value
+		out = append(out, audit.Change{
+			Key: r.Setting.Name(), Old: &oldValue, New: r.Value, Layer: string(r.Source),
+			TakesEffect: TakesEffectNextStart,
+		})
+	}
+
+	slices.SortFunc(out, func(a, b audit.Change) int { return strings.Compare(a.Key, b.Key) })
+
+	return out
+}
+
+// LogChanges writes one INFO line for each changed setting with its key, its
+// old value, its new value and its new layer (ADR 63 decision 9). The
+// values of a sensitive setting are only set or not set.
+func LogChanges(ctx context.Context, logger *slog.Logger, changes []audit.Change) {
+	for _, change := range changes {
+		old := ""
+		if change.Old != nil {
+			old = *change.Old
+		}
+
+		logger.LogAttrs(ctx, slog.LevelInfo, "setting changed",
+			slog.String("key", change.Key),
+			slog.String("old", old),
+			slog.String("value", change.New),
+			slog.String("layer", change.Layer),
+			slog.String("takes_effect", change.TakesEffect),
+		)
+	}
 }
 
 // redact answers r with the values of a sensitive setting replaced: the
@@ -190,13 +288,17 @@ func LayeredLookup(lookup LookupFunc, file ConfigFile) LookupFunc {
 	}
 }
 
-// LogResolved writes the configuration log of ADR 63 decisions 7 and 8: one
-// INFO line for each setting with its key, its effective value and its
-// layer, and one WARN line for each setting that more than one layer sets,
-// also when the values are equal. The default is not a layer for the WARN
-// line. A sensitive setting shows only set or not set (decision 6): Resolve
-// already removed its value.
+// LogResolved writes the configuration log of ADR 63 decisions 7 and 8:
+// LogSettings, then LogOverrides.
 func LogResolved(ctx context.Context, logger *slog.Logger, resolved []Resolved) {
+	LogSettings(ctx, logger, resolved)
+	LogOverrides(ctx, logger, resolved)
+}
+
+// LogSettings writes one INFO line for each setting with its key, its
+// effective value and its layer (ADR 63 decision 7). A sensitive setting
+// shows only set or not set (decision 6): Resolve already removed its value.
+func LogSettings(ctx context.Context, logger *slog.Logger, resolved []Resolved) {
 	for _, r := range resolved {
 		logger.LogAttrs(ctx, slog.LevelInfo, "setting",
 			slog.String("key", r.Setting.Name()),
@@ -204,7 +306,12 @@ func LogResolved(ctx context.Context, logger *slog.Logger, resolved []Resolved) 
 			slog.String("layer", string(r.Source)),
 		)
 	}
+}
 
+// LogOverrides writes one WARN line for each setting that more than one
+// layer sets, also when the values are equal (ADR 63 decision 8). The
+// default is not a layer for this rule.
+func LogOverrides(ctx context.Context, logger *slog.Logger, resolved []Resolved) {
 	for _, r := range resolved {
 		if len(r.Layers) <= 1 {
 			continue
@@ -228,5 +335,25 @@ func LogResolved(ctx context.Context, logger *slog.Logger, resolved []Resolved) 
 		}
 
 		logger.LogAttrs(ctx, slog.LevelWarn, "setting has a value in more than one layer", attrs...)
+	}
+}
+
+// SnapshotEnv answers a lookup over the values that lookup gives for keys
+// now. The server resolves the start and each reload against one snapshot:
+// a variable changes only at a restart (ADR 63 decision 5), and the server
+// clears the secret variables after it reads them.
+func SnapshotEnv(lookup LookupFunc, keys []string) LookupFunc {
+	values := make(map[string]string, len(keys))
+
+	for _, key := range keys {
+		if value, ok := lookup(key); ok {
+			values[key] = value
+		}
+	}
+
+	return func(key string) (string, bool) {
+		value, ok := values[key]
+
+		return value, ok
 	}
 }
