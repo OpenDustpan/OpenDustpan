@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -202,6 +204,7 @@ func newServiceBackedHandler(
 		Schema:         st,
 		Principals:     seedRoutePrincipals(t, st),
 		Tokens:         seedRouteTokens(t, st),
+		Access:         seedRouteAccess(t, st),
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -228,6 +231,7 @@ const (
 	testTokenID          = "tok-routes0000000000001"
 	testServiceTokenID   = "tok-routes0000000000002"
 	testOwnTokenID       = "tok-routes0000000000003"
+	testRoleID           = "rol-routes0000000000001"
 )
 
 // allowGrants passes every escalation check, so the routes that create or
@@ -291,6 +295,91 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	return svc
 }
 
+// Grant IDs that seedRouteAccess writes, one on each object kind, so each
+// revoke route answers 204 in the generic enforcement tests.
+const (
+	testServerGrantID     = "grt-routes-server"
+	testNamespaceGrantID  = "grt-routes-namespace"
+	testCollectionGrantID = "grt-routes-collection"
+	testUnitGrantID       = "grt-routes-unit"
+)
+
+// testCollection and testUnitName name the collection and the unit of the
+// seeded grants.
+const (
+	testCollection = "payments"
+	testUnitName   = "web/prod"
+)
+
+// seedRouteAccess gives the test caller (seedRouteTokens writes its
+// record) the site administrator role on the installation, so the grant routes pass the
+// escalation check, a custom role that no grant holds, and one grant on each
+// object kind. It returns the access service over st.
+func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
+	t.Helper()
+
+	ctx := t.Context()
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+
+	rol := access.Role{
+		CreatedAt: at, UpdatedAt: at, ID: testRoleID, Name: "deployer", Description: "",
+		Actions: []identity.Action{identity.ActionUnitRead}, BuiltIn: false,
+	}
+	if err := st.CreateRole(ctx, rol, storetest.ServerChange(at, "role:"+rol.ID)); err != nil {
+		t.Fatalf("seed role: %v", err)
+	}
+
+	unit := seedStack(t, st, testNamespace, "web", "prod")
+
+	other := access.Subject{Kind: access.SubjectPrincipal, ID: testOtherPrincipalID}
+
+	grants := []access.Grant{
+		{
+			CreatedAt: at, Condition: nil, Object: identity.ServerObject(), ID: "grt-routes-tester",
+			Role: access.RoleSiteAdministrator, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectPrincipal, ID: testCallerID},
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.ServerObject(), ID: testServerGrantID,
+			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.NamespaceObject(testNamespace), ID: testNamespaceGrantID,
+			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.CollectionObject(testNamespace, testCollection),
+			ID: testCollectionGrantID, Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: unit, ID: testUnitGrantID,
+			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+	}
+	for i := range grants {
+		fence, e := storetest.GrantWrite(t, st, grants[i].Object, at, "grant:"+grants[i].ID)
+
+		seedErr := st.CreateGrant(ctx, grants[i], fence, e)
+		if seedErr != nil {
+			t.Fatalf("seed grant %q: %v", grants[i].ID, seedErr)
+		}
+	}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	if err != nil {
+		t.Fatalf("access authorizer: %v", err)
+	}
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("access service: %v", err)
+	}
+
+	return svc
+}
+
 // seedRoutePrincipals writes the principals, the group and the membership
 // that the principal and group routes name, and returns the service over st.
 func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
@@ -329,7 +418,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		t.Fatalf("seed member: %v", err)
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: st, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -344,19 +433,31 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
-	"POST /api/server/restores":                                `{"backupID":"` + string(testBackupID) + `"}`,
-	"POST /api/server/principals":                              `{"subject":"bob","kind":"person"}`,
-	"PATCH /api/server/principals/{id}":                        `{"displayName":"Alice A."}`,
-	"POST /api/server/groups":                                  `{"name":"dev"}`,
-	"PATCH /api/server/groups/{id}":                            `{"description":"Runs the platform"}`,
-	"POST /api/server/groups/{id}/members":                     `{"principalID":"` + testOtherPrincipalID + `"}`,
-	"POST /api/server/tokens":                                  `{"principalID":"` + testPrincipalID + `","name":"ci"}`,
-	"POST /api/server/tokens/{id}/rotate":                      `{}`,
-	"POST /api/server/service-tokens":                          `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
-	"POST /api/server/service-tokens/{id}/rotate":              `{}`,
-	"POST /api/server/caller/tokens":                           `{"name":"laptop"}`,
-	"POST /api/server/caller/tokens/{id}/rotate":               `{}`,
+	"POST /api/server/restores": `{"backupID":"` + string(
+		testBackupID,
+	) + `"}`,
+	"POST /api/server/principals":                                             `{"subject":"bob","kind":"person"}`,
+	"PATCH /api/server/principals/{id}":                                       `{"displayName":"Alice A."}`,
+	"POST /api/server/groups":                                                 `{"name":"dev"}`,
+	"PATCH /api/server/groups/{id}":                                           `{"description":"Runs the platform"}`,
+	"POST /api/server/groups/{id}/members":                                    `{"principalID":"` + testOtherPrincipalID + `"}`,
+	"POST /api/server/roles":                                                  `{"name":"releaser","actions":["unit:read"]}`,
+	"PATCH /api/server/roles/{id}":                                            `{"description":"Reads units"}`,
+	"POST /api/server/grants":                                                 routeGrantBody,
+	"POST /api/server/namespaces/{namespace}/grants":                          routeGrantBody,
+	"POST /api/server/namespaces/{namespace}/collections/{collection}/grants": routeGrantBody,
+	"POST /api/server/namespaces/{namespace}/unit-grants":                     routeGrantBody,
+	"POST /api/server/tokens":                                                 `{"principalID":"` + testPrincipalID + `","name":"ci"}`,
+	"POST /api/server/tokens/{id}/rotate":                                     `{}`,
+	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
+	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
+	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 }
+
+// routeGrantBody is the body of each grant route: a role that no seeded
+// grant gives to the group.
+const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"writer"}`
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
@@ -629,6 +730,8 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		id = testPrincipalID
 	case strings.HasPrefix(route.Path, "/api/server/groups"):
 		id = testGroupID
+	case strings.HasPrefix(route.Path, "/api/server/roles"):
+		id = testRoleID
 	case strings.HasPrefix(route.Path, "/api/server/tokens"):
 		id = testTokenID
 	case strings.HasPrefix(route.Path, "/api/server/service-tokens"):
@@ -636,11 +739,17 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	case strings.HasPrefix(route.Path, "/api/server/caller/tokens"):
 		id = testOwnTokenID
 	default:
+		id = routeGrantID(route.Path, id)
 	}
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
 	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
+	path = strings.ReplaceAll(path, "{collection}", testCollection)
+
+	if strings.Contains(route.Path, "/unit-grants") {
+		path += "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
+	}
 
 	var body io.Reader = http.NoBody
 	if text, ok := routeBodies[route.Method+" "+route.Path]; ok {
@@ -654,12 +763,44 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	req.SetPathValue("namespace", testNamespace)
 	req.SetPathValue("id", id)
 	req.SetPathValue("principal", testPrincipalID)
+	req.SetPathValue("collection", testCollection)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	return req
+}
+
+// routeGrantID returns the seeded grant on the object kind of a grant path,
+// or id for any other path.
+func routeGrantID(path, id string) string {
+	switch {
+	case strings.Contains(path, "/unit-grants"):
+		return testUnitGrantID
+	case strings.Contains(path, "/collections/"):
+		return testCollectionGrantID
+	case strings.HasPrefix(path, "/api/server/namespaces/") && strings.Contains(path, "/grants"):
+		return testNamespaceGrantID
+	case strings.HasPrefix(path, "/api/server/grants"):
+		return testServerGrantID
+	default:
+		return id
+	}
+}
+
+// createsRecord reports whether a POST to path creates a record and
+// answers 201: a namespace, a principal, a group, a member, a role, a
+// grant, or a token (a rotation makes a new one).
+func createsRecord(path string) bool {
+	created := []string{
+		"/api/server/namespaces", "/api/server/principals", "/api/server/groups",
+		"/api/server/groups/{id}/members", "/api/server/roles",
+	}
+
+	return slices.Contains(created, path) ||
+		strings.HasSuffix(path, "/grants") || strings.HasSuffix(path, "/unit-grants") ||
+		strings.HasSuffix(path, "tokens") || strings.HasSuffix(path, "/rotate")
 }
 
 // wantSuccessStatus answers the success status of route: POST
@@ -672,10 +813,14 @@ func wantSuccessStatus(route apiserver.Route) int {
 		return http.StatusAccepted
 	}
 
-	if route.Method == http.MethodPost && (route.Path == "/api/server/namespaces" ||
-		route.Path == "/api/server/principals" || route.Path == "/api/server/groups" ||
-		route.Path == "/api/server/groups/{id}/members" || strings.HasSuffix(route.Path, "tokens") ||
-		strings.HasSuffix(route.Path, "/rotate")) {
+	if route.Method == http.MethodPost &&
+		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/grants" {
+		// No collection exists until the collections are wired (#478), so
+		// a grant on one answers 404 after the authorization.
+		return http.StatusNotFound
+	}
+
+	if route.Method == http.MethodPost && createsRecord(route.Path) {
 		return http.StatusCreated
 	}
 
@@ -925,6 +1070,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
@@ -1055,6 +1201,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
@@ -1079,6 +1226,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,

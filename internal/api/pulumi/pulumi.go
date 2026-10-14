@@ -395,10 +395,20 @@ func (h *Handler) listStacks(
 	h.listStacksAll(ctx, w, p, project)
 }
 
-// listStacksIn lists the stacks in one namespace.
+// listStacksIn lists the stacks in one namespace. The caller must hold
+// unit:read and namespace:read on the namespace, as on a route that
+// declares them.
 func (h *Handler) listStacksIn(
 	ctx context.Context, w http.ResponseWriter, p identity.Principal, ns namespace.Name, project stack.ProjectName,
 ) {
+	for _, action := range []identity.Action{identity.ActionUnitRead, identity.ActionNamespaceRead} {
+		if err := h.authz.Authorize(ctx, p, action, identity.NamespaceObject(ns)); err != nil {
+			h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
+
+			return
+		}
+	}
+
 	if _, err := h.namespaces.Get(ctx, ns); err != nil {
 		h.writeNamespaceNotFound(ctx, w, p, ns, err)
 

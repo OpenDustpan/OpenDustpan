@@ -52,6 +52,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -218,7 +219,10 @@ func WithAuthenticator(a identity.Authenticator) Option {
 	return func(o *settings) { o.authenticator = a }
 }
 
-// WithAuthorizer sets the authorization policy. Defaults to identity.AdminOnly.
+// WithAuthorizer sets the authorization policy. Defaults to an
+// access.Authorizer, which decides with the roles and grants of the store
+// (ADR 52), when the namespace store keeps roles, grants and principals,
+// as both SQL adapters do. Otherwise it defaults to identity.AdminOnly.
 func WithAuthorizer(a identity.Authorizer) Option {
 	return func(o *settings) { o.authorizer = a }
 }
@@ -383,7 +387,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		blobStore:               nil,
 		inventoryReader:         nil,
 		authenticator:           nil,
-		authorizer:              identity.AdminOnly{},
+		authorizer:              nil,
 		logger:                  slog.New(slog.DiscardHandler),
 		now:                     time.Now,
 		region:                  "",
@@ -414,6 +418,10 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
+	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
+		return nil, authzErr
+	}
+
 	svc, err := newServices(cfg)
 	if err != nil {
 		return nil, err
@@ -429,18 +437,28 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	cfg.authenticator, err = gatedAuthenticator(cfg, svc.tokens)
-	if err != nil {
-		return nil, err
+	if tokensErr := wireTokens(&cfg, svc.tokens); tokensErr != nil {
+		return nil, tokensErr
 	}
 
-	// Every authenticated person can list and revoke its own personal
-	// tokens with no grant (ADR 53, decision 3).
+	return assemble(cfg, base, svc, backups)
+}
+
+// wireTokens puts the stored access tokens behind the configured
+// authenticator, and lets every authenticated person list and revoke its
+// own personal tokens with no grant (ADR 53, decision 3).
+func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
+	authn, err := gatedAuthenticator(*cfg, tokens)
+	if err != nil {
+		return err
+	}
+
+	cfg.authenticator = authn
 	cfg.authorizer = identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
 	}
 
-	return assemble(cfg, base, svc, backups)
+	return nil
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -1223,7 +1241,12 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	principals, err := newPrincipalService(cfg)
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
 		return nil, err
 	}
@@ -1240,6 +1263,7 @@ func newServerHandler(
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
 		Principals:    principals,
+		Access:        grants,
 		Tokens:        deps.services.tokens,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
@@ -1269,16 +1293,115 @@ func serverAuditOf(store namespace.Store) audit.ServerStore {
 // newPrincipalService builds the principal and group service (ADR 52) from
 // the namespace store, or returns nil when the store keeps no principals.
 // Every SQL adapter serves all ports from one database connection, so the
-// namespace store is the principal store too.
-func newPrincipalService(cfg settings) (*principal.Service, error) {
+// namespace store is the principal store too. The access service, when the
+// store keeps grants, guards the membership changes and the deletes: each
+// one gives or takes the grants of a principal or a group.
+func newPrincipalService(cfg settings, grants *access.Service) (*principal.Service, error) {
 	store, ok := cfg.namespaceStore.(principal.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: store, Now: nil, NewID: nil})
+	var guard principal.Guard
+	if grants != nil {
+		guard = grants
+	}
+
+	svc, err := principal.NewService(principal.Config{Store: store, Guard: guard, Now: nil, NewID: nil})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// withRequestCache gives each request its own access cache, so the
+// decisions of one request read the subjects of the caller and the custom
+// roles once (access.WithRequestCache). The cache ends with the request. It
+// wraps the request log, which reads the route pattern from the request
+// that the mux serves, so it must see that same request.
+func withRequestCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(access.WithRequestCache(r.Context())))
+	})
+}
+
+// accessStores is a namespace store that also keeps roles, grants and
+// principals. Both SQL adapters are one.
+type accessStores interface {
+	access.Store
+	access.Callers
+	access.Units
+	principal.Store
+}
+
+// setDefaultAuthorizer sets the default authorizer of the store when no
+// option sets one.
+func setDefaultAuthorizer(cfg *settings) error {
+	if cfg.authorizer != nil {
+		return nil
+	}
+
+	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	if err != nil {
+		return err
+	}
+
+	cfg.authorizer = authz
+
+	return nil
+}
+
+// defaultAuthorizer returns an access.Authorizer over the store when it
+// keeps roles, grants and principals, else identity.AdminOnly. The
+// bootstrap admin tokens are administrators, so they hold every action
+// under both.
+//
+//nolint:ireturn // Two policies with no shared concrete type: the caller keeps the port.
+func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
+	stores, ok := store.(accessStores)
+	if !ok {
+		return identity.AdminOnly{}, nil
+	}
+
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: stores, Callers: stores, Collections: nil, Units: stores,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("authorizer: %w", err)
+	}
+
+	return authz, nil
+}
+
+// newAccessService builds the role and grant service (ADR 52) from the
+// namespace store, or returns nil when the store keeps no roles and grants.
+// The service checks escalation with the grant model, so it uses the
+// configured authorizer when that is an access.Authorizer, and its own one
+// otherwise.
+func newAccessService(cfg settings) (*access.Service, error) {
+	stores, ok := cfg.namespaceStore.(accessStores)
+	if !ok {
+		return nil, nil //nolint:nilnil // No access store is a valid setup: the routes answer 501.
+	}
+
+	authz, isAccess := cfg.authorizer.(*access.Authorizer)
+	if !isAccess {
+		var err error
+
+		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
+			Store: stores, Callers: stores, Collections: nil, Units: stores,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("access authorizer: %w", err)
+		}
+	}
+
+	svc, err := access.NewService(access.ServiceConfig{
+		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("access service: %w", err)
 	}
 
 	return svc, nil
@@ -1739,5 +1862,5 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		mux.Handle("/", console)
 	}
 
-	return withRequestLog(mux, cfg.logger, cfg.authenticator, observed), nil
+	return withRequestCache(withRequestLog(mux, cfg.logger, cfg.authenticator, observed)), nil
 }

@@ -115,7 +115,7 @@ func TestValidateGroupName(t *testing.T) {
 func TestNewServiceNeedsStore(t *testing.T) {
 	t.Parallel()
 
-	_, err := principal.NewService(principal.Config{Store: nil, Now: nil, NewID: nil})
+	_, err := principal.NewService(principal.Config{Store: nil, Guard: nil, Now: nil, NewID: nil})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
 	}
@@ -214,7 +214,10 @@ func TestServiceEntries(t *testing.T) {
 	at := time.Date(2026, time.October, 13, 23, 0, 0, 0, time.UTC)
 
 	svc, err := principal.NewService(principal.Config{
-		Store: st, Now: func() time.Time { return at }, NewID: func(prefix string) string { return prefix + "fixed" },
+		Store: st,
+		Guard: nil,
+		Now:   func() time.Time { return at },
+		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -276,7 +279,7 @@ func openStore(t *testing.T) *sqlite.Store {
 func newServiceOverStore(t *testing.T) *principal.Service {
 	t.Helper()
 
-	svc, err := principal.NewService(principal.Config{Store: openStore(t), Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{Store: openStore(t), Guard: nil, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

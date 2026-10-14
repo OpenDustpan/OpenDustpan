@@ -4,13 +4,16 @@ package server
 //
 // POST /api/server/namespaces creates a namespace homed in the region of
 // the server. The bootstrap admin token calls it on an empty installation
-// for the first namespace. It needs the action namespace:admin on the
-// namespace the body names, in the style of the workspace create route.
+// for the first namespace. It needs the action server:create-namespace on
+// the installation (ADR 52). A creator with a stored principal holds the
+// namespace-admin role on the new namespace: the grant and the namespace
+// commit in one transaction, and the grant writes an audit entry.
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -62,10 +65,10 @@ func decodeNamespaceName(body []byte) (namespace.Name, error) {
 	return name, nil
 }
 
-// resolveCreateNamespace returns the namespace the create acts on: the name
-// in the body. It reads the body with http.MaxBytesReader and restores r.Body
-// before returning, so the handler can read it again. A missing or bad name
-// fails before authorization runs.
+// resolveCreateNamespace returns the object the create acts on: the
+// installation. It reads the body with http.MaxBytesReader and restores
+// r.Body before returning, so the handler can read it again. A missing or
+// bad name fails before authorization runs.
 func resolveCreateNamespace(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNamespaceBodyBytes))
 	if err != nil {
@@ -74,18 +77,17 @@ func resolveCreateNamespace(w http.ResponseWriter, r *http.Request) (identity.Ob
 
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
-	name, err := decodeNamespaceName(body)
-	if err != nil {
+	if _, err := decodeNamespaceName(body); err != nil {
 		return identity.Object{}, err
 	}
 
-	return identity.NamespaceObject(name), nil
+	return identity.ServerObject(), nil
 }
 
 // createNamespace serves POST /api/server/namespaces: it creates a namespace
 // homed in the region of the server and answers 201 with it. A duplicate
 // answers 409. A bad name answers 400.
-func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxNamespaceBodyBytes))
@@ -102,7 +104,7 @@ func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, _ iden
 		return
 	}
 
-	ns, err := h.namespaces.Create(ctx, name)
+	ns, err := h.storeNamespace(r, p, name)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -115,4 +117,31 @@ func (h *Handler) createNamespace(w http.ResponseWriter, r *http.Request, _ iden
 		FailoverVersion: ns.FailoverVersion,
 		CreatedAt:       ns.CreatedAt.UTC().Format(time.RFC3339Nano),
 	})
+}
+
+// storeNamespace stores the namespace name. With an access service, the
+// namespace, the namespace-admin grant of the creator and the audit entry
+// commit together.
+func (h *Handler) storeNamespace(
+	r *http.Request,
+	p identity.Principal,
+	name namespace.Name,
+) (namespace.Namespace, error) {
+	if h.access == nil {
+		ns, err := h.namespaces.Create(r.Context(), name)
+		if err != nil {
+			return namespace.Namespace{}, fmt.Errorf("create namespace: %w", err)
+		}
+
+		return ns, nil
+	}
+
+	ns := h.namespaces.New(name)
+
+	e := callerEntry(r, p, identity.ActionServerCreateNamespace)
+	if _, err := h.access.CreateNamespace(r.Context(), e, p, ns); err != nil {
+		return namespace.Namespace{}, fmt.Errorf("create namespace: %w", err)
+	}
+
+	return ns, nil
 }

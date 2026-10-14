@@ -69,6 +69,8 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.namespaceOverrideRoutes()...)
 	routes = append(routes, h.principalRoutes()...)
 	routes = append(routes, h.groupRoutes()...)
+	routes = append(routes, h.roleRoutes()...)
+	routes = append(routes, h.grantRoutes()...)
 	routes = append(routes, h.tokenRoutes()...)
 	routes = append(routes, h.ownTokenRoutes()...)
 
@@ -82,7 +84,7 @@ func (h *Handler) coreRoutes() []Route {
 			Method:  http.MethodPost,
 			Path:    "/api/server/namespaces",
 			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceAdmin},
+			Actions: []identity.Action{identity.ActionServerCreateNamespace},
 			Resolve: resolveCreateNamespace,
 			Serve:   h.createNamespace,
 		},
