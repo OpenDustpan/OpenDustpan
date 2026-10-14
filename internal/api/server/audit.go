@@ -42,6 +42,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),

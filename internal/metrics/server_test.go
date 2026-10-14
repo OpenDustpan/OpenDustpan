@@ -193,3 +193,39 @@ func TestNormalizeRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestServerMetricsConfigReload(t *testing.T) {
+	t.Parallel()
+
+	m := metrics.NewServerMetrics("1.2.3", time.Unix(0, 0))
+
+	if got := scrapeServer(t, m); !strings.Contains(got, "dustpan_config_last_reload_success 1") {
+		t.Fatalf("the gauge does not start at 1:\n%s", got)
+	}
+
+	m.ObserveConfigReload(metrics.ReloadFailure)
+
+	got := scrapeServer(t, m)
+	for _, want := range []string{
+		`dustpan_config_reloads_total{result="failure"} 1`,
+		"dustpan_config_last_reload_success 0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+
+	m.ObserveConfigReload(metrics.ReloadSuccess)
+	m.ObserveConfigReload(metrics.ReloadSuccess)
+
+	got = scrapeServer(t, m)
+	for _, want := range []string{
+		`dustpan_config_reloads_total{result="success"} 2`,
+		`dustpan_config_reloads_total{result="failure"} 1`,
+		"dustpan_config_last_reload_success 1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+}

@@ -84,6 +84,7 @@ func deleteEntry(ns namespace.Name, at time.Time) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "secrettest",
 		Channel:    audit.ChannelAPI,

@@ -25,6 +25,7 @@ func testEntry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "pulumi-cli/3.200.0",
 		Channel:    audit.ChannelAPI,

@@ -108,15 +108,19 @@ type auditEntry struct {
 	Version    string `json:"version"`
 	ValuePath  string `json:"valuePath"`
 	ValueCount *int64 `json:"valueCount,omitempty"`
-	SourceIP   string `json:"sourceIP"`
-	UserAgent  string `json:"userAgent"`
-	Channel    string `json:"channel"`
-	Kind       string `json:"kind"`
-	Outcome    string `json:"outcome"`
-	RequestID  string `json:"requestID"`
-	ObjectID   string `json:"objectID,omitempty"`
-	PrevHash   string `json:"prevHash"`
-	Hash       string `json:"hash"`
+	// Changes holds the keys of the entry with their old and new values, for
+	// example the settings of a startup or config-file entry (ADR 63). It is
+	// omitted for an entry without them.
+	Changes   []auditChange `json:"changes,omitempty"`
+	SourceIP  string        `json:"sourceIP"`
+	UserAgent string        `json:"userAgent"`
+	Channel   string        `json:"channel"`
+	Kind      string        `json:"kind"`
+	Outcome   string        `json:"outcome"`
+	RequestID string        `json:"requestID"`
+	ObjectID  string        `json:"objectID,omitempty"`
+	PrevHash  string        `json:"prevHash"`
+	Hash      string        `json:"hash"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
@@ -132,6 +136,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Version:    e.Version,
 		ValuePath:  e.ValuePath,
 		ValueCount: e.ValueCount,
+		Changes:    toAuditChanges(e.Changes),
 		SourceIP:   e.SourceIP,
 		UserAgent:  e.UserAgent,
 		Channel:    string(e.Channel),
@@ -142,6 +147,33 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 	}
+}
+
+// auditChange is the wire shape of one change of an entry: the key, the old
+// and the new value, the layer of a setting (ADR 63) and when a recorded
+// change applies. A sensitive key holds only set or not set.
+type auditChange struct {
+	Key         string  `json:"key"`
+	Old         *string `json:"old,omitempty"`
+	New         string  `json:"new"`
+	Layer       string  `json:"layer,omitempty"`
+	TakesEffect string  `json:"takesEffect,omitempty"`
+}
+
+// toAuditChanges maps the changes of an entry to their wire shape, nil for
+// none.
+func toAuditChanges(changes []audit.Change) []auditChange {
+	if len(changes) == 0 {
+		return nil
+	}
+
+	out := make([]auditChange, 0, len(changes))
+
+	for _, c := range changes {
+		out = append(out, auditChange{Key: c.Key, Old: c.Old, New: c.New, Layer: c.Layer, TakesEffect: c.TakesEffect})
+	}
+
+	return out
 }
 
 // listEntriesResponse is the answered document of the entry list.

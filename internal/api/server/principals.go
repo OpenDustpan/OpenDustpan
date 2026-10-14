@@ -221,7 +221,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: none}); ok {
+		if res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -232,7 +232,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 // change writes one failure entry here, best effort.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
 		if !ok && res.object != "" && h.principals != nil {
 			h.appendServerChange(r, p, serverChange{
@@ -249,7 +249,7 @@ func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) R
 // runPrincipalOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
 func (h *Handler) runPrincipalOp(
-	w http.ResponseWriter, r *http.Request, op principalOp, c call,
+	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
 ) (principalResult, bool) {
 	ctx := r.Context()
 

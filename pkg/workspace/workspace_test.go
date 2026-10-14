@@ -1085,6 +1085,7 @@ func retentionEntry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "workspace_test",
 		Channel:    audit.ChannelAPI,
