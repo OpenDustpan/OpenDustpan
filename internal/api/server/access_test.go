@@ -29,7 +29,13 @@ import (
 type subjectAuthenticator struct{}
 
 func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	return identity.Principal{Subject: token, DisplayName: token, Admin: token == "admin", TokenID: ""}, nil
+	return identity.Principal{
+		Subject:        token,
+		DisplayName:    token,
+		Admin:          token == "admin",
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}, nil
 }
 
 // roleDoc and grantDoc decode the wire forms in tests.
