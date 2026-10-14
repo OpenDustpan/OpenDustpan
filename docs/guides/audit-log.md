@@ -57,6 +57,12 @@ An entry holds these fields:
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
   declares it in the `Dustpan-Channel` header). Unknown values are `api`.
+  The server writes two more channels on its own: `startup` and
+  `config-file` (see "Settings entries").
+- `changes`: the keys of the entry with their values, else omitted. Each
+  change holds `key`, `new`, and when they apply, `old`, `layer` and
+  `takesEffect`. A `startup` or `config-file` entry holds its settings
+  here.
 - Kind: `tool-operation`, `reveal`, `override`, `change` or `read-access`,
   never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -66,14 +72,44 @@ An entry holds these fields:
   (ADR 32).
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
-  When `valueCount` is set, the encoding appends one more field after
-  `prevHash`: the text `value_count=` with the decimal count. When it is
-  omitted, the encoding is unchanged, so an entry written before the count
-  keeps its hash.
+  After `prevHash`, the encoding appends each optional field that the entry
+  sets, in this fixed order: `value_count=` with the decimal count, then
+  `object_id=` (ADR 47, which its own change adds), then `changes=` with
+  the canonical JSON of the changes (sorted by key), as the store holds
+  it. An
+  optional field that the entry does not set adds nothing, so an entry
+  written before the field keeps its hash.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
 allows only the two kinds.
+
+## Settings entries
+
+Each server process writes entries about its own settings in the scope
+`@server` (ADR 63 decisions 9 and 10). The subject is the instance ID: a new
+`ins-` ID at each start, which the start log shows on the line `instance`.
+The action is `server:manage-settings`, and the kind is `change`.
+
+- At each start, the server writes one entry with the channel `startup`.
+  Its `changes` hold each setting with its `key`, its value in `new` and
+  its `layer` (`flag`, `env`, `file` or `default`). A change of the file or of a
+  variable while the server is off shows as the difference between two
+  start entries.
+- When a reload of the configuration file changes a value, the server
+  writes one entry with the channel `config-file`. Its `changes` hold each
+  changed setting with its `old` and its `new` value, and `takesEffect`.
+  No setting applies while the server runs yet, so `takesEffect` is
+  `next start`: the entry records a change, and the new value applies at
+  the next start.
+
+No route of the API reads the scope `@server` yet (ADR 60 decision 7).
+These entries become readable through the API when that route lands.
+
+A sensitive setting (the database URL and each secret) shows only `set` or
+`not set`, never the value. When the server cannot write the start entry,
+the start stops. When it cannot write the entry of a reload, it keeps the
+old configuration and the reload fails.
 
 ## Read the entries
 

@@ -153,6 +153,9 @@ type settings struct {
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
+	// beforeServe runs after the start-up checks and the listen, before
+	// the server serves. See WithBeforeServe.
+	beforeServe func(ctx context.Context) error
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -296,6 +299,15 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// WithBeforeServe sets a function that Run calls after the start-up checks
+// and the listen, and before the server serves. When it answers an error,
+// Run closes the listener and returns the error, so a failed function
+// leaves no server running. The binary writes the start audit entry here
+// (ADR 63 decision 10), so a start that fails its checks writes no entry.
+func WithBeforeServe(fn func(ctx context.Context) error) Option {
+	return func(o *settings) { o.beforeServe = fn }
+}
+
 // proxySettings holds the trusted proxy settings of the client address
 // (internal/clientip): the proxies and the forwarding header they set.
 type proxySettings struct {
@@ -429,6 +441,7 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	beforeServe     func(ctx context.Context) error
 }
 
 // services holds the domain services that NewServer wires together.
@@ -478,6 +491,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxBodyBytesInFlight:    0,
 		backupTarget:            nil,
 		backupTargetName:        "",
+		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 	}
@@ -598,6 +612,7 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		beforeServe:     cfg.beforeServe,
 	}, nil
 }
 
@@ -999,6 +1014,12 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	if s.beforeServe != nil {
+		if hookErr := s.beforeServe(ctx); hookErr != nil {
+			return errors.Join(fmt.Errorf("before serve: %w", hookErr), closeListener(ln))
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              ln.Addr().String(),
 		Handler:           s.handler,
@@ -1094,6 +1115,16 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 	}
 
 	return shutdownServer(ctx, srv, serveErr)
+}
+
+// closeListener closes ln after a failed start and answers the close
+// error, wrapped, or nil.
+func closeListener(ln net.Listener) error {
+	if err := ln.Close(); err != nil {
+		return fmt.Errorf("close listener: %w", err)
+	}
+
+	return nil
 }
 
 // shutdownServer shuts down srv after ctx is done and reports the serve

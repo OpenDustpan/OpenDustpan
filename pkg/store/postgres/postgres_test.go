@@ -218,10 +218,10 @@ var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the five whitelisted columns.
+// names one of the six whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind":
+	case "subject", "action", "object", "outcome", "kind", "changes":
 		return field, true
 	default:
 		return "", false

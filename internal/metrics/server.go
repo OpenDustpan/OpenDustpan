@@ -28,6 +28,8 @@ const (
 	maxRequestSeries = 1024
 	maxInFlightCount = 16
 	maxBuildCount    = 4
+	// maxReloadSeries holds one series for each reload result.
+	maxReloadSeries = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -38,6 +40,13 @@ const (
 	labelMethod  = "method"
 	labelCode    = "code"
 	labelVersion = "version"
+	labelResult  = "result"
+)
+
+// Results of a reload of the configuration file (ADR 63 decision 5).
+const (
+	ReloadSuccess = "success"
+	ReloadFailure = "failure"
 )
 
 // ServerMetrics holds the request count, the request duration histogram,
@@ -47,7 +56,8 @@ const (
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
-// the HTTP middleware do (ADR 32 decision 9).
+// the HTTP middleware do (ADR 32 decision 9). It also holds the two
+// families of the reload of the configuration file (ADR 63 decision 5).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -57,6 +67,8 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	reloads  *Counter
+	reloadOK *Gauge
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -104,7 +116,23 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
+		reloads: reg.NewCounter(
+			"dustpan_config_reloads_total",
+			"Reloads of the configuration file by result.",
+			[]string{labelResult},
+			maxReloadSeries,
+		),
+		reloadOK: reg.NewGauge(
+			"dustpan_config_last_reload_success",
+			"1 when the last reload of the configuration file succeeded, else 0.",
+			nil,
+			1,
+		),
 	}
+
+	// The configuration that the server started with is valid, so the gauge
+	// starts at 1: an alert on 0 fires only after a failed reload.
+	m.reloadOK.Set(1, []string{}...)
 
 	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
 	build.Set(1, version)
@@ -177,6 +205,23 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// ObserveConfigReload records one reload of the configuration file (ADR 63
+// decision 5): it counts result (ReloadSuccess or ReloadFailure) in
+// dustpan_config_reloads_total and sets dustpan_config_last_reload_success
+// to 1 for a success and 0 for a failure. Any other result counts as a
+// failure, so the label set stays fixed.
+func (m *ServerMetrics) ObserveConfigReload(result string) {
+	if result == ReloadSuccess {
+		m.reloads.Inc(ReloadSuccess)
+		m.reloadOK.Set(1, []string{}...)
+
+		return
+	}
+
+	m.reloads.Inc(ReloadFailure)
+	m.reloadOK.Set(0, []string{}...)
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any
