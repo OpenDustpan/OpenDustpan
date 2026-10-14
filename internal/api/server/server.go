@@ -74,8 +74,10 @@ type Config struct {
 	// keep them.
 	Tokens *accesstoken.Service
 	// Audit appends the entries of the scope @server: each change of a
-	// principal or a group writes one (ADR 60, decision 7). Nil writes no
-	// entry.
+	// principal or a group writes one (ADR 60, decision 7). With Access set,
+	// it is required and must also keep the entries of each namespace
+	// (audit.Store), because each access-review export writes an entry (ADR
+	// 52, decision 13). Without Access, nil writes no entry.
 	Audit audit.ServerStore
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
@@ -132,6 +134,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
 	case cfg.Metrics == nil:
 		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
+	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
+		// Each access-review export writes an audit entry, in @server or in
+		// the namespace of the export (ADR 52, decision 13).
+		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
 	}
 
 	h := &Handler{
@@ -161,6 +167,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// keepsNamespaceAudit reports whether entries keeps the entries of @server
+// and of each namespace, as the export of an access review needs.
+func keepsNamespaceAudit(entries audit.ServerStore) bool {
+	if entries == nil {
+		return false
+	}
+
+	_, ok := entries.(namespaceAppender)
+
+	return ok
 }
 
 // Backups returns the backup service the handler was wired with, or nil when

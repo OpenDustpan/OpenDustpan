@@ -159,6 +159,10 @@ _Avoid_: Permission category, scope
 A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
 
+**Access review**:
+An export of the grants that give access to one object. It holds the grants on the object and inside it. It also holds the grants with a role that gives a data action or manages access on each object that contains it. A bootstrap admin token has a row too. It is a snapshot at one time, or a history between two times (ADR 52, decision 10). Each export request writes an audit entry.
+_Avoid_: Access report, permission audit
+
 **No access**:
 The state of an object or a console section that the principal has no grant to use.
 _Avoid_: Locked (that is a unit lock), forbidden, disabled
@@ -302,7 +306,7 @@ An output adapter of the port `pkg/logsink` that delivers structured records to 
 _Avoid_: Log target, log destination, exporter
 
 **Kind of access**:
-The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The server cannot see who runs a CLI command, so `tofu state pull` writes a `tool-operation` entry. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log).
+The field of an audit entry that tells kinds of access apart. It has exactly one value from a fixed list. `tool-operation`: a tool needed secrets for its own work, for example a Pulumi decrypt call or an OpenTofu state download. `reveal`: a person asked to see a secret value. The server cannot see who runs a CLI command, so `tofu state pull` writes a `tool-operation` entry. The Pulumi routes `decrypt/log-decryption` and `decrypt/log-batch-decryption` are routes, not kinds. Each records an entry of the kind `reveal`, because the Pulumi CLI calls them when a person asks it to show secrets. ADR 44 adds `override`: a person used an override. ADR 60 adds `change` (an action that changes something) and `audit-read` (a read or an export of the audit log). ADR 52 adds `read-access`: a read of the access-review export of an object.
 _Avoid_: Audit type, `log-decryption` as a kind
 
 **Value count**:

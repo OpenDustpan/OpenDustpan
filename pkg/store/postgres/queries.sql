@@ -1021,6 +1021,93 @@ FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
 WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
+-- name: ReviewGrants :many
+-- One page of an access-review export (ADR 52, decision 10). The join on
+-- group_members reads the memberships of the groups of the grants: of one
+-- principal for a subject filter, or of every member for expand. It gives
+-- one row for each membership that overlaps the grant and the window (a
+-- history), or that is current at as_of_ms (a snapshot). In a history, a
+-- grant on a container with a custom role is in the export, a deleted role
+-- included. The IDs order with the C collation, as in SQLite.
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  COALESCE(m.added_at_ms, 0)::bigint AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  COALESCE(m.principal_id, '')::text AS member_id,
+  COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(p.subject, pg.name, '')::text AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= @as_of_ms::bigint
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint) AS member_count
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((@principal::text <> '' AND m.principal_id = @principal::text)
+    OR (@principal::text = '' AND @expand::boolean))
+  AND CASE WHEN @history::boolean THEN
+    m.added_at_ms < @to_ms::bigint
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint END
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (@all_grants::boolean
+    OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
+    OR g.target = @target::text
+    OR (g.target = ANY(@containers::text[])
+      AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (@subject::text = '' OR g.subject = @subject::text
+    OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN @history::boolean THEN
+    g.created_at_ms < @to_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @from_ms::bigint
+  ELSE g.created_at_ms <= @as_of_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @as_of_ms::bigint END
+  AND (g.created_at_ms > @after_at_ms::bigint
+    OR (g.created_at_ms = @after_at_ms::bigint
+      AND (g.id COLLATE "C" > @after_id::text
+        OR (g.id = @after_id::text
+          AND (COALESCE(m.added_at_ms, 0) > @after_member_at_ms::bigint
+            OR (COALESCE(m.added_at_ms, 0) = @after_member_at_ms::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > @after_member_id::text))))))
+ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
+LIMIT @row_limit::bigint;
+
+-- name: CountReviewGrants :one
+SELECT COUNT(*)
+FROM grants g
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((@principal::text <> '' AND m.principal_id = @principal::text)
+    OR (@principal::text = '' AND @expand::boolean))
+  AND CASE WHEN @history::boolean THEN
+    m.added_at_ms < @to_ms::bigint
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint END
+WHERE (@all_grants::boolean
+    OR (@namespace::text <> '' AND g.namespace = @namespace::text AND g.object_kind <> 'installation')
+    OR g.target = @target::text
+    OR (g.target = ANY(@containers::text[])
+      AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (@subject::text = '' OR g.subject = @subject::text
+    OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN @history::boolean THEN
+    g.created_at_ms < @to_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @from_ms::bigint
+  ELSE g.created_at_ms <= @as_of_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @as_of_ms::bigint END;
+
+-- name: ReviewStacksByIDs :many
+-- The stacks of the unit grants of an export, deleted ones included (ADR 47):
+-- an export shows a grant on a deleted unit, with its name at the time of
+-- the delete, so a reviewer can clean it up.
+SELECT id, namespace, project, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM stacks WHERE id = ANY(@ids::text[]);
+
+-- name: ReviewWorkspacesByIDs :many
+-- The workspaces of the unit grants of an export, deleted ones included.
+SELECT id, namespace, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM workspaces WHERE id = ANY(@ids::text[]);
+
 -- name: UnitStackID :one
 -- The stable ID of a Pulumi stack, for a grant on the unit (ADR 19, ADR 52).
 SELECT id FROM stacks WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;

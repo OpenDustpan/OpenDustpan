@@ -703,6 +703,7 @@ func CoverageAllowlist() []AllowEntry {
 		journalAllowEntries(),
 		principalAllowEntries(),
 		accessAllowEntries(),
+		reviewAllowEntries(),
 		tokenAllowEntries(),
 	)
 }
@@ -1249,4 +1250,33 @@ func (coverageNamespaceStore) SetOverrides(
 	namespace.Fence,
 ) error {
 	return nil
+}
+
+// reviewCoveringTest names the test that proves the access-review and
+// caller-access routes instead of a CLI: no CLI calls them (ADR 52).
+const reviewCoveringTest = "TestAccessReview"
+
+// reviewAllowEntries returns the operator and console routes of the access
+// review and the access of the caller. The harness steps of
+// reviewCoveringTest drive each one through the real binary on each store.
+func reviewAllowEntries() []AllowEntry {
+	reason := "Operator and console route (ADR 52): no CLI reads the access review or the caller access. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	paths := []string{
+		"/api/server/access-review",
+		"/api/server/namespaces/{namespace}/access-review",
+		"/api/server/namespaces/{namespace}/collections/{collection}/access-review",
+		"/api/server/namespaces/{namespace}/unit-access-review",
+		"/api/server/caller/access",
+	}
+
+	out := make([]AllowEntry, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, AllowEntry{
+			Method: http.MethodGet, Path: path, CoveringTest: reviewCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
 }

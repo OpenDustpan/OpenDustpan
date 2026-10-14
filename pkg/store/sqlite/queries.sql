@@ -935,6 +935,97 @@ FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
 
+-- name: ReviewGrants :many
+-- One page of an access-review export (ADR 52, decision 10). The join on
+-- group_members reads the memberships of the groups of the grants: of one
+-- principal for a subject filter, or of every member for expand. It gives
+-- one row for each membership that overlaps the grant and the window (a
+-- history), or that is current at as_of_ms (a snapshot). In a history, a
+-- grant on a container with a custom role is in the export, a deleted role
+-- included. A JSON array carries each list, so the query stays fixed.
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)) AS member_count
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
+    OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
+  AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
+    m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
+    OR (CAST(sqlc.arg('namespace') AS TEXT) <> '' AND g.namespace = CAST(sqlc.arg('namespace') AS TEXT)
+      AND g.object_kind <> 'installation')
+    OR g.target = CAST(sqlc.arg('target') AS TEXT)
+    OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
+        OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR g.subject = CAST(sqlc.arg('subject') AS TEXT)
+    OR (CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
+    g.created_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
+    AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
+  ELSE g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END
+  AND (g.created_at_ms > CAST(sqlc.arg('after_at_ms') AS INTEGER)
+    OR (g.created_at_ms = CAST(sqlc.arg('after_at_ms') AS INTEGER)
+      AND (g.id > CAST(sqlc.arg('after_id') AS TEXT)
+        OR (g.id = CAST(sqlc.arg('after_id') AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(sqlc.arg('after_member_id') AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountReviewGrants :one
+SELECT COUNT(*)
+FROM grants g
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
+    OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
+  AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
+    m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END
+WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
+    OR (CAST(sqlc.arg('namespace') AS TEXT) <> '' AND g.namespace = CAST(sqlc.arg('namespace') AS TEXT)
+      AND g.object_kind <> 'installation')
+    OR g.target = CAST(sqlc.arg('target') AS TEXT)
+    OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
+        OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR g.subject = CAST(sqlc.arg('subject') AS TEXT)
+    OR (CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
+    g.created_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
+    AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
+  ELSE g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END;
+
+-- name: ReviewStacksByIDs :many
+-- The stacks of the unit grants of an export, deleted ones included (ADR 47):
+-- an export shows a grant on a deleted unit, with its name at the time of
+-- the delete, so a reviewer can clean it up.
+SELECT id, namespace, project, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM stacks WHERE id IN (sqlc.slice('ids'));
+
+-- name: ReviewWorkspacesByIDs :many
+-- The workspaces of the unit grants of an export, deleted ones included.
+SELECT id, namespace, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM workspaces WHERE id IN (sqlc.slice('ids'));
+
 -- name: UnitStackID :one
 -- The stable ID of a Pulumi stack, for a grant on the unit (ADR 19, ADR 52).
 SELECT id FROM stacks WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
