@@ -73,21 +73,37 @@ func (s *Store) GetPrincipalBySubject(ctx context.Context, subject string) (prin
 
 // ListPrincipals implements principal.Store. It reads the page and the
 // total in one REPEATABLE READ snapshot.
-func (s *Store) ListPrincipals(ctx context.Context, pq principal.Query) ([]principal.Principal, int64, error) {
+func (s *Store) ListPrincipals(
+	ctx context.Context, pq principal.Query, kind principal.Kind,
+) ([]principal.Principal, int64, error) {
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
-		list: listPrincipalRows, count: countPrincipalRows, conv: principalFromList,
+		list: func(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
+			return listPrincipalRows(ctx, q, pq, kind)
+		},
+		count: func(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
+			return countPrincipalRows(ctx, q, pq, kind)
+		},
+		conv: principalFromList,
 	})
 }
 
-func listPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
+func listPrincipalRows(
+	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind,
+) ([]db.ListPrincipalsRow, error) {
 	return q.ListPrincipals(
 		ctx,
-		db.ListPrincipalsParams{After: pq.After, Low: pq.Low, High: pq.High, RowLimit: rowLimit(pq.Limit)},
+		db.ListPrincipalsParams{
+			After:    pq.After,
+			Low:      pq.Low,
+			High:     pq.High,
+			Kind:     string(kind),
+			RowLimit: rowLimit(pq.Limit),
+		},
 	)
 }
 
-func countPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
-	return q.CountPrincipals(ctx, db.CountPrincipalsParams{Low: pq.Low, High: pq.High})
+func countPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind) (int64, error) {
+	return q.CountPrincipals(ctx, db.CountPrincipalsParams{Low: pq.Low, High: pq.High, Kind: string(kind)})
 }
 
 func principalFromList(r db.ListPrincipalsRow) principal.Principal {

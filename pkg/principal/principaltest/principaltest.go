@@ -41,6 +41,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "subject compares exactly", test: testSubjectCase},
 		{name: "missing principal is ErrNotFound", test: testMissingPrincipal},
 		{name: "list principals orders by subject", test: testListPrincipals},
+		{name: "list principals of one kind pages with a prefix", test: testListPrincipalsOfKind},
 		{name: "update principal keeps subject and kind", test: testUpdatePrincipal},
 		{name: "update of a missing principal is ErrNotFound", test: testUpdateMissingPrincipal},
 		{name: "delete principal removes its memberships", test: testDeletePrincipal},
@@ -321,7 +322,7 @@ func testMissingPrincipal(t *testing.T, s principal.Store) {
 func testListPrincipals(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	got, _, err := s.ListPrincipals(t.Context(), all())
+	got, _, err := s.ListPrincipals(t.Context(), all(), "")
 	if err != nil {
 		t.Fatalf("list an empty store: %v", err)
 	}
@@ -334,12 +335,70 @@ func testListPrincipals(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-3", "bob", principal.KindWorkload))
 
-	got, _, err = s.ListPrincipals(t.Context(), all())
+	got, _, err = s.ListPrincipals(t.Context(), all(), "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 
 	equalStrings(t, "subjects", subjects(got), []string{"alice", "bob", "carol"})
+}
+
+func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "ci-build", principal.KindService))
+	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
+	mustCreatePrincipal(t, s, newPrincipal("prn-3", "ci-deploy", principal.KindService))
+	mustCreatePrincipal(t, s, newPrincipal("prn-4", "ci-runner", principal.KindWorkload))
+	mustCreatePrincipal(t, s, newPrincipal("prn-5", "bob", principal.KindService))
+
+	if err := s.DeletePrincipal(t.Context(), "prn-5", entry()); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		kind  principal.Kind
+		q     principal.Query
+		want  []string
+		total int64
+	}{
+		{"services", principal.KindService, all(), []string{"ci-build", "ci-deploy"}, 2},
+		{
+			"services after a key", principal.KindService,
+			principal.Query{After: "ci-build", Low: "", High: "", Limit: 10},
+			[]string{"ci-deploy"},
+			2,
+		},
+		{
+			"workloads with a prefix", principal.KindWorkload,
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10},
+			[]string{"ci-runner"},
+			1,
+		},
+		{
+			"persons with a prefix", principal.KindPerson,
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 10},
+			nil, 0,
+		},
+		{
+			"every kind with a prefix", "",
+			principal.Query{After: "", Low: "ci-", High: "ci.", Limit: 2},
+			[]string{"ci-build", "ci-deploy"},
+			3,
+		},
+	} {
+		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		equalStrings(t, tc.name, subjects(got), tc.want)
+
+		if total != tc.total {
+			t.Fatalf("%s total = %d, want %d", tc.name, total, tc.total)
+		}
+	}
 }
 
 func testUpdatePrincipal(t *testing.T, s principal.Store) {
@@ -811,7 +870,7 @@ func testPagePrincipals(t *testing.T, s principal.Store) {
 	}
 
 	for _, tc := range cases {
-		got, _, err := s.ListPrincipals(ctx, tc.q)
+		got, _, err := s.ListPrincipals(ctx, tc.q, "")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -1049,12 +1108,12 @@ func checkPrincipalTotals(t *testing.T, s principal.Store) {
 
 	ctx := t.Context()
 
-	ps, total, err := s.ListPrincipals(ctx, onePerPage())
+	ps, total, err := s.ListPrincipals(ctx, onePerPage(), "")
 	if err != nil || total != 3 || len(ps) != 1 || ps[0].GroupCount != 2 {
 		t.Fatalf("first principal = %+v, total %d, %v; want alice in 2 groups of 3 principals", ps, total, err)
 	}
 
-	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10})
+	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10}, "")
 	if err != nil || total != 1 {
 		t.Fatalf("total of prefix b = %d, %v; want 1 with no regard to the cursor", total, err)
 	}

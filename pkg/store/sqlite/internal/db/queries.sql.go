@@ -231,15 +231,17 @@ SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject >= ?1
   AND (CAST(?2 AS TEXT) = '' OR subject < ?2)
+  AND (CAST(?3 AS TEXT) = '' OR kind = ?3)
 `
 
 type CountPrincipalsParams struct {
 	Low  string
 	High string
+	Kind string
 }
 
 func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countPrincipals, arg.Low, arg.High)
+	row := q.db.QueryRowContext(ctx, countPrincipals, arg.Low, arg.High, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2640,14 +2642,16 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject > ?1
   AND p.subject >= ?2
   AND (CAST(?3 AS TEXT) = '' OR p.subject < ?3)
+  AND (CAST(?4 AS TEXT) = '' OR p.kind = ?4)
 ORDER BY p.subject
-LIMIT ?4
+LIMIT ?5
 `
 
 type ListPrincipalsParams struct {
 	After    string
 	Low      string
 	High     string
+	Kind     string
 	RowLimit int64
 }
 
@@ -2667,6 +2671,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 		arg.After,
 		arg.Low,
 		arg.High,
+		arg.Kind,
 		arg.RowLimit,
 	)
 	if err != nil {
