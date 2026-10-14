@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke demo
+.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke demo
 
 check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -44,20 +44,36 @@ semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and sec
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is a
 # line in .trivyignore with its reason.
 #
-# The license scan is a second run, because --severity applies to each scanner
-# of a run. Trivy gives each license a class and a severity. The scan fails on
-# a forbidden license (CRITICAL, for example AGPL), a restricted license
-# (HIGH, for example GPL) and an unknown license. It passes a notice license
-# (LOW: MIT, BSD, Apache-2.0) and a reciprocal license (MEDIUM: MPL-2.0),
-# which docs/research/licenses.md accepts. Trivy reads the license of a Go
-# module from the module cache, so go mod download runs first: with an empty
-# cache the scan finds no license and passes.
+# The license scan writes a JSON report, and scripts/trivy-license-gate.py checks
+# it. The gate fails on an unknown, restricted (HIGH, for example GPL) or
+# forbidden (CRITICAL, for example AGPL) license. It passes a notice license
+# (LOW: MIT, BSD, Apache-2.0) and a reciprocal license (MEDIUM: MPL-2.0), which
+# docs/research/licenses.md accepts. The scan does not filter by --severity: that
+# filter also drops the LOW results, so the scan found nothing and still passed.
+# Trivy reads the license of a Go module from the module cache, so go mod download
+# runs first. The gate also fails when a go.mod requirement has no license result,
+# so an empty cache cannot pass. The canary fixture under testdata/trivy-canary
+# requires a GPL module. The gate must flag it, or the scan is not trusted. The
+# real scan skips that fixture, so it does not fail on the fixture.
+TRIVY_CANARY_MODULE := github.com/xen0n/gosmopolitan@v1.3.0
+TRIVY_LICENSE_FLAGS := --scanners license --disable-telemetry --skip-version-check --no-progress
+
 trivy: ## Trivy: known vulnerabilities in dependencies, misconfigurations (Dockerfile), secrets in the tree, and dependency licenses.
 	trivy fs --scanners vuln,misconfig,secret --exit-code 1 \
 		--disable-telemetry --skip-version-check --no-progress .
 	go mod download
-	trivy fs --scanners license --severity UNKNOWN,HIGH,CRITICAL --exit-code 1 \
-		--disable-telemetry --skip-version-check --no-progress .
+	go mod download $(TRIVY_CANARY_MODULE)
+	mkdir -p bin
+	trivy fs $(TRIVY_LICENSE_FLAGS) --skip-dirs testdata/trivy-canary \
+		--format json --output bin/trivy-license.json .
+	python3 -I scripts/trivy-license-gate.py gate bin/trivy-license.json go.mod
+	$(MAKE) trivy-canary
+
+trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in testdata/trivy-canary, or the scan is not trusted.
+	go mod download $(TRIVY_CANARY_MODULE)
+	mkdir -p bin
+	trivy fs $(TRIVY_LICENSE_FLAGS) --format json --output bin/trivy-canary.json testdata/trivy-canary
+	python3 -I scripts/trivy-license-gate.py canary bin/trivy-canary.json
 
 # Scans the commits of every local branch, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
