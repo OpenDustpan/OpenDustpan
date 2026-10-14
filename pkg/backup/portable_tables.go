@@ -20,6 +20,9 @@ const (
 	portColDeletedAtMs = "deleted_at_ms"
 	portColSource      = "source"
 	portColKind        = "kind"
+	portColDeletedName = "deleted_name"
+	portColTool        = "tool"
+	portColUnitID      = "unit_id"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -55,6 +58,8 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: "id", Kind: KindText},
+				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: portColDeletedName, Kind: KindText},
 			},
 		},
 		{
@@ -160,12 +165,12 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "inventory",
-			OrderBy: []string{portColNamespace, "tool", portColName},
+			OrderBy: []string{portColNamespace, portColTool, portColName},
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
-				{Name: "tool", Kind: KindText},
+				{Name: portColTool, Kind: KindText},
 				{Name: portColName, Kind: KindText},
-				{Name: "unit_id", Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
 				{Name: "display_name", Kind: KindText},
 				{Name: "last_changed_ms", Kind: KindTime},
 				{Name: portColStatus, Kind: KindText},
@@ -173,6 +178,18 @@ func portableSpec() []PortableTable {
 				{Name: "lock_holder", Kind: KindText},
 				{Name: "lock_since_ms", Kind: KindTime},
 				{Name: "lock_operation", Kind: KindText},
+			},
+		},
+		{
+			Table:   "inventory_deleted",
+			OrderBy: []string{portColTool, portColUnitID},
+			Columns: []Column{
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColTool, Kind: KindText},
+				{Name: portColUnitID, Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: "purge_after_ms", Kind: KindTime},
 			},
 		},
 		{

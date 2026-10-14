@@ -335,7 +335,7 @@ func (s *fakeBackupStore) DeleteStack(
 	_ context.Context,
 	ref stack.Ref,
 	fence namespace.Fence,
-	_ stack.DeleteGuard,
+	_ stack.DeleteGuard, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -370,7 +370,12 @@ func (s *fakeBackupStore) DeleteStack(
 
 // ForceDeleteStack implements stack.Store with its children, key and entry,
 // even when the latest checkpoint manages resources.
-func (s *fakeBackupStore) ForceDeleteStack(_ context.Context, ref stack.Ref, fence namespace.Fence) error {
+func (s *fakeBackupStore) ForceDeleteStack(
+	_ context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	_ audit.Entry,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1145,6 +1150,19 @@ func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.Che
 	}
 
 	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+}
+
+// ListDeletedUnits implements inventory.DeletedReader. The fake removes a
+// deleted stack with its entry, so it never holds a deleted entry.
+func (s *fakeBackupStore) ListDeletedUnits(_ context.Context, _ namespace.Name) ([]inventory.DeletedEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	return []inventory.DeletedEntry{}, nil
 }
 
 // ListUnits implements inventory.Reader, ordered by tool then name.

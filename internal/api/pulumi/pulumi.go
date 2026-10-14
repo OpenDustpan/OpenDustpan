@@ -646,13 +646,19 @@ func (h *Handler) getStack(w http.ResponseWriter, r *http.Request, _ identity.Pr
 	})
 }
 
-// deleteStack removes the stack with its history. Without force=true the
-// store refuses when the stack still manages resources, as the Pulumi CLI
-// expects. The check runs inside the delete transaction, so an update that
-// finishes between the check and the delete cannot drop resources. After the
-// rows are gone, the checkpoint blobs of the stack go too, so a deleted stack
-// leaves no orphan blob behind.
-func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+// deleteStack soft-deletes the stack (ADR 47): the stack leaves every tool
+// route and list at once, and its name is free, but its history, state and
+// data key stay until the retention period ends. Without force=true the store
+// refuses when the stack still manages resources, as the Pulumi CLI expects.
+// The check runs inside the delete transaction, so an update that finishes
+// between the check and the delete cannot drop resources. A delete while a
+// mutating update runs answers 409. The checkpoint blobs stay, because a
+// restore reads them. Each delete writes an audit entry of the kind change in
+// the delete transaction: if the append fails, the delete rolls back and the
+// route answers 500 (ADR 60, fail closed).
+func (h *Handler) deleteStack(
+	w http.ResponseWriter, r *http.Request, principal identity.Principal, obj identity.Object,
+) {
 	ctx := r.Context()
 
 	ref, err := stack.ParseRef(r.PathValue("namespace"), r.PathValue("project"), r.PathValue("stack"))
@@ -662,17 +668,17 @@ func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	st, err := h.stacks.Get(ctx, ref)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
+	entry := changeEntry(ctx, changeAudit{
+		request:   r,
+		principal: principal,
+		object:    obj,
+		action:    identity.ActionUnitManage,
+	})
 
 	if deleteForce(r) {
-		err = h.stacks.ForceDelete(ctx, ref)
+		err = h.stacks.ForceDelete(ctx, ref, entry)
 	} else {
-		err = h.stacks.Delete(ctx, ref)
+		err = h.stacks.Delete(ctx, ref, entry)
 	}
 
 	if err != nil {
@@ -680,8 +686,6 @@ func (h *Handler) deleteStack(w http.ResponseWriter, r *http.Request, _ identity
 
 		return
 	}
-
-	h.updates.DeleteStackBlobs(ctx, ref, st.ID)
 
 	w.WriteHeader(http.StatusNoContent)
 }

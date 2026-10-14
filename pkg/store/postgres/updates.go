@@ -550,9 +550,10 @@ func (s *Store) AppendEvents(ctx context.Context, batch stack.EventBatch, fence 
 	})
 }
 
-// ListEvents implements stack.EventStore. A stack delete removes its updates
-// with it, so a delete between the existence check and the read answers an
-// empty list.
+// ListEvents implements stack.EventStore. A stack delete is a soft delete
+// that keeps the updates and events of the stack (ADR 47), so a delete
+// between the lookup of the stack ID and the read still answers the events.
+// After the delete, the name no longer finds the stack.
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
 ) ([]stack.Event, error) {

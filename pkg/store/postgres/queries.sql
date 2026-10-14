@@ -51,18 +51,18 @@ ON CONFLICT DO NOTHING;
 -- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3;
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
 -- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1
+WHERE namespace = $1 AND deleted_at_ms IS NULL
 ORDER BY project, name;
 
 -- name: ListStacksInProject :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1 AND project = $2
+WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
 ORDER BY name;
 
 -- name: CreateStackTag :exec
@@ -79,7 +79,7 @@ ORDER BY name;
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
-WHERE s.namespace = $1
+WHERE s.namespace = $1 AND s.deleted_at_ms IS NULL
 ORDER BY t.stack_id, t.name;
 
 -- name: DeleteStackTags :exec
@@ -92,19 +92,19 @@ SET updated_at_ms = $1
 WHERE id = $2;
 
 -- name: RenameStack :execrows
-UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4;
+UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4 AND deleted_at_ms IS NULL;
 
 -- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3;
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
 SELECT id, version
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE;
 
 -- name: CreateUpdate :exec
@@ -149,7 +149,7 @@ WHERE stack_id = $1
 -- name: SetStackVersion :exec
 UPDATE stacks
 SET version = $1, updated_at_ms = $2
-WHERE namespace = $3 AND project = $4 AND name = $5;
+WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 
 -- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
@@ -271,7 +271,15 @@ WHERE c.stack_id = $1
 ORDER BY u.version DESC
 LIMIT 1;
 
+-- name: SoftDeleteStack :execrows
+-- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
+-- hold ":", so "deleted:" and the ID never match a lookup by name.
+UPDATE stacks
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1
+WHERE id = $2 AND deleted_at_ms IS NULL;
+
 -- name: DeleteStack :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 DELETE FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3;
 
@@ -326,6 +334,18 @@ ON CONFLICT (namespace, tool, name) DO UPDATE SET
 UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
 WHERE namespace = $4 AND tool = $5 AND name = $6;
+
+-- name: InsertDeletedInventory :exec
+-- Records a deleted unit (ADR 47). The delete transaction removes the live
+-- entry of the unit with DeleteInventory.
+INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListDeletedInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = $1
+ORDER BY tool, name, unit_id;
 
 -- name: DeleteInventory :exec
 DELETE FROM inventory

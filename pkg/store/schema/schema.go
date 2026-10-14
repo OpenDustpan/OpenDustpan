@@ -154,6 +154,7 @@ var embeddedMigrationNames = []string{
 	"0027_update_journal_md5.sql",
 	"0028_principals_and_groups.sql",
 	"0029_audit_server_scope.sql",
+	"0031_soft_delete_stacks.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

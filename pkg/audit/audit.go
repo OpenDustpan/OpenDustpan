@@ -47,7 +47,8 @@ const (
 	// write, a write without the lock, or an unfenced force-unlock.
 	KindOverride Kind = "override"
 	// KindChange records an action that changes something, for example a
-	// principal or a group of the installation (ADR 60, decision 4).
+	// principal or a group of the installation, or a delete of a unit (ADR 60,
+	// decision 4).
 	KindChange Kind = "change"
 )
 

@@ -1303,7 +1303,13 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	pulumiRestoreScenario(t, env, org)
 
+	scratchID := stackIDOf(t, env, org, softDeleted)
+
 	for _, s := range pulumiTeardownSteps(scratch, resourced) {
+		env.Step(ctx, t, s)
+	}
+
+	for _, s := range pulumiSoftDeleteSteps(ctx, env, org, scratchID) {
 		env.Step(ctx, t, s)
 	}
 
@@ -2823,6 +2829,127 @@ func pulumiTeardownSteps(scratch, resourced string) []e2e.StepSpec {
 		// A stack of its own for the delete with resources below.
 		step("stack init resourced", nil, "stack", "init", resourced, "--no-select"),
 	}
+}
+
+// softDeleted is the stack that the soft delete steps remove and create again.
+const softDeleted = "scratch-soft"
+
+// stackIDOf creates the stack name in the e2e project through the CLI and
+// returns its stable ID, failing the test when the stack is missing.
+func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
+	t.Helper()
+
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, name)
+	env.Step(t.Context(), t, step("stack init "+name, nil, "stack", "init", qualified, "--no-select"))
+
+	id, status, err := env.StackID(t.Context(), org, e2e.Project, name)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("get stack %s: status %d, err %v", name, status, err)
+	}
+
+	return id
+}
+
+// pulumiSoftDeleteSteps returns the steps of a soft delete (ADR 47): the
+// removed stack is not found, its name is free at once, and a new stack with
+// that name gets a new stable ID.
+func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
+	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
+
+	return []e2e.StepSpec{
+		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
+		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
+		{
+			Check:  nil,
+			Name:   "stack select removed",
+			Args:   []string{"stack", "select", qualified},
+			Env:    nil,
+			Stdin:  "",
+			Fail:   true,
+			Redact: false,
+		},
+		step("stack init removed name", func(e2e.Result) error {
+			id, status, err := env.StackID(ctx, org, e2e.Project, softDeleted)
+			if err != nil {
+				return fmt.Errorf("get stack %s: %w", softDeleted, err)
+			}
+
+			if status != http.StatusOK {
+				return fmt.Errorf("%w: get stack %s: status %d", errUnexpected, softDeleted, status)
+			}
+
+			if id == removedID {
+				return fmt.Errorf("%w: new stack %s kept the removed stack ID %s", errUnexpected, softDeleted, id)
+			}
+
+			return nil
+		}, "stack", "init", qualified, "--no-select"),
+		step("stack history of new stack", func(r e2e.Result) error {
+			if got := strings.TrimSpace(r.Stdout); got != "[]" {
+				return fmt.Errorf("%w: new stack has history of the removed stack: %s", errUnexpected, got)
+			}
+
+			return nil
+		}, "stack", "history", "--json", "--stack", qualified),
+		step("stack rm new", nil, "stack", "rm", "--yes", "--stack", qualified),
+	}
+}
+
+// tombstonePrefix starts the stored name of a deleted unit. No response may
+// ever show it (ADR 47).
+const tombstonePrefix = "deleted:"
+
+// tombstoneLists are the list routes that checkNoTombstone reads after a
+// stack delete: the Pulumi Cloud-compatible lists and the inventory.
+func tombstoneLists(org string) []string {
+	return []string{
+		"/api/user/stacks",
+		"/api/user/stacks?organization=" + org,
+		"/api/user/stacks?organization=" + org + "&project=" + e2e.Project,
+		"/api/inventory/units?organization=" + org,
+	}
+}
+
+// checkNoTombstone checks that the CLI output and every list of the Pulumi
+// Cloud-compatible API and of the inventory API leave out the removed stack:
+// no answer holds its name or the stored name of a deleted unit.
+func checkNoTombstone(ctx context.Context, env *e2e.Env, org string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		if err := checkNoTombstoneIn("stack ls", r.Stdout+r.Stderr); err != nil {
+			return err
+		}
+
+		for _, path := range tombstoneLists(org) {
+			status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+			if err != nil {
+				return fmt.Errorf("get %s: %w", path, err)
+			}
+
+			if status != http.StatusOK {
+				return fmt.Errorf("%w: get %s: status %d", errUnexpected, path, status)
+			}
+
+			if err := checkNoTombstoneIn(path, body); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+}
+
+// checkNoTombstoneIn fails when body, read from source, shows a deleted unit
+// by its stored name or still lists the removed stack.
+func checkNoTombstoneIn(source, body string) error {
+	if strings.Contains(body, tombstonePrefix) {
+		return fmt.Errorf("%w: %s shows a deleted unit by its stored name: %s", errUnexpected, source, body)
+	}
+
+	if strings.Contains(body, `"`+softDeleted+`"`) || strings.Contains(body, "/"+softDeleted) {
+		return fmt.Errorf("%w: %s still lists the removed stack %s: %s", errUnexpected, source, softDeleted, body)
+	}
+
+	return nil
 }
 
 // pulumiResourcedRemoveSteps returns the steps that remove a stack with
