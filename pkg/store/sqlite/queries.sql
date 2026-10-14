@@ -341,21 +341,24 @@ ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = ? AND name = ?;
+WHERE namespace = ? AND name = ? AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = ?;
+WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = ?
+WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY name;
 
 -- name: SaveWorkspace :execrows
@@ -367,7 +370,16 @@ SET revision = @revision, lock_id = @lock_id, lock_holder = @lock_holder,
     allow_forced_writes = @allow_forced_writes, allow_unlocked_writes = @allow_unlocked_writes
 WHERE id = @id AND revision = @expected_revision;
 
+-- name: SoftDeleteWorkspace :execrows
+-- Moves the name to deleted_name and frees it (ADR 47). A workspace name
+-- cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
+-- revision moves on, so a concurrent compare-and-swap of the row fails.
+UPDATE workspaces
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?, revision = revision + 1
+WHERE id = ? AND deleted_at_ms IS NULL;
+
 -- name: DeleteWorkspace :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
 -- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
 -- the data key through DeleteSecretKeysOfStack with the workspace ID.
 DELETE FROM workspaces

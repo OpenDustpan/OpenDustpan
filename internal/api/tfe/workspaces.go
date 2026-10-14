@@ -172,6 +172,43 @@ func resolveCreateWorkspace(w http.ResponseWriter, r *http.Request) (identity.Ob
 	return unitObject(ref)
 }
 
+// deleteWorkspace serves DELETE
+// /api/v2/organizations/{organization}/workspaces/{workspace}, as the
+// OpenTofu remote backend sends it for "tofu workspace delete". It is a soft
+// delete (ADR 47): the workspace leaves every route and list at once and its
+// name is free, but its state versions and data key stay until the final
+// delete. It answers 204, 404 for an unknown organization or workspace, and
+// 409 while the workspace is locked. Each delete writes an audit entry of the
+// kind change.
+func (h *Handler) deleteWorkspace(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	ns, err := namespace.ParseName(r.PathValue("organization"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	name, err := workspace.ParseName(r.PathValue("workspace"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	entry := changeEntry(r, p, obj, identity.ActionUnitManage)
+	if err := h.workspaces.Delete(ctx, workspace.Ref{Namespace: ns, Name: name}, entry); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // readWorkspace serves GET /api/v2/organizations/{organization}/workspaces/{workspace}.
 // An unknown organization or workspace answers 404 as a JSON:API error.
 func (h *Handler) readWorkspace(

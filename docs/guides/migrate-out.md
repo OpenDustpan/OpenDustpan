@@ -165,9 +165,10 @@ Do these steps once for each workspace.
 
 Each unit in OpenDustpan keeps its state and its history after the move.
 Keep it until the target works. Then delete a stack with `pulumi stack rm`
-while you are logged in to OpenDustpan.
+while you are logged in to OpenDustpan. Delete a workspace with `tofu
+workspace delete` through the remote backend.
 
-A delete is a soft delete (ADR 47). The stack leaves every list and its name
+A delete is a soft delete (ADR 47). The unit leaves every list and its name
 is free at once, but OpenDustpan keeps its state, its history and its secrets
 until the retention period ends.
 
