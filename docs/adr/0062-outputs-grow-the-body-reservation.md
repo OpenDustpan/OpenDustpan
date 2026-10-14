@@ -1,4 +1,4 @@
-# 70. Outputs grow the body reservation
+# 62. Outputs grow the body reservation
 
 Status: accepted · 2026-10-14
 
