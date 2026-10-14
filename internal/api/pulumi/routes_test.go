@@ -1478,6 +1478,7 @@ func newDeleteHandlerWithAudit(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            exportPanicsStore{UpdateStore: nil, EventStore: nil},
+		Tokens:             nil,
 		Checkpoints:        exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Events:             exportPanicsStore{UpdateStore: nil, EventStore: nil},
 		Namespaces:         namespaces,
@@ -1839,6 +1840,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            stores,
+		Tokens:             nil,
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,
@@ -1909,6 +1911,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            stores,
+		Tokens:             nil,
 		Checkpoints:        stores,
 		Events:             stores,
 		Namespaces:         namespaces,

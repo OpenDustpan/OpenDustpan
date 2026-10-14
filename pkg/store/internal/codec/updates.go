@@ -37,6 +37,7 @@ type UpdateRow struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	CheckpointBytes  int64
+	TokenID          string
 }
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
@@ -105,6 +106,7 @@ func ToUpdateRow(u stack.Update, stackID stack.ID) UpdateRow {
 		RestoredFrom:     u.RestoredFrom,
 		JournalVersion:   u.JournalVersion,
 		CheckpointBytes:  u.CheckpointBytes,
+		TokenID:          u.TokenID,
 	}
 }
 
@@ -143,6 +145,7 @@ func FromUpdateRow(row UpdateRow, ref stack.Ref) (stack.Update, error) {
 		RestoredFrom:    row.RestoredFrom,
 		JournalVersion:  row.JournalVersion,
 		CheckpointBytes: row.CheckpointBytes,
+		TokenID:         row.TokenID,
 	}, nil
 }
 

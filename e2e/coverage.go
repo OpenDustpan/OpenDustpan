@@ -171,6 +171,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		// The store never serves a request: only ActiveUpdate runs, and it
 		// answers not found. The embedded stores stay nil on purpose.
 		Updates:            coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
+		Tokens:             nil,
 		Checkpoints:        coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Events:             coverageUpdateStore{UpdateStore: nil, CheckpointStore: nil, EventStore: nil},
 		Namespaces:         namespaces,

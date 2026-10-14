@@ -422,6 +422,81 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 }
 
+func TestCheckActive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	live, _ := f.create(t, f.service, "live")
+
+	revoked, _ := f.create(t, f.service, "revoked")
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	expired, _, err := f.createIn(ctx,
+		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	orphan, _ := f.create(t, f.person, "laptop")
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	f.clock.Advance(time.Hour)
+
+	if err := f.svc.CheckActive(ctx, live.ID); err != nil {
+		t.Errorf("live token: err = %v, want nil", err)
+	}
+
+	for name, id := range map[string]string{
+		"revoked": revoked.ID, "expired": expired.ID, "deleted owner": orphan.ID, "unknown": "acc-unknown",
+	} {
+		if err := f.svc.CheckActive(ctx, id); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s token: err = %v, want ErrUnauthenticated", name, err)
+		}
+	}
+}
+
+func TestCheckActiveRefusesADisabledPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	// Only the account disable is on, so the sweep disables the person and
+	// not its token.
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	tok, _ := f.createLong(t, f.person, "laptop")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil || len(res.Principals) != 1 {
+		t.Fatalf("sweep = %+v, %v; want the person disabled", res, err)
+	}
+
+	if err := f.svc.CheckActive(ctx, tok.ID); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("token of a disabled person: err = %v, want ErrUnauthenticated", err)
+	}
+}
+
 func TestRotate(t *testing.T) {
 	t.Parallel()
 

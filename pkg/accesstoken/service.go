@@ -232,6 +232,40 @@ func (s *Service) Get(ctx context.Context, id string) (Token, error) {
 	return t, nil
 }
 
+// CheckActive answers nil when the access token with the ID id is active now
+// and its principal still exists and is not disabled. Otherwise it answers an error that wraps
+// identity.ErrUnauthenticated, or the store error. It records no use of the
+// token: an update checks its token on each lease request (ADR 53).
+func (s *Service) CheckActive(ctx context.Context, id string) error {
+	t, err := s.store.GetToken(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: access token not found", identity.ErrUnauthenticated)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check access token %q: %w", id, err)
+	}
+
+	if status := t.StatusAt(s.Now()); status != StatusActive {
+		return fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
+	}
+
+	owner, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: principal of access token is gone", identity.ErrUnauthenticated)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check principal of access token %q: %w", id, err)
+	}
+
+	if !owner.DisabledAt.IsZero() {
+		return fmt.Errorf("%w: the principal of the access token is disabled", identity.ErrUnauthenticated)
+	}
+
+	return nil
+}
+
 // List returns one page of tokens, newest first.
 func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 	q, limit, err := req.query(s.Now())
@@ -536,7 +570,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
-	if err := s.checkActive(ctx, m.Token, m.Owner, now); err != nil {
+	if err := s.checkPolicyActive(ctx, m.Token, m.Owner, now); err != nil {
 		return identity.Principal{}, err
 	}
 
@@ -551,12 +585,12 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
-// checkActive refuses the token t of the owner o when the policy disables
+// checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last
 // use forward and keep t, or o, alive. A failed read of the policy answers
 // its error, so the caller fails closed.
-func (s *Service) checkActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
 		return fmt.Errorf("authenticate access token: %w", err)
