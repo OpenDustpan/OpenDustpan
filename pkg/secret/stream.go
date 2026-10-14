@@ -86,6 +86,7 @@ func (s *Service) SealStream(ctx context.Context, scope Scope, r io.Reader) (io.
 	return &sealReader{
 		aead: aead, scope: scope, nonce: nonce, src: r,
 		counter: 0, header: nil, pending: nil, done: false, srcDone: false,
+		plainBuf: nil, sealBuf: nil, frameBuf: nil,
 	}, nil
 }
 
@@ -187,6 +188,14 @@ type sealReader struct {
 	pending []byte
 	done    bool
 	srcDone bool
+
+	// plainBuf, sealBuf and frameBuf are reused for every chunk. A chunk
+	// allocates them once, so a large upload does not churn the heap by three
+	// chunk-sized buffers per chunk. The collector counts that churn as live
+	// until its next cycle, and the count grows with the number of Ps.
+	plainBuf []byte
+	sealBuf  []byte
+	frameBuf []byte
 }
 
 // Read seals the next chunk when its buffer runs dry.
@@ -207,12 +216,18 @@ func (r *sealReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// sealNext reads one plaintext chunk and buffers its sealed frame.
+// sealNext reads one plaintext chunk and buffers its sealed frame. The
+// buffers are reused, so pending aliases frameBuf until the next chunk; Read
+// drains pending before sealNext runs again.
 func (r *sealReader) sealNext() error {
 	var plain []byte
 
 	if !r.srcDone {
-		buf := make([]byte, streamChunkPlain)
+		if r.plainBuf == nil {
+			r.plainBuf = make([]byte, streamChunkPlain)
+		}
+
+		buf := r.plainBuf
 
 		n, err := io.ReadFull(r.src, buf)
 		switch err {
@@ -239,19 +254,16 @@ func (r *sealReader) sealNext() error {
 	}
 
 	aad := streamAAD(r.scope, r.nonce, r.counter, last)
-	sealed := r.aead.Seal(nil, streamNonceOf(r.nonce, r.counter), plain, aad)
+	r.sealBuf = r.aead.Seal(r.sealBuf[:0], streamNonceOf(r.nonce, r.counter), plain, aad)
+	sealed := r.sealBuf
 
-	frame := make([]byte, 0, streamFrameHeader+len(sealed))
 	var ln [4]byte
 	// A sealed chunk holds one plaintext chunk plus the GCM overhead, so
 	// its length always fits the 4-byte frame field.
 	//nolint:gosec // A sealed chunk holds one plaintext chunk plus the GCM overhead.
 	binary.BigEndian.PutUint32(ln[:], uint32(len(sealed)))
-	frame = append(frame, ln[:]...)
-	frame = append(frame, byte(last))
-	frame = append(frame, sealed...)
 
-	var pending []byte
+	pending := r.frameBuf[:0]
 
 	if r.header == nil {
 		head := make([]byte, 0, 1+len(r.nonce))
@@ -261,7 +273,10 @@ func (r *sealReader) sealNext() error {
 		pending = append(pending, head...)
 	}
 
-	pending = append(pending, frame...)
+	pending = append(pending, ln[:]...)
+	pending = append(pending, byte(last))
+	pending = append(pending, sealed...)
+	r.frameBuf = pending
 	r.pending = pending
 
 	r.counter++
