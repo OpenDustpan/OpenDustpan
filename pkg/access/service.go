@@ -679,10 +679,6 @@ func (s *Service) checkGrant(
 		return none, fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
 	}
 
-	if err := s.checkDelegationGranter(ctx, granter, role); err != nil {
-		return none, err
-	}
-
 	return fence, s.checkEscalation(ctx, granter, in.Object, role)
 }
 
@@ -778,7 +774,9 @@ func (s *Service) fenceOf(ctx context.Context, obj identity.Object) (namespace.F
 }
 
 // checkEscalation refuses a role with an action that granter does not hold
-// on obj.
+// on obj, and a role with a delegation action when granter does not hold
+// server:manage-access on the installation. A grant, a revoke, a change of
+// who holds a grant and a change of a role all run it.
 func (s *Service) checkEscalation(
 	ctx context.Context,
 	granter identity.Principal,
@@ -787,6 +785,10 @@ func (s *Service) checkEscalation(
 ) error {
 	if granter.Admin {
 		return nil
+	}
+
+	if err := s.checkDelegationGranter(ctx, granter, role); err != nil {
+		return err
 	}
 
 	held, err := s.authz.heldActions(ctx, granter, obj)

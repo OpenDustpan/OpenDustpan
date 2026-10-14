@@ -47,6 +47,7 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "a token of a manage-tokens holder follows later grants", test: testTokenFollowsLaterGrants},
 		{name: "a service token needs principal:manage-tokens", test: testServiceTokenNeedsTheGrant},
 		{name: "a grant of manage-tokens needs server:manage-access", test: testManageTokensGrantNeedsAccess},
+		{name: "a membership that gives manage-tokens needs server:manage-access", test: testMembershipNeedsAccess},
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
 		{name: "an account administrator cannot act as a site administrator", test: testNoPersonalEscalation},
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
@@ -296,6 +297,50 @@ func testManageTokensGrantNeedsAccess(t *testing.T, d *delegation) {
 
 	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
 	d.mustGrant(t, signedIn(admin), alice, access.RoleTokenManager, target)
+}
+
+// testMembershipNeedsAccess proves that a membership is a grant by proxy:
+// to add a member to a group that holds token-manager on a service
+// principal needs server:manage-access too, also for a caller that manages
+// the groups and holds principal:manage-tokens everywhere.
+func testMembershipNeedsAccess(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ctx := t.Context()
+	grouper := d.principalOf(t, "grouper@example.com", principal.KindPerson)
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+
+	role, err := d.access.CreateRole(ctx, changeEntry(bootstrap(), identity.ActionServerManageRoles), bootstrap(),
+		access.RoleInput{Name: "grouper", Description: "", Actions: []identity.Action{
+			identity.ActionServerManageGroups, identity.ActionPrincipalManageTokens,
+		}})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	d.mustGrant(t, bootstrap(), grouper, role.ID, identity.ServerObject())
+
+	group, err := d.principals.CreateGroup(ctx, changeEntry(bootstrap(), identity.ActionServerManageGroups),
+		principal.GroupInput{Name: "deployers", Description: ""})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	_, err = d.access.Grant(ctx, changeEntry(bootstrap(), identity.ActionServerManageAccess), bootstrap(),
+		access.GrantInput{
+			Object: identity.PrincipalObject(deploy.ID), Role: access.RoleTokenManager,
+			Subject: access.Subject{Kind: access.SubjectGroup, ID: group.ID},
+		})
+	if err != nil {
+		t.Fatalf("grant to the group: %v", err)
+	}
+
+	_, err = d.principals.AddMember(ctx, changeEntry(signedIn(grouper), identity.ActionServerManageGroups),
+		signedIn(grouper), group.ID, alice.ID)
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("membership that gives manage-tokens: err = %v, want ErrEscalation", err)
+	}
 }
 
 // testPrincipalGrantRules proves that a grant on a principal names a
