@@ -21,6 +21,8 @@ The project owner answered on 2026-10-14:
   log if keys are changed in the running application (via the console or
   via a mounted config reload). We should obviously not log sensitive field
   values, but for others I think we should."
+- About the start: "I guess startups should probably generate an audit log
+  with their config". The owner wrote this with "I guess" and "probably".
 
 Reports say that its maintainers archived `gopkg.in/yaml.v3`.
 `go.yaml.in/yaml/v3` is its
@@ -83,16 +85,19 @@ The owner approved the dependency and the logging rules personally.
    instance ID as the subject and `config-file` as the channel. The person
    who edited the file is outside the server. The audit log of the platform
    that holds the file (for example Kubernetes) records that person.
-10. **A change while the server is off.** Each instance stores the
-    effective static layer that it last applied (sensitive values only as
-    `set` or `not set`). At start, when the new static layer differs, the
-    server writes the audit entry of decision 9 with the channel `startup`.
-    Without this, an edit of the file or of an environment variable between
-    two runs leaves no audit entry.
+10. **An audit entry at each start.** When an instance starts, it writes one
+    audit entry in `@server` with the channel `startup` and the instance ID
+    as the subject. The entry holds each declared setting with its effective
+    value and its source, as the log of decision 7 does. Rule 6 applies. An
+    edit of the file or of an environment variable while the server is off
+    thus shows as the difference between two start entries. The server
+    stores no other copy of the last configuration. The owner wrote this
+    with "I guess" and "probably".
 11. **Fail closed.** A change through the API commits with its audit entry
     in one transaction, as every other audited change does. When the audit
     log is on and the server cannot write the entry for a file reload, the
-    server keeps the old configuration and the reload fails.
+    server keeps the old configuration and the reload fails. When it cannot
+    write the entry of decision 10, the start fails.
 
 ## Not decided here
 
