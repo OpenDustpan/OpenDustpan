@@ -71,6 +71,14 @@ const (
 	unitTool = "pulumi"
 )
 
+// AccessTokenChecker answers whether an access token still works. It is the
+// port of the lease check. accesstoken.Service implements it.
+type AccessTokenChecker interface {
+	// CheckActive returns nil when the token with the ID id is active and its
+	// principal exists. Otherwise it wraps identity.ErrUnauthenticated.
+	CheckActive(ctx context.Context, id string) error
+}
+
 // Config holds the dependencies of a Handler.
 type Config struct {
 	Stacks        *stack.Service
@@ -79,7 +87,11 @@ type Config struct {
 	Namespaces    *namespace.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	Logger        *slog.Logger
+	// AccessTokens checks, on each lease request, the access token that
+	// started the update (ADR 53). Nil refuses every update that an access
+	// token started, so the check fails closed.
+	AccessTokens AccessTokenChecker
+	Logger       *slog.Logger
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -111,6 +123,7 @@ type Handler struct {
 	updates        *stack.Updates
 	secrets        *secret.Service
 	namespaces     *namespace.Service
+	accessTokens   AccessTokenChecker
 	authn          identity.Authenticator
 	authz          identity.Authorizer
 	logger         *slog.Logger
@@ -157,6 +170,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		updates:        cfg.Updates,
 		secrets:        cfg.Secrets,
 		namespaces:     cfg.Namespaces,
+		accessTokens:   cfg.AccessTokens,
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
 		logger:         cfg.Logger,

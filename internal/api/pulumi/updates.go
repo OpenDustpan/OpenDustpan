@@ -431,7 +431,7 @@ func (h *Handler) createUpdate(w http.ResponseWriter, r *http.Request, kind stac
 // startUpdate starts the update and hands out its lease. The request tags
 // are ignored in milestone 1: they only annotate the stack. The journal version
 // is negotiated from the CLI's User-Agent and its offer (ADR 43, decision 2).
-func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
+func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
 	ref, id, ok := h.updateTarget(w, r)
@@ -446,7 +446,7 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 
 	journal := h.journalVersionFor(r.UserAgent(), offer)
 
-	started, err := h.updates.StartWithJournalVersion(ctx, ref, id, int64(journal))
+	started, err := h.updates.StartBy(ctx, ref, id, p.TokenID, int64(journal))
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -459,6 +459,31 @@ func (h *Handler) startUpdate(w http.ResponseWriter, r *http.Request, _ identity
 		Version:         int(started.Update.Version),
 		JournalVersion:  int(started.Update.JournalVersion),
 	})
+}
+
+// checkUpdateToken answers nil when the update was started with no access
+// token, or when its access token still works. Otherwise it answers
+// identity.ErrUnauthenticated, so a revoked, expired or deleted token ends the
+// update's writes at its next request (ADR 53). A failed read fails closed.
+func (h *Handler) checkUpdateToken(ctx context.Context, ref stack.Ref, id stack.UpdateID) error {
+	u, err := h.updates.Get(ctx, ref, id)
+	if err != nil {
+		return err
+	}
+
+	if u.TokenID == "" {
+		return nil
+	}
+
+	if h.accessTokens == nil {
+		return fmt.Errorf("%w: no access token checker for update %s", identity.ErrUnauthenticated, id)
+	}
+
+	if err := h.accessTokens.CheckActive(ctx, u.TokenID); err != nil {
+		return fmt.Errorf("access token of update %s: %w", id, err)
+	}
+
+	return nil
 }
 
 // journalVersionFor answers the journal version of a start. With journaling

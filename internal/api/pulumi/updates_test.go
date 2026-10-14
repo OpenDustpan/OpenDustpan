@@ -421,15 +421,31 @@ func newUpdateFixtureWithCutoff(
 ) updateFixture {
 	t.Helper()
 
-	return newUpdateFixtureWithAuthenticator(t, authz, tokenAuthenticator{}, limit, cutoff)
+	return newUpdateFixtureWithAuthenticator(
+		t,
+		authz,
+		tokenAuthenticator{},
+		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff},
+	)
+}
+
+// fixtureOptions holds the settings of an update fixture beyond its policy and
+// authenticator: the checkpoint limit, the delta cutoff, and the check of the
+// access token that started an update.
+type fixtureOptions struct {
+	checker pulumi.AccessTokenChecker
+	limit   int
+	cutoff  int
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
 // does, with authn as the authenticator of access tokens.
 func newUpdateFixtureWithAuthenticator(
-	t *testing.T, authz identity.Authorizer, authn identity.Authenticator, limit, cutoff int,
+	t *testing.T, authz identity.Authorizer, authn identity.Authenticator, opts fixtureOptions,
 ) updateFixture {
 	t.Helper()
+
+	limit, cutoff, checker := opts.limit, opts.cutoff, opts.checker
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
@@ -481,6 +497,7 @@ func newUpdateFixtureWithAuthenticator(
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           authn,
+		AccessTokens:            checker,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -2687,6 +2704,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
+		AccessTokens:            nil,
 		Authorizer:              allowAll(),
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

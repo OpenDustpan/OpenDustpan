@@ -230,6 +230,7 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 	}
 
 	u := Update{
+		TokenID:        "",
 		JournalVersion: 0,
 		CreatedAt:      s.clock(),
 		StartedAt:      time.Time{},
@@ -271,6 +272,15 @@ func (s *Updates) Start(ctx context.Context, ref Ref, id UpdateID) (Started, err
 func (s *Updates) StartWithJournalVersion(
 	ctx context.Context, ref Ref, id UpdateID, journalVersion int64,
 ) (Started, error) {
+	return s.StartBy(ctx, ref, id, "", journalVersion)
+}
+
+// StartBy starts the update like StartWithJournalVersion, for the access token
+// tokenID. The update keeps the ID, so each later lease request can check the
+// token (ADR 53). An empty tokenID starts it for no access token.
+func (s *Updates) StartBy(
+	ctx context.Context, ref Ref, id UpdateID, tokenID string, journalVersion int64,
+) (Started, error) {
 	fence, err := s.fence(ctx, ref)
 	if err != nil {
 		return Started{}, err
@@ -294,6 +304,7 @@ func (s *Updates) StartWithJournalVersion(
 	}
 
 	u.JournalVersion = journalVersion
+	u.TokenID = tokenID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {

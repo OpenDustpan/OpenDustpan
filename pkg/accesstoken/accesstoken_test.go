@@ -371,7 +371,13 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 
 	_, personSecret := f.create(t, f.person, "laptop")
-	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
@@ -382,6 +388,52 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 		"revoked": revokedSecret.Reveal(), "expired": expiredSecret.Reveal(), "deleted owner": personSecret.Reveal(),
 	} {
 		if _, err := f.svc.AuthenticateToken(ctx, raw); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s token: err = %v, want ErrUnauthenticated", name, err)
+		}
+	}
+}
+
+func TestCheckActive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	live, _ := f.create(t, f.service, "live")
+
+	revoked, _ := f.create(t, f.service, "revoked")
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	expired, _, err := f.createIn(ctx,
+		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	orphan, _ := f.create(t, f.person, "laptop")
+	admin := identity.Principal{
+		Subject:        "admin",
+		DisplayName:    "",
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	f.clock.Advance(time.Hour)
+
+	if err := f.svc.CheckActive(ctx, live.ID); err != nil {
+		t.Errorf("live token: err = %v, want nil", err)
+	}
+
+	for name, id := range map[string]string{
+		"revoked": revoked.ID, "expired": expired.ID, "deleted owner": orphan.ID, "unknown": "acc-unknown",
+	} {
+		if err := f.svc.CheckActive(ctx, id); !errors.Is(err, identity.ErrUnauthenticated) {
 			t.Errorf("%s token: err = %v, want ErrUnauthenticated", name, err)
 		}
 	}

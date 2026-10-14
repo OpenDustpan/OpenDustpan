@@ -243,6 +243,7 @@ type Update struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	JournalClosed    int64
+	TokenID          string
 }
 
 type UpdateEvent struct {

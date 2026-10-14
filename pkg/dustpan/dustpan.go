@@ -1119,11 +1119,17 @@ func newPulumiHandler(
 		entries = s
 	}
 
+	var accessTokens pulumi.AccessTokenChecker
+	if svc.tokens != nil {
+		accessTokens = svc.tokens
+	}
+
 	handler, err := pulumi.NewHandler(pulumi.Config{
 		Stacks:               svc.stacks,
 		Updates:              svc.updates,
 		Secrets:              svc.secrets,
 		Namespaces:           svc.namespaces,
+		AccessTokens:         accessTokens,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
 		Logger:               cfg.logger,
