@@ -58,6 +58,9 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerReadPrincipals,
+		identity.ActionServerManagePrincipals,
+		identity.ActionServerManageGroups,
 	} {
 		lowered := strings.ToLower(string(a))
 		if strings.Contains(lowered, "stack") || strings.Contains(lowered, "pulumi") {
@@ -323,6 +326,16 @@ func TestServerActionsProveWireForms(t *testing.T) {
 
 	if identity.ActionServerRestore != "server:restore" {
 		t.Fatalf("restore action = %q, want %q", identity.ActionServerRestore, "server:restore")
+	}
+
+	for action, want := range map[identity.Action]string{
+		identity.ActionServerReadPrincipals:   "server:read-principals",
+		identity.ActionServerManagePrincipals: "server:manage-principals",
+		identity.ActionServerManageGroups:     "server:manage-groups",
+	} {
+		if string(action) != want {
+			t.Fatalf("action = %q, want %q", action, want)
+		}
 	}
 }
 

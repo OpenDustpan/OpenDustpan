@@ -25,6 +25,7 @@ import (
 type Store interface {
 	namespace.Store
 	audit.Store
+	audit.ServerStore
 }
 
 // TestStore is one fresh, empty store with hooks that change or remove a
@@ -61,6 +62,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "check finds a deleted entry", test: testCheckDeletedEntry},
 		{name: "check pages a chain longer than one page", test: testCheckPagesLongChain},
 		{name: "a nil count and a set count round-trip with a valid chain", test: testValueCountRoundTrip},
+		{name: "the server scope keeps its own chain", test: testServerScopeChain},
+		{name: "the server scope refuses an entry of another scope", test: testServerScopeRefusesNamespace},
+		{name: "a namespace append refuses the server scope", test: testNamespaceRefusesServerScope},
+		{name: "concurrent server scope appends form one valid chain", test: testConcurrentServerAppends},
+		{name: "an unknown kind is refused and change is accepted", test: testChangeKind},
 	}
 
 	for _, tc := range cases {
@@ -630,5 +636,180 @@ func testCheckDeletedEntry(t *testing.T, ts TestStore) {
 
 	if check.BadSequence != 3 {
 		t.Fatalf("bad sequence = %d, want 3", check.BadSequence)
+	}
+}
+
+// newServerEntry returns a valid change entry in ServerScope with the given
+// subject and request ID.
+func newServerEntry(subject, requestID string) audit.Entry {
+	e := newEntry(audit.ServerScope, subject, requestID, now())
+	e.Action = "server:manage-principals"
+	e.Object = "principal:prn-1"
+	e.Kind = audit.KindChange
+
+	return e
+}
+
+// testServerScopeChain proves that the server scope numbers its entries
+// from 1 in a chain of its own, apart from the chain of a namespace, and
+// that List and Check read it.
+func testServerScopeChain(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-ns", now()))
+
+	for i := range 3 {
+		stored, err := s.AppendServer(t.Context(), newServerEntry("admin", fmt.Sprintf("req-%d", i)))
+		if err != nil {
+			t.Fatalf("append server entry: %v", err)
+		}
+
+		if stored.Sequence != int64(i+1) || stored.Namespace != audit.ServerScope || stored.Kind != audit.KindChange {
+			t.Fatalf("stored server entry = %+v, want sequence %d in %s", stored, i+1, audit.ServerScope)
+		}
+	}
+
+	checkServerScopeReads(t, s, ns.Name)
+}
+
+// checkServerScopeReads proves that List and Check read the three entries
+// of the server scope, and that the namespace ns lists only its own entry.
+func checkServerScopeReads(t *testing.T, s Store, ns namespace.Name) {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	if listing.Total != 3 || len(listing.Entries) != 3 {
+		t.Fatalf("server listing = %d of %d, want 3", len(listing.Entries), listing.Total)
+	}
+
+	checkStoredChain(t, listing)
+
+	check, err := s.Check(t.Context(), audit.ServerScope)
+	if err != nil {
+		t.Fatalf("check server chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 3 {
+		t.Fatalf("server check = %+v, want valid with 3 entries", check)
+	}
+
+	nsListing, err := s.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || nsListing.Total != 1 {
+		t.Fatalf("namespace listing = %+v, %v; want only its own entry", nsListing, err)
+	}
+}
+
+// testServerScopeRefusesNamespace proves that AppendServer refuses an entry
+// that names a namespace and an entry that fails validation.
+func testServerScopeRefusesNamespace(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	_, err := s.AppendServer(t.Context(), newEntry(ns.Name, "admin", "req-1", now()))
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("server append of a namespace entry = %v, want ErrInvalidEntry", err)
+	}
+
+	bad := newServerEntry("", "req-2")
+
+	_, err = s.AppendServer(t.Context(), bad)
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("server append with no subject = %v, want ErrInvalidEntry", err)
+	}
+}
+
+// testNamespaceRefusesServerScope proves that Append never writes the
+// server scope: no namespace has its name, so no fence names it.
+func testNamespaceRefusesServerScope(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	fence := namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 1}
+
+	_, err := s.Append(t.Context(), fence, newServerEntry("admin", "req-1"))
+	if err == nil {
+		t.Fatal("append through a fence that names the server scope succeeded, want an error")
+	}
+}
+
+// testConcurrentServerAppends proves that appends of the server scope that
+// run at the same time form one sequence and one valid chain.
+func testConcurrentServerAppends(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+
+	const n = 16
+
+	var wg sync.WaitGroup
+
+	errs := make(chan error, n)
+
+	for i := range n {
+		wg.Go(func() {
+			_, err := s.AppendServer(
+				context.Background(),
+				newServerEntry(fmt.Sprintf("user-%d", i), fmt.Sprintf("req-%d", i)),
+			)
+			errs <- err
+		})
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent server append: %v", err)
+		}
+	}
+
+	check, err := s.Check(t.Context(), audit.ServerScope)
+	if err != nil {
+		t.Fatalf("check server chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != n {
+		t.Fatalf("server check = %+v, want valid with %d entries", check, n)
+	}
+
+	listing, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: n})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	checkSequencesUnique(t, listing, n)
+	checkStoredChain(t, listing)
+}
+
+// testChangeKind proves that the store keeps the kind change and refuses a
+// kind that the audit log does not know.
+func testChangeKind(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	e := newEntry(ns.Name, "admin", "req-1", now())
+	e.Kind = audit.KindChange
+
+	stored := appendEntry(t, s, ns.Fence(), e)
+	if stored.Kind != audit.KindChange {
+		t.Fatalf("stored kind = %q, want %q", stored.Kind, audit.KindChange)
+	}
+
+	e.Kind = "rename"
+
+	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("append with an unknown kind = %v, want ErrInvalidEntry", err)
 	}
 }

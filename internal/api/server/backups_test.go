@@ -140,16 +140,19 @@ func newBackupFixture(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       service,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        stores.registry,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        service,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         stores.registry,
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -554,16 +557,19 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Namespaces:    namespaces,
-		Backups:       nil,
-		Restores:      nil,
-		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
-		Metrics:       stubMetrics{},
-		Version:       "test",
-		Schema:        nil,
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        nil,
+		Restores:       nil,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         nil,
+		Principals:     nil,
+		Audit:          nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

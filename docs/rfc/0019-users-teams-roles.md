@@ -76,7 +76,7 @@ decide. It is not a decision.
 
   | Action | Object | Operation |
   | --- | --- | --- |
-  | `server:manage-principals` | installation | create, disable and remove principals |
+  | `server:manage-principals` | installation | create, change and remove principals |
   | `group:read` | group | read a group and its members |
   | `group:manage` | group | create, rename and delete a group |
   | `group:manage-members` | group | add and remove members |
@@ -178,4 +178,25 @@ Accepted in part as ADR 52 on 2026-10-13:
   `Never` for a principal with no sign-in and no access token use. JSON from
   the REST API, CSV in the console, and its own action.
 
-The questions in "Open questions" have no outcome yet.
+Lead decisions under owner delegation, 2026-10-13:
+
+- Action names. `server:read-principals`, `server:manage-principals` and
+  `server:manage-groups` act on the installation and replace the `group:*`
+  proposal: ADR 52 does not make a group the object of a grant.
+- History. A removal ends a membership and keeps its row. A delete ends a
+  principal or a group and keeps its row. The access-review history reads
+  these rows.
+- Fail-closed audit. Each change writes its audit entry in the transaction
+  of the change. If the entry fails, the change fails with 500. A failure
+  entry for a refused change is written after it, as well as possible.
+- No disabled flag yet. It comes back with the sign-in and token change that
+  enforces it.
+- Paging. Each list takes a cursor, a limit (default 100, maximum 1000) and
+  a prefix, and the database answers it with an index. Each list answers
+  `total` and `nextCursor`. A principal answers `groupCount`, and a group
+  answers `memberCount`.
+- Source. Each principal and group has a `source`: `local` today, `ldap` or
+  `scim` with directory sync (ADR 55). A group whose source is not `local`
+  refuses a membership change through the API with 409.
+
+The other questions in "Open questions" have no outcome yet.

@@ -65,6 +65,26 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 	return i, err
 }
 
+const addGroupMember = `-- name: AddGroupMember :execrows
+INSERT INTO group_members (group_id, principal_id, added_at_ms)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING
+`
+
+type AddGroupMemberParams struct {
+	GroupID     string
+	PrincipalID string
+	AddedAtMs   int64
+}
+
+func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addGroupMember, arg.GroupID, arg.PrincipalID, arg.AddedAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const appendEvent = `-- name: AppendEvent :exec
 INSERT INTO update_events (stack_id, update_id, sequence, timestamp_ms, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -235,6 +255,67 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countGroupMembers = `-- name: CountGroupMembers :one
+SELECT COUNT(*)
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = $1 AND m.removed_at_ms IS NULL
+  AND p.subject COLLATE "C" >= $2::text
+  AND ($3::text = '' OR p.subject COLLATE "C" < $3::text)
+`
+
+type CountGroupMembersParams struct {
+	GroupID string
+	Low     string
+	High    string
+}
+
+func (q *Queries) CountGroupMembers(ctx context.Context, arg CountGroupMembersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGroupMembers, arg.GroupID, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGroups = `-- name: CountGroups :one
+SELECT COUNT(*) FROM principal_groups
+WHERE deleted_at_ms IS NULL
+  AND name_key COLLATE "C" >= $1::text
+  AND ($2::text = '' OR name_key COLLATE "C" < $2::text)
+`
+
+type CountGroupsParams struct {
+	Low  string
+	High string
+}
+
+func (q *Queries) CountGroups(ctx context.Context, arg CountGroupsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGroups, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGroupsOfPrincipal = `-- name: CountGroupsOfPrincipal :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
+  AND g.name_key COLLATE "C" >= $2::text
+  AND ($3::text = '' OR g.name_key COLLATE "C" < $3::text)
+`
+
+type CountGroupsOfPrincipalParams struct {
+	PrincipalID string
+	Low         string
+	High        string
+}
+
+func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfPrincipalParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGroupsOfPrincipal, arg.PrincipalID, arg.Low, arg.High)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -243,6 +324,25 @@ WHERE workspace_id = $1 AND status = 'pending'
 
 func (q *Queries) CountPendingStateVersions(ctx context.Context, workspaceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countPendingStateVersions, workspaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPrincipals = `-- name: CountPrincipals :one
+SELECT COUNT(*) FROM principals
+WHERE deleted_at_ms IS NULL
+  AND subject COLLATE "C" >= $1::text
+  AND ($2::text = '' OR subject COLLATE "C" < $2::text)
+`
+
+type CountPrincipalsParams struct {
+	Low  string
+	High string
+}
+
+func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPrincipals, arg.Low, arg.High)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -291,6 +391,38 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 	return result.RowsAffected(), nil
 }
 
+const createGroup = `-- name: CreateGroup :execrows
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreateGroupParams struct {
+	ID          string
+	Name        string
+	NameKey     string
+	Description string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createGroup,
+		arg.ID,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.Source,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createNamespace = `-- name: CreateNamespace :execrows
 INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -310,6 +442,38 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createPrincipal = `-- name: CreatePrincipal :execrows
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreatePrincipalParams struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createPrincipal,
+		arg.ID,
+		arg.Subject,
+		arg.DisplayName,
+		arg.Kind,
+		arg.Source,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -580,6 +744,24 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return result.RowsAffected(), nil
 }
 
+const deleteGroup = `-- name: DeleteGroup :execrows
+UPDATE principal_groups SET deleted_at_ms = $1
+WHERE id = $2 AND deleted_at_ms IS NULL
+`
+
+type DeleteGroupParams struct {
+	DeletedAtMs pgtype.Int8
+	ID          string
+}
+
+func (q *Queries) DeleteGroup(ctx context.Context, arg DeleteGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteGroup, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteInventory = `-- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3
@@ -624,6 +806,24 @@ type DeleteJournalSequencesParams struct {
 func (q *Queries) DeleteJournalSequences(ctx context.Context, arg DeleteJournalSequencesParams) error {
 	_, err := q.db.Exec(ctx, deleteJournalSequences, arg.StackID, arg.UpdateID)
 	return err
+}
+
+const deletePrincipal = `-- name: DeletePrincipal :execrows
+UPDATE principals SET deleted_at_ms = $1
+WHERE id = $2 AND deleted_at_ms IS NULL
+`
+
+type DeletePrincipalParams struct {
+	DeletedAtMs pgtype.Int8
+	ID          string
+}
+
+func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSecretKeysOfStack = `-- name: DeleteSecretKeysOfStack :exec
@@ -709,6 +909,36 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const endMembershipsInGroup = `-- name: EndMembershipsInGroup :exec
+UPDATE group_members SET removed_at_ms = $1
+WHERE group_id = $2 AND removed_at_ms IS NULL
+`
+
+type EndMembershipsInGroupParams struct {
+	RemovedAtMs pgtype.Int8
+	GroupID     string
+}
+
+func (q *Queries) EndMembershipsInGroup(ctx context.Context, arg EndMembershipsInGroupParams) error {
+	_, err := q.db.Exec(ctx, endMembershipsInGroup, arg.RemovedAtMs, arg.GroupID)
+	return err
+}
+
+const endMembershipsOfPrincipal = `-- name: EndMembershipsOfPrincipal :exec
+UPDATE group_members SET removed_at_ms = $1
+WHERE principal_id = $2 AND removed_at_ms IS NULL
+`
+
+type EndMembershipsOfPrincipalParams struct {
+	RemovedAtMs pgtype.Int8
+	PrincipalID string
+}
+
+func (q *Queries) EndMembershipsOfPrincipal(ctx context.Context, arg EndMembershipsOfPrincipalParams) error {
+	_, err := q.db.Exec(ctx, endMembershipsOfPrincipal, arg.RemovedAtMs, arg.PrincipalID)
+	return err
 }
 
 const failRunningBackups = `-- name: FailRunningBackups :exec
@@ -1038,6 +1268,37 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	return failover_version, err
 }
 
+const getGroup = `-- name: GetGroup :one
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL
+`
+
+type GetGroupRow struct {
+	ID          string
+	Name        string
+	Description string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	MemberCount int64
+}
+
+func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
+	row := q.db.QueryRow(ctx, getGroup, id)
+	var i GetGroupRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Source,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.MemberCount,
+	)
+	return i, err
+}
+
 const getInstallationState = `-- name: GetInstallationState :one
 SELECT state
 FROM installation
@@ -1144,6 +1405,72 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namesp
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+	)
+	return i, err
+}
+
+const getPrincipal = `-- name: GetPrincipal :one
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL
+`
+
+type GetPrincipalRow struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	GroupCount  int64
+}
+
+func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow, error) {
+	row := q.db.QueryRow(ctx, getPrincipal, id)
+	var i GetPrincipalRow
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.Kind,
+		&i.Source,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.GroupCount,
+	)
+	return i, err
+}
+
+const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
+`
+
+type GetPrincipalBySubjectRow struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	GroupCount  int64
+}
+
+func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (GetPrincipalBySubjectRow, error) {
+	row := q.db.QueryRow(ctx, getPrincipalBySubject, subject)
+	var i GetPrincipalBySubjectRow
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.DisplayName,
+		&i.Kind,
+		&i.Source,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.GroupCount,
 	)
 	return i, err
 }
@@ -1486,6 +1813,28 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.AllowUnlockedWrites,
 	)
 	return i, err
+}
+
+const groupIDByNameKey = `-- name: GroupIDByNameKey :one
+SELECT id FROM principal_groups WHERE name_key COLLATE "C" = $1::text AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) GroupIDByNameKey(ctx context.Context, nameKey string) (string, error) {
+	row := q.db.QueryRow(ctx, groupIDByNameKey, nameKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const groupSource = `-- name: GroupSource :one
+SELECT source FROM principal_groups WHERE id = $1 AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) GroupSource(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, groupSource, id)
+	var source string
+	err := row.Scan(&source)
+	return source, err
 }
 
 const highestUpdateVersion = `-- name: HighestUpdateVersion :one
@@ -2048,6 +2397,201 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 	return items, nil
 }
 
+const listGroupMembers = `-- name: ListGroupMembers :many
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
+  m.added_at_ms
+FROM group_members m JOIN principals p ON p.id = m.principal_id
+WHERE m.group_id = $1 AND m.removed_at_ms IS NULL
+  AND p.subject COLLATE "C" > $2::text
+  AND p.subject COLLATE "C" >= $3::text
+  AND ($4::text = '' OR p.subject COLLATE "C" < $4::text)
+ORDER BY p.subject COLLATE "C"
+LIMIT $5
+`
+
+type ListGroupMembersParams struct {
+	GroupID  string
+	After    string
+	Low      string
+	High     string
+	RowLimit int32
+}
+
+type ListGroupMembersRow struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	GroupCount  int64
+	AddedAtMs   int64
+}
+
+func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersParams) ([]ListGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listGroupMembers,
+		arg.GroupID,
+		arg.After,
+		arg.Low,
+		arg.High,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupMembersRow
+	for rows.Next() {
+		var i ListGroupMembersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.DisplayName,
+			&i.Kind,
+			&i.Source,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.GroupCount,
+			&i.AddedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroups = `-- name: ListGroups :many
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+FROM principal_groups g
+WHERE g.deleted_at_ms IS NULL
+  AND g.name_key COLLATE "C" > $1::text
+  AND g.name_key COLLATE "C" >= $2::text
+  AND ($3::text = '' OR g.name_key COLLATE "C" < $3::text)
+ORDER BY g.name_key COLLATE "C"
+LIMIT $4
+`
+
+type ListGroupsParams struct {
+	After    string
+	Low      string
+	High     string
+	RowLimit int32
+}
+
+type ListGroupsRow struct {
+	ID          string
+	Name        string
+	Description string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	MemberCount int64
+}
+
+func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListGroupsRow, error) {
+	rows, err := q.db.Query(ctx, listGroups,
+		arg.After,
+		arg.Low,
+		arg.High,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupsRow
+	for rows.Next() {
+		var i ListGroupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Source,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
+  AND g.name_key COLLATE "C" > $2::text
+  AND g.name_key COLLATE "C" >= $3::text
+  AND ($4::text = '' OR g.name_key COLLATE "C" < $4::text)
+ORDER BY g.name_key COLLATE "C"
+LIMIT $5
+`
+
+type ListGroupsOfPrincipalParams struct {
+	PrincipalID string
+	After       string
+	Low         string
+	High        string
+	RowLimit    int32
+}
+
+type ListGroupsOfPrincipalRow struct {
+	ID          string
+	Name        string
+	Description string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	MemberCount int64
+}
+
+func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPrincipalParams) ([]ListGroupsOfPrincipalRow, error) {
+	rows, err := q.db.Query(ctx, listGroupsOfPrincipal,
+		arg.PrincipalID,
+		arg.After,
+		arg.Low,
+		arg.High,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGroupsOfPrincipalRow
+	for rows.Next() {
+		var i ListGroupsOfPrincipalRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Source,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventory = `-- name: ListInventory :many
 SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
        lock_holder, lock_since_ms, lock_operation
@@ -2141,6 +2685,70 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrincipals = `-- name: ListPrincipals :many
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+FROM principals p
+WHERE p.deleted_at_ms IS NULL
+  AND p.subject COLLATE "C" > $1::text
+  AND p.subject COLLATE "C" >= $2::text
+  AND ($3::text = '' OR p.subject COLLATE "C" < $3::text)
+ORDER BY p.subject COLLATE "C"
+LIMIT $4
+`
+
+type ListPrincipalsParams struct {
+	After    string
+	Low      string
+	High     string
+	RowLimit int32
+}
+
+type ListPrincipalsRow struct {
+	ID          string
+	Subject     string
+	DisplayName string
+	Kind        string
+	Source      string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+	GroupCount  int64
+}
+
+func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) ([]ListPrincipalsRow, error) {
+	rows, err := q.db.Query(ctx, listPrincipals,
+		arg.After,
+		arg.Low,
+		arg.High,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrincipalsRow
+	for rows.Next() {
+		var i ListPrincipalsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.DisplayName,
+			&i.Kind,
+			&i.Source,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.GroupCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2594,6 +3202,17 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const lockServerAuditScope = `-- name: LockServerAuditScope :exec
+SELECT pg_advisory_xact_lock(418581342580)
+`
+
+// Orders the appends of the audit scope @server, which has no namespace row
+// to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
+func (q *Queries) LockServerAuditScope(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockServerAuditScope)
+	return err
+}
+
 const lockStackForUpdates = `-- name: LockStackForUpdates :one
 SELECT id, version
 FROM stacks
@@ -2743,6 +3362,17 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	return arrival, err
 }
 
+const principalExists = `-- name: PrincipalExists :one
+SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, principalExists, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -2802,6 +3432,25 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobMd5,
 	)
 	return err
+}
+
+const removeGroupMember = `-- name: RemoveGroupMember :execrows
+UPDATE group_members SET removed_at_ms = $1
+WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL
+`
+
+type RemoveGroupMemberParams struct {
+	RemovedAtMs pgtype.Int8
+	GroupID     string
+	PrincipalID string
+}
+
+func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, removeGroupMember, arg.RemovedAtMs, arg.GroupID, arg.PrincipalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const renameStack = `-- name: RenameStack :execrows
@@ -3115,6 +3764,33 @@ func (q *Queries) UpdateExists(ctx context.Context, arg UpdateExistsParams) (boo
 	return exists, err
 }
 
+const updateGroup = `-- name: UpdateGroup :execrows
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
+WHERE id = $5 AND deleted_at_ms IS NULL
+`
+
+type UpdateGroupParams struct {
+	Name        string
+	NameKey     string
+	Description string
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateGroup,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateInventoryLock = `-- name: UpdateInventoryLock :exec
 UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
@@ -3143,6 +3819,25 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 		arg.Name,
 	)
 	return err
+}
+
+const updatePrincipal = `-- name: UpdatePrincipal :execrows
+UPDATE principals SET display_name = $1, updated_at_ms = $2
+WHERE id = $3 AND deleted_at_ms IS NULL
+`
+
+type UpdatePrincipalParams struct {
+	DisplayName string
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePrincipal, arg.DisplayName, arg.UpdatedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertInstallationState = `-- name: UpsertInstallationState :exec

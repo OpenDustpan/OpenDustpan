@@ -19,6 +19,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -31,6 +33,17 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestPrincipalConformance runs the principal and group store suite.
+func TestPrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.Run(t, func(t *testing.T) principal.Store {
 		t.Helper()
 
 		return open(t)
@@ -2078,4 +2091,21 @@ func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
 	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
 		t.Fatalf("seed checkpoint: %v", err)
 	}
+}
+
+// BenchmarkPrincipalLists measures each principal and group list with its
+// total, at the scale of principaltest.Bench.
+func BenchmarkPrincipalLists(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	principaltest.Bench(b, s)
 }
