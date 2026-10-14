@@ -678,9 +678,12 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 
 // TestWALGuardBusyBackoff holds a read transaction open so every TRUNCATE
 // checkpoint stays busy with a slow attempt, and proves the wait before the
-// next tick doubles up to the cap: the intervals between failed ticks grow.
-// After the reader ends and a truncate succeeds, a new busy period starts
-// from the base interval again.
+// next tick doubles from the base interval up to the cap. After the reader
+// ends and a truncate succeeds, a new busy period starts from the base
+// interval again. The test reads only the ticks of its own store, and it
+// checks each wait the guard recorded against the outcome of the tick before
+// it: a loaded runner or the guard of a parallel test cannot change the
+// result, and no assertion measures wall-clock time.
 func TestWALGuardBusyBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -712,13 +715,23 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		prefix:    "backoff-1",
 	})
 
-	waitForFailedTicks(ctx, t, 6, 15*time.Second)
+	// After the writes, each tick meets only the held reader: each tick is
+	// slow, so the wait doubles to the cap within 4 ticks.
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "a failed tick after a wait of the backoff cap",
+		timeout: 15 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return slices.ContainsFunc(failedTicks(ticks), func(tick sqlite.WALGuardTick) bool {
+				return tick.Waited == backoffCap
+			})
+		},
+	})
 
-	bounds := failedTickWaitBounds(t)
+	first := storeTicks(t, path)
 
-	t.Logf("failed ticks while busy: smallest wait = %s, largest wait = %s", bounds.min, bounds.max)
-
-	requireBackoffGrowth(t, bounds.min, bounds.max, base, backoffCap)
+	requireBackoffRule(t, first, base, backoffCap)
+	requireFirstFailedWait(t, failedTicks(first), base, "first busy period")
 
 	if rbErr := tx.Rollback(); rbErr != nil {
 		t.Fatalf("roll back read transaction: %v", rbErr)
@@ -728,13 +741,20 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	// the reader ends succeeds and records it. Poll the hook, not the file:
 	// the file drops at checkpoint time but the tick records just after, so
 	// file polling can return without an observable success.
-	waitForSucceededTicks(ctx, t, 1, 10*time.Second)
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "a successful tick after the reader ended",
+		timeout: 10 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return slices.ContainsFunc(ticks, func(tick sqlite.WALGuardTick) bool { return tick.Succeeded })
+		},
+	})
 
 	waitForWALBelow(ctx, t, path, threshold, 10*time.Second)
 
 	t.Logf("write-ahead log size = %d bytes after the reader ended", fileSizes(t, path).wal)
 
-	before := len(sqlite.WALGuardTicksForTest())
+	before := len(storeTicks(t, path))
 
 	pinned := pinWALReader(ctx, t, raw)
 
@@ -746,9 +766,19 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		prefix:    "backoff-2",
 	})
 
-	waitForFailedTicks(ctx, t, before+3, 15*time.Second)
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "3 failed ticks in the second busy period",
+		timeout: 15 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return len(failedTicks(ticks[min(before, len(ticks)):])) >= 3
+		},
+	})
 
-	requireBackoffReset(t, failedTicks(sqlite.WALGuardTicksForTest()[before:]), base)
+	all := storeTicks(t, path)
+
+	requireBackoffRule(t, all, base, backoffCap)
+	requireFirstFailedWait(t, failedTicks(all[min(before, len(all)):]), base, "second busy period")
 
 	if rbErr := pinned.Rollback(); rbErr != nil {
 		t.Fatalf("roll back second read transaction: %v", rbErr)
@@ -787,25 +817,52 @@ func waitForFailedTicks(ctx context.Context, t *testing.T, want int, timeout tim
 	}
 }
 
-// waitForSucceededTicks polls the test hook until it holds at least want
-// successful guard ticks or timeout passes.
-func waitForSucceededTicks(ctx context.Context, t *testing.T, want int, timeout time.Duration) {
+// storeTicks returns the guard ticks of the store at path in order. Other
+// tests open stores in parallel, and their guards record in the same hook
+// buffer, so a test reads only the ticks of its own store.
+func storeTicks(t *testing.T, path string) []sqlite.WALGuardTick {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve database path: %v", err)
+	}
+
+	out := []sqlite.WALGuardTick{}
+
+	for _, tick := range sqlite.WALGuardTicksForTest() {
+		if tick.Path == abs {
+			out = append(out, tick)
+		}
+	}
+
+	return out
+}
+
+// storeTickWait holds one poll of the guard ticks of one store: the database
+// path, the condition that ends the poll, a description of the condition for
+// the failure message, and the time limit.
+type storeTickWait struct {
+	path    string
+	what    string
+	timeout time.Duration
+	done    func(ticks []sqlite.WALGuardTick) bool
+}
+
+// waitForStoreTicks polls the test hook until the ticks of the store at
+// w.path satisfy w.done, or w.timeout passes.
+func waitForStoreTicks(ctx context.Context, t *testing.T, w storeTickWait) {
+	t.Helper()
+
+	deadline := time.Now().Add(w.timeout)
 
 	for {
-		if got := len(succeededTicks(sqlite.WALGuardTicksForTest())); got >= want {
+		if w.done(storeTicks(t, w.path)) {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf(
-				"successful guard ticks = %d after %s, want %d",
-				len(succeededTicks(sqlite.WALGuardTicksForTest())),
-				timeout,
-				want,
-			)
+			t.Fatalf("no %s after %s: %d guard ticks of the store", w.what, w.timeout, len(storeTicks(t, w.path)))
 		}
 
 		timer := time.NewTimer(10 * time.Millisecond)
@@ -819,70 +876,55 @@ func waitForSucceededTicks(ctx context.Context, t *testing.T, want int, timeout 
 	}
 }
 
-// tickWaitBounds holds the smallest and the largest guard wait between the
-// failed ticks the hook holds.
-type tickWaitBounds struct {
-	min time.Duration
-	max time.Duration
-}
-
-// failedTickWaitBounds returns the smallest and the largest guard wait
-// between the failed ticks the hook holds.
-func failedTickWaitBounds(t *testing.T) tickWaitBounds {
+// requireBackoffRule asserts that each wait the guard recorded follows from
+// the outcome of the tick before it: a successful tick and a failed tick with
+// only fast busy attempts reset the wait to the base interval, and a failed
+// tick with a slow busy attempt doubles the wait up to the backoff cap. The
+// first tick of the store waits the base interval, because the ticks before
+// it found the log below the threshold. The guard records the wait it
+// scheduled, not a wall-clock gap, so a loaded runner cannot change it.
+func requireBackoffRule(t *testing.T, ticks []sqlite.WALGuardTick, base, backoffCap time.Duration) {
 	t.Helper()
 
-	waits := tickWaits(failedTicks(sqlite.WALGuardTicksForTest()))
-	if len(waits) == 0 {
-		t.Fatal("no failed guard tick waits while busy, want growth to observe")
+	if len(ticks) == 0 {
+		t.Fatal("no guard ticks of the store, want at least one")
 	}
 
-	bounds := tickWaitBounds{min: waits[0], max: waits[0]}
-
-	for _, wait := range waits[1:] {
-		bounds.min = min(bounds.min, wait)
-		bounds.max = max(bounds.max, wait)
+	if ticks[0].Waited != base {
+		t.Fatalf("wait before the first guard tick = %s, want the %s base", ticks[0].Waited, base)
 	}
 
-	return bounds
-}
+	for i := 1; i < len(ticks); i++ {
+		prev, next := ticks[i-1], ticks[i]
 
-// requireBackoffGrowth asserts the waits between failed ticks start near the
-// base interval and grow toward the backoff cap.
-func requireBackoffGrowth(t *testing.T, minWait, maxWait, base, backoffCap time.Duration) {
-	t.Helper()
+		want := base
+		if !prev.Succeeded && prev.SlowBusy {
+			want = min(2*prev.Waited, backoffCap)
+		}
 
-	if maxWait < 100*time.Millisecond {
-		t.Fatalf("largest failed tick wait = %s, want at least 100 ms so backoff grows the wait", maxWait)
-	}
-
-	if maxWait > backoffCap+100*time.Millisecond {
-		t.Fatalf("largest failed tick wait = %s, want at most %s plus slack", maxWait, backoffCap)
-	}
-
-	if minWait > 3*base {
-		t.Fatalf(
-			"smallest failed tick wait = %s, want at most %s so the first ticks keep the base",
-			minWait,
-			3*base,
-		)
+		if next.Waited != want {
+			t.Fatalf(
+				"wait before guard tick %d = %s, want %s after a tick that waited %s "+
+					"(succeeded = %t, slow busy = %t)",
+				i, next.Waited, want, prev.Waited, prev.Succeeded, prev.SlowBusy,
+			)
+		}
 	}
 }
 
-// requireBackoffReset asserts the second busy period starts from the base
-// interval again: its first wait stays near the base.
-func requireBackoffReset(t *testing.T, second []sqlite.WALGuardTick, base time.Duration) {
+// requireFirstFailedWait asserts that the first failed tick of a busy period
+// waited the base interval: a new busy period starts from the base again.
+func requireFirstFailedWait(t *testing.T, failed []sqlite.WALGuardTick, base time.Duration, period string) {
 	t.Helper()
 
-	if len(second) < 3 {
-		t.Fatalf("failed ticks in the second busy period = %d, want at least 3", len(second))
+	if len(failed) == 0 {
+		t.Fatalf("no failed guard ticks in the %s, want at least one", period)
 	}
 
-	resetWait := tickWaits(second)[0]
+	t.Logf("wait before the first failed tick of the %s = %s", period, failed[0].Waited)
 
-	t.Logf("first wait of the second busy period = %s, want near the %s base", resetWait, base)
-
-	if resetWait > 3*base {
-		t.Fatalf("first wait after the reset = %s, want at most %s", resetWait, 3*base)
+	if failed[0].Waited != base {
+		t.Fatalf("wait before the first failed tick of the %s = %s, want the %s base", period, failed[0].Waited, base)
 	}
 }
 
@@ -894,32 +936,6 @@ func failedTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
 		if !tick.Succeeded {
 			out = append(out, tick)
 		}
-	}
-
-	return out
-}
-
-// succeededTicks returns the successful guard ticks in order.
-func succeededTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
-	var out []sqlite.WALGuardTick
-
-	for _, tick := range ticks {
-		if tick.Succeeded {
-			out = append(out, tick)
-		}
-	}
-
-	return out
-}
-
-// tickWaits returns the guard wait before each tick after the first, as the
-// guard recorded it: a scheduled wait, not a wall-clock gap, so a loaded
-// runner cannot stretch it.
-func tickWaits(ticks []sqlite.WALGuardTick) []time.Duration {
-	out := []time.Duration{}
-
-	for i := 1; i < len(ticks); i++ {
-		out = append(out, ticks[i].Waited)
 	}
 
 	return out
