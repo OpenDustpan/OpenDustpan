@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -707,5 +708,24 @@ func TestSelfAllowed(t *testing.T) {
 	err = authz.Authorize(t.Context(), person, identity.ActionCallerRead, identity.CallerObject())
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("another action on the caller: err = %v, want ErrDenied", err)
+	}
+}
+
+func TestAdminSubjects(t *testing.T) {
+	t.Parallel()
+
+	two, err := identity.NewStaticTokens(strings.Repeat("a", 32), strings.Repeat("b", 32))
+	if err != nil {
+		t.Fatalf("static tokens: %v", err)
+	}
+
+	one, err := identity.NewStaticToken("root", strings.Repeat("c", 32))
+	if err != nil {
+		t.Fatalf("static token: %v", err)
+	}
+
+	got := identity.Chain{two, identity.Chain{one}}.AdminSubjects()
+	if want := []string{"admin", "admin-2", "root"}; !slices.Equal(got, want) {
+		t.Fatalf("admin subjects = %v, want %v", got, want)
 	}
 }
