@@ -3994,6 +3994,9 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	tofuForceUnlockFenceScenario(t, env)
 	tofuOverrideSwitchesScenario(t, env)
 
+	// The inventory API serves the console scheme as well as Bearer (ADR 13).
+	inventorySchemeScenario(t, env)
+
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
 	tofuSealedStateScenario(t, env)
@@ -5281,6 +5284,7 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	if versionID == "" {
@@ -5304,6 +5308,7 @@ func checkImportEncryptedStored(ctx context.Context, t *testing.T, env *e2e.Env)
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -5501,6 +5506,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// The inventory entry of the workspace holds the lock: holder A, no
@@ -5521,6 +5527,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	checkInventoryUnlocked(ctx, t, env, "opentofu:"+e2e.Namespace+"/"+e2e.Workspace)
@@ -5533,6 +5540,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// A plan as B fails at once. go-tfe discards the 409 detail for lock, so
@@ -5558,6 +5566,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// An unlock by B answers 409: only the holder unlocks.
@@ -5569,6 +5578,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// A force-unlock as B succeeds. The CLI sends no lock ID that the
@@ -5612,6 +5622,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{"attributes":{"reason":"` + lockReason + `"}}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     checkWorkspaceShowsLock(e2e.SubjectB, lockReason),
@@ -5621,6 +5632,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
@@ -5630,6 +5642,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     checkWorkspaceHidesLock,
@@ -5639,6 +5652,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// A force-unlock of an unlocked workspace answers 409.
@@ -5650,6 +5664,7 @@ func tofuLockScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// Two principals contend for one lock: both plans run at once with a
@@ -6022,6 +6037,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -6034,6 +6050,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -6046,6 +6063,7 @@ func tofuStateVersionListScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -6349,6 +6367,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// The new current version copies the first version: its MD5 attribute
@@ -6394,6 +6413,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -6404,6 +6424,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -6424,6 +6445,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -6485,6 +6507,7 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// A plan now fails on the held lock: the CLI prints the lock failure and
@@ -6523,6 +6546,7 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -6549,6 +6573,7 @@ func tofuDestroyScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.Step(ctx, t, step("state pull after destroy", checkStateDestroyed, "state", "pull"))
@@ -7094,6 +7119,7 @@ func maskedCurrentVersion(ctx context.Context, t *testing.T, env *e2e.Env, works
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	if versionID == "" {
@@ -7211,6 +7237,7 @@ func maskedResourceChecks(ctx context.Context, t *testing.T, env *e2e.Env, _, ve
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	addresses := maskedResourceAddresses(t, listBody)
@@ -7224,6 +7251,7 @@ func maskedResourceChecks(ctx context.Context, t *testing.T, env *e2e.Env, _, ve
 			Body:      "",
 			Want:      http.StatusOK,
 			UserAgent: "",
+			Scheme:    "",
 		})
 	}
 }
@@ -7318,6 +7346,7 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -7328,6 +7357,7 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	for _, q := range []string{maskedSecretV2, "hello"} {
@@ -7343,6 +7373,7 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 			Body:      "",
 			Want:      http.StatusOK,
 			UserAgent: "",
+			Scheme:    "",
 		})
 	}
 
@@ -7365,6 +7396,7 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	if firstPage.cursor == "" {
@@ -7380,6 +7412,7 @@ func maskedResourceFilterChecks(ctx context.Context, t *testing.T, env *e2e.Env,
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -7698,6 +7731,7 @@ func maskedOutputsCheck(ctx context.Context, t *testing.T, env *e2e.Env, workspa
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -7987,6 +8021,7 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 			Body:      "",
 			Want:      http.StatusConflict,
 			UserAgent: "",
+			Scheme:    "",
 		},
 		{
 			Check:     checkEncryptedByClient,
@@ -7996,6 +8031,7 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 			Body:      "",
 			Want:      http.StatusConflict,
 			UserAgent: "",
+			Scheme:    "",
 		},
 	} {
 		env.APIStepA(ctx, t, spec)
@@ -8011,6 +8047,7 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -8368,6 +8405,7 @@ func tofuDiffScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -8380,6 +8418,7 @@ func tofuDiffScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	other := maskedCurrentVersion(ctx, t, env, "masked")
@@ -8391,6 +8430,7 @@ func tofuDiffScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusNotFound,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
 
@@ -8448,6 +8488,7 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(staleSerialDetail),
@@ -8462,6 +8503,7 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		),
 		Want:      http.StatusUnprocessableEntity,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:  checkDirectRejected(lineageMismatchDetail),
@@ -8476,6 +8518,7 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		),
 		Want:      http.StatusUnprocessableEntity,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
@@ -8485,6 +8528,7 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.Step(ctx, t, step("state push force", nil, "state", "push", "-force", stalePath))
@@ -13852,6 +13896,7 @@ func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	status, _, body := enterMaintenance(ctx, t, env, "")

@@ -62,6 +62,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 			return nil
 		},
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// The stale job locks, then stops before its upload.
@@ -73,6 +74,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Want:      http.StatusOK,
 		Check:     nil,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// Job B force-unlocks with the real CLI. The release writes the fence.
@@ -109,6 +111,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 			return nil
 		},
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// Job B writes with the real CLI after the fence: it reads the fenced
@@ -133,6 +136,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Want:      http.StatusOK,
 		Check:     nil,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -145,6 +149,7 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Want:      http.StatusUnprocessableEntity,
 		Check:     nil,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -155,5 +160,6 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Want:      http.StatusOK,
 		Check:     nil,
 		UserAgent: "",
+		Scheme:    "",
 	})
 }
