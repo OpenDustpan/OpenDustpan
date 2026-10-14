@@ -412,6 +412,7 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	newSerial := current.Serial + 1
@@ -472,6 +473,7 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
@@ -482,6 +484,7 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	crashUploadSettled(ctx, t, env, uploadSettledInput{
@@ -501,6 +504,7 @@ func crashTofuUpload(t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{
@@ -632,6 +636,7 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	// The lock is held, so the kill lands during it with no sleep and no
@@ -671,6 +676,7 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 		Body:      `{"data":{}}`,
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepB(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
@@ -680,6 +686,7 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusConflict,
 		UserAgent: "",
+		Scheme:    "",
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		Check:     nil,
@@ -689,6 +696,7 @@ func crashHeldLock(t *testing.T, env *e2e.Env) {
 		Body:      "",
 		Want:      http.StatusOK,
 		UserAgent: "",
+		Scheme:    "",
 	})
 
 	env.Step(ctx, t, step("plan after lock kill", nil, "plan", "-input=false", "-no-color"))

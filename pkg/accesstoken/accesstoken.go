@@ -339,3 +339,61 @@ func Ref(id string) string {
 
 	return "token:" + invalidRef
 }
+
+// Expiry warnings (ADR 53, decision 11). RFC 20 keeps the thresholds open:
+// these follow the lead proposal of warnings 14 days and 3 days before the
+// expiry.
+const (
+	// ExpiryWarningSoon is how long before its expiry a token warns soon.
+	ExpiryWarningSoon = ExpiringWithin
+	// ExpiryWarningImminent is how long before its expiry a token warns
+	// imminent.
+	ExpiryWarningImminent = 3 * 24 * time.Hour
+	// ExpiryHeader is the response header that names the expiry of the
+	// token of the caller, in RFC 3339, when the token warns. The server
+	// sets it on each answer to such a token, and the opendustpan CLI
+	// prints a warning when it reads it.
+	ExpiryHeader = "Dustpan-Token-Expires-At"
+)
+
+// ExpiryWarning names how near the expiry of a token is.
+type ExpiryWarning string
+
+// Expiry warnings of a token.
+const (
+	// WarningNone is a token more than ExpiryWarningSoon before its expiry,
+	// or a token that ended.
+	WarningNone ExpiryWarning = "none"
+	// WarningSoon is a token at most ExpiryWarningSoon before its expiry.
+	WarningSoon ExpiryWarning = "soon"
+	// WarningImminent is a token at most ExpiryWarningImminent before its
+	// expiry.
+	WarningImminent ExpiryWarning = "imminent"
+)
+
+// WarningFor returns the warning of a token that expires at expiresAt, at
+// the time now. A token that expired has no warning: it no longer works.
+func WarningFor(expiresAt, now time.Time) ExpiryWarning {
+	left := expiresAt.Sub(now)
+
+	switch {
+	case left <= 0:
+		return WarningNone
+	case left <= ExpiryWarningImminent:
+		return WarningImminent
+	case left <= ExpiryWarningSoon:
+		return WarningSoon
+	default:
+		return WarningNone
+	}
+}
+
+// ExpiryWarningAt returns the warning of t at the time now: WarningNone for
+// a token that is not active.
+func (t Token) ExpiryWarningAt(now time.Time) ExpiryWarning {
+	if t.StatusAt(now) != StatusActive {
+		return WarningNone
+	}
+
+	return WarningFor(t.ExpiresAt, now)
+}

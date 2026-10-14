@@ -120,7 +120,7 @@ func TestLoadAdminTokensFrom(t *testing.T) {
 func TestLoadAdminTokensClearsVariable(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, tokenA)
 
-	got, err := loadAdminTokens()
+	got, err := loadAdminTokens(os.LookupEnv)
 	if err != nil {
 		t.Fatalf("load admin tokens: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestLoadAdminTokensKeepsFileVariable(t *testing.T) {
 
 	t.Setenv(adminTokenFileEnvVar, path)
 
-	got, err := loadAdminTokens()
+	got, err := loadAdminTokens(os.LookupEnv)
 	if err != nil {
 		t.Fatalf("load admin tokens: %v", err)
 	}
