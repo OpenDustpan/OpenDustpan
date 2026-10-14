@@ -56,7 +56,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0032_soft_delete_workspaces.sql":    "0ad4fc7201fd387375327c0c05fffa7e927a1db377a5812f93edea3f102fcdac",
 		"0035_access_tokens.sql":             "aacb1bd2b0ea84d6b9c16960fccd2af09e8466afc54819dd3f34b545c49cd71e",
 		"0042_roles_and_grants.sql":          "5e4cfab98773407ddb05a166ceb4287826bfdc8dc0330de6250ac751f2fd1b82",
-		"0049_namespace_ip_allowlist.sql":    "24567a6a4104e14e1909dfeb3489cc7fafebcded41fd1672980b3877006ba051",
+		"0051_namespace_ip_allowlist.sql":    "24567a6a4104e14e1909dfeb3489cc7fafebcded41fd1672980b3877006ba051",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
