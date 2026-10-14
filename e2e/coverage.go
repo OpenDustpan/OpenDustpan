@@ -460,6 +460,18 @@ func (coverageWorkspaces) DiscardJSONRendering(
 	return workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
+func (coverageWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return workspace.ErrStateVersionNotFound
+}
+
 // coverageInventoryRoutes returns the inventory adapter's route table.
 func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()

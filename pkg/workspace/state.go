@@ -213,6 +213,32 @@ func (sv StateVersion) retriedBy(tok token.Token) bool {
 	return sv.Status == StatusFinalized && sv.Upload.Matches(tok)
 }
 
+// checkUploadCapability reports whether tok may upload content for sv at now.
+// A retry with the capability that finalized the version passes. It reads no
+// content and writes nothing.
+func (sv StateVersion) checkUploadCapability(tok token.Token, now time.Time) error {
+	if sv.retriedBy(tok) {
+		return nil
+	}
+
+	return sv.accepts(tok, now)
+}
+
+// checkRenderingCapability reports whether tok may upload the JSON rendering
+// of sv at now. A finalized version with the same capability still passes. It
+// reads no content and writes nothing.
+func (sv StateVersion) checkRenderingCapability(tok token.Token, now time.Time) error {
+	if !sv.Upload.Matches(tok) {
+		return fmt.Errorf("%w: wrong capability for state version %s", ErrUploadDenied, sv.ID)
+	}
+
+	if !now.Before(sv.UploadExpiresAt) {
+		return fmt.Errorf("%w: capability for state version %s expired", ErrUploadDenied, sv.ID)
+	}
+
+	return nil
+}
+
 // accepts reports whether tok may upload content for sv at now.
 func (sv StateVersion) accepts(tok token.Token, now time.Time) error {
 	switch {

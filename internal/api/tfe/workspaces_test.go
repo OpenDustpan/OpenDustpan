@@ -731,6 +731,18 @@ func (p pagingWorkspaces) Upload(
 	return workspace.StateVersion{}, workspace.ErrUploadDenied
 }
 
+func (p pagingWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+func (p pagingWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
 func (p pagingWorkspaces) DiscardJSONRendering(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
 ) error {

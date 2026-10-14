@@ -258,6 +258,14 @@ func (h *Handler) uploadState(
 		return
 	}
 
+	id := workspace.StateVersionID(r.PathValue("id"))
+
+	if checkErr := h.workspaces.CheckUpload(ctx, id, tok); checkErr != nil {
+		h.writeError(ctx, w, checkErr)
+
+		return
+	}
+
 	release, ok := h.hold(w, r, bodygate.StreamReservation(r))
 	if !ok {
 		return
@@ -265,7 +273,7 @@ func (h *Handler) uploadState(
 
 	defer release()
 
-	if _, err := h.workspaces.Upload(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body); err != nil {
+	if _, err := h.workspaces.Upload(ctx, id, tok, r.Body); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -291,6 +299,14 @@ func (h *Handler) uploadJSONState(
 		return
 	}
 
+	id := workspace.StateVersionID(r.PathValue("id"))
+
+	if checkErr := h.workspaces.CheckJSONRenderingUpload(ctx, id, tok); checkErr != nil {
+		h.writeError(ctx, w, checkErr)
+
+		return
+	}
+
 	release, ok := h.hold(w, r, bodygate.Reservation(r, h.maxState))
 	if !ok {
 		return
@@ -298,7 +314,7 @@ func (h *Handler) uploadJSONState(
 
 	defer release()
 
-	discardErr := h.workspaces.DiscardJSONRendering(ctx, workspace.StateVersionID(r.PathValue("id")), tok, r.Body)
+	discardErr := h.workspaces.DiscardJSONRendering(ctx, id, tok, r.Body)
 	if discardErr != nil {
 		h.writeError(ctx, w, discardErr)
 

@@ -152,6 +152,11 @@ type StateWriter interface {
 		tok token.Token,
 		content io.Reader,
 	) (workspace.StateVersion, error)
+	// CheckUpload reports whether the capability tok may upload state version
+	// id now, without reading any body and without writing anything.
+	CheckUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
+	// CheckJSONRenderingUpload does the same for the JSON rendering upload.
+	CheckJSONRenderingUpload(ctx context.Context, id workspace.StateVersionID, tok token.Token) error
 	// DiscardJSONRendering accepts the JSON rendering uploaded with a state
 	// version and discards it: the server keeps the state itself and the
 	// outputs declared at creation.

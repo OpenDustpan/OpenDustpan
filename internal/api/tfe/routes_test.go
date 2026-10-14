@@ -341,6 +341,22 @@ func (stubWorkspaces) Upload(
 	return workspace.StateVersion{}, workspace.ErrUploadDenied
 }
 
+// CheckUpload allows every capability: route tests never reach it with a
+// wrong one unless they override it.
+func (stubWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+// CheckJSONRenderingUpload allows every capability: route tests never reach
+// it with a wrong one unless they override it.
+func (stubWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
 // DiscardJSONRendering denies every rendering upload: route tests never
 // reach it with a valid capability.
 func (stubWorkspaces) DiscardJSONRendering(
@@ -1505,6 +1521,18 @@ func (errorWorkspaces) Upload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
 ) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, errTestInternal
+}
+
+func (errorWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+func (errorWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
 }
 
 func (errorWorkspaces) DiscardJSONRendering(
