@@ -344,6 +344,16 @@ func TestWorkspaceConformance(t *testing.T) {
 	})
 }
 
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 

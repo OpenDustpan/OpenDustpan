@@ -52,6 +52,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				"allow_forced_writes",
 				"allow_unlocked_writes",
+				"ip_allowlist",
 			},
 		},
 		{

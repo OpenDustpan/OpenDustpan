@@ -100,10 +100,11 @@ var families = map[identity.Action]Family{
 	identity.ActionServerCreateNamespace:  FamilyAdministration,
 	identity.ActionServerReadAccess:       FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
-	identity.ActionServerReadTokens:          FamilyAdministration,
-	identity.ActionServerManageTokens:        FamilyAdministration,
-	identity.ActionServerManageServiceTokens: FamilyAdministration,
-	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
+	identity.ActionServerReadTokens:           FamilyAdministration,
+	identity.ActionServerManageTokens:         FamilyAdministration,
+	identity.ActionServerManageServiceTokens:  FamilyAdministration,
+	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,

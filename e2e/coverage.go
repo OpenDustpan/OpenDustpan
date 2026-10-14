@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -201,6 +202,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		CheckpointDeltaCutoff:   0,
@@ -343,6 +345,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
@@ -490,14 +493,14 @@ func (coverageWorkspaces) DiscardJSONRendering(
 
 func (coverageWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 func (coverageWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 // coverageInventoryRoutes returns the inventory adapter's route table.
@@ -643,6 +646,34 @@ func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigr
 	return nil, nil
 }
 
+// coverageIPAllowlistStore holds no rule: the route table needs an IP
+// allowlist service, and the coverage gate never serves a request.
+type coverageIPAllowlistStore struct{}
+
+func (coverageIPAllowlistStore) NamespaceList(_ context.Context, _ namespace.Name) (ipallow.List, error) {
+	return ipallow.List{}, nil
+}
+
+func (coverageIPAllowlistStore) SetNamespaceList(
+	_ context.Context, _ namespace.Name, _ ipallow.List, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+// coverageIPAllowlists returns the IP allowlist service of the route table.
+func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
+	tb.Helper()
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: coverageIPAllowlistStore{}, Namespaces: coverageNamespaces(tb), Now: nil, Enabled: true,
+	})
+	if err != nil {
+		tb.Fatalf("ip allowlist service: %v", err)
+	}
+
+	return svc
+}
+
 // coverageServerRoutes returns the installation adapter's route table: the
 // namespace route (ADR 39), the backup routes (ADR 30), the restore routes
 // (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
@@ -666,6 +697,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		IPAllowlists:   coverageIPAllowlists(tb),
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -768,6 +800,7 @@ func CoverageAllowlist() []AllowEntry {
 		reviewAllowEntries(),
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
+		ipAllowlistAllowEntries(),
 	)
 }
 
@@ -929,6 +962,35 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: "TestTokenPolicy", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// ipAllowlistCoveringTest names the test that proves the IP allowlist routes
+// instead of a CLI: no CLI manages IP allowlists.
+const ipAllowlistCoveringTest = "TestIPAllowlists"
+
+// ipAllowlistAllowEntries returns the operator and console routes of the IP
+// allowlists of the namespaces. The harness steps of
+// ipAllowlistCoveringTest drive each one through the real binary on each store.
+func ipAllowlistAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages IP allowlists. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const list = "/api/server/namespaces/{namespace}/ip-allowlist"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPut, list},
+		{http.MethodDelete, list},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
 		})
 	}
 

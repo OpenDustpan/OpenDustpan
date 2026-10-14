@@ -111,6 +111,7 @@ func newAuditedPrincipalHandler(
 		Access:         nil,
 		Tokens:         nil,
 		OnAuditFailure: nil,
+		IPAllowlists:   nil,
 		Audit:          entries,
 	})
 	if err != nil {

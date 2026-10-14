@@ -2299,9 +2299,18 @@ FROM namespaces
 WHERE name = $1
 `
 
-func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, error) {
+type GetNamespaceRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
 	row := q.db.QueryRow(ctx, getNamespace, name)
-	var i Namespace
+	var i GetNamespaceRow
 	err := row.Scan(
 		&i.Name,
 		&i.HomeRegion,
@@ -2320,11 +2329,20 @@ WHERE name = $1
 FOR SHARE
 `
 
+type GetNamespaceForShareRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
 // Reads the namespace row with a shared lock. A switch change waits for the
 // transaction that reads it, so the switch it reads is the one that commits.
-func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namespace, error) {
+func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (GetNamespaceForShareRow, error) {
 	row := q.db.QueryRow(ctx, getNamespaceForShare, name)
-	var i Namespace
+	var i GetNamespaceForShareRow
 	err := row.Scan(
 		&i.Name,
 		&i.HomeRegion,
@@ -2334,6 +2352,19 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (Namesp
 		&i.AllowUnlockedWrites,
 	)
 	return i, err
+}
+
+const getNamespaceIPAllowlist = `-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = $1
+`
+
+func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRow(ctx, getNamespaceIPAllowlist, name)
+	var ip_allowlist string
+	err := row.Scan(&ip_allowlist)
+	return ip_allowlist, err
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
@@ -4119,15 +4150,24 @@ FROM namespaces
 ORDER BY name
 `
 
-func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
+type ListNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, error) {
 	rows, err := q.db.Query(ctx, listNamespaces)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Namespace
+	var items []ListNamespacesRow
 	for rows.Next() {
-		var i Namespace
+		var i ListNamespacesRow
 		if err := rows.Scan(
 			&i.Name,
 			&i.HomeRegion,
@@ -5641,6 +5681,26 @@ type SetInstallationStateIfParams struct {
 // nothing when the stored state differs or the row is missing.
 func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallationStateIfParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setInstallationStateIf, arg.State, arg.State_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
+UPDATE namespaces
+SET ip_allowlist = $1
+WHERE name = $2
+`
+
+type SetNamespaceIPAllowlistParams struct {
+	IpAllowlist string
+	Name        string
+}
+
+// Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+func (q *Queries) SetNamespaceIPAllowlist(ctx context.Context, arg SetNamespaceIPAllowlistParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setNamespaceIPAllowlist, arg.IpAllowlist, arg.Name)
 	if err != nil {
 		return 0, err
 	}

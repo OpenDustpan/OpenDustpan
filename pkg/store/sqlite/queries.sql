@@ -19,6 +19,17 @@ UPDATE namespaces
 SET allow_forced_writes = ?, allow_unlocked_writes = ?
 WHERE name = ?;
 
+-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = ?;
+
+-- name: SetNamespaceIPAllowlist :execrows
+-- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+UPDATE namespaces
+SET ip_allowlist = ?
+WHERE name = ?;
+
 -- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces

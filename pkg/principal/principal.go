@@ -178,6 +178,13 @@ func ValidateSubject(s string) error {
 // subjectPattern is the form of a subject made through the API.
 var subjectPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+:/-]{0,254}$`)
 
+// IsBootstrapSubject reports whether s is a subject that a bootstrap admin
+// token uses: the subjects of the bootstrap admin tokens are admin and
+// admin-N, and the API refuses to make a principal with such a subject.
+func IsBootstrapSubject(s string) bool {
+	return reservedSubject(s)
+}
+
 // reservedSubject reports whether s, without regard to case, is "admin" or
 // "admin" and a character that is not a letter: the subjects of the
 // bootstrap admin tokens are admin and admin-N (identity.NewStaticTokens),

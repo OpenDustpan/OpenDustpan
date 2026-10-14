@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -213,6 +215,7 @@ type serverStore interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	ipallow.Store
 }
 
 // serverBuild groups the handler, stores and database proxy newServer opens,
@@ -255,9 +258,46 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 	in := envInput{
-		deltaCutoff: 0,
-		tb:          tb, cli: cli, store: store, dir: dir, token: token, tokenB: tokenB, rec: rec,
+		deltaCutoff:       0,
 		disableJournaling: true,
+		ipAllowlists:      false,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               dir,
+		token:             token,
+		tokenB:            tokenB,
+		rec:               rec,
+	}
+
+	if UseBinaryServer() {
+		return newBinaryEnv(ctx, in)
+	}
+
+	return newInprocessEnv(ctx, in)
+}
+
+// NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
+// turned on and applied to the bootstrap admin token too, so a step can lock
+// one namespace to one source address and prove the 403 answers.
+func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	dir := tb.TempDir()
+	token := newToken(tb)
+	tokenB := newToken(tb)
+	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
+	in := envInput{
+		deltaCutoff:       0,
+		disableJournaling: false,
+		ipAllowlists:      true,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               dir,
+		token:             token,
+		tokenB:            tokenB,
+		rec:               rec,
 	}
 
 	if UseBinaryServer() {
@@ -278,7 +318,9 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	tokenB := newToken(tb)
 	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
 	in := envInput{
+		deltaCutoff:       cutoff,
 		disableJournaling: false,
+		ipAllowlists:      false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -286,7 +328,6 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		token:             token,
 		tokenB:            tokenB,
 		rec:               rec,
-		deltaCutoff:       cutoff,
 	}
 
 	if UseBinaryServer() {
@@ -310,6 +351,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB, member: member},
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
+		ipAllowlists:      in.ipAllowlists,
 	})
 
 	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
@@ -440,6 +482,24 @@ type serverArgs struct {
 	deltaCutoff int
 	// disableJournaling turns Pulumi journaling off on the in-process server.
 	disableJournaling bool
+	// ipAllowlists turns IP allowlists on for the in-process server and
+	// applies them to the bootstrap admin token too.
+	ipAllowlists bool
+}
+
+// ipAllowlistOptions adds the IP allowlist options to opts when args turns
+// the feature on, so the in-process server checks the lists of every
+// namespace, including for the bootstrap admin token.
+func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) []dustpan.Option {
+	if !args.ipAllowlists {
+		return opts
+	}
+
+	return append(opts,
+		dustpan.WithIPAllowlists(true),
+		dustpan.WithIPAllowlistsIncludeBootstrap(true),
+		dustpan.WithIPAllowlistStore(st),
+	)
 }
 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
@@ -479,24 +539,28 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
-	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
-		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
-		dustpan.WithBlobStore(blobs),
-		dustpan.WithBackupTarget(target, targetName),
-		dustpan.WithInventoryReader(st),
-		dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
-		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
-		dustpan.WithDisablePulumiJournaling(args.disableJournaling),
-	)
+	srv, err := dustpan.NewServer(ipAllowlistOptions(
+		st,
+		args,
+		[]dustpan.Option{
+			dustpan.WithRegion(region),
+			dustpan.WithNamespaceStore(st),
+			dustpan.WithStackStore(st),
+			dustpan.WithUpdateStore(st),
+			dustpan.WithCheckpointStore(st),
+			dustpan.WithEventStore(st),
+			dustpan.WithSecretKeyStore(st),
+			dustpan.WithSecretWrapper(wrapper),
+			dustpan.WithWorkspaceStore(st),
+			dustpan.WithStateStore(st),
+			dustpan.WithBlobStore(blobs),
+			dustpan.WithBackupTarget(target, targetName),
+			dustpan.WithInventoryReader(st),
+			dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
+			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
+			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
+		},
+	)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
 	}
@@ -987,6 +1051,35 @@ func (e *Env) ServerAPIHeadersAs(ctx context.Context, token, path string) (APIRe
 // token.
 func (e *Env) ServerAPIStatusBare(ctx context.Context, method, path string) (int, string, error) {
 	return e.serverStatus(ctx, "", method, path, "")
+}
+
+// ServerAPIStatusFrom sends one installation API request with token as a
+// Bearer credential, leaving from the local address source (for example
+// "127.0.0.2"), and returns its status and body. A step that holds an IP
+// allowlist for one namespace uses it to prove that a source inside the
+// list passes and a source outside it is refused.
+//
+//nolint:revive // The step names the source beside the token, the method, the path and the body.
+func (e *Env) ServerAPIStatusFrom(
+	ctx context.Context, source, token, method, path, body string,
+) (int, string, error) {
+	base, ok := e.client.Transport.(*http.Transport)
+	if !ok {
+		return 0, "", fmt.Errorf("server request %s %s from %s: %w",
+			method, path, source, errNotHTTPTransport)
+	}
+
+	transport := base.Clone()
+	//nolint:exhaustruct_v5 // The dialer sets only the source address; the rest stays zero.
+	transport.DialContext = (&net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}).DialContext
+
+	client := &http.Client{Transport: transport, Timeout: e.client.Timeout}
+
+	defer client.CloseIdleConnections()
+
+	return e.serverStatusWith(ctx, serverRequest{
+		client: client, token: token, method: method, path: path, body: body,
+	})
 }
 
 // TFEStatus sends one request to the TFE-compatible API as the given token
@@ -2159,32 +2252,55 @@ func (e *Env) saveHeldDeployment(
 	})
 }
 
+// errNotHTTPTransport reports that the harness client has no
+// *http.Transport, so no request can leave from another source address.
+var errNotHTTPTransport = errors.New("client transport is not an *http.Transport")
+
+// serverRequest is one installation API request: the client that sends it,
+// the Bearer token ("" sends none), the method, the path and the body (""
+// sends none).
+type serverRequest struct {
+	client *http.Client
+	token  string
+	method string
+	path   string
+	body   string
+}
+
 // serverStatus sends one installation API request and returns its status and
 // body. An empty token sends no Authorization header.
 func (e *Env) serverStatus(
 	ctx context.Context, token, method, path, body string,
 ) (int, string, error) {
+	return e.serverStatusWith(ctx, serverRequest{
+		client: e.client, token: token, method: method, path: path, body: body,
+	})
+}
+
+// serverStatusWith sends req to the installation API and returns its status
+// and body.
+func (e *Env) serverStatusWith(ctx context.Context, req serverRequest) (int, string, error) {
 	var reader io.Reader
-	if body != "" {
-		reader = strings.NewReader(body)
+	if req.body != "" {
+		reader = strings.NewReader(req.body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, reader)
+	httpReq, err := http.NewRequestWithContext(ctx, req.method, e.URL+req.path, reader)
 	if err != nil {
-		return 0, "", fmt.Errorf("build %s %s: %w", method, path, err)
+		return 0, "", fmt.Errorf("build %s %s: %w", req.method, req.path, err)
 	}
 
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if req.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+req.token)
 	}
 
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
+	if req.body != "" {
+		httpReq.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := e.client.Do(req)
+	resp, err := req.client.Do(httpReq)
 	if err != nil {
-		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+		return 0, "", fmt.Errorf("%s %s: %w", req.method, req.path, err)
 	}
 
 	defer func() {
@@ -2193,7 +2309,7 @@ func (e *Env) serverStatus(
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, "", fmt.Errorf("read %s %s: %w", method, path, err)
+		return 0, "", fmt.Errorf("read %s %s: %w", req.method, req.path, err)
 	}
 
 	return resp.StatusCode, string(respBody), nil
