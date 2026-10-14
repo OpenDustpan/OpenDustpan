@@ -251,6 +251,13 @@ var Settings = []*Setting{
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
 	stringSetting(
+		"log-sink", "DUSTPAN_LOG_SINK", "",
+		"a target of the application log instead of stderr; repeat the flag for more targets. Each is "+
+			"[<name>=]stderr, stdout, file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
+			"or webhook:<https URL> (DUSTPAN_LOG_SINK, targets separated by white space)",
+		"(none: stderr). For example `stderr syslog+tls://logs.example:6514`",
+	).WithFile("log-sink").WithSensitive(),
+	stringSetting(
 		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
 		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
 			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
@@ -304,6 +311,16 @@ var Settings = []*Setting{
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE",
 		"A file that holds the webhook secret. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins.",
+	),
+	envSetting(
+		"DUSTPAN_LOG_WEBHOOK_SECRET",
+		"The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. "+
+			"Required when `--log-sink` names a webhook and you set no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LOG_WEBHOOK_SECRET_FILE",
+		"A file that holds the log webhook secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins.",
 	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
