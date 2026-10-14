@@ -578,7 +578,22 @@ func (h *Handler) writeDenied(
 	obj identity.Object,
 	err error,
 ) {
-	if errors.Is(err, identity.ErrDenied) && h.hidden(ctx, p, obj) {
+	if !errors.Is(err, identity.ErrDenied) {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	hide, hideErr := h.hidden(ctx, p, obj)
+	if hideErr != nil {
+		// The read check failed (a store error, not a refusal): answer
+		// that error, never a 404 that hides it.
+		h.writeError(ctx, w, hideErr)
+
+		return
+	}
+
+	if hide {
 		h.writeNotFound(ctx, w, notFoundDetail)
 
 		return
@@ -588,18 +603,28 @@ func (h *Handler) writeDenied(
 }
 
 // hidden reports whether p cannot read obj: a unit without unit:read, or a
-// namespace without namespace:read. Any other object is never hidden.
-func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) bool {
+// namespace without namespace:read. Any other object is never hidden. It
+// returns the error of a read check that fails for another reason than a
+// refusal.
+func (h *Handler) hidden(ctx context.Context, p identity.Principal, obj identity.Object) (bool, error) {
 	read := identity.ActionNamespaceRead
 	if obj.IsUnit() {
 		read = identity.ActionUnitRead
 	}
 
 	if obj.IsServer() || obj.IsCaller() || obj.Namespace() == "" {
-		return false
+		return false, nil
 	}
 
-	return h.authz.Authorize(ctx, p, read, obj) != nil
+	err := h.authz.Authorize(ctx, p, read, obj)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, identity.ErrDenied):
+		return true, nil
+	default:
+		return false, fmt.Errorf("authorize %s: %w", read, err)
+	}
 }
 
 // isAbsence reports whether err means the resolver found nothing: an unknown

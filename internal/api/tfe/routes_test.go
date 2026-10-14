@@ -115,6 +115,27 @@ func (readOnlyAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// failingReadAuthorizer denies every action except the read actions, and
+// fails the read actions with a store error, as an Authorizer does when its
+// store is down.
+type failingReadAuthorizer struct{}
+
+func (failingReadAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if action == identity.ActionUnitRead || action == identity.ActionNamespaceRead {
+		return errStoreDown
+	}
+
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// errStoreDown is the store error of failingReadAuthorizer.
+var errStoreDown = errors.New("store down")
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool

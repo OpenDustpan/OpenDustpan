@@ -135,6 +135,18 @@ func TestUnknownAndHiddenIDsAnswerTheSame(t *testing.T) {
 		})
 	}
 
+	t.Run("a failed read check answers 500, not 404", func(t *testing.T) {
+		t.Parallel()
+
+		handler := newEnforcingHandler(t, failingReadAuthorizer{})
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, workspaceRequest(t, http.MethodPost, "/api/v2/workspaces/ws-test123/actions/lock",
+			`{"data":{}}`))
+
+		checkJSONAPIError(t, rec, http.StatusInternalServerError)
+	})
+
 	t.Run("read but not lock", func(t *testing.T) {
 		t.Parallel()
 
