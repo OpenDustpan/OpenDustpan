@@ -21,7 +21,8 @@ import (
 
 const (
 	// DefaultMaxStateBytes bounds one state version unless configured otherwise.
-	DefaultMaxStateBytes = 512 << 20
+	// It is the policy default of ADR 45.
+	DefaultMaxStateBytes = 32 << 20
 	// UploadWindow is how long a state upload capability stays valid.
 	UploadWindow = 10 * time.Minute
 	// DefaultMaxPendingVersions bounds the pending state versions of one
@@ -712,12 +713,12 @@ func (s *Service) Upload(
 		return StateVersion{}, fmt.Errorf("upload state %s: %w", id, err)
 	}
 
-	if sv.retriedBy(tok) {
-		return s.confirmRetry(sv, content)
+	if checkErr := sv.checkUploadCapability(tok, s.clock()); checkErr != nil {
+		return StateVersion{}, checkErr
 	}
 
-	if acceptErr := sv.accepts(tok, s.clock()); acceptErr != nil {
-		return StateVersion{}, acceptErr
+	if sv.retriedBy(tok) {
+		return s.confirmRetry(sv, content)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -766,6 +767,33 @@ func (s *Service) Upload(
 	return sv, nil
 }
 
+// CheckUpload reports whether the capability tok may upload state version id
+// now. It reads no content. It returns the same errors as Upload returns for
+// a bad capability: ErrStateVersionNotFound for an unknown version,
+// ErrUploadDenied for a wrong or expired capability or a version that is not
+// pending. A retry with the capability that finalized the version passes, as
+// in Upload.
+func (s *Service) CheckUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+	sv, err := s.states.GetStateVersion(ctx, id)
+	if err != nil {
+		return fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	return sv.checkUploadCapability(tok, s.clock())
+}
+
+// CheckJSONRenderingUpload does the same for the JSON rendering upload (the
+// rules of DiscardJSONRendering: wrong capability or expired capability fail;
+// a finalized version with the same capability still passes).
+func (s *Service) CheckJSONRenderingUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+	sv, err := s.states.GetStateVersion(ctx, id)
+	if err != nil {
+		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+	}
+
+	return sv.checkRenderingCapability(tok, s.clock())
+}
+
 // uploadedBody is what a state upload stores: the size of its bytes, and the
 // outputs read from them as they streamed.
 type uploadedBody struct {
@@ -795,12 +823,8 @@ func (s *Service) DiscardJSONRendering(
 		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
 	}
 
-	if !sv.Upload.Matches(tok) {
-		return fmt.Errorf("%w: wrong capability for state version %s", ErrUploadDenied, id)
-	}
-
-	if !s.clock().Before(sv.UploadExpiresAt) {
-		return fmt.Errorf("%w: capability for state version %s expired", ErrUploadDenied, id)
+	if checkErr := sv.checkRenderingCapability(tok, s.clock()); checkErr != nil {
+		return checkErr
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(content, s.maxState+1))
@@ -809,7 +833,7 @@ func (s *Service) DiscardJSONRendering(
 	}
 
 	if int64(len(raw)) > s.maxState {
-		return fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		return errTooLargeBody("JSON rendering", int64(len(raw)), s.maxState)
 	}
 
 	marks, err := ExtractSensitiveMarks(raw)
@@ -1221,7 +1245,7 @@ func (s *Service) openStateBytes(ctx context.Context, id StateVersionID) ([]byte
 	}
 
 	if int64(len(raw)) > s.maxState {
-		return nil, StateVersion{}, fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		return nil, StateVersion{}, errTooLargeBody("state", int64(len(raw)), s.maxState)
 	}
 
 	return raw, sv, nil
@@ -1930,7 +1954,7 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 
 	switch {
 	case counted.n > s.maxState:
-		problem = fmt.Errorf("%w: limit %d bytes", ErrTooLarge, s.maxState)
+		problem = errTooLargeBody("state", counted.n, s.maxState)
 	case !in.unchecked && sum != in.want:
 		problem = ErrChecksumMismatch
 	default:

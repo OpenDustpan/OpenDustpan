@@ -165,6 +165,8 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -337,6 +339,22 @@ func (stubWorkspaces) Upload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
 ) (workspace.StateVersion, error) {
 	return workspace.StateVersion{}, workspace.ErrUploadDenied
+}
+
+// CheckUpload allows every capability: route tests never reach it with a
+// wrong one unless they override it.
+func (stubWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+// CheckJSONRenderingUpload allows every capability: route tests never reach
+// it with a wrong one unless they override it.
+func (stubWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
 }
 
 // DiscardJSONRendering denies every rendering upload: route tests never
@@ -692,6 +710,8 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -712,6 +732,8 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {
@@ -734,6 +756,8 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -1499,6 +1523,18 @@ func (errorWorkspaces) Upload(
 	return workspace.StateVersion{}, errTestInternal
 }
 
+func (errorWorkspaces) CheckUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
+func (errorWorkspaces) CheckJSONRenderingUpload(
+	_ context.Context, _ workspace.StateVersionID, _ token.Token,
+) error {
+	return nil
+}
+
 func (errorWorkspaces) DiscardJSONRendering(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token, _ io.Reader,
 ) error {
@@ -1565,6 +1601,8 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		Workspaces:     errorWorkspaces{},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	}, tfe.ExtraRoutes)
 	if err != nil {

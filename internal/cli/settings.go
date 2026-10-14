@@ -173,12 +173,13 @@ var Settings = []*Setting{
 	intSetting(
 		"max-state-bytes", "DUSTPAN_MAX_STATE_BYTES", "0",
 		"largest OpenTofu state in bytes, 0 means the default (DUSTPAN_MAX_STATE_BYTES)",
-		"`0`: 512 MiB, the largest OpenTofu state",
+		"`0`: 32 MiB, the largest OpenTofu state",
 	),
 	intSetting(
 		"max-body-bytes-in-flight", "DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT", "0",
 		"concurrent large bodies in bytes, 0 means the default (DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT)",
-		"`0`: 128 MiB of large Pulumi request bodies at the same time",
+		"`0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. "+
+			"The budget covers OpenTofu state uploads as well.",
 	),
 	intSetting(
 		"checkpoint-delta-cutoff", "DUSTPAN_CHECKPOINT_DELTA_CUTOFF", "1048576",

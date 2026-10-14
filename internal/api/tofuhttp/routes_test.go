@@ -9,7 +9,17 @@ import "testing"
 func TestEveryRouteDeclaresItsActions(t *testing.T) {
 	t.Parallel()
 
-	h := &Handler{authn: nil, authz: nil, logger: nil, ws: nil, namespaces: nil, audit: nil, mux: nil, routes: nil}
+	h := &Handler{
+		authn:      nil,
+		authz:      nil,
+		logger:     nil,
+		ws:         nil,
+		namespaces: nil,
+		audit:      nil,
+		gate:       nil,
+		mux:        nil,
+		routes:     nil,
+	}
 	routes := h.buildRoutes()
 
 	if len(routes) == 0 {

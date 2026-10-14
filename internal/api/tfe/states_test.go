@@ -178,6 +178,8 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 		Workspaces:     stubWorkspaces{},
 		BaseURL:        base,
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -794,6 +796,8 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -1083,6 +1087,8 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -1194,6 +1200,8 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {

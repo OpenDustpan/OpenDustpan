@@ -225,6 +225,8 @@ func TestRestoreVersionOfAnotherWorkspace(t *testing.T) {
 		Workspaces:     foreignRestoreWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -296,6 +298,8 @@ func TestRestoreLockedByOther(t *testing.T) {
 		Workspaces:     lockedRestoreWorkspaces{stubWorkspaces: stubWorkspaces{}},
 		BaseURL:        baseurl.Resolver{},
 		Audit:          nil,
+		Gate:           nil,
+		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
