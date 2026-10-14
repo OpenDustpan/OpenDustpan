@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -28,15 +29,31 @@ func WithAuditChain(setting audit.ChainSetting) Option {
 	return func(o *settings) { o.auditChain = setting }
 }
 
+// WithAuditCheckpoints turns signed checkpoints of the audit log on (ADR 60
+// decision 18). They are off by default. They need the chain on and a blob
+// store: Run fails when the chain resolves off. While they are on, each
+// scheduled chain check signs the last hash of each scope whose chain
+// matches with signer, stores the checkpoint in the blob store, and checks
+// every stored checkpoint. A scope with a checkpoint that does not match
+// counts in dustpan_audit_chain_invalid.
+func WithAuditCheckpoints(signer *audit.Signer) Option {
+	return func(o *settings) { o.auditSigner = signer }
+}
+
+// ErrCheckpointsNeedChain reports signed checkpoints with the chain off.
+var ErrCheckpointsNeedChain = errors.New("audit checkpoints need the audit chain on: set --audit-chain=on")
+
 // chainDeps holds the ports of the chain switch: the switch, the audit
-// store, the check of a restored log and the namespace list. checker is
-// nil when the store cannot check a restored log.
+// store, the check of a restored log, the namespace list and the signed
+// checkpoints. checker is nil when the store cannot check a restored log,
+// and checkpoints is nil while signed checkpoints are off.
 type chainDeps struct {
-	sw         audit.ChainSwitch
-	entries    audit.Store
-	checker    audit.RestoreChecker
-	namespaces namespace.Store
-	setting    audit.ChainSetting
+	sw          audit.ChainSwitch
+	entries     audit.Store
+	checker     audit.RestoreChecker
+	namespaces  namespace.Store
+	checkpoints *audit.Checkpoints
+	setting     audit.ChainSetting
 }
 
 // newChainDeps answers the ports of the chain switch from the namespace
@@ -48,7 +65,7 @@ func newChainDeps(cfg *settings) (*chainDeps, error) {
 	entries, okEntries := cfg.namespaceStore.(audit.Store)
 
 	if !okSwitch || !okEntries {
-		if cfg.auditChain != audit.ChainAuto {
+		if cfg.auditChain != audit.ChainAuto || cfg.auditSigner != nil {
 			return nil, fmt.Errorf("namespace store cannot turn the audit chain on or off: %w", ErrMissingOption)
 		}
 
@@ -60,12 +77,23 @@ func newChainDeps(cfg *settings) (*chainDeps, error) {
 		checker = nil
 	}
 
+	var checkpoints *audit.Checkpoints
+
+	if cfg.auditSigner != nil {
+		if cfg.blobStore == nil {
+			return nil, fmt.Errorf("audit checkpoints need a blob store: %w", ErrMissingOption)
+		}
+
+		checkpoints = &audit.Checkpoints{Blobs: cfg.blobStore, Entries: entries, Signer: cfg.auditSigner}
+	}
+
 	return &chainDeps{
-		sw:         sw,
-		entries:    entries,
-		checker:    checker,
-		namespaces: cfg.namespaceStore,
-		setting:    cfg.auditChain,
+		sw:          sw,
+		entries:     entries,
+		checker:     checker,
+		namespaces:  cfg.namespaceStore,
+		checkpoints: checkpoints,
+		setting:     cfg.auditChain,
 	}, nil
 }
 
@@ -83,6 +111,17 @@ func (s *Server) resolveAuditChain(ctx context.Context) error {
 	}
 
 	s.chainOn = on
+
+	if s.chain.checkpoints == nil {
+		return nil
+	}
+
+	if !on {
+		return ErrCheckpointsNeedChain
+	}
+
+	s.logger.InfoContext(ctx, "audit checkpoints are on",
+		slog.String("key_id", s.chain.checkpoints.Signer.KeyID()))
 
 	return nil
 }
@@ -128,7 +167,7 @@ func (s *Server) checkAuditChain(ctx context.Context) {
 		return
 	}
 
-	invalid, err := audit.CheckScopes(ctx, s.chain.entries, scopes)
+	invalid, err := s.checkScopes(ctx, scopes)
 	if err != nil && ctx.Err() != nil {
 		return
 	}
@@ -219,4 +258,65 @@ func recheckChainAfterRestore(chain *chainDeps, rc restoreChain) restoreStep {
 
 		return nil
 	}
+}
+
+// checkScopes runs the chain check of each scope, and the checkpoint step
+// while checkpoints are on. It answers the count of scopes that fail. A
+// scope whose check answers an error counts as failed too, and the error
+// joins the answer.
+func (s *Server) checkScopes(ctx context.Context, scopes []namespace.Name) (int, error) {
+	if s.chain.checkpoints == nil {
+		return audit.CheckScopes(ctx, s.chain.entries, scopes)
+	}
+
+	var (
+		invalid int
+		errs    []error
+	)
+
+	for _, scope := range scopes {
+		ok, err := s.checkScope(ctx, scope)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("check %s: %w", scope, err))
+		}
+
+		if !ok {
+			invalid++
+		}
+	}
+
+	return invalid, errors.Join(errs...)
+}
+
+// checkScope checks the chain of scope, signs a checkpoint of its last
+// hash when the chain matches, and checks the stored checkpoints of scope.
+// It never signs a chain that does not match.
+func (s *Server) checkScope(ctx context.Context, scope namespace.Name) (bool, error) {
+	chain, err := s.chain.entries.Check(ctx, scope)
+	if err != nil {
+		return false, fmt.Errorf("chain: %w", err)
+	}
+
+	if !chain.Valid {
+		return false, nil
+	}
+
+	cps := s.chain.checkpoints
+
+	_, err = cps.Write(ctx, scope, s.now())
+	if err != nil {
+		return false, fmt.Errorf("checkpoint: %w", err)
+	}
+
+	result, err := cps.Verify(ctx, scope)
+	if err != nil {
+		return false, fmt.Errorf("checkpoints: %w", err)
+	}
+
+	if !result.Valid {
+		s.logger.ErrorContext(ctx, "audit checkpoint does not match",
+			slog.String("scope", scope.String()), slog.Int64("sequence", result.BadSequence))
+	}
+
+	return result.Valid, nil
 }

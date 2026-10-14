@@ -280,7 +280,9 @@ type serveFlags struct {
 	auditSinks              []string
 	logSinks                []string
 	// app is the application logger and its sinks, set by run.
-	app appLog
+	app                 appLog
+	auditSigningKeyFile string
+	auditCheckpoints    bool
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -313,6 +315,10 @@ func (f *serveFlags) check() error {
 
 	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
 		return fmt.Errorf("--audit-chain: %w", err)
+	}
+
+	if err := f.checkCheckpointFlags(); err != nil {
+		return err
 	}
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
@@ -395,6 +401,8 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
+	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
 }
 
 // registerNet registers the network and console flags.
@@ -945,6 +953,13 @@ func (f *serveFlags) serveWithStores(
 	}
 	opts = append(opts, f.backupOptions(backupTarget)...)
 	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...))
+
+	checkpoints, err := f.checkpointOptions()
+	if err != nil {
+		return err
+	}
+
+	opts = append(opts, checkpoints...)
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks

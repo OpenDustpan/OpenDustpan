@@ -249,6 +249,18 @@ var Settings = []*Setting{
 			"on or off decide alone (DUSTPAN_AUDIT_CHAIN)",
 		"`auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone",
 	).WithFile("audit-chain"),
+	boolSetting(
+		"audit-checkpoints", "DUSTPAN_AUDIT_CHECKPOINTS",
+		"sign a checkpoint of the audit chain of each scope every hour and store it in the blob store; "+
+			"needs --audit-chain=on and --audit-signing-key-file (DUSTPAN_AUDIT_CHECKPOINTS=true)",
+		"(none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file",
+	).WithFile("audit-checkpoints"),
+	stringSetting(
+		"audit-signing-key-file", "DUSTPAN_AUDIT_SIGNING_KEY_FILE", "",
+		"file holding the base64 32-byte Ed25519 seed that signs audit checkpoints "+
+			"(DUSTPAN_AUDIT_SIGNING_KEY_FILE)",
+		referenceNone,
+	).WithFile("audit-signing-key-file").WithDoc("A file that holds the base64 32-byte Ed25519 seed. Only its owner can read it."),
 	stringSetting(
 		"log-sink", "DUSTPAN_LOG_SINK", "",
 		"a target of the application log instead of stderr; repeat the flag for more targets. Each is "+

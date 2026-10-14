@@ -210,6 +210,44 @@ While the chain is off, the server does not run this check.
           summary: A restored OpenDustpan audit log does not match its chain
 ```
 
+## Sign checkpoints
+
+Signed checkpoints are opt-in (ADR 60 decision 18).
+They show a rewrite of the log by a person who can write to the database and compute the chain again.
+`--audit-checkpoints` (`DUSTPAN_AUDIT_CHECKPOINTS=true`) turns them on.
+They need `--audit-chain=on` and the signing key file that `--audit-signing-key-file` (`DUSTPAN_AUDIT_SIGNING_KEY_FILE`) names.
+The server does not start when one of the two is missing.
+
+The key file holds a 32-byte Ed25519 seed in base64.
+The file must not be readable by group or others.
+The server never makes the key and never derives it from the key-encryption key.
+Make a key with this command:
+
+```sh
+(umask 077 && openssl rand -base64 32 > audit-signing.key)
+```
+
+At each check, the server does these steps for each scope whose chain matches:
+
+1. It signs the hash of the last entry of the scope.
+   The checkpoint holds the scope, the sequence, the hash, the time, the key ID and the signature.
+   The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
+   The server logs the key ID at start.
+2. It writes the checkpoint to the blob store under `audit-checkpoints/<scope in hexadecimal>/<sequence>.json`.
+   A key holds one checkpoint and the server never writes it again, so two instances write it once.
+3. It checks every checkpoint of the scope: the key ID, the signature, and the hash of the entry at its sequence.
+
+A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
+The server never signs a scope whose chain does not match.
+
+Keep the blob store apart from the database: give the two stores different credentials.
+If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
+An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
+A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
+A restore of an older backup deletes entries that later checkpoints sign, so those checkpoints do not match.
+
+A change of the key makes every older checkpoint fail the check, because the check knows only the current key.
+
 ## What the chain protects against
 
 The chain shows a change or a deletion of an entry.
@@ -223,7 +261,7 @@ The chain does not stop a person who can write to the database and compute
 the chain again.
 Such a person can rewrite the entries and their hashes, and the check still
 answers valid.
-An anchor outside the database is RFC 22.
+Signed checkpoints in the blob store are the anchor outside the database (see above).
 Protect the database and its backups as the guide for backups says.
 
 ## Alert on failed logging

@@ -159,6 +159,8 @@ type settings struct {
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
+	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
+	auditSigner *audit.Signer
 }
 
 // Option configures a Server.
@@ -465,6 +467,7 @@ func defaultSettings() *settings {
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainAuto,
 		auditSinks:              nil,
+		auditSigner:             nil,
 	}
 }
 

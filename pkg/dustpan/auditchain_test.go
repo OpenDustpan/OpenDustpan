@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -281,10 +282,13 @@ func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) 
 func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) (*dustpan.Server, func()) {
 	t.Helper()
 
-	authn, err := identity.NewStaticToken("admin", adminToken)
-	if err != nil {
-		t.Fatalf("authenticator: %v", err)
-	}
+	return runAuditServer(t, st, newChainBlobs(t), dustpan.WithAuditChain(setting))
+}
+
+// newChainBlobs opens a blob store in a temporary directory that the test
+// closes.
+func newChainBlobs(t *testing.T) *fs.Store {
+	t.Helper()
 
 	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
 	if err != nil {
@@ -297,26 +301,17 @@ func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.Cha
 		}
 	})
 
-	srv, err := dustpan.NewServer(
-		dustpan.WithRegion(region),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
-		dustpan.WithSecretWrapper(testWrapper(t)),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
-		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(st),
-		dustpan.WithAuthenticator(authn),
-		dustpan.WithListener(openTestListener(t)),
-		dustpan.WithAuditChain(setting),
-	)
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
+	return blobs
+}
+
+// runAuditServer starts a server on st and blobs with extra options and
+// answers it and a function that stops it and waits for Run.
+func runAuditServer(
+	t *testing.T, st *sqlite.Store, blobs blob.Store, extra ...dustpan.Option,
+) (*dustpan.Server, func()) {
+	t.Helper()
+
+	srv := newAuditServer(t, st, blobs, extra...)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := runServer(ctx, srv)
@@ -340,6 +335,40 @@ func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.Cha
 	t.Cleanup(stop)
 
 	return srv, stop
+}
+
+// newAuditServer configures a server on st and blobs with extra options.
+func newAuditServer(t *testing.T, st *sqlite.Store, blobs blob.Store, extra ...dustpan.Option) *dustpan.Server {
+	t.Helper()
+
+	authn, err := identity.NewStaticToken("admin", adminToken)
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	opts := []dustpan.Option{
+		dustpan.WithRegion(region),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
+		dustpan.WithAuthenticator(authn),
+		dustpan.WithListener(openTestListener(t)),
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv
 }
 
 // waitForChainState waits until st records want, which Run does during its
