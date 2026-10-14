@@ -90,7 +90,13 @@ func (l pulumiLifecycle) Restore(
 	return ref.Project.String() + "/" + ref.Stack.String(), nil
 }
 
-// Purge implements inventory.Lifecycle.
+// Purge implements inventory.Lifecycle. It deletes the blobs of the unit
+// after the rows and keeps the blob purge record. A late write can still
+// leave a blob after this delete: a save or upload that passed its checks
+// before the update was canceled and the unit was force-deleted and purged
+// writes its blob, and then its SQL commit fails. The ADR 47 PR 4 sweep
+// deletes the blobs again after a grace period longer than any such write,
+// and only then finishes the record.
 func (l pulumiLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error {
 	id := stack.ID(unitID)
 
@@ -136,7 +142,13 @@ func (l opentofuLifecycle) Restore(
 	return ref.Name.String(), nil
 }
 
-// Purge implements inventory.Lifecycle.
+// Purge implements inventory.Lifecycle. It deletes the blobs of the unit
+// after the rows and keeps the blob purge record. A late write can still
+// leave a blob after this delete: a save or upload that passed its checks
+// before the update was canceled and the unit was force-deleted and purged
+// writes its blob, and then its SQL commit fails. The ADR 47 PR 4 sweep
+// deletes the blobs again after a grace period longer than any such write,
+// and only then finishes the record.
 func (l opentofuLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error {
 	id := workspace.ID(unitID)
 

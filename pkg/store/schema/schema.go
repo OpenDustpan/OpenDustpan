@@ -159,7 +159,7 @@ var embeddedMigrationNames = []string{
 	"0035_access_tokens.sql",
 	"0042_roles_and_grants.sql",
 	"0048_audit_changes.sql",
-	"0049_audit_object_id_and_blob_purges.sql",
+	"0052_audit_object_id_and_blob_purges.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
