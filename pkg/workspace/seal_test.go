@@ -69,6 +69,7 @@ func newSealFixture(t *testing.T) sealFixture {
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("plain service: %v", err)
@@ -91,6 +92,7 @@ func newSealFixture(t *testing.T) sealFixture {
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)
@@ -399,6 +401,7 @@ func TestSealUnsealedStatesResumesAfterCrash(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)
@@ -674,6 +677,7 @@ func TestSealSweepKeepsConcurrentUpload(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)
@@ -760,6 +764,7 @@ func TestSealSkipsVersionDeletedBeforeSeal(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)
@@ -834,6 +839,7 @@ func TestSealSkipsVersionAndBlobDeletedBeforeRead(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)

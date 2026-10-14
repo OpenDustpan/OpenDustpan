@@ -48,6 +48,7 @@ func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, chang
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

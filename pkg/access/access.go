@@ -11,7 +11,7 @@
 // A role is a named set of actions. Each action is in exactly one family:
 //
 //   - operator: the operation of the installation (backups, restores,
-//     maintenance, metrics),
+//     maintenance, metrics, the installation audit log),
 //   - administration: the principals, groups, roles and grants of the
 //     installation, and namespace create,
 //   - data: every action inside a namespace, its access included.
@@ -66,7 +66,7 @@ type Family string
 
 // Families of actions. No action is in two families.
 const (
-	// FamilyOperator holds the operation of the installation.
+	// FamilyOperator holds the operation of the installation, and its audit log.
 	FamilyOperator Family = "operator"
 	// FamilyAdministration holds the principals, groups, roles and grants
 	// of the installation, and namespace create.
@@ -88,6 +88,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
+	identity.ActionServerReadAudit:   FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
 
@@ -102,6 +103,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadTokens:          FamilyAdministration,
 	identity.ActionServerManageTokens:        FamilyAdministration,
 	identity.ActionServerManageServiceTokens: FamilyAdministration,
+	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,
@@ -127,6 +129,8 @@ var families = map[identity.Action]Family{
 	identity.ActionUnitReadSecrets:        FamilyData,
 	identity.ActionUnitMove:               FamilyData,
 	identity.ActionUnitManageAccess:       FamilyData,
+	identity.ActionUnitRestore:            FamilyData,
+	identity.ActionUnitPurge:              FamilyData,
 	identity.ActionUnitReadAccess:         FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
@@ -277,11 +281,36 @@ func (r Role) Has(action identity.Action) bool {
 
 // GrantQuery is a page of the grants on one object as a store reads it:
 // the grants after the subject AfterSubject and the role AfterRole, in the
-// order of subject then role, at most Limit of them.
+// order of subject then role, at most Limit of them. Subject, when it is not
+// empty, keeps the grants of that subject (the text form). Role, when it is
+// not empty, keeps the grants of that role.
 type GrantQuery struct {
 	AfterSubject string
 	AfterRole    string
+	Subject      string
+	Role         string
 	Limit        int
+}
+
+// Holder kinds of a listed grant, next to the principal kinds.
+const (
+	// HolderGroup is the holder kind of a grant to a group.
+	HolderGroup = "group"
+)
+
+// Holder names the holder of a grant for a list: the display name of a
+// principal (its subject when it has no display name) and its kind (person
+// or service), or the name of a group and the kind HolderGroup. Both are
+// empty when the record does not exist.
+type Holder struct {
+	Name string
+	Kind string
+}
+
+// ListedGrant is one grant of a list, with its holder.
+type ListedGrant struct {
+	Holder Holder
+	Grant  Grant
 }
 
 // GrantStore keeps the grants.
@@ -314,10 +343,12 @@ type GrantStore interface {
 	// installation). It returns ErrNotFound when no such grant exists in
 	// that namespace.
 	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
-	// ListGrantsOn returns one page of the current grants on obj, ordered
-	// by subject then role, and the count of every current grant on obj. A
-	// unit obj matches by its stable ID, and returns ErrInvalid with none.
-	ListGrantsOn(ctx context.Context, obj identity.Object, q GrantQuery) ([]Grant, int64, error)
+	// ListGrantsOn returns one page of the current grants on obj that
+	// match the filters of q, ordered by subject then role, each with its
+	// holder, and the count of every current grant on obj that matches the
+	// filters. It reads the holders in the query of the page. A unit obj
+	// matches by its stable ID, and returns ErrInvalid with none.
+	ListGrantsOn(ctx context.Context, obj identity.Object, q GrantQuery) ([]ListedGrant, int64, error)
 	// GrantsOn returns every current grant that one of subjects holds on
 	// one of objects, in one query. An empty list of subjects or objects
 	// returns none. A unit matches by its stable ID: a unit object with none

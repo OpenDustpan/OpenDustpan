@@ -9,14 +9,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/logsink/file"
+	"opendustpan.org/opendustpan/pkg/logsink/slogsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -50,7 +54,9 @@ func (f failingStackStore) GetStack(_ context.Context, _ stack.Ref) (stack.Stack
 // encrypt route has a key. A nil stackErr uses the SQLite store for stacks;
 // a set stackErr fails stack reads with it, so one request answers 500. It
 // returns the test server, the dustpan server, and the store for seeding.
-func canaryServer(t *testing.T, sink io.Writer, stackErr error) (*httptest.Server, *dustpan.Server, *sqlite.Store) {
+func canaryServer(
+	t *testing.T, sink io.Writer, stackErr error, extra ...dustpan.Option,
+) (*httptest.Server, *dustpan.Server, *sqlite.Store) {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -92,7 +98,7 @@ func canaryServer(t *testing.T, sink io.Writer, stackErr error) (*httptest.Serve
 
 	logger := slog.New(slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	srv, err := dustpan.NewServer(
+	opts := []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(stacks),
@@ -108,7 +114,9 @@ func canaryServer(t *testing.T, sink io.Writer, stackErr error) (*httptest.Serve
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithClock(func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) }),
-	)
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -350,4 +358,168 @@ func TestCanaryFailingStoreLogsNoDriverText(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("log lines = %d, want 2 (setup and failing request)", len(lines))
 	}
+}
+
+// TestCanaryNeverInAFileAuditSink sends the canary values through both tool
+// adapters with a file audit sink, then a decrypt report that writes one
+// audit entry. The sink receives the entry and none of the canary values
+// (ADR 32 decision 7, ADR 60 decision 13).
+func TestCanaryNeverInAFileAuditSink(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+
+	auditFile, err := file.Open(path)
+	if err != nil {
+		t.Fatalf("open audit file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := auditFile.Close(); closeErr != nil {
+			t.Errorf("close audit file: %v", closeErr)
+		}
+	})
+
+	var sink requestLogSink
+
+	ts, srv, st := canaryServer(t, &sink, nil,
+		dustpan.WithListener(openTestListener(t)),
+		dustpan.WithAuditSinks(audit.ShipSink{Sink: auditFile, Name: "canary", Interval: 10 * time.Millisecond}),
+	)
+	seedCanaryNamespace(t, st)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := runServer(ctx, srv)
+
+	t.Cleanup(func() {
+		cancel()
+
+		if runErr := <-done; runErr != nil {
+			t.Errorf("run: %v", runErr)
+		}
+	})
+
+	created := doLogged(t, ts, logCall{
+		method: http.MethodPost, path: "/api/stacks/acme/web", auth: "token " + adminToken,
+		requestID: "", body: `{"stackName":"prod"}`,
+	})
+	if created.status != http.StatusOK {
+		t.Fatalf("create stack: status %d, body %s", created.status, created.body)
+	}
+
+	calls := canaryCalls()
+	for _, tc := range calls {
+		doLogged(t, ts, tc.call)
+	}
+
+	reportCanary := "canary-report-6f7a8b9c0d1e2f3a4b5c"
+	report := logCall{
+		method: http.MethodPost, path: "/api/stacks/acme/web/prod/decrypt/log-decryption",
+		auth: "token " + adminToken, requestID: "", body: `{"ciphertext":"` + reportCanary + `"}`,
+	}
+	calls = append(calls, canaryCall{kind: "decrypt report", canaries: []string{reportCanary}, call: report})
+
+	reported := doLogged(t, ts, report)
+	if reported.status != http.StatusNoContent {
+		t.Fatalf("decrypt report: status %d, body %s", reported.status, reported.body)
+	}
+
+	shipped := waitForFileLine(t, path, `"action":"unit:decrypt"`)
+
+	requireAbsent(t, "audit file sink", shipped, calls)
+}
+
+// waitForFileLine waits until the file at path holds want and answers its
+// content. It fails the test after a few seconds.
+func waitForFileLine(t *testing.T, path, want string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for {
+		data, err := os.ReadFile(path) //nolint:gosec // The path is a test temp file.
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+
+		if strings.Contains(string(data), want) {
+			return string(data)
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("%s lacks %q after 5s: %s", path, want, data)
+		}
+
+		timer := time.NewTimer(10 * time.Millisecond)
+
+		select {
+		case <-timer.C:
+		case <-t.Context().Done():
+			timer.Stop()
+			t.Fatal("test ended while it waited for the audit file")
+		}
+	}
+}
+
+// TestCanaryNeverInAFileLogSink sends the canary values through both tool
+// adapters with the application log on a file log sink (ADR 60 decision
+// 14). The file holds one request line for each call and none of the
+// canary values (ADR 32 decision 7).
+func TestCanaryNeverInAFileLogSink(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "app.jsonl")
+
+	logFile, err := file.Open(path)
+	if err != nil {
+		t.Fatalf("open log file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := logFile.Close(); closeErr != nil {
+			t.Errorf("close log file: %v", closeErr)
+		}
+	})
+
+	handler := slogsink.New(logFile, slogsink.Options{
+		Level:         slog.LevelDebug,
+		OnDrop:        nil,
+		QueueSize:     0,
+		BatchSize:     0,
+		FlushInterval: 0,
+		WriteTimeout:  0,
+	})
+
+	var unused requestLogSink
+
+	ts, _, st := canaryServer(t, &unused, nil, dustpan.WithLogger(slog.New(handler)))
+	seedCanaryNamespace(t, st)
+
+	created := doLogged(t, ts, logCall{
+		method: http.MethodPost, path: "/api/stacks/acme/web", auth: "token " + adminToken,
+		requestID: "", body: `{"stackName":"prod"}`,
+	})
+	if created.status != http.StatusOK {
+		t.Fatalf("create stack: status %d, body %s", created.status, created.body)
+	}
+
+	calls := canaryCalls()
+	for _, tc := range calls {
+		doLogged(t, ts, tc.call)
+	}
+
+	if closeErr := handler.Close(t.Context()); closeErr != nil {
+		t.Fatalf("flush log sink: %v", closeErr)
+	}
+
+	data, err := os.ReadFile(path) //nolint:gosec // The path is a test temp file.
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+
+	if lines := requestLines(t, string(data)); len(lines) != len(calls)+1 {
+		t.Fatalf("request lines in the log file = %d, want %d", len(lines), len(calls)+1)
+	}
+
+	requireAbsent(t, "log file sink", string(data), calls)
 }

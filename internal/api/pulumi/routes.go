@@ -631,7 +631,8 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 }
 
 // enforceLease serves a lease route: the update lease token stands in for the
-// declared actions, so the Authorizer does not run.
+// declared actions, so the Authorizer does not run. The update service checks
+// the access token that started the update (ADR 53).
 func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()

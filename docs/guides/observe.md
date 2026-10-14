@@ -81,6 +81,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_audit_append_failures_total` | (none) |
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
+| `dustpan_inactivity_sweeps_total` | `result` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -99,6 +100,9 @@ with the label `result` (`success` or `failure`).
 and 0 when it failed. It holds 1 at start. Alert when it holds 0: the server
 kept its old configuration, and the log line `config file reload failed`
 names the key and the rule.
+`dustpan_inactivity_sweeps_total` counts the runs of the inactivity disable.
+The `result` label is `success` or `failure`.
+Alert when the `failure` series grows: a failed run disables nothing.
 
 ## Request log
 
@@ -112,6 +116,43 @@ Values are `debug`, `info`, `warn` and `error`.
 `--log-format` (`DUSTPAN_LOG_FORMAT`) sets the format.
 The default is `json`.
 Values are `json` and `text`.
+
+## Send the application log to other targets
+
+The server writes its log to stderr by default.
+`--log-sink` (`DUSTPAN_LOG_SINK`) sends it to other targets instead (ADR 60 decision 14).
+Give `--log-sink` once for each target.
+In `DUSTPAN_LOG_SINK` and in the key `log-sink` of the configuration file, separate the targets with spaces or line breaks.
+The start log shows only whether `log-sink` is set, because a webhook URL can hold a token.
+Each target is `[<name>=]<target>`:
+
+| Target | Example |
+| --- | --- |
+| Standard error, in the format of `--log-format` | `stderr` |
+| Standard output, in the format of `--log-format` | `stdout` |
+| A file of JSON lines | `file:/var/log/dustpan/server.jsonl` |
+| Syslog (RFC 5424) over UDP, TCP or TLS | `syslog+tls://logs.example:6514` |
+| A signed HTTPS webhook | `webhook:https://logs.example/hooks/dustpan` |
+
+```sh
+opendustpan serve --log-sink stderr --log-sink 'syslog+tls://logs.example:6514'
+```
+
+Name `stderr` too when you want to keep the stderr lines.
+A syslog target uses the facility `local0` (16) unless you set `?facility=<0 to 23>`.
+`?max-size=<bytes>` caps a message, from 480 to 65507 bytes, default 8192.
+The server drops a line above the cap and counts it.
+A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
+The audit log guide describes the record format, the syslog format and the webhook signature.
+Object storage is a target of the audit log only.
+
+A target other than a stream is best effort.
+The server puts each line in a queue of 4,096 lines and never waits for the target.
+It writes the queue in batches, at least once a second.
+When the queue is full or a write fails, the server drops the lines.
+`dustpan_log_sink_dropped_total{sink="<name>"}` counts them.
+Without a name, the kind is the name: `file`, `syslog` or `webhook`.
+The server opens a file target again on `SIGHUP`, as it does for the audit log.
 
 ## Request IDs
 

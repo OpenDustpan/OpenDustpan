@@ -105,6 +105,7 @@ func seedUnsealedState(
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("plain service: %v", err)

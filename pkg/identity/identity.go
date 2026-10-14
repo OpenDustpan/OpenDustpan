@@ -99,6 +99,10 @@ const (
 	// ActionServerObserve allows reading installation metrics. Its object
 	// is ServerObject.
 	ActionServerObserve Action = "server:observe"
+	// ActionServerReadAudit allows reading the audit entries of the
+	// installation, the scope @server (ADR 60, decision 7). Its object is
+	// ServerObject.
+	ActionServerReadAudit Action = "server:read-audit"
 	// ActionServerMaintenance allows reading and changing the installation
 	// state between normal operation and maintenance mode. Its object is
 	// ServerObject.
@@ -141,6 +145,13 @@ const (
 	// ActionUnitManageAccess allows granting and revoking roles on a unit.
 	// Its object is a unit.
 	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionUnitRestore allows bringing back a deleted unit before its
+	// retention period ends (ADR 47). Its object is a unit.
+	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitPurge allows the final delete of a deleted unit before its
+	// retention period ends (ADR 47). It cannot be undone. Its object is a
+	// unit.
+	ActionUnitPurge Action = "unit:purge"
 	// ActionServerReadAccess allows reading the access-review export of the
 	// whole installation: every grant (ADR 52, decision 10). Its object is
 	// ServerObject.
@@ -197,6 +208,10 @@ const (
 	// object is CallerObject. Every authenticated person holds it with no
 	// grant.
 	ActionTokenManageOwn Action = "token:manage-own"
+	// ActionServerManageTokenPolicy allows changing the token life cycle
+	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
+	// 6). Its object is ServerObject.
+	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

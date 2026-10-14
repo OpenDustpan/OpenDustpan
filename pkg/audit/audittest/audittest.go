@@ -62,6 +62,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "check finds a deleted entry", test: testCheckDeletedEntry},
 		{name: "check pages a chain longer than one page", test: testCheckPagesLongChain},
 		{name: "a nil count and a set count round-trip with a valid chain", test: testValueCountRoundTrip},
+		{name: "an empty and a set object ID round-trip with a valid chain", test: testObjectIDRoundTrip},
 		{name: "the server scope keeps its own chain", test: testServerScopeChain},
 		{name: "the server scope refuses an entry of another scope", test: testServerScopeRefusesNamespace},
 		{name: "a namespace append refuses the server scope", test: testNamespaceRefusesServerScope},
@@ -135,6 +136,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Kind:       audit.KindReveal,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  requestID,
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -824,6 +826,47 @@ func testChangeKind(t *testing.T, ts TestStore) {
 
 	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("append with an unknown kind = %v, want ErrInvalidEntry", err)
+	}
+}
+
+// testObjectIDRoundTrip appends an entry without an object ID and one with
+// it: both list back as written, and the chain stays valid, so the hash of the
+// old-format entry is unchanged and the new field is covered.
+func testObjectIDRoundTrip(t *testing.T, ts TestStore) {
+	t.Helper()
+
+	s := ts.Store
+	ns := newNamespace(t, s)
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	withID := newEntry(ns.Name, "admin", "req-2", now())
+	withID.Kind = audit.KindChange
+	withID.ObjectID = "stk-0123"
+
+	if stored := appendEntry(t, s, ns.Fence(), withID); stored.ObjectID != withID.ObjectID {
+		t.Fatalf("stored object ID = %q, want %q", stored.ObjectID, withID.ObjectID)
+	}
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 2 || listing.Entries[0].ObjectID != withID.ObjectID ||
+		listing.Entries[1].ObjectID != "" {
+		t.Fatalf("listing = %+v, want the set ID newest and an empty ID oldest", listing.Entries)
+	}
+
+	checkValidChain(t, []audit.Entry{listing.Entries[1], listing.Entries[0]})
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 2 {
+		t.Fatalf("check = %+v, want 2 valid entries", check)
 	}
 }
 

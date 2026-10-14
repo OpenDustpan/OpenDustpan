@@ -213,7 +213,7 @@ func (h *Handler) reviewRoutes() []Route {
 // the read-access action action: one page of the export of the object, and
 // its audit entry.
 func (h *Handler) reviewAccess(action identity.Action) accessOp {
-	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c call) (principalResult, error) {
+	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call) (principalResult, error) {
 		req, err := reviewRequest(r)
 		if err != nil {
 			return failed(""), err
@@ -255,7 +255,13 @@ func reviewPageOf(page access.ReviewPage) reviewResponse {
 // read-access, in the namespace of the object or in @server. It fails
 // closed: the caller answers the error and no rows. NewHandler refuses a
 // config that serves the export with no audit store.
-func (h *Handler) appendReviewRead(r *http.Request, c call, action identity.Action, object string, at time.Time) error {
+func (h *Handler) appendReviewRead(
+	r *http.Request,
+	c *call,
+	action identity.Action,
+	object string,
+	at time.Time,
+) error {
 	entry := callerEntry(r, c.p, action)
 	entry.At, entry.Kind, entry.Outcome = at, audit.KindReadAccess, audit.OutcomeSuccess
 	entry.Object = object
@@ -426,7 +432,7 @@ func millisOf(t *time.Time) *int64 {
 // callerAccess serves GET /api/server/caller/access: the access of the
 // caller on one object, or by object kind.
 func callerAccess(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	q := r.URL.Query()
 	object, kind := q.Get("object"), q.Get("type")

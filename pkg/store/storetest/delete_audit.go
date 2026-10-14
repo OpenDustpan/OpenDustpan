@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -28,7 +31,8 @@ type auditLister interface {
 }
 
 // testDeleteAppendsChangeEntry deletes the stack and expects the audit chain
-// of the namespace to hold the entry of the delete, at the time of the delete.
+// of the namespace to hold the entry of the delete, at the time of the delete
+// and with the stable ID of the stack as its object ID.
 func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -37,8 +41,17 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 		t.Skip("store does not list audit entries")
 	}
 
+	st := mustGetFixtureStack(t, f)
+
 	want := deleteEntry(f.ref.Namespace)
-	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), want); err != nil {
+	err := f.s.DeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: want, PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -53,8 +66,8 @@ func testDeleteAppendsChangeEntry(t *testing.T, f fixture) {
 
 	got := listing.Entries[0]
 	if got.Kind != audit.KindChange || got.Object != want.Object || got.Action != want.Action ||
-		!got.At.Equal(want.At) || got.Sequence != 1 {
-		t.Fatalf("audit entry = %+v, want %+v as sequence 1", got, want)
+		!got.At.Equal(want.At) || got.Sequence != 1 || got.ObjectID != st.ID.String() {
+		t.Fatalf("audit entry = %+v, want %+v as sequence 1 with object ID %s", got, want, st.ID)
 	}
 }
 
@@ -75,12 +88,18 @@ func testDeleteRefusedEntryChangesNothing(t *testing.T, f fixture) {
 	for i := range refused {
 		e := &refused[i]
 
-		err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), *e)
+		err := f.s.DeleteStack(
+			t.Context(),
+			f.ref,
+			f.fence,
+			stack.EmptyGuard(),
+			inventory.Deletion{Entry: *e, PurgeAfter: purgeAt()},
+		)
 		if !errors.Is(err, audit.ErrInvalidEntry) {
 			t.Fatalf("delete with entry %+v: err = %v, want ErrInvalidEntry", e, err)
 		}
 
-		err = f.s.ForceDeleteStack(t.Context(), f.ref, f.fence, *e)
+		err = f.s.ForceDeleteStack(t.Context(), f.ref, f.fence, inventory.Deletion{Entry: *e, PurgeAfter: purgeAt()})
 		if !errors.Is(err, audit.ErrInvalidEntry) {
 			t.Fatalf("force delete with entry %+v: err = %v, want ErrInvalidEntry", e, err)
 		}
@@ -107,12 +126,24 @@ func testDeleteFailedAppendChangesNothing(t *testing.T, f fixture) {
 		t.Fatalf("break audit appends: %v", err)
 	}
 
-	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), deleteEntry(f.ref.Namespace))
+	err := f.s.DeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(f.ref.Namespace), PurgeAfter: purgeAt()},
+	)
 	if err == nil {
 		t.Fatal("delete with a failing audit append: err = nil, want an error")
 	}
 
-	if err := f.s.ForceDeleteStack(t.Context(), f.ref, f.fence, deleteEntry(f.ref.Namespace)); err == nil {
+	err = f.s.ForceDeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		inventory.Deletion{Entry: deleteEntry(f.ref.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err == nil {
 		t.Fatal("force delete with a failing audit append: err = nil, want an error")
 	}
 
@@ -176,7 +207,14 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 	st := mustGetFixtureStack(t, f)
 	waiting := f.create(t, f.ref, "u1", mutating())
 
-	if err := f.s.DeleteStack(ctx, f.ref, f.fence, stack.EmptyGuard(), deleteEntry(f.ref.Namespace)); err != nil {
+	err := f.s.DeleteStack(
+		ctx,
+		f.ref,
+		f.fence,
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(f.ref.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -186,15 +224,15 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 		Stack:     stack.Name("deleted:" + st.ID.String()),
 	}
 
-	if _, err := f.s.GetStack(ctx, tomb); !errors.Is(err, stack.ErrNotFound) {
+	if _, err = f.s.GetStack(ctx, tomb); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("get stack by the stored name: err = %v, want ErrNotFound", err)
 	}
 
-	if err := f.s.RenameStack(ctx, tomb, "back", f.fence); !errors.Is(err, stack.ErrNotFound) {
+	if err = f.s.RenameStack(ctx, tomb, "back", f.fence); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("rename by the stored name: err = %v, want ErrNotFound", err)
 	}
 
-	err := f.s.UpdateStackTags(ctx, tomb, map[string]string{"k": "v"}, deletedAt(), f.fence)
+	err = f.s.UpdateStackTags(ctx, tomb, map[string]string{"k": "v"}, deletedAt(), f.fence)
 	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("update tags by the stored name: err = %v, want ErrNotFound", err)
 	}
@@ -249,7 +287,7 @@ func testPortableDeleteKeepsChildren(t *testing.T, newStore PortableFactory) {
 		t.Context(),
 		seed.prod.Ref,
 		seed.acme.Fence(),
-		deleteEntry(seed.acme.Name),
+		inventory.Deletion{Entry: deleteEntry(seed.acme.Name), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
 		t.Fatalf("delete stack: %v", err)
@@ -282,7 +320,8 @@ func workspaceDeleteEntry(ns namespace.Name) audit.Entry {
 }
 
 // testDeleteWorkspaceAppendsChangeEntry deletes a workspace and expects the
-// audit chain of the namespace to hold the entry of the delete.
+// audit chain of the namespace to hold the entry of the delete, with the
+// workspace ID as its object ID.
 func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -295,7 +334,13 @@ func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
 	w := createTestWorkspace(t, s, ns, "network")
 	want := workspaceDeleteEntry(ns.Name)
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), want); err != nil {
+	err := s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: want, PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -309,8 +354,9 @@ func testDeleteWorkspaceAppendsChangeEntry(t *testing.T, s WorkspaceStore) {
 	}
 
 	got := listing.Entries[0]
-	if got.Kind != audit.KindChange || got.Object != want.Object || !got.At.Equal(want.At) || got.Sequence != 1 {
-		t.Fatalf("audit entry = %+v, want %+v as sequence 1", got, want)
+	if got.Kind != audit.KindChange || got.Object != want.Object || !got.At.Equal(want.At) || got.Sequence != 1 ||
+		got.ObjectID != w.ID.String() {
+		t.Fatalf("audit entry = %+v, want %+v as sequence 1 with object ID %s", got, want, w.ID)
 	}
 }
 
@@ -328,7 +374,12 @@ func testDeleteWorkspaceRefusedEntryChangesNothing(t *testing.T, s WorkspaceStor
 
 	refused := []audit.Entry{invalid, workspaceDeleteEntry("other")}
 	for i := range refused {
-		err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), refused[i])
+		err := s.DeleteWorkspace(
+			t.Context(),
+			w.Ref,
+			ns.Fence(),
+			inventory.Deletion{Entry: refused[i], PurgeAfter: purgeAt()},
+		)
 		if !errors.Is(err, audit.ErrInvalidEntry) {
 			t.Fatalf("delete with entry %+v: err = %v, want ErrInvalidEntry", refused[i], err)
 		}
@@ -356,7 +407,12 @@ func testDeleteWorkspaceFailedAppendChangesNothing(t *testing.T, s WorkspaceStor
 		t.Fatalf("break audit appends: %v", err)
 	}
 
-	err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name))
+	err := s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: workspaceDeleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
 	if err == nil {
 		t.Fatal("delete with a failing audit append: err = nil, want an error")
 	}
@@ -373,7 +429,13 @@ func testDeletedWorkspaceStoredNameFindsNothing(t *testing.T, s WorkspaceStore) 
 	ns := newWorkspaceNamespace(t, s, "acme")
 	w := createTestWorkspace(t, s, ns, "network")
 
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name)); err != nil {
+	err := s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: workspaceDeleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -434,10 +496,228 @@ func testDeleteWorkspaceRefusesPendingState(t *testing.T, s WorkspaceStore) {
 
 	unlockTestWorkspace(t, s, ns, w.Ref)
 
-	err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), workspaceDeleteEntry(ns.Name))
+	err := s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: workspaceDeleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
 	if !errors.Is(err, workspace.ErrPendingState) {
 		t.Fatalf("delete with a pending state version: err = %v, want ErrPendingState", err)
 	}
 
 	assertWorkspaceUnchanged(t, s, ns, w)
+}
+
+// testPortablePurgeRemovesChildren deletes and purges a stack that has tags,
+// updates, a checkpoint, events and data keys: no table of a portable export
+// holds a row of the stack any more, and the other stacks keep theirs.
+func testPortablePurgeRemovesChildren(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seed := seedBackupStore(t, s)
+	id := seed.prod.ID.String()
+
+	deletion := inventory.Deletion{Entry: deleteEntry(seed.acme.Name), PurgeAfter: purgeAt()}
+	if err := s.ForceDeleteStack(t.Context(), seed.prod.Ref, seed.acme.Fence(), deletion); err != nil {
+		t.Fatalf("delete stack: %v", err)
+	}
+
+	purge := lifecycleEntry(seed.acme.Name, "unit:purge")
+	if err := s.PurgeStack(t.Context(), seed.prod.ID, seed.acme.Fence(), purge); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
+
+	after, sum, _ := exportPortable(t, s)
+
+	for _, table := range append(keptChildTables(), "stacks", "inventory_deleted") {
+		path := backup.PortablePath(table)
+
+		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {
+			if row["stack_id"] == id || row["id"] == id || row["unit_id"] == id {
+				t.Fatalf("table %s still holds a row of the purged stack %s: %v", table, id, row)
+			}
+		}
+	}
+
+	if sum.RowCounts["stacks"] == 0 {
+		t.Fatal("export holds no stack, want the other stacks of the seed")
+	}
+}
+
+// Wrapper is a test wrapper around a store, as an adapter test builds one
+// to break or count a part of it. Inner returns the store it wraps, so a
+// conformance case reaches the optional ports of that store.
+type Wrapper interface {
+	Inner() any
+}
+
+// storeAs returns s, or the store that s wraps, as a T. It reports false
+// when neither is a T.
+func storeAs[T any](s any) (T, bool) {
+	if v, ok := s.(T); ok {
+		return v, true
+	}
+
+	if w, ok := s.(Wrapper); ok {
+		return storeAs[T](w.Inner())
+	}
+
+	var zero T
+
+	return zero, false
+}
+
+// auditAppender is the part of audit.Store that the object ID cases write.
+type auditAppender interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
+}
+
+// unitEntry returns an audit entry of the kind tool-operation on object in
+// ns, with no object ID, as a tool adapter writes it.
+func unitEntry(ns namespace.Name, object string) audit.Entry {
+	e := deleteEntry(ns)
+	e.Kind = audit.KindToolOperation
+	e.Action = "unit:read-secrets"
+	e.Object = object
+
+	return e
+}
+
+// checkAppendedObjectID appends e and checks that the store stored want as
+// its object ID.
+func checkAppendedObjectID(t *testing.T, s auditAppender, fence namespace.Fence, e audit.Entry, want string) {
+	t.Helper()
+
+	stored, err := s.Append(t.Context(), fence, e)
+	if err != nil {
+		t.Fatalf("append entry on %s: %v", e.Object, err)
+	}
+
+	if stored.ObjectID != want {
+		t.Fatalf("object ID of the entry on %s = %q, want %q", e.Object, stored.ObjectID, want)
+	}
+
+	if stored.Hash != audit.ComputeHash(stored, stored.PrevHash) {
+		t.Fatalf("hash of the entry on %s does not cover its object ID", e.Object)
+	}
+}
+
+// testAppendFillsStackID appends entries with no object ID, as the tool
+// adapters write them (ADR 47). An entry on the live stack gets its stable
+// ID in the append transaction; an entry on an unknown stack or on the
+// namespace gets none.
+func testAppendFillsStackID(t *testing.T, f fixture) {
+	t.Helper()
+
+	appender, ok := storeAs[auditAppender](f.s)
+	if !ok {
+		return
+	}
+
+	st := mustGetFixtureStack(t, f)
+	ns := f.ref.Namespace
+	unit := "pulumi:" + ns.String() + "/" + f.ref.Project.String() + "/" + f.ref.Stack.String()
+
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, unit), st.ID.String())
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, "pulumi:"+ns.String()+"/web/unknown"), "")
+	checkAppendedObjectID(t, appender, f.fence, unitEntry(ns, ns.String()), "")
+}
+
+// testAppendFillsWorkspaceID is testAppendFillsStackID for a workspace.
+func testAppendFillsWorkspaceID(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	appender, ok := storeAs[auditAppender](s)
+	if !ok {
+		return
+	}
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	checkAppendedObjectID(
+		t,
+		appender,
+		ns.Fence(),
+		unitEntry(ns.Name, "opentofu:acme/"+w.Ref.Name.String()),
+		w.ID.String(),
+	)
+	checkAppendedObjectID(t, appender, ns.Fence(), unitEntry(ns.Name, "opentofu:acme/unknown"), "")
+}
+
+// seedPurgedWorkspace makes the workspace "doomed" in acme with a finalized
+// state version and a data key, unlocks it, deletes it and purges it. It
+// returns the stable ID of the workspace.
+func seedPurgedWorkspace(t *testing.T, s PortableStore, acme namespace.Namespace) string {
+	t.Helper()
+
+	ctx := t.Context()
+	w := createTestWorkspace(t, s, acme, "doomed")
+	locked := lockTestWorkspace(t, s, acme, w, "alice")
+	declared := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l9", "v9", 1))
+	createPendingVersion(t, s, acme, declared)
+
+	current := finalizedVersion(declared, now().Add(2*time.Hour), "v9")
+	if _, err := s.RecordUploadAttempt(ctx, current.ID, current.Content, acme.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	if err := s.FinalizeStateVersion(ctx, current, acme.Fence()); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	unlockTestWorkspace(t, s, acme, w.Ref)
+
+	scope, err := secret.NewScope(acme.Name, w.ID.String())
+	if err != nil {
+		t.Fatalf("scope of the workspace: %v", err)
+	}
+
+	key := secret.WrappedKey{CreatedAt: now(), Scope: scope, WrapperID: "kek-1", Ciphertext: []byte("wrapped-doomed")}
+	if _, err := s.CreateKey(ctx, key, acme.Fence()); err != nil {
+		t.Fatalf("create key of the workspace: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: workspaceDeleteEntry(acme.Name), PurgeAfter: purgeAt()}
+	d.Entry.Object = "opentofu:" + acme.Name.String() + "/doomed"
+
+	if err := s.DeleteWorkspace(ctx, w.Ref, acme.Fence(), d); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	if err := s.PurgeWorkspace(ctx, w.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+		t.Fatalf("purge workspace: %v", err)
+	}
+
+	return w.ID.String()
+}
+
+// testPortablePurgeRemovesWorkspaceRows deletes and purges a workspace that
+// has a finalized state version and a data key (ADR 23, decision 5): no
+// table of a portable export holds a row of the workspace any more, and the
+// other workspace keeps its state versions.
+func testPortablePurgeRemovesWorkspaceRows(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seed := seedBackupStore(t, s)
+	id := seedPurgedWorkspace(t, s, seed.acme)
+
+	after, sum, _ := exportPortable(t, s)
+
+	for _, table := range []string{"workspaces", "state_versions", "secret_keys", "inventory", "inventory_deleted"} {
+		path := backup.PortablePath(table)
+
+		for _, row := range readPortableLines(t, path, after.files[path].Bytes()) {
+			if row["id"] == id || row["workspace_id"] == id || row["stack_id"] == id || row["unit_id"] == id {
+				t.Fatalf("table %s still holds a row of the purged workspace %s: %v", table, id, row)
+			}
+		}
+	}
+
+	if sum.RowCounts["state_versions"] == 0 || sum.RowCounts["secret_keys"] == 0 {
+		t.Fatal("export lost the state versions or the data keys of the other units")
+	}
 }

@@ -642,6 +642,46 @@ func TestNewServerRequiresSecretWrapper(t *testing.T) {
 	}
 }
 
+// TestNewServerRefusesShortRetention proves that the SDK keeps the minimum
+// soft-delete retention of the binary (ADR 47): a retention below one hour
+// fails with ErrInvalidOption, while zero (the default) and one hour pass.
+func TestNewServerRefusesShortRetention(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		retention time.Duration
+		wantErr   bool
+	}{
+		{retention: time.Minute, wantErr: true},
+		{retention: -time.Hour, wantErr: true},
+		{retention: 0, wantErr: false},
+		{retention: dustpan.MinSoftDeleteRetention, wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.retention.String(), func(t *testing.T) {
+			t.Parallel()
+
+			st, blobs, authn := requireServerPorts(t)
+			opts := append(fullServerOptions(t, st, blobs, authn), dustpan.WithSoftDeleteRetention(tc.retention))
+
+			_, err := dustpan.NewServer(opts...)
+			if tc.wantErr != errors.Is(err, dustpan.ErrInvalidOption) {
+				t.Fatalf(
+					"NewServer with retention %s: err = %v, want ErrInvalidOption %v",
+					tc.retention,
+					err,
+					tc.wantErr,
+				)
+			}
+
+			if !tc.wantErr && err != nil {
+				t.Fatalf("NewServer with retention %s: %v", tc.retention, err)
+			}
+		})
+	}
+}
+
 // requireServerPorts opens a SQLite store, a blob store and an authenticator.
 func requireServerPorts(t *testing.T) (*sqlite.Store, *fs.Store, *identity.StaticToken) {
 	t.Helper()

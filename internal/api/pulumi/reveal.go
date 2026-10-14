@@ -304,6 +304,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		Kind:       audit.KindReveal,
 		Outcome:    a.outcome,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   a.object.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
