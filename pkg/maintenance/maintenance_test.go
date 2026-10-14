@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -129,11 +130,11 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard) error {
+func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard, audit.Entry) error {
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence) error {
+func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, audit.Entry) error {
 	return stack.ErrNotFound
 }
 

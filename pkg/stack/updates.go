@@ -416,10 +416,10 @@ func (s *Updates) SaveCheckpoint(
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the stack. The caller
-// runs it after DeleteStack or ForceDeleteStack removed the rows, so no save
-// can still commit a row naming these blobs: a concurrent save fails its
-// fenced write once the stack is gone. It is best effort and logs no key.
+// DeleteStackBlobs removes every checkpoint blob of the stack. No route calls
+// it since the soft delete (ADR 47); it stays for the purge of a deleted
+// stack. The caller runs it after the rows are gone, so no save can still
+// commit a row naming these blobs. It is best effort and logs no key.
 func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
 	if err != nil {

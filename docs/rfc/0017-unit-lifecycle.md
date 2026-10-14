@@ -66,3 +66,9 @@ decides nothing. An ADR records a decision (ADR 15).
 
 The part on soft delete and on the move of a unit between namespaces is
 accepted as ADR 47 on 2026-10-12. The rest has no outcome yet.
+
+ADR 47 follow-up, decided by the project lead under the owner's delegation on
+2026-10-13: a delete frees the name at once, and a restore needs a free name
+(409 when it is taken, or a new name in the request). `pulumi stack rm
+--force` is the same soft delete, and a separate `unit:purge` action removes a
+deleted unit before its retention period ends.

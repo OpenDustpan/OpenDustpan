@@ -83,6 +83,15 @@ type Inventory struct {
 	LockOperation pgtype.Text
 }
 
+type InventoryDeleted struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
 type Namespace struct {
 	Name                string
 	HomeRegion          string
@@ -141,6 +150,8 @@ type Stack struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	ID          string
+	DeletedAtMs pgtype.Int8
+	DeletedName pgtype.Text
 }
 
 type StackTag struct {

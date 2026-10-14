@@ -847,6 +847,7 @@ type DeleteStackParams struct {
 	Name      string
 }
 
+// Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
 	if err != nil {
@@ -1524,7 +1525,7 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 const getStack = `-- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 `
 
 type GetStackParams struct {
@@ -1561,7 +1562,7 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 const getStackID = `-- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 `
 
 type GetStackIDParams struct {
@@ -1901,6 +1902,34 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+	)
+	return err
+}
+
+const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
+INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertDeletedInventoryParams struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
+// Records a deleted unit (ADR 47). The delete transaction removes the live
+// entry of the unit with DeleteInventory.
+func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedInventoryParams) error {
+	_, err := q.db.Exec(ctx, insertDeletedInventory,
+		arg.Namespace,
+		arg.Tool,
+		arg.UnitID,
+		arg.Name,
+		arg.DeletedAtMs,
+		arg.PurgeAfterMs,
 	)
 	return err
 }
@@ -2286,6 +2315,40 @@ func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([
 			return nil, err
 		}
 		items = append(items, blob_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeletedInventory = `-- name: ListDeletedInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = $1
+ORDER BY tool, name, unit_id
+`
+
+func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([]InventoryDeleted, error) {
+	rows, err := q.db.Query(ctx, listDeletedInventory, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -2825,7 +2888,7 @@ const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
-WHERE s.namespace = $1
+WHERE s.namespace = $1 AND s.deleted_at_ms IS NULL
 ORDER BY t.stack_id, t.name
 `
 
@@ -2852,7 +2915,7 @@ func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1
+WHERE namespace = $1 AND deleted_at_ms IS NULL
 ORDER BY project, name
 `
 
@@ -2897,7 +2960,7 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 const listStacksInProject = `-- name: ListStacksInProject :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = $1 AND project = $2
+WHERE namespace = $1 AND project = $2 AND deleted_at_ms IS NULL
 ORDER BY name
 `
 
@@ -3216,7 +3279,7 @@ func (q *Queries) LockServerAuditScope(ctx context.Context) error {
 const lockStackForUpdates = `-- name: LockStackForUpdates :one
 SELECT id, version
 FROM stacks
-WHERE namespace = $1 AND project = $2 AND name = $3
+WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 FOR NO KEY UPDATE
 `
 
@@ -3454,7 +3517,7 @@ func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberPa
 }
 
 const renameStack = `-- name: RenameStack :execrows
-UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4
+UPDATE stacks SET name = $1 WHERE namespace = $2 AND project = $3 AND name = $4 AND deleted_at_ms IS NULL
 `
 
 type RenameStackParams struct {
@@ -3691,7 +3754,7 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 const setStackVersion = `-- name: SetStackVersion :exec
 UPDATE stacks
 SET version = $1, updated_at_ms = $2
-WHERE namespace = $3 AND project = $4 AND name = $5
+WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL
 `
 
 type SetStackVersionParams struct {
@@ -3728,6 +3791,27 @@ type SetWorkspaceCurrentParams struct {
 func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurrentParams) error {
 	_, err := q.db.Exec(ctx, setWorkspaceCurrent, arg.CurrentStateVersionID, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const softDeleteStack = `-- name: SoftDeleteStack :execrows
+UPDATE stacks
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1
+WHERE id = $2 AND deleted_at_ms IS NULL
+`
+
+type SoftDeleteStackParams struct {
+	DeletedAtMs pgtype.Int8
+	ID          string
+}
+
+// Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
+// hold ":", so "deleted:" and the ID never match a lookup by name.
+func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteStack, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchStack = `-- name: TouchStack :exec

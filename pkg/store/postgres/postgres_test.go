@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -446,6 +447,7 @@ type uncountedStore struct {
 var (
 	_ storetest.CountNullifier = (*uncountedStore)(nil)
 	_ storetest.CountSetter    = (*uncountedStore)(nil)
+	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
 // openUncounted returns a store in a fresh schema of the database at base
@@ -501,6 +503,50 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) erro
 
 	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = $1`, count); err != nil {
 		return fmt.Errorf("set the checkpoint count: %w", err)
+	}
+
+	return nil
+}
+
+// List forwards to the audit list of the wrapped store, which the embedded
+// interface hides, so the delete case can read the entry of a delete.
+func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+	lister, ok := s.UpdatesStore.(audit.Store)
+	if !ok {
+		return audit.Listing{}, errNoAuditList
+	}
+
+	listing, err := lister.List(ctx, ns, page)
+	if err != nil {
+		return audit.Listing{}, fmt.Errorf("list audit entries: %w", err)
+	}
+
+	return listing, nil
+}
+
+// errNoAuditList reports a wrapped store without an audit list.
+var errNoAuditList = errors.New("wrapped store lists no audit entries")
+
+// BreakAuditAppends implements storetest.AuditBreaker with a trigger that
+// raises an error on every insert of an audit entry.
+func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			s.t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	_, err = conn.Exec(ctx, `CREATE FUNCTION break_audit_appends() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit append broken by the test'; END $$;
+CREATE TRIGGER break_audit_appends BEFORE INSERT ON audit_entries
+FOR EACH ROW EXECUTE FUNCTION break_audit_appends();`)
+	if err != nil {
+		return fmt.Errorf("create the trigger: %w", err)
 	}
 
 	return nil

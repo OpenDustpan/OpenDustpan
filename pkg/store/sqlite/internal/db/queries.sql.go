@@ -742,6 +742,7 @@ type DeleteStackParams struct {
 	Name      string
 }
 
+// Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
 func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
 	if err != nil {
@@ -1333,7 +1334,7 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 const getStack = `-- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackParams struct {
@@ -1370,7 +1371,7 @@ func (q *Queries) GetStack(ctx context.Context, arg GetStackParams) (GetStackRow
 const getStackID = `-- name: GetStackID :one
 SELECT id
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackIDParams struct {
@@ -1424,7 +1425,7 @@ func (q *Queries) GetStackTags(ctx context.Context, stackID string) ([]GetStackT
 const getStackVersion = `-- name: GetStackVersion :one
 SELECT version
 FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type GetStackVersionParams struct {
@@ -1732,6 +1733,34 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+	)
+	return err
+}
+
+const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
+INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertDeletedInventoryParams struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
+// Records a deleted unit (ADR 47). The delete transaction removes the live
+// entry of the unit with DeleteInventory.
+func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedInventoryParams) error {
+	_, err := q.db.ExecContext(ctx, insertDeletedInventory,
+		arg.Namespace,
+		arg.Tool,
+		arg.UnitID,
+		arg.Name,
+		arg.DeletedAtMs,
+		arg.PurgeAfterMs,
 	)
 	return err
 }
@@ -2129,6 +2158,43 @@ func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([
 			return nil, err
 		}
 		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeletedInventory = `-- name: ListDeletedInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = ?
+ORDER BY tool, name, unit_id
+`
+
+func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([]InventoryDeleted, error) {
+	rows, err := q.db.QueryContext(ctx, listDeletedInventory, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -2704,7 +2770,7 @@ const listStackTagsInNamespace = `-- name: ListStackTagsInNamespace :many
 SELECT t.stack_id, t.name, t.value
 FROM stack_tags AS t
 JOIN stacks AS s ON s.id = t.stack_id
-WHERE s.namespace = ?
+WHERE s.namespace = ? AND s.deleted_at_ms IS NULL
 ORDER BY t.stack_id, t.name
 `
 
@@ -2734,7 +2800,7 @@ func (q *Queries) ListStackTagsInNamespace(ctx context.Context, namespace string
 const listStacksInNamespace = `-- name: ListStacksInNamespace :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ?
+WHERE namespace = ? AND deleted_at_ms IS NULL
 ORDER BY project, name
 `
 
@@ -2782,7 +2848,7 @@ func (q *Queries) ListStacksInNamespace(ctx context.Context, namespace string) (
 const listStacksInProject = `-- name: ListStacksInProject :many
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
-WHERE namespace = ? AND project = ?
+WHERE namespace = ? AND project = ? AND deleted_at_ms IS NULL
 ORDER BY name
 `
 
@@ -3236,7 +3302,7 @@ func (q *Queries) RemoveGroupMember(ctx context.Context, arg RemoveGroupMemberPa
 }
 
 const renameStack = `-- name: RenameStack :execrows
-UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ?
+UPDATE stacks SET name = ? WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type RenameStackParams struct {
@@ -3473,7 +3539,7 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 const setStackVersion = `-- name: SetStackVersion :exec
 UPDATE stacks
 SET version = ?, updated_at_ms = ?
-WHERE namespace = ? AND project = ? AND name = ?
+WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL
 `
 
 type SetStackVersionParams struct {
@@ -3510,6 +3576,27 @@ type SetWorkspaceCurrentParams struct {
 func (q *Queries) SetWorkspaceCurrent(ctx context.Context, arg SetWorkspaceCurrentParams) error {
 	_, err := q.db.ExecContext(ctx, setWorkspaceCurrent, arg.CurrentStateVersionID, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const softDeleteStack = `-- name: SoftDeleteStack :execrows
+UPDATE stacks
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+type SoftDeleteStackParams struct {
+	DeletedAtMs sql.NullInt64
+	ID          string
+}
+
+// Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
+// hold ":", so "deleted:" and the ID never match a lookup by name.
+func (q *Queries) SoftDeleteStack(ctx context.Context, arg SoftDeleteStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, softDeleteStack, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const touchStack = `-- name: TouchStack :exec
