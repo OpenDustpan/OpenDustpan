@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -151,12 +152,23 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 	})
 }
 
-// DeleteWorkspace implements workspace.Store: it removes the workspace with
-// its state versions, its wrapped data key and its inventory entry in one
-// fenced transaction. The data key shares the secret_keys table with stack
-// scopes, keyed by the workspace ID, so DeleteSecretKeysOfStack removes it.
-func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+// DeleteWorkspace implements workspace.Store. It soft-deletes the workspace in
+// one fenced transaction (ADR 47), with its audit entry e (ADR 60, fail
+// closed): it frees the name, keeps the state versions
+// and the wrapped data key, and moves the inventory entry to the deleted
+// units. It returns
+// ErrLocked while the workspace is locked, ErrPendingState while it has a
+// pending state version, and ErrNotFound if no live
+// workspace has ref. The transaction holds the write lock from the start, so a
+// concurrent lock of the workspace either runs before the check or waits
+// until the delete commits.
+func (s *Store) DeleteWorkspace(
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
 		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
 			Name:      ref.Name.String(),
@@ -169,17 +181,13 @@ func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence na
 			return fmt.Errorf("select workspace: %w", getErr)
 		}
 
-		if keyErr := q.DeleteSecretKeysOfStack(ctx, row.ID); keyErr != nil {
-			return fmt.Errorf("delete secret key: %w", keyErr)
+		if busyErr := refuseBusyWorkspace(ctx, q, row.LockID, row.ID); busyErr != nil {
+			return busyErr
 		}
 
-		if versionsErr := q.DeleteStateVersionsOfWorkspace(ctx, row.ID); versionsErr != nil {
-			return fmt.Errorf("delete state versions: %w", versionsErr)
-		}
-
-		n, deleteErr := q.DeleteWorkspace(ctx, db.DeleteWorkspaceParams{
-			Namespace: ref.Namespace.String(),
-			Name:      ref.Name.String(),
+		n, deleteErr := q.SoftDeleteWorkspace(ctx, db.SoftDeleteWorkspaceParams{
+			DeletedAtMs: sql.NullInt64{Int64: e.At.UnixMilli(), Valid: true},
+			ID:          row.ID,
 		})
 		if deleteErr != nil {
 			return fmt.Errorf("delete workspace: %w", deleteErr)
@@ -189,17 +197,59 @@ func (s *Store) DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence na
 			return workspace.ErrNotFound
 		}
 
-		entry := db.DeleteInventoryParams{
-			Namespace: ref.Namespace.String(),
-			Tool:      workspaceInventoryTool,
-			Name:      ref.Name.String(),
-		}
-		if inventoryErr := q.DeleteInventory(ctx, entry); inventoryErr != nil {
-			return fmt.Errorf("delete inventory entry: %w", inventoryErr)
-		}
-
-		return nil
+		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, e.At)
 	})
+}
+
+// refuseBusyWorkspace returns ErrLocked while the workspace holds a lock, and
+// ErrPendingState while it has a pending state version, so a delete never
+// leaves an upload without its workspace. The caller runs it in the delete
+// transaction, which holds the write lock, so no declare runs between the count and the delete.
+func refuseBusyWorkspace(ctx context.Context, q *db.Queries, lockID, workspaceID string) error {
+	if lockID != "" {
+		return workspace.ErrLocked
+	}
+
+	pending, err := q.CountPendingStateVersions(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("count pending state versions: %w", err)
+	}
+
+	if pending > 0 {
+		return workspace.ErrPendingState
+	}
+
+	return nil
+}
+
+// moveWorkspaceInventoryToDeleted moves the inventory entry of the deleted
+// workspace ref, with the ID workspaceID, to the deleted units in the
+// transaction of q (ADR 47). The entry keeps the name before the delete.
+func moveWorkspaceInventoryToDeleted(
+	ctx context.Context, q *db.Queries, ref workspace.Ref, workspaceID string, at time.Time,
+) error {
+	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
+		Namespace:    ref.Namespace.String(),
+		Tool:         workspaceInventoryTool,
+		UnitID:       workspaceID,
+		Name:         ref.Name.String(),
+		DeletedAtMs:  at.UnixMilli(),
+		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("insert deleted inventory entry: %w", err)
+	}
+
+	entry := db.DeleteInventoryParams{
+		Namespace: ref.Namespace.String(),
+		Tool:      workspaceInventoryTool,
+		Name:      ref.Name.String(),
+	}
+	if err := q.DeleteInventory(ctx, entry); err != nil {
+		return fmt.Errorf("delete inventory entry: %w", err)
+	}
+
+	return nil
 }
 
 // CreateStateVersion implements workspace.StateStore with a fenced insert. A

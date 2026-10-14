@@ -94,7 +94,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
 		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
-		{name: "delete of the stack deletes its children", test: testDeleteStackDeletesChildren},
+		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
 		{name: "delete without force refuses a stack with resources", test: testDeleteRefusesResources},
 		{name: "delete with force removes a stack with resources", test: testDeleteWithForceRemovesResources},
@@ -1519,10 +1519,11 @@ func testCheckpointKeepsAfterEnd(t *testing.T, f fixture) {
 	assertCheckpointVersion(t, f, f.ref, canceled.Version, canceledCP)
 }
 
-// testDeleteStackDeletesChildren checks that the final delete of a stack
-// removes the stack with its updates, checkpoints and events, so no child
-// row remains.
-func testDeleteStackDeletesChildren(t *testing.T, f fixture) {
+// testDeletedStackChildrenUnreachable checks that after a soft delete the
+// stack and its updates, checkpoints and events are no longer reachable by
+// the name of the stack (ADR 47). The rows stay; the portable export case
+// proves that.
+func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 	t.Helper()
 
 	u := f.run(t, f.ref, "u1", mutating())

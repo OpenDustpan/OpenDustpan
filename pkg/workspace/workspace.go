@@ -26,6 +26,9 @@ var (
 	ErrInvalidName = errors.New("invalid workspace name")
 	// ErrLocked reports a lock request on a workspace that is already locked.
 	ErrLocked = errors.New("workspace is locked")
+	// ErrPendingState reports a delete of a workspace that has a pending state
+	// version: an upload that started and did not finish or expire.
+	ErrPendingState = errors.New("workspace has a pending state version")
 	// ErrNotLocked reports an operation that needs the caller to hold the lock.
 	ErrNotLocked = errors.New("workspace is not locked")
 	// ErrOverrideRefused reports an override that the unit or its namespace
