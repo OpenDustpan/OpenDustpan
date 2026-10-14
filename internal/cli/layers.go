@@ -117,10 +117,8 @@ func Resolve(fs *flag.FlagSet, settings []*Setting, lookup LookupFunc, file Conf
 			return nil, err
 		}
 
-		if setting.Flag != "" && winner.Source != SourceFlag && fs.Lookup(setting.Flag) != nil {
-			if err := fs.Set(setting.Flag, winner.Value); err != nil {
-				return nil, fmt.Errorf("setting %s from %s: %w", setting.Name(), winner.Source, err)
-			}
+		if err := applyWinner(fs, setting, winner); err != nil {
+			return nil, err
 		}
 
 		out = append(
@@ -136,6 +134,33 @@ func Resolve(fs *flag.FlagSet, settings []*Setting, lookup LookupFunc, file Conf
 	}
 
 	return out, nil
+}
+
+// applyWinner sets the flag of setting in fs to the value of winner, when
+// the flag exists and the command line does not set it. A List flag gets
+// the items of the value separated by white space, as its variable holds
+// them, so a variable with two items does not become one item.
+func applyWinner(fs *flag.FlagSet, setting *Setting, winner Layer) error {
+	if setting.Flag == "" || winner.Source == SourceFlag {
+		return nil
+	}
+
+	f := fs.Lookup(setting.Flag)
+	if f == nil {
+		return nil
+	}
+
+	if list, ok := f.Value.(*listValue); ok {
+		list.setItems(strings.Fields(winner.Value))
+
+		return nil
+	}
+
+	if err := fs.Set(setting.Flag, winner.Value); err != nil {
+		return fmt.Errorf("setting %s from %s: %w", setting.Name(), winner.Source, err)
+	}
+
+	return nil
 }
 
 // collectLayers answers the layers that hold a value for setting, highest
