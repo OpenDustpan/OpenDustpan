@@ -3540,6 +3540,104 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listExpiredInventory = `-- name: ListExpiredInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $2
+`
+
+type ListExpiredInventoryParams struct {
+	PurgeAfterMs int64
+	Limit        int32
+}
+
+// The first page of the deleted units of every namespace whose retention
+// ended at or before $1 (ADR 47), for the retention sweep. Byte order
+// (COLLATE "C"), as inventory.PageExpired orders.
+func (q *Queries) ListExpiredInventory(ctx context.Context, arg ListExpiredInventoryParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.Query(ctx, listExpiredInventory, arg.PurgeAfterMs, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredInventoryAfter = `-- name: ListExpiredInventoryAfter :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+  AND (purge_after_ms > $2
+    OR (purge_after_ms = $2 AND tool COLLATE "C" > $3)
+    OR (purge_after_ms = $2 AND tool = $3
+      AND unit_id COLLATE "C" > $4))
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $5
+`
+
+type ListExpiredInventoryAfterParams struct {
+	NowMs       int64
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int32
+}
+
+// The page of ListExpiredInventory after the cursor (end of retention,
+// tool, unit ID).
+func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpiredInventoryAfterParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.Query(ctx, listExpiredInventoryAfter,
+		arg.NowMs,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,

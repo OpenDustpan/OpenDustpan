@@ -344,6 +344,29 @@ FROM inventory_deleted
 WHERE namespace = $1
 ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
+-- name: ListExpiredInventory :many
+-- The first page of the deleted units of every namespace whose retention
+-- ended at or before $1 (ADR 47), for the retention sweep. Byte order
+-- (COLLATE "C"), as inventory.PageExpired orders.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $2;
+
+-- name: ListExpiredInventoryAfter :many
+-- The page of ListExpiredInventory after the cursor (end of retention,
+-- tool, unit ID).
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= sqlc.arg(now_ms)
+  AND (purge_after_ms > sqlc.arg(after_ms)
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool)
+      AND unit_id COLLATE "C" > sqlc.arg(after_unit_id)))
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;

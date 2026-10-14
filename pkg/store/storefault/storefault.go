@@ -102,6 +102,7 @@ type Inner interface {
 	workspace.StateStore
 	inventory.Reader
 	inventory.DeletedReader
+	inventory.ExpiredDeleted
 	maintenance.Store
 }
 
@@ -754,6 +755,18 @@ func (s *Store) GetDeletedUnit(
 	}
 
 	return s.inner.GetDeletedUnit(ctx, ns, tool, unitID)
+}
+
+// ListExpiredDeleted returns one page of expired deleted units, unless a
+// fault fires first.
+func (s *Store) ListExpiredDeleted(
+	ctx context.Context, now time.Time, after *inventory.ExpiredCursor, limit int,
+) ([]inventory.DeletedEntry, error) {
+	if err := s.before(ctx, "ListExpiredDeleted"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListExpiredDeleted(ctx, now, after, limit)
 }
 
 // GetState returns the installation state, unless a fault fires first.

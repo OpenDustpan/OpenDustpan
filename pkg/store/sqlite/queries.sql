@@ -315,6 +315,27 @@ FROM inventory_deleted
 WHERE namespace = ?
 ORDER BY tool, name, unit_id;
 
+-- name: ListExpiredInventory :many
+-- The first page of the deleted units of every namespace whose retention
+-- ended at or before the time (ADR 47), for the retention sweep.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= ?
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT ?;
+
+-- name: ListExpiredInventoryAfter :many
+-- The page of ListExpiredInventory after the cursor (end of retention,
+-- tool, unit ID).
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= sqlc.arg(now_ms)
+  AND (purge_after_ms > sqlc.arg(after_ms)
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id)))
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT sqlc.arg(page_limit);
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;

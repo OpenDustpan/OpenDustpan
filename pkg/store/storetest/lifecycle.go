@@ -763,3 +763,98 @@ func testRestoreOrPurgeWorkspaceInAnotherNamespace(t *testing.T, s WorkspaceStor
 		t.Fatalf("restore in acme: %v", err)
 	}
 }
+
+// testListExpiredDeleted deletes stacks in two namespaces whose retention
+// ends before, at and after a cut-off time, some at the same time. Each page
+// of ListExpiredDeleted must equal inventory.PageExpired over every deleted
+// unit, and walking the pages by their cursor must give each expired unit
+// once: across namespaces, in the order of the end of retention, then tool,
+// then unit ID.
+func testListExpiredDeleted(t *testing.T, s Store) {
+	t.Helper()
+
+	expired, ok := storeAs[inventory.ExpiredDeleted](s)
+	if !ok {
+		t.Fatal("store does not implement inventory.ExpiredDeleted, which the retention sweep needs")
+	}
+
+	cut := deletedAt().Add(10 * 24 * time.Hour)
+	ends := []time.Duration{-48 * time.Hour, -time.Hour, -time.Hour, 0, time.Millisecond, 24 * time.Hour}
+	all := make([]inventory.DeletedEntry, 0, 2*len(ends))
+
+	for _, name := range []string{"acme", "beta"} {
+		ns := newNamespace(t, s, name)
+
+		for i, end := range ends {
+			st := newStack(ns.Name, "web", fmt.Sprintf("s%d", i))
+			if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+				t.Fatalf("create stack %s: %v", st.Ref, err)
+			}
+
+			d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: cut.Add(end)}
+			if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
+				t.Fatalf("delete stack %s: %v", st.Ref, err)
+			}
+		}
+
+		listed, err := s.ListDeletedUnits(t.Context(), ns.Name)
+		if err != nil {
+			t.Fatalf("deleted units of %s: %v", ns.Name, err)
+		}
+
+		all = append(all, listed...)
+	}
+
+	for _, limit := range []int{2, 100} {
+		checkExpiredPages(t, expired, all, cut, limit)
+	}
+
+	if got, err := expired.ListExpiredDeleted(t.Context(), deletedAt(), nil, 10); err != nil || len(got) != 0 {
+		t.Fatalf("expired before any retention ends = %d, %v, want none", len(got), err)
+	}
+}
+
+// checkExpiredPages walks the expired units at now in pages of limit and
+// checks each page against inventory.PageExpired over all.
+func checkExpiredPages(t *testing.T, s inventory.ExpiredDeleted, all []inventory.DeletedEntry, now time.Time, limit int) {
+	t.Helper()
+
+	var (
+		cursor *inventory.ExpiredCursor
+		seen   int
+	)
+
+	want := len(inventory.PageExpired(all, now, nil, len(all)))
+
+	for pages := 0; ; pages++ {
+		if pages > len(all)+1 {
+			t.Fatalf("limit %d: more pages than entries", limit)
+		}
+
+		got, err := s.ListExpiredDeleted(t.Context(), now, cursor, limit)
+		if err != nil {
+			t.Fatalf("expired page %d: %v", pages, err)
+		}
+
+		wantPage := inventory.PageExpired(all, now, cursor, limit)
+		if !sameDeletedPage(
+			inventory.DeletedPage{Entries: got, Total: 0, Next: nil},
+			inventory.DeletedPage{Entries: wantPage, Total: 0, Next: nil},
+		) {
+			t.Fatalf("limit %d, page %d = %+v, want %+v", limit, pages, got, wantPage)
+		}
+
+		seen += len(got)
+
+		if len(got) < limit {
+			break
+		}
+
+		last := got[len(got)-1]
+		cursor = &inventory.ExpiredCursor{PurgeAfter: last.PurgeAfter, Tool: last.Tool, UnitID: last.UnitID}
+	}
+
+	if seen != want || want != 8 {
+		t.Fatalf("limit %d: walked %d expired units, want %d (8)", limit, seen, want)
+	}
+}
