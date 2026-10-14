@@ -290,7 +290,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		Namespace:  a.object.Namespace(),
 		Subject:    a.principal.Subject,
 		IDPSubject: "",
-		TokenID:    "",
+		TokenID:    a.principal.TokenID,
 		Action:     string(identity.ActionUnitReadSecrets),
 		Object:     a.object.String(),
 		Version:    a.version,
