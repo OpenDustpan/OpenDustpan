@@ -31,6 +31,8 @@ const (
 	// maxSinkSeries caps the series of the audit sink families: one per
 	// configured sink.
 	maxSinkSeries = MaxSinkSeries
+	// maxReloadSeries holds one series for each reload result.
+	maxReloadSeries = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -43,7 +45,14 @@ const (
 	labelVersion = "version"
 	// labelSink names a configured audit sink, for example "siem". The
 	// operator sets the name; it never holds an address or a secret.
-	labelSink = "sink"
+	labelSink   = "sink"
+	labelResult = "result"
+)
+
+// Results of a reload of the configuration file (ADR 63 decision 5).
+const (
+	ReloadSuccess = "success"
+	ReloadFailure = "failure"
 )
 
 // MaxSinkSeries is the count of sinks that the audit sink families label.
@@ -58,7 +67,8 @@ const MaxSinkSeries = 16
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
-// the HTTP middleware do (ADR 32 decision 9).
+// the HTTP middleware do (ADR 32 decision 9). It also holds the two
+// families of the reload of the configuration file (ADR 63 decision 5).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -68,9 +78,9 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
-	shipped  *Counter
-	sinkFail *Counter
-	sinkSkip *Counter
+	sinks    sinkFamilies
+	reloads  *Counter
+	reloadOK *Gauge
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -118,25 +128,24 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		shipped: reg.NewCounter(
-			"dustpan_audit_sink_entries_total",
-			"Audit entries that a sink accepted, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
+		sinks: newSinkFamilies(reg),
+		reloads: reg.NewCounter(
+			"dustpan_config_reloads_total",
+			"Reloads of the configuration file by result.",
+			[]string{labelResult},
+			maxReloadSeries,
 		),
-		sinkFail: reg.NewCounter(
-			"dustpan_audit_sink_failures_total",
-			"Failed delivery rounds of an audit sink, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
-		),
-		sinkSkip: reg.NewCounter(
-			"dustpan_audit_sink_skipped_total",
-			"Audit entries that a sink skipped because it cannot hold them, by sink.",
-			[]string{labelSink},
-			maxSinkSeries,
+		reloadOK: reg.NewGauge(
+			"dustpan_config_last_reload_success",
+			"1 when the last reload of the configuration file succeeded, else 0.",
+			nil,
+			1,
 		),
 	}
+
+	// The configuration that the server started with is valid, so the gauge
+	// starts at 1: an alert on 0 fires only after a failed reload.
+	m.reloadOK.Set(1, []string{}...)
 
 	build := reg.NewGauge("dustpan_build_info", "Server build info.", []string{labelVersion}, maxBuildCount)
 	build.Set(1, version)
@@ -211,11 +220,35 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
 }
 
+// sinkFamilies holds the audit sink families: counters labeled by sink,
+// with one series for each configured sink.
+type sinkFamilies struct {
+	shipped  *Counter
+	sinkFail *Counter
+	sinkSkip *Counter
+}
+
+// newSinkFamilies registers the audit sink families in reg.
+func newSinkFamilies(reg *Registry) sinkFamilies {
+	family := func(name, help string) *Counter {
+		return reg.NewCounter(name, help, []string{labelSink}, maxSinkSeries)
+	}
+
+	return sinkFamilies{
+		shipped:  family("dustpan_audit_sink_entries_total", "Audit entries that a sink accepted, by sink."),
+		sinkFail: family("dustpan_audit_sink_failures_total", "Failed delivery rounds of an audit sink, by sink."),
+		sinkSkip: family(
+			"dustpan_audit_sink_skipped_total",
+			"Audit entries that a sink skipped because it cannot hold them, by sink.",
+		),
+	}
+}
+
 // AddAuditShipped adds entries to the count of audit entries that the sink
 // named sink accepted.
 func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
 	if entries > 0 {
-		m.shipped.Add(uint64(entries), sink)
+		m.sinks.shipped.Add(uint64(entries), sink)
 	}
 }
 
@@ -223,7 +256,7 @@ func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
 // named sink. The shipper retries, so a failure loses no entry, but a count
 // that keeps growing means the sink falls behind. Operators alert on it.
 func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
-	m.sinkFail.Inc(sink)
+	m.sinks.sinkFail.Inc(sink)
 }
 
 // AddAuditSkipped adds entries to the count of audit entries that the sink
@@ -232,8 +265,25 @@ func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
 // such an entry. Operators alert when it is above zero.
 func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	if entries > 0 {
-		m.sinkSkip.Add(uint64(entries), sink)
+		m.sinks.sinkSkip.Add(uint64(entries), sink)
 	}
+}
+
+// ObserveConfigReload records one reload of the configuration file (ADR 63
+// decision 5): it counts result (ReloadSuccess or ReloadFailure) in
+// dustpan_config_reloads_total and sets dustpan_config_last_reload_success
+// to 1 for a success and 0 for a failure. Any other result counts as a
+// failure, so the label set stays fixed.
+func (m *ServerMetrics) ObserveConfigReload(result string) {
+	if result == ReloadSuccess {
+		m.reloads.Inc(ReloadSuccess)
+		m.reloadOK.Set(1, []string{}...)
+
+		return
+	}
+
+	m.reloads.Inc(ReloadFailure)
+	m.reloadOK.Set(0, []string{}...)
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

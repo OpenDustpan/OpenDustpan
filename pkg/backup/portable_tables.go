@@ -266,6 +266,7 @@ func portableSpec() []PortableTable {
 				{Name: "prev_hash", Kind: KindText},
 				{Name: "hash", Kind: KindText},
 				{Name: "value_count", Kind: KindInteger},
+				{Name: "changes", Kind: KindText},
 			},
 		},
 		{

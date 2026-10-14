@@ -80,8 +80,8 @@ func (l Level) String() string {
 }
 
 // Attr is one named attribute of a record. Value holds a string, an int64,
-// a bool or nil. An adapter writes any other type with its default text
-// form.
+// a bool, a json.RawMessage or nil. A JSON adapter writes a json.RawMessage
+// as it is. An adapter writes any other type with its default text form.
 type Attr struct {
 	Value any
 	Key   string
@@ -95,6 +95,12 @@ func String(key, value string) Attr {
 // Int64 returns an attribute with an integer value.
 func Int64(key string, value int64) Attr {
 	return Attr{Key: key, Value: value}
+}
+
+// RawJSON returns an attribute whose value is the JSON text raw. raw must
+// be valid JSON: MarshalJSON fails on any other text.
+func RawJSON(key string, raw json.RawMessage) Attr {
+	return Attr{Key: key, Value: raw}
 }
 
 // Bool returns an attribute with a boolean value.

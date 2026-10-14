@@ -12,7 +12,7 @@ import (
 // journalWriter returns the journal writer of the recording build. It checks
 // each batch with the replay verifier before it stores the batch. The update
 // store must also hold the journal rows.
-func journalWriter(cfg settings) (*stack.JournalEntries, error) {
+func journalWriter(cfg *settings) (*stack.JournalEntries, error) {
 	rows, ok := cfg.updateStore.(stack.JournalStore)
 	if !ok {
 		return nil, fmt.Errorf("%w: journal rows", stack.ErrMissingDependency)
