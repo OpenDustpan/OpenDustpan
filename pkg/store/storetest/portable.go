@@ -58,6 +58,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
 		{name: "a soft delete keeps every child row of the stack", test: testPortableDeleteKeepsChildren},
+		{name: "a purge removes every row of the stack", test: testPortablePurgeRemovesChildren},
 	}
 
 	for _, tc := range cases {

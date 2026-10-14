@@ -42,10 +42,12 @@ type memStore struct {
 	namespaces  map[namespace.Name]namespace.Namespace
 	workspaces  map[workspace.ID]workspace.Workspace
 	deleted     map[workspace.ID]inventory.DeletedEntry
-	versions    map[workspace.StateVersionID]workspace.StateVersion
-	current     map[workspace.ID]workspace.StateVersionID
-	entries     map[memInventoryKey]inventory.Entry
-	mu          sync.Mutex
+	// removed holds each deleted workspace, so a restore brings it back.
+	removed  map[workspace.ID]workspace.Workspace
+	versions map[workspace.StateVersionID]workspace.StateVersion
+	current  map[workspace.ID]workspace.StateVersionID
+	entries  map[memInventoryKey]inventory.Entry
+	mu       sync.Mutex
 	// lostAck makes the next finalize commit and then report an error, as a
 	// dropped connection after COMMIT would.
 	lostAck bool
@@ -68,6 +70,7 @@ func newMemStore() *memStore {
 		namespaces:   map[namespace.Name]namespace.Namespace{},
 		workspaces:   map[workspace.ID]workspace.Workspace{},
 		deleted:      map[workspace.ID]inventory.DeletedEntry{},
+		removed:      map[workspace.ID]workspace.Workspace{},
 		versions:     map[workspace.StateVersionID]workspace.StateVersion{},
 		current:      map[workspace.ID]workspace.StateVersionID{},
 		entries:      map[memInventoryKey]inventory.Entry{},
@@ -198,6 +201,32 @@ func (m *memStore) ListDeletedUnits(_ context.Context, ns namespace.Name) ([]inv
 	return out, nil
 }
 
+// QueryDeletedUnits implements inventory.DeletedReader with
+// inventory.PageDeleted over ListDeletedUnits.
+func (m *memStore) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	all, err := m.ListDeletedUnits(ctx, q.Namespace)
+	if err != nil {
+		return inventory.DeletedPage{}, err
+	}
+
+	return inventory.PageDeleted(all, q), nil
+}
+
+// GetDeletedUnit implements inventory.DeletedReader.
+func (m *memStore) GetDeletedUnit(
+	_ context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	e, ok := m.deleted[workspace.ID(unitID)]
+	if !ok || e.Namespace != ns || e.Tool != tool {
+		return inventory.DeletedEntry{}, inventory.ErrNotFound
+	}
+
+	return e, nil
+}
+
 func (m *memStore) CreateWorkspace(_ context.Context, w workspace.Workspace, fence namespace.Fence) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -290,7 +319,14 @@ func (m *memStore) SaveWorkspace(_ context.Context, w workspace.Workspace, fence
 // its name is free, while its state versions stay. It removes the inventory
 // entry, refuses a locked workspace with ErrLocked and one with a pending
 // state version with ErrPendingState.
-func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry) error {
+func (m *memStore) DeleteWorkspace(
+	_ context.Context,
+	ref workspace.Ref,
+	fence namespace.Fence,
+	d inventory.Deletion,
+) error {
+	e := d.Entry
+
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
 	}
@@ -313,18 +349,109 @@ func (m *memStore) DeleteWorkspace(_ context.Context, ref workspace.Ref, fence n
 
 	m.deleted[id] = inventory.DeletedEntry{
 		DeletedAt:  e.At,
-		PurgeAfter: e.At.Add(inventory.DeletedRetention),
+		PurgeAfter: d.PurgeAfter,
 		Namespace:  ref.Namespace,
 		Tool:       memInventoryTool,
 		UnitID:     id.String(),
 		Name:       ref.Name.String(),
 	}
+	m.removed[id] = m.workspaces[id]
 	delete(m.workspaces, id)
 
 	for key := range m.entries {
 		if key.namespace == ref.Namespace && key.tool == memInventoryTool && key.name == ref.Name.String() {
 			delete(m.entries, key)
 		}
+	}
+
+	return nil
+}
+
+// RestoreWorkspace implements workspace.Store: it brings back the deleted
+// workspace id of the namespace of fence under newName, or under its old
+// name, and publishes its inventory entry again.
+func (m *memStore) RestoreWorkspace(
+	_ context.Context, id workspace.ID, newName workspace.Name, fence namespace.Fence, e audit.Entry,
+) (workspace.Ref, error) {
+	if err := validMemEntry(e, fence); err != nil {
+		return workspace.Ref{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return workspace.Ref{}, err
+	}
+
+	entry, ok := m.deleted[id]
+	if !ok || entry.Namespace != fence.Namespace {
+		return workspace.Ref{}, workspace.ErrNotFound
+	}
+
+	name := newName
+	if name == "" {
+		name = workspace.Name(entry.Name)
+	}
+
+	ref := workspace.Ref{Namespace: fence.Namespace, Name: name}
+	for live := range m.workspaces {
+		if m.workspaces[live].Ref == ref {
+			return workspace.Ref{}, workspace.ErrAlreadyExists
+		}
+	}
+
+	w := m.removed[id]
+	w.Ref = ref
+	m.workspaces[id] = w
+	m.publish(w)
+
+	delete(m.removed, id)
+	delete(m.deleted, id)
+
+	return ref, nil
+}
+
+// PurgeWorkspace implements workspace.Store: it removes the deleted
+// workspace id of the namespace of fence with its state versions.
+func (m *memStore) PurgeWorkspace(_ context.Context, id workspace.ID, fence namespace.Fence, e audit.Entry) error {
+	if err := validMemEntry(e, fence); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if entry, ok := m.deleted[id]; !ok || entry.Namespace != fence.Namespace {
+		return workspace.ErrNotFound
+	}
+
+	for vid := range m.versions {
+		if m.versions[vid].Workspace == id {
+			delete(m.versions, vid)
+		}
+	}
+
+	delete(m.current, id)
+	delete(m.removed, id)
+	delete(m.deleted, id)
+
+	return nil
+}
+
+// validMemEntry checks e as the store adapters do: it must pass validation
+// and name the namespace of fence.
+func validMemEntry(e audit.Entry, fence namespace.Fence) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q", audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
 	return nil
@@ -886,6 +1013,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -904,6 +1032,72 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
 }
 
+// TestDeleteRecordsRetention proves that a delete records the end of the
+// configured retention: the delete time plus Config.Retention (ADR 47,
+// decision 2), not the default.
+func TestDeleteRecordsRetention(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+		Retention:          2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if err = svc.Delete(t.Context(), f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	deleted, err := f.store.ListDeletedUnits(t.Context(), f.ws.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("list deleted units: %v", err)
+	}
+
+	want := f.now.UTC().Add(2 * time.Hour)
+	if len(deleted) != 1 || !deleted[0].PurgeAfter.Equal(want) {
+		t.Fatalf("deleted units = %+v, want one that is purged after %v", deleted, want)
+	}
+}
+
+// retentionEntry returns a valid audit entry for a delete of acme's workspace.
+// The service sets its time.
+func retentionEntry() audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
+		Namespace:  "acme",
+		Subject:    "alice@example.com",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:manage",
+		Object:     "opentofu:acme/e2e-workspace",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "workspace_test",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		ObjectID:   "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
 // cappedService returns a service over the fixture stores holding at most
 // limit pending versions per workspace.
 func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
@@ -919,6 +1113,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		MaxPendingVersions: limit,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -2451,6 +2646,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		MaxPendingVersions: 2,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -2633,6 +2829,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("second service: %v", err)
@@ -3491,6 +3688,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		MaxStateBytes:      64,
 		Logger:             nil,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -3650,6 +3848,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		MaxStateBytes:      64,
 		Logger:             nil,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -3823,6 +4022,7 @@ func newSealedFixture(t *testing.T) fixture {
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      4 << 20,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -3895,6 +4095,7 @@ func TestSealedReadWithoutSealerFails(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service without a sealer: %v", err)

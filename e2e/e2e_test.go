@@ -2856,7 +2856,7 @@ func stackIDOf(t *testing.T, env *e2e.Env, org, name string) string {
 func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID string) []e2e.StepSpec {
 	qualified := fmt.Sprintf("%s/%s/%s", org, e2e.Project, softDeleted)
 
-	return []e2e.StepSpec{
+	steps := []e2e.StepSpec{
 		step("stack rm soft", nil, "stack", "rm", "--yes", "--stack", qualified),
 		step("stack ls hides the removed stack", checkNoTombstone(ctx, env, org), "stack", "ls", "--json", "--all"),
 		{
@@ -2884,6 +2884,13 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 
 			return nil
 		}, "stack", "init", qualified, "--no-select"),
+	}
+
+	// While the new stack holds the old name, the restore steps prove the
+	// 409, the restore under a new name and the purge.
+	steps = append(steps, pulumiRestoreSteps(ctx, env, org, removedID)...)
+
+	return append(steps,
 		step("stack history of new stack", func(r e2e.Result) error {
 			if got := strings.TrimSpace(r.Stdout); got != "[]" {
 				return fmt.Errorf("%w: new stack has history of the removed stack: %s", errUnexpected, got)
@@ -2892,7 +2899,7 @@ func pulumiSoftDeleteSteps(ctx context.Context, env *e2e.Env, org, removedID str
 			return nil
 		}, "stack", "history", "--json", "--stack", qualified),
 		step("stack rm new", nil, "stack", "rm", "--yes", "--stack", qualified),
-	}
+	)
 }
 
 // tombstonePrefix starts the stored name of a deleted unit. No response may
@@ -4346,7 +4353,9 @@ const remoteProdName = e2e.RemotePrefix + e2e.RemoteProd
 func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 	var removedID string
 
-	return []e2e.StepSpec{
+	// While the new workspace holds the old name, the restore steps prove the
+	// 409, the restore under a new name and the purge.
+	return append([]e2e.StepSpec{
 		step("workspace select dev again", func(e2e.Result) error {
 			id, err := remoteWorkspaceID(ctx, env, remoteProdName)
 			removedID = id
@@ -4366,7 +4375,7 @@ func tofuSoftDeleteSteps(ctx context.Context, env *e2e.Env) []e2e.StepSpec {
 		}, "workspace", "list", "-no-color"),
 		step("workspace new prod again", nil, "workspace", "new", e2e.RemoteProd, "-no-color"),
 		step("remote state pull new prod", statePullLacksGreeting, "state", "pull", "-no-color"),
-	}
+	}, tofuRestoreSteps(ctx, env, &removedID)...)
 }
 
 // workspaceIDData is the data member of a TFE-compatible workspace document,

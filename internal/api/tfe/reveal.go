@@ -271,6 +271,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 		Kind:       audit.KindReveal,
 		Outcome:    a.outcome,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   a.object.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

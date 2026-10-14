@@ -136,6 +136,13 @@ const (
 	// ActionUnitManageAccess allows granting and revoking roles on a unit.
 	// Its object is a unit.
 	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionUnitRestore allows bringing back a deleted unit before its
+	// retention period ends (ADR 47). Its object is a unit.
+	ActionUnitRestore Action = "unit:restore"
+	// ActionUnitPurge allows the final delete of a deleted unit before its
+	// retention period ends (ADR 47). It cannot be undone. Its object is a
+	// unit.
+	ActionUnitPurge Action = "unit:purge"
 	// ActionRoleRead allows reading the role catalog. Every signed-in
 	// principal holds it, so a person who grants a role can see its
 	// actions. Its object is ServerObject.

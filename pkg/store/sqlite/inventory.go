@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -127,17 +129,17 @@ func removeStackInventory(ctx context.Context, q *db.Queries, ref stack.Ref) err
 
 // moveStackInventoryToDeleted moves the inventory entry of the stack ref with
 // stackID to the deleted units, in the transaction of the delete (ADR 13, ADR
-// 47). The retention period ends DeletedRetention after at.
+// 47). The retention period ends at purgeAfter.
 func moveStackInventoryToDeleted(
-	ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time,
+	ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, d inventory.Deletion,
 ) error {
 	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
 		Namespace:    ref.Namespace.String(),
 		Tool:         inventoryTool,
 		UnitID:       stackID,
 		Name:         stackUnitName(ref),
-		DeletedAtMs:  at.UnixMilli(),
-		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+		DeletedAtMs:  d.Entry.At.UnixMilli(),
+		PurgeAfterMs: d.PurgeAfter.UnixMilli(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert deleted inventory entry: %w", err)
@@ -170,6 +172,150 @@ func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inve
 	}
 
 	return out, nil
+}
+
+// QueryDeletedUnits implements inventory.DeletedReader with one count and one
+// page query, built from the filters that q sets. The page query reads one
+// row more than the page size, so it knows whether a next page exists.
+func (s *Store) QueryDeletedUnits(ctx context.Context, q inventory.DeletedQuery) (inventory.DeletedPage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	where, args := deletedFilter(q)
+
+	var total int
+
+	countQuery := "SELECT COUNT(*) FROM inventory_deleted WHERE " + // #nosec G202 // Fixed fragments only.
+		where
+
+	count := s.conn.QueryRowContext(ctx, countQuery, args...)
+	if err := count.Scan(&total); err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("count deleted inventory: %w", err)
+	}
+
+	if q.After != nil {
+		where += " AND (tool, name, unit_id) > (?, ?, ?)"
+		args = append(args, q.After.Tool, q.After.Name, q.After.UnitID)
+	}
+
+	size := q.PageSize()
+	args = append(args, size+1)
+
+	rows, err := s.conn.QueryContext(ctx,
+		"SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms FROM inventory_deleted WHERE "+
+			where+ // #nosec G202 // Fixed fragments from deletedFilter; every value is a bound argument.
+			" ORDER BY tool, name, unit_id LIMIT ?", args...)
+	if err != nil {
+		return inventory.DeletedPage{}, fmt.Errorf("select deleted inventory: %w", err)
+	}
+
+	entries, err := scanDeletedRows(rows)
+	if err != nil {
+		return inventory.DeletedPage{}, err
+	}
+
+	return inventory.TrimDeletedPage(entries, size, total), nil
+}
+
+// deletedFilter returns the WHERE clause and its arguments for the filters
+// of q, without the cursor. The name prefix compares characters exactly:
+// LIKE in SQLite ignores the case of ASCII letters.
+func deletedFilter(q inventory.DeletedQuery) (string, []any) {
+	where := "namespace = ?"
+	args := []any{q.Namespace.String()}
+
+	if q.Tool != "" {
+		where += " AND tool = ?"
+		args = append(args, q.Tool)
+	}
+
+	if q.NamePrefix != "" {
+		where += " AND substr(name, 1, ?) = ?"
+		args = append(args, utf8.RuneCountInString(q.NamePrefix), q.NamePrefix)
+	}
+
+	if !q.PurgeBefore.IsZero() {
+		where += " AND purge_after_ms <= ?"
+		args = append(args, q.PurgeBefore.UnixMilli())
+	}
+
+	return where, args
+}
+
+// scanDeletedRows reads every row of a deleted inventory query and closes
+// rows.
+func scanDeletedRows(rows *sql.Rows) ([]inventory.DeletedEntry, error) {
+	out, err := readDeletedRows(rows)
+	closeErr := rows.Close()
+
+	if err != nil {
+		return nil, err
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("close deleted inventory rows: %w", closeErr)
+	}
+
+	return out, nil
+}
+
+// readDeletedRows reads every row of a deleted inventory query.
+func readDeletedRows(rows *sql.Rows) ([]inventory.DeletedEntry, error) {
+	out := []inventory.DeletedEntry{}
+
+	for rows.Next() {
+		var (
+			ns, tool, unitID, name string
+			deletedMs, purgeMs     int64
+		)
+
+		if err := rows.Scan(&ns, &tool, &unitID, &name, &deletedMs, &purgeMs); err != nil {
+			return nil, fmt.Errorf("scan deleted inventory: %w", err)
+		}
+
+		out = append(out, inventory.DeletedEntry{
+			DeletedAt:  time.UnixMilli(deletedMs).UTC(),
+			PurgeAfter: time.UnixMilli(purgeMs).UTC(),
+			Namespace:  namespace.Name(ns),
+			Tool:       tool,
+			UnitID:     unitID,
+			Name:       name,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read deleted inventory: %w", err)
+	}
+
+	return out, nil
+}
+
+// GetDeletedUnit implements inventory.DeletedReader.
+func (s *Store) GetDeletedUnit(
+	ctx context.Context, ns namespace.Name, tool, unitID string,
+) (inventory.DeletedEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+		Namespace: ns.String(), Tool: tool, UnitID: unitID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return inventory.DeletedEntry{}, inventory.ErrNotFound
+	}
+
+	if err != nil {
+		return inventory.DeletedEntry{}, fmt.Errorf("select deleted inventory entry: %w", err)
+	}
+
+	return inventory.DeletedEntry{
+		DeletedAt:  time.UnixMilli(row.DeletedAtMs).UTC(),
+		PurgeAfter: time.UnixMilli(row.PurgeAfterMs).UTC(),
+		Namespace:  namespace.Name(row.Namespace),
+		Tool:       row.Tool,
+		UnitID:     row.UnitID,
+		Name:       row.Name,
+	}, nil
 }
 
 // ListUnits implements inventory.Reader: entries of one namespace, ordered by

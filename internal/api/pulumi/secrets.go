@@ -443,6 +443,7 @@ func (h *Handler) newAuditEntry(
 		Kind:       detail.kind,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   obj.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

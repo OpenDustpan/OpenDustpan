@@ -109,10 +109,12 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 // inFencedAuditedTx runs fn and appends e to the chain of the namespace of
 // fence in one fenced transaction: the change and its audit entry commit
 // together, or neither does (ADR 60, fail closed). An entry that fails
-// validation or names another namespace changes nothing. The transaction holds the
+// validation or names another namespace changes nothing. fn may set fields
+// of e that only the transaction knows, such as the object ID, before the
+// append. The transaction holds the
 // namespace row FOR UPDATE, as Append does, so the appends form one sequence.
 func (s *Store) inFencedAuditedTx(
-	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -128,7 +130,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -232,6 +234,7 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 		ValueCount: toInt8(e.ValueCount),
+		ObjectID:   e.ObjectID,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -371,6 +374,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
 		ValueCount: fromInt8(row.ValueCount),
+		ObjectID:   row.ObjectID,
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
 		Channel:    audit.Channel(row.Channel),

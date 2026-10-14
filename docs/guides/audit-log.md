@@ -38,6 +38,11 @@ secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
 answering 204 when the append fails.
 
+A restore or a purge of a deleted unit (ADR 47) writes one entry with the
+kind `change` (ADR 60), the action `unit:restore` or `unit:purge`, and the
+stable ID of the unit in `objectID`. The store appends it in the same
+transaction as the change, so a failed append changes nothing.
+
 An entry holds these fields:
 
 - Who: `subject`, `idpSubject` (empty until an identity provider exists),
@@ -55,12 +60,16 @@ An entry holds these fields:
 - `requestID`: the request ID the server mints. The server returns it in
   the `X-Request-Id` response header and ignores an ID the client sends
   (ADR 32).
+- `objectID`: the stable ID of the unit, for a restore or a purge of a
+  deleted unit (ADR 47). The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   When `valueCount` is set, the encoding appends one more field after
   `prevHash`: the text `value_count=` with the decimal count. When it is
   omitted, the encoding is unchanged, so an entry written before the count
   keeps its hash.
+  When `objectID` is set, the encoding appends the text `object_id=` with
+  the ID after that. An entry without an object ID keeps its hash.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41

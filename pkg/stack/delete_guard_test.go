@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -100,7 +101,7 @@ type deleteStacks struct {
 }
 
 func (m *deleteStacks) DeleteStack(
-	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard, _ audit.Entry,
+	_ context.Context, _ stack.Ref, _ namespace.Fence, guard stack.DeleteGuard, _ inventory.Deletion,
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -133,8 +134,25 @@ func (m *deleteStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.St
 	return nil, nil
 }
 
-func (m *deleteStacks) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (m *deleteStacks) ForceDeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ inventory.Deletion,
+) error {
 	return nil
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*deleteStacks) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*deleteStacks) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+	return stack.ErrNotFound
 }
 
 func (m *deleteStacks) UpdateStackTags(
@@ -206,6 +224,7 @@ func newDeleteFixture(
 		Namespaces: namespaces,
 		Now:        func() time.Time { return now },
 		State:      st,
+		Retention:  0,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -362,6 +381,7 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 		Namespaces: namespaces,
 		Now:        func() time.Time { return now },
 		State:      nil,
+		Retention:  0,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -706,6 +726,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 		Namespaces: namespaces,
 		Now:        func() time.Time { return now },
 		State:      updates,
+		Retention:  0,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -972,6 +993,7 @@ func deleteEntry() audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

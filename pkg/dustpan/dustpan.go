@@ -139,6 +139,7 @@ type settings struct {
 	maxCheckpointBytes   int
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
+	softDeleteRetention  time.Duration
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -297,6 +298,13 @@ func WithMaxSecretBatchBytes(n int) Option {
 	return func(o *settings) { o.maxSecretBatchBytes = n }
 }
 
+// WithSoftDeleteRetention sets how long a deleted stack or workspace stays
+// before its final delete (ADR 47, decision 2). Zero means the domain
+// default, inventory.DeletedRetention.
+func WithSoftDeleteRetention(d time.Duration) Option {
+	return func(o *settings) { o.softDeleteRetention = d }
+}
+
 // WithMaxStateBytes bounds one OpenTofu state version. Zero means the domain default.
 func WithMaxStateBytes(n int64) Option {
 	return func(o *settings) { o.maxStateBytes = n }
@@ -399,6 +407,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
+		softDeleteRetention:     0,
 		maxBodyBytesInFlight:    0,
 		backupTarget:            nil,
 		backupTargetName:        "",
@@ -769,7 +778,7 @@ func newServices(cfg settings) (services, error) {
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates,
+		State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -796,6 +805,7 @@ func newServices(cfg settings) (services, error) {
 		Now:                cfg.now,
 		MaxStateBytes:      cfg.maxStateBytes,
 		MaxPendingVersions: 0,
+		Retention:          cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("workspace service: %w", err)
@@ -1169,14 +1179,28 @@ func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
 }
 
 // newInventoryHandler builds the tool-neutral inventory API from the
-// namespace service and the inventory reader.
+// namespace service, the inventory reader and the restore and purge of each
+// tool (ADR 47). Every SQL adapter also reads the deleted units through the
+// inventory reader. A custom reader that keeps no deleted units fails here
+// with a clear error.
 func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Namespaces:    svc.namespaces,
-		Units:         cfg.inventoryReader,
+		Namespaces: svc.namespaces,
+		Units:      cfg.inventoryReader,
+		Deleted:    deleted,
+		Lifecycles: map[string]inventory.Lifecycle{
+			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates},
+			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces},
+		},
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Now:           nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)

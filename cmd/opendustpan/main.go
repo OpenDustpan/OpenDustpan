@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -74,6 +75,12 @@ var (
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+	)
+	// errRetention reports a soft-delete retention that is not a duration of
+	// at least one hour.
+	errRetention = errors.New(
+		"soft-delete retention must be a duration of at least 1h, for example 720h: " +
+			"set --soft-delete-retention (DUSTPAN_SOFT_DELETE_RETENTION)",
 	)
 	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
 	// the delta capability off, so only negative values fail.
@@ -228,6 +235,13 @@ func serveWithIO(
 		return errDeltaCutoff
 	}
 
+	retention, err := parseRetention(f.softDeleteRetention)
+	if err != nil {
+		return err
+	}
+
+	f.retention = retention
+
 	return f.run(ctx, stdin, stderr, terminal)
 }
 
@@ -263,6 +277,9 @@ type serveFlags struct {
 	maxBodyBytesInFlight    int64
 	checkpointDeltaCutoff   int64
 	disablePulumiJournaling bool
+	softDeleteRetention     string
+	// retention is softDeleteRetention after the check.
+	retention time.Duration
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -336,6 +353,7 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
+	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -937,6 +955,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
+		dustpan.WithSoftDeleteRetention(f.retention),
 	}
 }
 
@@ -1334,6 +1353,20 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
+}
+
+// minRetention is the shortest soft-delete retention the server accepts.
+const minRetention = time.Hour
+
+// parseRetention parses the soft-delete retention: a Go duration of at least
+// one hour (ADR 47, decision 2). There is no maximum.
+func parseRetention(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minRetention {
+		return 0, errRetention
+	}
+
+	return d, nil
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,

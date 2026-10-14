@@ -149,6 +149,7 @@ func newCrashFixture(
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

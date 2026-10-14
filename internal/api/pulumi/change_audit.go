@@ -41,6 +41,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   a.object.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

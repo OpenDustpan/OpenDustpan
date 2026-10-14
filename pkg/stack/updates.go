@@ -416,10 +416,9 @@ func (s *Updates) SaveCheckpoint(
 	})
 }
 
-// DeleteStackBlobs removes every checkpoint blob of the stack. No route calls
-// it since the soft delete (ADR 47); it stays for the purge of a deleted
-// stack. The caller runs it after the rows are gone, so no save can still
-// commit a row naming these blobs. It is best effort and logs no key.
+// DeleteStackBlobs removes every checkpoint blob of the stack. The purge of a
+// deleted stack runs it after the rows are gone (ADR 47), so no save can
+// still commit a row naming these blobs. It is best effort and logs no key.
 func (s *Updates) DeleteStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	listed, err := s.blobs.List(ctx, "pulumi/"+stackID.String()+"/")
 	if err != nil {

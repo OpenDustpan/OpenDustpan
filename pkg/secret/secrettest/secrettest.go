@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -89,6 +90,7 @@ func deleteEntry(ns namespace.Name, at time.Time) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -371,11 +373,18 @@ func testDeleteStackKeepsKey(t *testing.T, s Store) {
 	}
 
 	at := time.UnixMilli(1_760_000_000_000).UTC()
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name, at)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name, at), PurgeAfter: at.Add(inventory.DeletedRetention)},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	if _, err := s.GetKey(t.Context(), scope); err != nil {
+	if _, err = s.GetKey(t.Context(), scope); err != nil {
 		t.Fatalf("get key after a soft delete: %v", err)
 	}
 
@@ -425,12 +434,18 @@ func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 		t.Fatalf("new scope: %v", err)
 	}
 
-	if _, err := s.CreateKey(t.Context(), newKey(scope, "kek-1", "wrapped-1"), ns.Fence()); err != nil {
+	if _, err = s.CreateKey(t.Context(), newKey(scope, "kek-1", "wrapped-1"), ns.Fence()); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 
 	at := time.UnixMilli(1_760_000_000_000).UTC()
-	if err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deleteEntry(ns.Name, at)); err != nil {
+	err = s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name, at), PurgeAfter: at.Add(inventory.DeletedRetention)},
+	)
+	if err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 

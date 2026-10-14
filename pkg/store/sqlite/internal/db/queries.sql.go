@@ -862,6 +862,44 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return result.RowsAffected()
 }
 
+const deleteCheckpointsOfStack = `-- name: DeleteCheckpointsOfStack :exec
+DELETE FROM checkpoints
+WHERE stack_id = ?
+`
+
+func (q *Queries) DeleteCheckpointsOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCheckpointsOfStack, stackID)
+	return err
+}
+
+const deleteDeletedInventory = `-- name: DeleteDeletedInventory :execrows
+DELETE FROM inventory_deleted
+WHERE tool = ? AND unit_id = ?
+`
+
+type DeleteDeletedInventoryParams struct {
+	Tool   string
+	UnitID string
+}
+
+func (q *Queries) DeleteDeletedInventory(ctx context.Context, arg DeleteDeletedInventoryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteDeletedInventory, arg.Tool, arg.UnitID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteEventsOfStack = `-- name: DeleteEventsOfStack :exec
+DELETE FROM update_events
+WHERE stack_id = ?
+`
+
+func (q *Queries) DeleteEventsOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteEventsOfStack, stackID)
+	return err
+}
+
 const deleteGroup = `-- name: DeleteGroup :execrows
 UPDATE principal_groups SET deleted_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL
@@ -911,6 +949,16 @@ func (q *Queries) DeleteJournal(ctx context.Context, arg DeleteJournalParams) er
 	return err
 }
 
+const deleteJournalOfStack = `-- name: DeleteJournalOfStack :exec
+DELETE FROM update_journal
+WHERE stack_id = ?
+`
+
+func (q *Queries) DeleteJournalOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalOfStack, stackID)
+	return err
+}
+
 const deleteJournalSequences = `-- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?
@@ -923,6 +971,16 @@ type DeleteJournalSequencesParams struct {
 
 func (q *Queries) DeleteJournalSequences(ctx context.Context, arg DeleteJournalSequencesParams) error {
 	_, err := q.db.ExecContext(ctx, deleteJournalSequences, arg.StackID, arg.UpdateID)
+	return err
+}
+
+const deleteJournalSequencesOfStack = `-- name: DeleteJournalSequencesOfStack :exec
+DELETE FROM update_journal_sequences
+WHERE stack_id = ?
+`
+
+func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalSequencesOfStack, stackID)
 	return err
 }
 
@@ -971,26 +1029,6 @@ func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) e
 	return err
 }
 
-const deleteStack = `-- name: DeleteStack :execrows
-DELETE FROM stacks
-WHERE namespace = ? AND project = ? AND name = ?
-`
-
-type DeleteStackParams struct {
-	Namespace string
-	Project   string
-	Name      string
-}
-
-// Not used since the soft delete (ADR 47); kept for the purge of a deleted stack.
-func (q *Queries) DeleteStack(ctx context.Context, arg DeleteStackParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteStack, arg.Namespace, arg.Project, arg.Name)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const deleteStackTags = `-- name: DeleteStackTags :exec
 DELETE FROM stack_tags
 WHERE stack_id = ?
@@ -1027,25 +1065,14 @@ func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceI
 	return err
 }
 
-const deleteWorkspace = `-- name: DeleteWorkspace :execrows
-DELETE FROM workspaces
-WHERE namespace = ? AND name = ?
+const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec
+DELETE FROM updates
+WHERE stack_id = ?
 `
 
-type DeleteWorkspaceParams struct {
-	Namespace string
-	Name      string
-}
-
-// Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
-// Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
-// the data key through DeleteSecretKeysOfStack with the workspace ID.
-func (q *Queries) DeleteWorkspace(ctx context.Context, arg DeleteWorkspaceParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteWorkspace, arg.Namespace, arg.Name)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) DeleteUpdatesOfStack(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteUpdatesOfStack, stackID)
+	return err
 }
 
 const endMembershipsInGroup = `-- name: EndMembershipsInGroup :exec
@@ -1456,6 +1483,77 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.UnlockedWrite,
 	)
 	return i, err
+}
+
+const getDeletedInventory = `-- name: GetDeletedInventory :one
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = ? AND tool = ? AND unit_id = ?
+`
+
+type GetDeletedInventoryParams struct {
+	Namespace string
+	Tool      string
+	UnitID    string
+}
+
+func (q *Queries) GetDeletedInventory(ctx context.Context, arg GetDeletedInventoryParams) (InventoryDeleted, error) {
+	row := q.db.QueryRowContext(ctx, getDeletedInventory, arg.Namespace, arg.Tool, arg.UnitID)
+	var i InventoryDeleted
+	err := row.Scan(
+		&i.Namespace,
+		&i.Tool,
+		&i.UnitID,
+		&i.Name,
+		&i.DeletedAtMs,
+		&i.PurgeAfterMs,
+	)
+	return i, err
+}
+
+const getDeletedStack = `-- name: GetDeletedStack :one
+SELECT project, deleted_name
+FROM stacks
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type GetDeletedStackParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetDeletedStackRow struct {
+	Project     string
+	DeletedName sql.NullString
+}
+
+// A deleted stack of one namespace by its stable ID (ADR 47), for a restore
+// or a purge. A live stack matches no row.
+func (q *Queries) GetDeletedStack(ctx context.Context, arg GetDeletedStackParams) (GetDeletedStackRow, error) {
+	row := q.db.QueryRowContext(ctx, getDeletedStack, arg.Namespace, arg.ID)
+	var i GetDeletedStackRow
+	err := row.Scan(&i.Project, &i.DeletedName)
+	return i, err
+}
+
+const getDeletedWorkspace = `-- name: GetDeletedWorkspace :one
+SELECT deleted_name
+FROM workspaces
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type GetDeletedWorkspaceParams struct {
+	Namespace string
+	ID        string
+}
+
+// A deleted workspace of one namespace by its ID (ADR 47), for a restore or
+// a purge. A live workspace matches no row.
+func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspaceParams) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getDeletedWorkspace, arg.Namespace, arg.ID)
+	var deleted_name sql.NullString
+	err := row.Scan(&deleted_name)
+	return deleted_name, err
 }
 
 const getFailoverVersion = `-- name: GetFailoverVersion :one
@@ -2337,8 +2435,8 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, object_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
@@ -2361,6 +2459,7 @@ type InsertAuditEntryParams struct {
 	PrevHash   string
 	Hash       string
 	ValueCount sql.NullInt64
+	ObjectID   string
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -2384,6 +2483,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+		arg.ObjectID,
 	)
 	return err
 }
@@ -2552,7 +2652,7 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, object_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -2584,6 +2684,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.PrevHash,
 		&i.Hash,
 		&i.ValueCount,
+		&i.ObjectID,
 	)
 	return i, err
 }
@@ -2712,7 +2813,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, object_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -2758,6 +2859,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.ObjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -2774,7 +2876,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, object_id
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -2818,6 +2920,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.ObjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -4077,6 +4180,46 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const purgeStack = `-- name: PurgeStack :execrows
+DELETE FROM stacks
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type PurgeStackParams struct {
+	Namespace string
+	ID        string
+}
+
+// The final delete of a deleted stack by its stable ID (ADR 47). The
+// children go first, through the queries below.
+func (q *Queries) PurgeStack(ctx context.Context, arg PurgeStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeStack, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const purgeWorkspace = `-- name: PurgeWorkspace :execrows
+DELETE FROM workspaces
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type PurgeWorkspaceParams struct {
+	Namespace string
+	ID        string
+}
+
+// The final delete of a deleted workspace by its ID (ADR 47). The state
+// versions and the data key go first.
+func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeWorkspace, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
@@ -4181,6 +4324,63 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 	return result.RowsAffected()
 }
 
+const restoreStack = `-- name: RestoreStack :execrows
+UPDATE stacks
+SET name = ?, deleted_name = NULL, deleted_at_ms = NULL, updated_at_ms = ?
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type RestoreStackParams struct {
+	Name        string
+	UpdatedAtMs int64
+	Namespace   string
+	ID          string
+}
+
+// Brings a deleted stack back under name. The unique key on (namespace,
+// project, name) refuses a name that a live stack holds.
+func (q *Queries) RestoreStack(ctx context.Context, arg RestoreStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreStack,
+		arg.Name,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const restoreWorkspace = `-- name: RestoreWorkspace :execrows
+UPDATE workspaces
+SET name = ?, deleted_name = NULL, deleted_at_ms = NULL, revision = revision + 1, updated_at_ms = ?
+WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
+`
+
+type RestoreWorkspaceParams struct {
+	Name        string
+	UpdatedAtMs int64
+	Namespace   string
+	ID          string
+}
+
+// Brings a deleted workspace back under name. The revision moves on, as
+// the delete moved it. The unique key on (namespace, name) refuses a name
+// that a live workspace holds.
+func (q *Queries) RestoreWorkspace(ctx context.Context, arg RestoreWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreWorkspace,
+		arg.Name,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const revokeAccessToken = `-- name: RevokeAccessToken :execrows
 UPDATE access_tokens SET revoked_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2 AND revoked_at_ms IS NULL
@@ -4237,6 +4437,28 @@ func (q *Queries) RevokeGrantsOfSubject(ctx context.Context, arg RevokeGrantsOfS
 		arg.SubjectID,
 	)
 	return err
+}
+
+const revokeGrantsOnTarget = `-- name: RevokeGrantsOnTarget :execrows
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE target = ? AND revoked_at_ms IS NULL
+`
+
+type RevokeGrantsOnTargetParams struct {
+	RevokedAtMs sql.NullInt64
+	RevokedBy   string
+	Target      string
+}
+
+// Ends every current grant on one target, for example unit:<stable ID> when
+// the purge of a deleted unit removes it (ADR 47). The rows stay for the
+// access-review history (ADR 52, decision 10).
+func (q *Queries) RevokeGrantsOnTarget(ctx context.Context, arg RevokeGrantsOnTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeGrantsOnTarget, arg.RevokedAtMs, arg.RevokedBy, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const roleIDByNameKey = `-- name: RoleIDByNameKey :one

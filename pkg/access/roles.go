@@ -19,12 +19,13 @@ const (
 	// RoleWriter reads, and runs updates and applies: it writes state and
 	// encrypts and decrypts secrets.
 	RoleWriter = "writer"
-	// RoleMaintainer writes, and makes, renames, deletes, unlocks and moves
-	// units, and manages collections.
+	// RoleMaintainer writes, and makes, renames, deletes, restores, unlocks
+	// and moves units, and manages collections. It cannot purge a deleted
+	// unit: a purge cannot be undone, so only the admin role holds it.
 	RoleMaintainer = "maintainer"
 	// RoleAdmin holds every data action on its object: it also manages
-	// access, the override switches, forced and unlocked writes and the
-	// namespace. The creator of a namespace holds it on the namespace.
+	// access, the override switches, forced and unlocked writes, the purge of
+	// deleted units and the namespace. The creator of a namespace holds it on the namespace.
 	RoleAdmin = "admin"
 	// RoleNamespaceAdmin is the role that the creator of a namespace gets on
 	// it.
@@ -85,6 +86,7 @@ func maintainerActions() []identity.Action {
 	return append(writerActions(),
 		identity.ActionUnitManage,
 		identity.ActionUnitMove,
+		identity.ActionUnitRestore,
 		identity.ActionCollectionCreate,
 		identity.ActionCollectionUpdate,
 		identity.ActionCollectionDelete,

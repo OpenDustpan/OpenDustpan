@@ -178,7 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	// A deleted stack keeps its row and moves its inventory entry to the
 	// deleted units (ADR 47), so the round trip carries both.
 	gone := mustCreateStack(t, s, acme, "gone")
-	if err := s.ForceDeleteStack(ctx, gone.Ref, acme.Fence(), deleteEntry(acme.Name)); err != nil {
+	err = s.ForceDeleteStack(
+		ctx,
+		gone.Ref,
+		acme.Fence(),
+		inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack %s: %v", gone.Ref, err)
 	}
 
@@ -397,6 +403,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -535,6 +542,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Kind:       kind,
 			Outcome:    audit.OutcomeSuccess,
 			RequestID:  fmt.Sprintf("req-%d", i),
+			ObjectID:   "",
 			PrevHash:   "",
 			Hash:       "",
 			Sequence:   0,

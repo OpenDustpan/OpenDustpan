@@ -1,0 +1,459 @@
+package inventory
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strconv"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// channelHeader names the request header that says where a request came
+// from, for the audit entry (ADR 60).
+const channelHeader = "Dustpan-Channel"
+
+// maxRestoreBody bounds the body of a restore request: one short name.
+const maxRestoreBody = 4096
+
+// maxPurgeWithinDays bounds the purgeWithinDays query value: ten years.
+const maxPurgeWithinDays = 3650
+
+// day is the length of one day for the purgeWithinDays query value.
+const day = 24 * time.Hour
+
+// errInvalidQuery reports a deleted-units query value that does not parse.
+var errInvalidQuery = errors.New("invalid query parameter")
+
+// errInvalidBody reports a restore body that is not one JSON object with an
+// optional name.
+var errInvalidBody = errors.New("invalid request body: send {} or {\"name\": \"<new name>\"}")
+
+// errUnknownTool reports a deleted-unit path with a tool that the server
+// does not serve. classify maps it to 404, as an unknown unit.
+var errUnknownTool = errors.New("unknown tool")
+
+// deletedUnitEntry is one deleted unit as the console reads it (ADR 47). Tool
+// is the tool label, Reference the unit reference under its name before the
+// delete, Name the tool's own name of the unit at the time of the delete, and
+// UnitID its stable ID, which the restore and purge routes take. DeletedAt
+// and PurgeAfter are RFC 3339 times in UTC, as the other tool-neutral APIs
+// write times: the server purges the unit after PurgeAfter.
+//
+// Contract: never remove or rename these fields.
+type deletedUnitEntry struct {
+	Tool       string `json:"tool"`
+	Reference  string `json:"reference"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	UnitID     string `json:"unitID"`
+	DeletedAt  string `json:"deletedAt"`
+	PurgeAfter string `json:"purgeAfter"`
+}
+
+// listDeletedUnitsResponse is one page of deleted units. Total counts every
+// deleted unit of the namespace that matches the filters, before the read
+// check of each unit. NextCursor is empty on the last page.
+//
+// Contract: never remove or rename these fields.
+type listDeletedUnitsResponse struct {
+	NextCursor string             `json:"nextCursor"`
+	Units      []deletedUnitEntry `json:"units"`
+	Total      int                `json:"total"`
+}
+
+// restoredUnitResponse is the live unit after a restore.
+//
+// Contract: never remove or rename these fields.
+type restoredUnitResponse struct {
+	Tool      string `json:"tool"`
+	Reference string `json:"reference"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UnitID    string `json:"unitID"`
+}
+
+// restoreRequest is the optional body of a restore: a new name of the unit.
+// For a Pulumi stack it is the stack name; the stack keeps its project.
+// Collections (#478) will add a collection field here, for a unit whose
+// collection is gone; see inventory.Lifecycle.
+type restoreRequest struct {
+	Name string `json:"name"`
+}
+
+// cursorWire is the opaque cursor of the deleted-units list, as base64url
+// JSON. Clients pass it back unchanged.
+type cursorWire struct {
+	Tool   string `json:"t"`
+	Name   string `json:"n"`
+	UnitID string `json:"u"`
+}
+
+// toolCode maps a tool label or code from a query to the stored code.
+func toolCode(s string) string {
+	switch s {
+	case "Pulumi":
+		return "pulumi"
+	case "OpenTofu":
+		return "opentofu"
+	default:
+		return s
+	}
+}
+
+// toDeletedUnitEntry maps one deleted entry to its wire shape.
+func toDeletedUnitEntry(e coreinventory.DeletedEntry) deletedUnitEntry {
+	return deletedUnitEntry{
+		Tool:       toolLabel(e.Tool),
+		Reference:  e.Tool + ":" + e.Namespace.String() + "/" + e.Name,
+		Namespace:  e.Namespace.String(),
+		Name:       e.Name,
+		UnitID:     e.UnitID,
+		DeletedAt:  formatTime(e.DeletedAt),
+		PurgeAfter: formatTime(e.PurgeAfter),
+	}
+}
+
+// formatTime writes t as an RFC 3339 time in UTC.
+func formatTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// encodeCursor returns the opaque form of c, or "" for no cursor.
+func encodeCursor(c *coreinventory.DeletedCursor) string {
+	if c == nil {
+		return ""
+	}
+
+	raw, err := json.Marshal(cursorWire{Tool: c.Tool, Name: c.Name, UnitID: c.UnitID})
+	if err != nil {
+		return ""
+	}
+
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// decodeCursor parses an opaque cursor. An empty value is no cursor.
+func decodeCursor(s string) (*coreinventory.DeletedCursor, error) {
+	if s == "" {
+		return nil, nil //nolint:nilnil // No cursor is a valid answer: the first page.
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
+	}
+
+	var w cursorWire
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return nil, fmt.Errorf("%w: cursor", errInvalidQuery)
+	}
+
+	return &coreinventory.DeletedCursor{Tool: w.Tool, Name: w.Name, UnitID: w.UnitID}, nil
+}
+
+// intQuery parses the query value name as an int from 0 to limit. An empty
+// value is 0.
+func intQuery(r *http.Request, name string, limit int) (int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return 0, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 || n > limit {
+		return 0, fmt.Errorf("%w: %s must be a number from 0 to %d", errInvalidQuery, name, limit)
+	}
+
+	return n, nil
+}
+
+// deletedQuery builds the store query of a list request for ns.
+func (h *Handler) deletedQuery(r *http.Request, ns namespace.Name) (coreinventory.DeletedQuery, error) {
+	limit, err := intQuery(r, "limit", coreinventory.MaxDeletedPageSize)
+	if err != nil {
+		return coreinventory.DeletedQuery{}, err
+	}
+
+	days, err := intQuery(r, "purgeWithinDays", maxPurgeWithinDays)
+	if err != nil {
+		return coreinventory.DeletedQuery{}, err
+	}
+
+	cursor, err := decodeCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		return coreinventory.DeletedQuery{}, err
+	}
+
+	var before time.Time
+	if r.URL.Query().Has("purgeWithinDays") {
+		before = h.now().Add(time.Duration(days) * day)
+	}
+
+	return coreinventory.DeletedQuery{
+		PurgeBefore: before,
+		After:       cursor,
+		Namespace:   ns,
+		Tool:        toolCode(r.URL.Query().Get("tool")),
+		NamePrefix:  r.URL.Query().Get("namePrefix"),
+		Limit:       limit,
+	}, nil
+}
+
+// listDeletedUnits answers GET /api/inventory/deleted-units with one page of
+// the deleted units of the namespace (ADR 47). The route wrapper already
+// allowed namespace:read on the namespace; this leaves out every unit that
+// the caller may not read. The query values tool, namePrefix,
+// purgeWithinDays, limit and cursor filter and page the list.
+func (h *Handler) listDeletedUnits(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	q, err := h.deletedQuery(r, ns)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	page, err := h.deleted.QueryDeletedUnits(ctx, q)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	units := make([]deletedUnitEntry, 0, len(page.Entries))
+
+	for i := range page.Entries {
+		uobj, objErr := deletedObject(page.Entries[i])
+		if objErr != nil {
+			h.writeError(ctx, w, objErr)
+
+			return
+		}
+
+		if authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, uobj); authErr != nil {
+			if errors.Is(authErr, identity.ErrDenied) {
+				continue
+			}
+
+			h.writeError(ctx, w, authErr)
+
+			return
+		}
+
+		units = append(units, toDeletedUnitEntry(page.Entries[i]))
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, listDeletedUnitsResponse{
+		NextCursor: encodeCursor(page.Next), Units: units, Total: page.Total,
+	})
+}
+
+// deletedObject is the unit reference of a deleted unit under its name before
+// the delete, with its stable ID. The ID keeps the grants of a new unit with
+// the same name away from the deleted unit.
+func deletedObject(e coreinventory.DeletedEntry) (identity.Object, error) {
+	obj, err := identity.UnitObject(e.Tool, e.Namespace, e.Name)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("unit reference: %w", err)
+	}
+
+	return obj.WithUnitID(e.UnitID), nil
+}
+
+// resolveDeletedUnit returns the unit reference of the deleted unit in the
+// path: the tool and unit ID in the path and the namespace in the
+// organization query value. An unknown tool or unit answers 404.
+func (h *Handler) resolveDeletedUnit(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	nsObj, err := resolveListUnits(nil, r)
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	tool := r.PathValue("tool")
+	if life, ok := h.lifecycles[tool]; !ok || life == nil {
+		return identity.Object{}, unknownTool(tool)
+	}
+
+	e, err := h.deleted.GetDeletedUnit(r.Context(), nsObj.Namespace(), tool, r.PathValue("unitID"))
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("deleted unit: %w", err)
+	}
+
+	return deletedObject(e)
+}
+
+// unknownTool is the error of a tool that the server does not serve. It
+// answers 404, as an unknown unit.
+func unknownTool(tool string) error {
+	return fmt.Errorf("%w: %w %q", coreinventory.ErrNotFound, errUnknownTool, tool)
+}
+
+// restoreUnit answers POST /api/inventory/deleted-units/{tool}/{unitID}/restore
+// (ADR 47). The body is {} or {"name": "<new name>"}. It answers 200 with
+// the live unit, 409 when a live unit holds the name, and 404 for an unknown
+// or purged unit. The tool writes the audit entry in the restore transaction.
+func (h *Handler) restoreUnit(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	req, err := readRestoreRequest(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	life, ok := h.lifecycles[obj.Tool()]
+	if !ok || life == nil {
+		h.writeError(ctx, w, unknownTool(obj.Tool()))
+
+		return
+	}
+
+	unitID := obj.UnitID()
+	entry := changeEntry(r, p, obj, identity.ActionUnitRestore)
+
+	name, err := life.Restore(ctx, obj.Namespace(), unitID, req.Name, entry)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, restoredUnitResponse{
+		Tool:      toolLabel(obj.Tool()),
+		Reference: obj.Tool() + ":" + obj.Namespace().String() + "/" + name,
+		Namespace: obj.Namespace().String(),
+		Name:      name,
+		UnitID:    unitID,
+	})
+}
+
+// readRestoreRequest reads the optional body of a restore. An empty body is
+// a restore under the name before the delete.
+func readRestoreRequest(r *http.Request) (restoreRequest, error) {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxRestoreBody+1))
+	if err != nil || len(raw) > maxRestoreBody {
+		return restoreRequest{}, errInvalidBody
+	}
+
+	var req restoreRequest
+	if len(raw) == 0 {
+		return req, nil
+	}
+
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return restoreRequest{}, errInvalidBody
+	}
+
+	return req, nil
+}
+
+// purgeUnit answers DELETE /api/inventory/deleted-units/{tool}/{unitID}: the
+// final delete of a deleted unit before its retention period ends (ADR 47).
+// It answers 204, and 404 for a live, unknown or purged unit. The tool
+// writes the audit entry in the purge transaction.
+func (h *Handler) purgeUnit(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	life, ok := h.lifecycles[obj.Tool()]
+	if !ok || life == nil {
+		h.writeError(ctx, w, unknownTool(obj.Tool()))
+
+		return
+	}
+
+	entry := changeEntry(r, p, obj, identity.ActionUnitPurge)
+
+	if err := life.Purge(ctx, obj.Namespace(), obj.UnitID(), entry); err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// changeEntry returns the audit entry of the kind change for a restore or a
+// purge of the unit obj (ADR 60, decision 4). The tool appends it in the
+// transaction of the change and stamps the time.
+func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
+	return audit.Entry{
+		At:         time.Time{},
+		Namespace:  obj.Namespace(),
+		Subject:    p.Subject,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     string(action),
+		Object:     obj.String(),
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   sourceIP(r),
+		UserAgent:  truncateUserAgent(r.UserAgent()),
+		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  requestid.FromContext(r.Context()),
+		ObjectID:   obj.UnitID(),
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
+// boundary.
+func truncateUserAgent(s string) string {
+	if len(s) <= audit.MaxUserAgentLen {
+		return s
+	}
+
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && !utf8RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
+
+// utf8RuneStart reports whether b starts a UTF-8 sequence.
+func utf8RuneStart(b byte) bool {
+	const continuationMask, continuationBits = 0xC0, 0x80
+
+	return b&continuationMask != continuationBits
+}
+
+// sourceIP returns the remote address that the server sees, without the
+// port. A value without a port reads back unchanged.
+func sourceIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}

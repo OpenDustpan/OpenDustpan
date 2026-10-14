@@ -31,6 +31,7 @@ func testEntry() audit.Entry {
 		Kind:       audit.KindReveal,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "req-1",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   1,
@@ -140,6 +141,30 @@ func TestComputeHashCoversTheValueCount(t *testing.T) {
 
 	if same := audit.ComputeHash(other, ""); same == got {
 		t.Fatal("hash did not change after the value count changed")
+	}
+}
+
+// TestComputeHashCoversTheObjectID proves that the hash covers a set object
+// ID, and that an entry with an empty object ID keeps the hash of the code
+// before the field: TestComputeHashKeepsEntriesWithoutACountValid pins it.
+func TestComputeHashCoversTheObjectID(t *testing.T) {
+	t.Parallel()
+
+	before := audit.ComputeHash(testEntry(), "")
+
+	with := testEntry()
+	with.ObjectID = "stk-1"
+
+	got := audit.ComputeHash(with, "")
+	if got == before {
+		t.Fatal("hash did not change after the object ID was set")
+	}
+
+	other := testEntry()
+	other.ObjectID = "stk-2"
+
+	if same := audit.ComputeHash(other, ""); same == got {
+		t.Fatal("hash did not change after the object ID changed")
 	}
 }
 

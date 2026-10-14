@@ -90,8 +90,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // auditEntry is one audit entry as the console reads it, in camelCase. AtMs
 // is the time of the action in Unix milliseconds. Sequence numbers the entry
-// in its namespace from 1. PrevHash is empty for the first entry of a
-// namespace.
+// in its namespace from 1. ObjectID is the stable ID of the unit of the
+// entry, and is omitted when the entry has none. PrevHash is empty for the
+// first entry of a namespace.
 //
 // Contract: never remove or rename these fields. The console reads only this
 // API, and it ships on its own schedule, so a released console keeps working
@@ -113,6 +114,7 @@ type auditEntry struct {
 	Kind       string `json:"kind"`
 	Outcome    string `json:"outcome"`
 	RequestID  string `json:"requestID"`
+	ObjectID   string `json:"objectID,omitempty"`
 	PrevHash   string `json:"prevHash"`
 	Hash       string `json:"hash"`
 }
@@ -136,6 +138,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Kind:       string(e.Kind),
 		Outcome:    string(e.Outcome),
 		RequestID:  e.RequestID,
+		ObjectID:   e.ObjectID,
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 	}

@@ -42,6 +42,7 @@ type AuditEntry struct {
 	PrevHash   string
 	Hash       string
 	ValueCount sql.NullInt64
+	ObjectID   string
 }
 
 type Backup struct {
