@@ -439,6 +439,19 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
 }
 
+// warnPasswordFlags writes one WARN line for each flag that holds a URL with a
+// password. The line names the flag and the variable to use, never the value
+// (issue 511).
+func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
+	for _, s := range settings {
+		logger.LogAttrs(ctx, slog.LevelWarn,
+			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
+			slog.String("flag", "--"+s.Flag),
+			slog.String("use", s.Env),
+		)
+	}
+}
+
 // run opens the store, runs the start-up checks and serves until ctx is done.
 // It resolves the key-encryption key before it opens the database, so a
 // missing key stops with the key error and never makes a key silently. Only
@@ -458,13 +471,7 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 
 	cli.LogResolved(ctx, logger, f.resolved)
 
-	for _, s := range f.passwordFlags {
-		logger.LogAttrs(ctx, slog.LevelWarn,
-			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
-			slog.String("flag", "--"+s.Flag),
-			slog.String("use", s.Env),
-		)
-	}
+	warnPasswordFlags(ctx, logger, f.passwordFlags)
 
 	f.instanceID = instance.NewID()
 	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
