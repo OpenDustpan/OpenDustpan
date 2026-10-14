@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -265,12 +265,14 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 		Version:    a.version,
 		ValuePath:  a.path,
 		ValueCount: nil,
-		SourceIP:   revealSourceIP(a.request),
+		Changes:    nil,
+		SourceIP:   clientip.String(a.request),
 		UserAgent:  truncateRevealUserAgent(a.request.UserAgent()),
 		Channel:    audit.NormalizeChannel(a.request.Header.Get(revealChannelHeader)),
 		Kind:       audit.KindReveal,
 		Outcome:    a.outcome,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   a.object.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -310,17 +312,6 @@ func truncateRevealUserAgent(s string) string {
 	}
 
 	return s[:cut]
-}
-
-// revealSourceIP returns the remote address that the server sees, without
-// the port. A value without a port reads back unchanged.
-func revealSourceIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-
-	return host
 }
 
 // writeNoStore answers err with Cache-Control: no-store, so no reveal

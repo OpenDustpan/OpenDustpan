@@ -134,7 +134,9 @@ func newCrashFixture(
 	wrappedBlobs := wrapCrashBlobs(t, blobFaults)
 	namespaces := crashNamespaces(t, wrappedSQL)
 
-	service, err := stack.NewService(stack.Config{Store: wrappedSQL, Namespaces: namespaces, Now: nil, State: nil})
+	service, err := stack.NewService(
+		stack.Config{Store: wrappedSQL, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
+	)
 	if err != nil {
 		t.Fatalf("stacks: %v", err)
 	}
@@ -151,6 +153,7 @@ func newCrashFixture(
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            wrappedSQL,
+		Tokens:             nil,
 		Checkpoints:        wrappedSQL,
 		Events:             wrappedSQL,
 		Namespaces:         namespaces,

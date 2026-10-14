@@ -20,6 +20,17 @@ type AccessToken struct {
 	RevokedAtMs  sql.NullInt64
 	ReplacedBy   sql.NullString
 	CreatedBy    string
+	DisabledAtMs sql.NullInt64
+}
+
+type AccessTokenPolicy struct {
+	ID                int64
+	MaxLifetimeMs     int64
+	InactivityMs      int64
+	DisableTokens     bool
+	DisableAccounts   bool
+	DisableBreakGlass bool
+	UpdatedAtMs       int64
 }
 
 type AuditEntry struct {
@@ -42,6 +53,15 @@ type AuditEntry struct {
 	PrevHash   string
 	Hash       string
 	ValueCount sql.NullInt64
+	Changes    sql.NullString
+	ObjectID   string
+}
+
+type AuditSinkCursor struct {
+	Sink        string
+	Namespace   string
+	Sequence    int64
+	UpdatedAtMs int64
 }
 
 type Backup struct {
@@ -51,6 +71,13 @@ type Backup struct {
 	EndedAtMs   int64
 	Target      string
 	Error       string
+}
+
+type BlobPurge struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
 }
 
 type Checkpoint struct {
@@ -133,14 +160,16 @@ type Namespace struct {
 }
 
 type Principal struct {
-	ID          string
-	Subject     string
-	DisplayName string
-	Kind        string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	DeletedAtMs sql.NullInt64
+	ID             string
+	Subject        string
+	DisplayName    string
+	Kind           string
+	Source         string
+	CreatedAtMs    int64
+	UpdatedAtMs    int64
+	DeletedAtMs    sql.NullInt64
+	DisabledAtMs   sql.NullInt64
+	LastActiveAtMs int64
 }
 
 type PrincipalGroup struct {
@@ -243,6 +272,7 @@ type Update struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	JournalClosed    int64
+	TokenID          string
 }
 
 type UpdateEvent struct {

@@ -170,7 +170,7 @@ workspace delete` through the remote backend.
 
 A delete is a soft delete (ADR 47). The unit leaves every list and its name
 is free at once, but OpenDustpan keeps its state, its history and its secrets
-until the retention period ends.
+until the retention period ends. See [Deleted units](deleted-units.md).
 
 ## Guides from other vendors
 

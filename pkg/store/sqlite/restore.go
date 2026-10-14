@@ -258,11 +258,28 @@ func fenceStagedFile(ctx context.Context, path string) error {
 		}
 	}()
 
-	if err := conn.PingContext(ctx); err != nil {
+	err = conn.PingContext(ctx)
+	if err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	if _, err := conn.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
+	}
+
+	// The restored log can reuse sequences that a sink already holds, and
+	// a restored cursor can point past the restored entries. A reset makes
+	// every sink receive the restored log again from its first entry.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_cursors`); err != nil {
+		return errors.Join(fmt.Errorf("reset staged audit sink cursors: %w", err), tx.Rollback())
+	}
+
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 

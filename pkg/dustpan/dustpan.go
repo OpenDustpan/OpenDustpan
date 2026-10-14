@@ -38,7 +38,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
@@ -50,6 +52,7 @@ import (
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -69,6 +72,13 @@ import (
 
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
+
+// ErrInvalidOption reports an option with a value that the server refuses.
+var ErrInvalidOption = errors.New("invalid option")
+
+// MinSoftDeleteRetention is the shortest soft-delete retention that
+// WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
+const MinSoftDeleteRetention = time.Hour
 
 // The secret service seals OpenTofu state blobs and outputs documents behind
 // the workspace Sealer port.
@@ -132,6 +142,7 @@ type settings struct {
 	listener             net.Listener
 	consoleDir           string
 	allowedOrigins       []string
+	proxies              proxySettings
 	tlsCertFile          string
 	tlsKeyFile           string
 	publicURL            string
@@ -139,6 +150,7 @@ type settings struct {
 	maxCheckpointBytes   int
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
+	softDeleteRetention  time.Duration
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -148,6 +160,11 @@ type settings struct {
 	disablePulumiJournaling bool
 	backupTarget            blob.Store
 	backupTargetName        string
+	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
+	auditSinks []audit.ShipSink
+	// beforeServe runs after the start-up checks and the listen, before
+	// the server serves. See WithBeforeServe.
+	beforeServe func(ctx context.Context) error
 }
 
 // Option configures a Server.
@@ -283,6 +300,39 @@ func WithAllowedOrigins(origins ...string) Option {
 	return func(o *settings) { o.allowedOrigins = origins }
 }
 
+// WithBeforeServe sets a function that Run calls after the start-up checks
+// and the listen, and before the server serves. When it answers an error,
+// Run closes the listener and returns the error, so a failed function
+// leaves no server running. The binary writes the start audit entry here
+// (ADR 63 decision 10), so a start that fails its checks writes no entry.
+func WithBeforeServe(fn func(ctx context.Context) error) Option {
+	return func(o *settings) { o.beforeServe = fn }
+}
+
+// proxySettings holds the trusted proxy settings of the client address
+// (internal/clientip): the proxies and the forwarding header they set.
+type proxySettings struct {
+	prefixes []netip.Prefix
+	header   string
+}
+
+// WithTrustedProxies names the proxies whose forwarding headers the server
+// trusts. Empty means none: every request reads as its TCP peer. List a proxy
+// only when it always overwrites or appends the header named by
+// WithTrustedProxyHeader, so a client cannot name any address. NewServer
+// refuses a list that covers every address or holds host bits.
+func WithTrustedProxies(prefixes ...netip.Prefix) Option {
+	return func(o *settings) { o.proxies.prefixes = prefixes }
+}
+
+// WithTrustedProxyHeader names the one forwarding header the server reads
+// from trusted proxies: "x-forwarded-for" (the default) or "forwarded". The
+// match ignores case and "" means the default. The server never reads the
+// other header. NewServer refuses an unknown value.
+func WithTrustedProxyHeader(h string) Option {
+	return func(o *settings) { o.proxies.header = h }
+}
+
 // WithClock overrides the time source, for tests.
 func WithClock(now func() time.Time) Option {
 	return func(o *settings) { o.now = now }
@@ -302,6 +352,14 @@ func WithMaxCheckpointBytes(n int) Option {
 // WithMaxSecretBatchBytes bounds one secrets batch. Zero means the domain default.
 func WithMaxSecretBatchBytes(n int) Option {
 	return func(o *settings) { o.maxSecretBatchBytes = n }
+}
+
+// WithSoftDeleteRetention sets how long a deleted stack or workspace stays
+// before its final delete (ADR 47, decision 2). Zero means the domain
+// default, inventory.DeletedRetention. Any other value below
+// MinSoftDeleteRetention makes NewServer fail with ErrInvalidOption.
+func WithSoftDeleteRetention(d time.Duration) Option {
+	return func(o *settings) { o.softDeleteRetention = d }
 }
 
 // WithMaxStateBytes bounds one OpenTofu state version. Zero means the domain default.
@@ -361,6 +419,11 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	// tokens runs the inactivity disable of access tokens and accounts on a
+	// schedule (ADR 53), or is nil when the store keeps no tokens.
+	tokens      *accesstoken.Service
+	shipper     *audit.Shipper
+	beforeServe func(ctx context.Context) error
 }
 
 // services holds the domain services that NewServer wires together.
@@ -375,9 +438,9 @@ type services struct {
 	tokens *accesstoken.Service
 }
 
-// NewServer validates the options and wires the server together.
-func NewServer(opts ...Option) (*Server, error) {
-	cfg := settings{
+// defaultSettings answers the settings of a server before its options.
+func defaultSettings() *settings {
+	return &settings{
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -399,6 +462,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		listener:                nil,
 		consoleDir:              "",
 		allowedOrigins:          nil,
+		proxies:                 proxySettings{prefixes: nil, header: ""},
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
@@ -406,41 +470,51 @@ func NewServer(opts ...Option) (*Server, error) {
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
+		softDeleteRetention:     0,
 		maxBodyBytesInFlight:    0,
 		backupTarget:            nil,
 		backupTargetName:        "",
+		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		auditSinks:              nil,
 	}
+}
+
+// NewServer validates the options and wires the server together.
+func NewServer(opts ...Option) (*Server, error) {
+	cfg := defaultSettings()
 
 	for _, opt := range opts {
-		opt(&cfg)
+		opt(cfg)
 	}
 
-	base, err := checkSettings(&cfg)
+	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	if authzErr := setDefaultAuthorizer(&cfg); authzErr != nil {
+	if authzErr := setDefaultAuthorizer(cfg); authzErr != nil {
 		return nil, authzErr
 	}
 
-	svc, err := newServices(cfg)
+	tokens, err := newTokenService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
+	svc, err := newServices(cfg, tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	svc.tokens = tokens
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
 
-	if tokensErr := wireTokens(&cfg, svc.tokens); tokensErr != nil {
+	if tokensErr := wireTokens(cfg, svc.tokens); tokensErr != nil {
 		return nil, tokensErr
 	}
 
@@ -451,7 +525,7 @@ func NewServer(opts ...Option) (*Server, error) {
 // authenticator, and lets every authenticated person list and revoke its
 // own personal tokens with no grant (ADR 53, decision 3).
 func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
-	authn, err := gatedAuthenticator(*cfg, tokens)
+	authn, err := gatedAuthenticator(cfg, tokens)
 	if err != nil {
 		return err
 	}
@@ -467,7 +541,7 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 // assemble mounts the adapters and routes around the services. backups is
 // the installation backup service, or nil when no backup target is
 // configured.
-func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
+func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backup.Service) (*Server, error) {
 	// One registry holds every family: the request, runtime and build
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
@@ -493,6 +567,11 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		restoreRegistry = reg
 	}
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -511,6 +590,9 @@ func assemble(cfg settings, base baseurl.Resolver, svc services, backups *backup
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		tokens:          svc.tokens,
+		shipper:         shipper,
+		beforeServe:     cfg.beforeServe,
 	}, nil
 }
 
@@ -532,7 +614,7 @@ type adapters struct {
 // readiness probe counts its failures on it.
 func newAdapters(
 	svc services,
-	cfg settings,
+	cfg *settings,
 	base baseurl.Resolver,
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
@@ -603,7 +685,7 @@ func newAdapters(
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -627,7 +709,7 @@ func newTofuHTTPHandler(cfg settings, svc services, gate *bodygate.Gate) (*tofuh
 
 // newMaintenance builds the maintenance service and the watcher that reads
 // the maintenance state for every request.
-func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintenance.Watcher, error) {
+func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *maintenance.Watcher, error) {
 	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
 	if !ok {
 		return nil, nil, errMaintenanceNeedsStore
@@ -658,7 +740,7 @@ func newMaintenance(svc services, cfg settings) (*maintenance.Service, *maintena
 // output route fail closed with a 500 when the append fails, so the counter
 // is the alert for lost entries.
 func newTFEHandler(
-	cfg settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	cfg *settings, svc services, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (*tfe.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -739,13 +821,68 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, nil
+	return base, checkRetention(cfg.softDeleteRetention)
+}
+
+// newWorkspaceService builds the OpenTofu workspace service, which seals
+// state with secrets.
+func newWorkspaceService(
+	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
+) (*workspace.Service, error) {
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         cfg.workspaceStore,
+		States:             cfg.stateStore,
+		Blobs:              cfg.blobStore,
+		Namespaces:         namespaces,
+		Sealer:             secrets,
+		Logger:             cfg.logger,
+		Now:                cfg.now,
+		MaxStateBytes:      cfg.maxStateBytes,
+		MaxPendingVersions: 0,
+		Retention:          cfg.softDeleteRetention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
+	return workspaces, nil
+}
+
+// newUpdateService builds the update service. A nil token service leaves the
+// token checker nil, so the service fails closed for any update that an
+// access token started.
+func newUpdateService(
+	cfg *settings, namespaces *namespace.Service, journal *stack.JournalEntries, tokens *accesstoken.Service,
+) (*stack.Updates, error) {
+	var checker stack.TokenChecker
+	if tokens != nil {
+		checker = tokens
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Stacks:             cfg.stackStore,
+		Blobs:              cfg.blobStore,
+		Tokens:             checker,
+		Now:                cfg.now,
+		Logger:             cfg.logger,
+		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
+	return updates, nil
 }
 
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg settings) (services, error) {
+func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
 	)
@@ -758,25 +895,14 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            cfg.updateStore,
-		Checkpoints:        cfg.checkpointStore,
-		Events:             cfg.eventStore,
-		Namespaces:         namespaces,
-		Stacks:             cfg.stackStore,
-		Blobs:              cfg.blobStore,
-		Now:                cfg.now,
-		Logger:             cfg.logger,
-		MaxCheckpointBytes: cfg.maxCheckpointBytes,
-		Journal:            journal,
-	})
+	updates, err := newUpdateService(cfg, namespaces, journal, tokens)
 	if err != nil {
-		return services{}, fmt.Errorf("update service: %w", err)
+		return services{}, err
 	}
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates,
+		State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -793,19 +919,9 @@ func newServices(cfg settings) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         cfg.workspaceStore,
-		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
-		Namespaces:         namespaces,
-		Sealer:             secrets,
-		Logger:             cfg.logger,
-		Now:                cfg.now,
-		MaxStateBytes:      cfg.maxStateBytes,
-		MaxPendingVersions: 0,
-	})
+	workspaces, err := newWorkspaceService(cfg, namespaces, secrets)
 	if err != nil {
-		return services{}, fmt.Errorf("workspace service: %w", err)
+		return services{}, err
 	}
 
 	return services{
@@ -875,6 +991,19 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	// The first run of the inactivity disable ends before the hook and
+	// before the server serves a request. A slow database delays the start
+	// by firstSweepLimit at most: the hourly runs try again.
+	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+	s.sweepOnce(firstCtx)
+	stopFirst()
+
+	if s.beforeServe != nil {
+		if hookErr := s.beforeServe(ctx); hookErr != nil {
+			return errors.Join(fmt.Errorf("before serve: %w", hookErr), closeListener(ln))
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              ln.Addr().String(),
 		Handler:           s.handler,
@@ -885,7 +1014,78 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
+	sweepCtx, stopSweeps := context.WithCancel(ctx)
+
+	var sweeps sync.WaitGroup
+
+	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+
+	// The shipper stops when Run returns, also after a serve error, and Run
+	// returns only after it stopped.
+	shipCtx, stopShipper := context.WithCancel(ctx)
+	waitShipper := s.startAuditShipper(shipCtx)
+
+	defer func() {
+		stopShipper()
+		waitShipper()
+		stopSweeps()
+		sweeps.Wait()
+	}()
+
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// sweepEvery is the period of the inactivity disable. The inactivity period
+// counts in days by default, so one run each hour is ample.
+const sweepEvery = time.Hour
+
+// firstSweepLimit bounds the run of the inactivity disable before the
+// server serves.
+const firstSweepLimit = time.Minute
+
+// sweepInactive runs the inactivity disable of ADR 53 once each
+// sweepEvery, until ctx is done. Run makes the first run before it serves.
+func (s *Server) sweepInactive(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	ticker := time.NewTicker(sweepEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweepOnce(ctx)
+		}
+	}
+}
+
+// sweepOnce runs the inactivity disable once and counts the result. A failed
+// run logs no error text, which may hold driver detail (ADR 32 decision 7),
+// and the next run tries again. A run that the server stops (ctx canceled)
+// is not a failure. A run past its time limit is.
+func (s *Server) sweepOnce(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "inactivity disable failed")
+	case err != nil:
+	case len(res.Tokens) > 0 || len(res.Principals) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "inactivity disable",
+			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
 }
 
 // startUpResult answers the result of Run when a start-up step fails with
@@ -970,6 +1170,16 @@ func (s *Server) serveUntilDone(ctx context.Context, srv *http.Server, ln net.Li
 	}
 
 	return shutdownServer(ctx, srv, serveErr)
+}
+
+// closeListener closes ln after a failed start and answers the close
+// error, wrapped, or nil.
+func closeListener(ln net.Listener) error {
+	if err := ln.Close(); err != nil {
+		return fmt.Errorf("close listener: %w", err)
+	}
+
+	return nil
 }
 
 // shutdownServer shuts down srv after ctx is done and reports the serve
@@ -1119,7 +1329,7 @@ func isLoopbackListenAddr(addr string) bool {
 // answer 204 when the append fails, so the counter is the alert for lost
 // entries.
 func newPulumiHandler(
-	svc services, cfg settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+	svc services, cfg *settings, base baseurl.Resolver, observed *metrics.ServerMetrics, gate *bodygate.Gate,
 ) (http.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
@@ -1155,7 +1365,7 @@ func newPulumiHandler(
 // service and the audit store. The store comes from the namespace store:
 // every SQL adapter serves all ports from one database connection. A custom
 // store that keeps no audit entries fails here with a clear error.
-func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
+func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	entries, ok := cfg.namespaceStore.(audit.Store)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
@@ -1175,15 +1385,43 @@ func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// checkRetention refuses a soft-delete retention below
+// MinSoftDeleteRetention. Zero means the domain default.
+func checkRetention(d time.Duration) error {
+	if d != 0 && d < MinSoftDeleteRetention {
+		return fmt.Errorf("%w: WithSoftDeleteRetention needs at least %s, got %s",
+			ErrInvalidOption, MinSoftDeleteRetention, d)
+	}
+
+	return nil
+}
+
 // newInventoryHandler builds the tool-neutral inventory API from the
-// namespace service and the inventory reader.
-func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
+// namespace service, the inventory reader and the restore and purge of each
+// tool (ADR 47). Every SQL adapter also reads the deleted units through the
+// inventory reader. A custom reader that keeps no deleted units fails here
+// with a clear error.
+func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	blobs := blobPurger{logger: cfg.logger}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Namespaces:    svc.namespaces,
-		Units:         cfg.inventoryReader,
+		Namespaces: svc.namespaces,
+		Units:      cfg.inventoryReader,
+		Deleted:    deleted,
+		Lifecycles: map[string]inventory.Lifecycle{
+			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
+		},
+		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Now:           cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -1203,7 +1441,7 @@ type installationDeps struct {
 // newInstallationAPI builds the restore service and the tool-neutral
 // installation API from the backup service and the maintenance service.
 func newInstallationAPI(
-	cfg settings, deps installationDeps,
+	cfg *settings, deps installationDeps,
 ) (http.Handler, *backup.RestoreService, error) {
 	restores, err := newRestoreService(cfg, deps, deps.maint)
 	if err != nil {
@@ -1226,7 +1464,7 @@ func newInstallationAPI(
 // the upgrade check reads, and the principal service when the store keeps
 // principals (ADR 52).
 func newServerHandler(
-	cfg settings, deps installationDeps, restores *backup.RestoreService,
+	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
 	grants, err := newAccessService(cfg)
 	if err != nil {
@@ -1299,7 +1537,7 @@ func adminSubjectsOf(authn identity.Authenticator) []string {
 // namespace store is the principal store too. The access service, when the
 // store keeps grants, guards the membership changes and the deletes: each
 // one gives or takes the grants of a principal or a group.
-func newPrincipalService(cfg settings, grants *access.Service) (*principal.Service, error) {
+func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Service, error) {
 	store, ok := cfg.namespaceStore.(principal.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No principal store is a valid setup: the routes answer 501.
@@ -1382,7 +1620,7 @@ func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
 // otherwise.
-func newAccessService(cfg settings) (*access.Service, error) {
+func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return nil, nil //nolint:nilnil // No access store is a valid setup: the routes answer 501.
@@ -1414,7 +1652,7 @@ func newAccessService(cfg settings) (*access.Service, error) {
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
 // no principals. Every SQL adapter keeps both.
-func newTokenService(cfg settings) (*accesstoken.Service, error) {
+func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1443,7 +1681,7 @@ func newTokenService(cfg settings) (*accesstoken.Service, error) {
 // from one source. It never refuses a valid token.
 //
 //nolint:ireturn // The adapters take the port.
-func gatedAuthenticator(cfg settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
+func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Authenticator, error) {
 	if tokens == nil {
 		return cfg.authenticator, nil
 	}
@@ -1479,7 +1717,7 @@ func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
 // database connection. A nil target means no backup target is configured.
-func newBackupService(cfg settings, svc services) (*backup.Service, error) {
+func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
 		return nil, nil
@@ -1525,7 +1763,7 @@ func newBackupService(cfg settings, svc services) (*backup.Service, error) {
 // backup of the live data before the apply. A nil target means no backup
 // target is configured.
 func newRestoreService(
-	cfg settings, deps installationDeps, maint *maintenance.Service,
+	cfg *settings, deps installationDeps, maint *maintenance.Service,
 ) (*backup.RestoreService, error) {
 	if cfg.backupTarget == nil {
 		//nolint:nilnil // Nil without an error means no backup target is configured.
@@ -1682,15 +1920,19 @@ func warnTokenExpiry(w http.ResponseWriter, caller identity.Principal, now time.
 	w.Header().Set(accesstoken.ExpiryHeader, caller.TokenExpiresAt.UTC().Format(time.RFC3339))
 }
 
-// remoteHost returns the remote address of r without the port: the source
-// that the authentication gate counts failures for.
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// unknownGateSource names the shared budget of requests with no client
+// address: the authentication gate counts their failures together.
+const unknownGateSource = "unknown"
+
+// gateSource returns the source text that the authentication gate counts
+// the failures of addr for: the address in text, or unknownGateSource when
+// the address is unknown. The gate maps an IPv6 address to its /64 itself.
+func gateSource(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return unknownGateSource
 	}
 
-	return host
+	return addr.String()
 }
 
 // callerForRequest returns the signed-in principal, or false when the
@@ -1724,11 +1966,12 @@ func callerForRequest(ctx context.Context, authn identity.Authenticator, r *http
 	return caller, true
 }
 
-// withRequestLog mints a request ID, stores it in the context, records the
-// request in the metrics registry, and writes one log line for each request.
-// The line holds the method, the route, the status, the duration, the size,
-// the ID, the adapter and, for a signed-in request, the subject. It holds
-// nothing else.
+// withRequestLog resolves the client address, mints a request ID, stores
+// both in the context, records the request in the metrics registry, and
+// writes one log line for each request. The line holds the method, the
+// route, the status, the duration, the size, the ID, the adapter, the client
+// address when known and, for a signed-in request, the subject. It holds
+// nothing else, in particular no header value.
 //
 // Go's ServeMux stores the matched pattern in Request.Pattern. The root mux
 // matches a prefix such as /api/ and forwards the request to an adapter
@@ -1738,20 +1981,35 @@ func callerForRequest(ctx context.Context, authn identity.Authenticator, r *http
 // the line uses unmatched. The line names the pattern only, never the path,
 // so a capability token in the path cannot leak into the log. The metrics
 // use the same pattern and adapter, so no label holds a path value.
+// requestAddr resolves the client address of each request and rate-limits
+// the missing-header warning.
+type requestAddr struct {
+	resolver *clientip.Resolver
+	warns    *warnLimiter
+}
+
 func withRequestLog(
 	next http.Handler,
+	addr requestAddr,
 	logger *slog.Logger,
 	authn identity.Authenticator,
 	observed *metrics.ServerMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved := addr.resolver.Resolve(r)
+		ctx := clientip.WithAddr(r.Context(), resolved)
+
+		if addr.warns != nil {
+			addr.warns.warnMissingHeader(ctx, r, resolved, addr.resolver, logger)
+		}
+
 		id := newRequestID()
 		// A direct assignment keeps the header name of ADR 32. The key is already
 		// in canonical form, so http.Header reads it with Get.
 		w.Header()[requestIDHeader] = []string{id}
 
-		ctx := requestid.WithContext(r.Context(), id)
-		ctx = authgate.WithRequest(ctx, remoteHost(r))
+		ctx = requestid.WithContext(ctx, id)
+		ctx = authgate.WithRequest(ctx, gateSource(resolved))
 
 		r = r.WithContext(ctx)
 
@@ -1775,18 +2033,7 @@ func withRequestLog(
 		next.ServeHTTP(wrapped, r)
 
 		elapsed := time.Since(start)
-
-		route := r.Pattern
-		if route == "" {
-			route = unmatchedRoute
-		}
-
-		// A root prefix without a method means the adapter found no route.
-		// Log it as unmatched, so the line never names a bare prefix.
-		if !strings.Contains(route, " ") && route != unmatchedRoute {
-			route = unmatchedRoute
-		}
-
+		route := logRoute(r)
 		adapter := adapterForRequest(r.Pattern, r.URL.Path)
 
 		if observed != nil {
@@ -1803,6 +2050,8 @@ func withRequestLog(
 			slog.String("adapter", adapter),
 		}
 
+		attrs = appendClientIP(attrs, resolved)
+
 		if signedIn {
 			attrs = append(attrs, slog.String("subject", caller.Subject))
 		}
@@ -1816,7 +2065,30 @@ func withRequestLog(
 	})
 }
 
-func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Handler, error) {
+// logRoute answers the route label of the request log line: the matched
+// pattern, or unmatched when nothing matched or the adapter found no route.
+// A root prefix without a method means the adapter found no route, so it
+// logs as unmatched and the line never names a bare prefix.
+func logRoute(r *http.Request) string {
+	route := r.Pattern
+	if route == "" || !strings.Contains(route, " ") {
+		return unmatchedRoute
+	}
+
+	return route
+}
+
+// appendClientIP adds the client address to attrs when it is known. It adds
+// the resolved address only, never a header value.
+func appendClientIP(attrs []slog.Attr, addr netip.Addr) []slog.Attr {
+	if !addr.IsValid() {
+		return attrs
+	}
+
+	return append(attrs, slog.String("client_ip", addr.String()))
+}
+
+func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Handler, error) {
 	mux := http.NewServeMux()
 	// /api/inventory/, /api/v2/ and /api/server/ are more specific than
 	// /api/, so the inventory units route, the OpenTofu routes and the
@@ -1866,5 +2138,29 @@ func routes(a adapters, cfg settings, observed *metrics.ServerMetrics) (http.Han
 		mux.Handle("/", console)
 	}
 
-	return withRequestCache(withRequestLog(mux, cfg.logger, cfg.authenticator, observed)), nil
+	resolver, err := newClientIPResolver(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
+
+	return withRequestCache(withRequestLog(mux, addr, cfg.logger, cfg.authenticator, observed)), nil
+}
+
+// newClientIPResolver builds the client address resolver of the server from
+// the trusted proxy settings. An unknown header or a refused proxy list
+// fails the build, so the server never starts with them.
+func newClientIPResolver(cfg *settings) (*clientip.Resolver, error) {
+	header, err := clientip.ParseHeader(cfg.proxies.header)
+	if err != nil {
+		return nil, fmt.Errorf("trusted proxy header: %w", err)
+	}
+
+	resolver, err := clientip.NewResolver(cfg.proxies.prefixes, header)
+	if err != nil {
+		return nil, fmt.Errorf("trusted proxies: %w", err)
+	}
+
+	return resolver, nil
 }

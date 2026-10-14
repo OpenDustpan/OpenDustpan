@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -120,12 +121,14 @@ func (h *Handler) appendOverrideAudit(
 		Version:    version,
 		ValuePath:  "",
 		ValueCount: nil,
-		SourceIP:   sourceIP(r),
+		Changes:    nil,
+		SourceIP:   clientip.String(r),
 		UserAgent:  truncateUserAgent(r.UserAgent()),
 		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:       audit.KindOverride,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  requestid.FromContext(ctx),
+		ObjectID:   obj.UnitID(),
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,

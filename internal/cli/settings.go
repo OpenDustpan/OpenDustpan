@@ -145,6 +145,18 @@ var Settings = []*Setting{
 		referenceNone,
 	).WithFile("public-url").WithURL(),
 	stringSetting(
+		"trusted-proxies", "DUSTPAN_TRUSTED_PROXIES", "",
+		"comma-separated CIDRs of trusted proxies, "+
+			"empty means none (DUSTPAN_TRUSTED_PROXIES)",
+		"(none: the server uses the address of the TCP peer only)",
+	).WithFile("trusted-proxies"),
+	stringSetting(
+		"trusted-proxy-header", "DUSTPAN_TRUSTED_PROXY_HEADER", "x-forwarded-for",
+		"forwarding header the server reads from trusted proxies: x-forwarded-for or forwarded "+
+			"(DUSTPAN_TRUSTED_PROXY_HEADER)",
+		"`x-forwarded-for` (or `forwarded`)",
+	).WithFile("trusted-proxy-header"),
+	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
 		"`info` (or `debug`, `warn`, `error`)",
@@ -219,6 +231,13 @@ var Settings = []*Setting{
 			"about 72 MiB of the budget. Installations with large outputs should raise this value. An upload "+
 			"that can never fit answers 413.",
 	).WithFile("max-body-bytes-in-flight"),
+	stringSetting(
+		"soft-delete-retention", "DUSTPAN_SOFT_DELETE_RETENTION", "720h",
+		"how long a deleted stack or workspace stays before its final delete, at least 1h "+
+			"(DUSTPAN_SOFT_DELETE_RETENTION)",
+		"`720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records "+
+			"the end of its retention, so a change applies to later deletes",
+	).WithFile("soft-delete-retention"),
 	intSetting(
 		"checkpoint-delta-cutoff", "DUSTPAN_CHECKPOINT_DELTA_CUTOFF", "1048576",
 		"checkpoint size in bytes from which the CLI sends delta uploads, "+
@@ -231,6 +250,20 @@ var Settings = []*Setting{
 			"(DUSTPAN_DISABLE_PULUMI_JOURNALING=true)",
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
+	stringSetting(
+		"log-sink", "DUSTPAN_LOG_SINK", "",
+		"a target of the application log instead of stderr; repeat the flag for more targets. Each is "+
+			"[<name>=]stderr, stdout, file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
+			"or webhook:<https URL> (DUSTPAN_LOG_SINK, targets separated by white space)",
+		"(none: stderr). For example `stderr syslog+tls://logs.example:6514`",
+	).WithFile("log-sink").WithSensitive(),
+	stringSetting(
+		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
+		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
+			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
+			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
+		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
+	).WithFile("audit-sink").WithSensitive(),
 	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
@@ -269,6 +302,26 @@ var Settings = []*Setting{
 		"A file that holds the tokens, one per line or comma-separated. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_ADMIN_TOKEN` wins.",
 	).WithFile("admin-token-file"),
+	envSetting(
+		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
+		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+
+			"Required when `--audit-sink` names a webhook and you set no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE",
+		"A file that holds the webhook secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins.",
+	),
+	envSetting(
+		"DUSTPAN_LOG_WEBHOOK_SECRET",
+		"The key of the HMAC-SHA256 signature of each request of a `webhook:` log sink. "+
+			"Required when `--log-sink` names a webhook and you set no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LOG_WEBHOOK_SECRET_FILE",
+		"A file that holds the log webhook secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_LOG_WEBHOOK_SECRET` wins.",
+	),
 	envSetting(
 		"DUSTPAN_KEY_ENCRYPTION_KEY",
 		"The base64 text of 32 random bytes. It can stay unset while the database holds no secrets.",

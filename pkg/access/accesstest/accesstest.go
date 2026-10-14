@@ -128,12 +128,14 @@ func entry() audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "accesstest",
 		Channel:    audit.ChannelAPI,
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -683,6 +685,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
 		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 		t.Fatalf("create principal: %v", err)
@@ -871,6 +874,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 	alice := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
 		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, alice, entry()); err != nil {
 		t.Fatalf("create principal: %v", err)

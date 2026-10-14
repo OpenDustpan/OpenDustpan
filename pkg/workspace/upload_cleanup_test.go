@@ -70,6 +70,7 @@ func TestUploadCleanupSurvivesTheRequest(t *testing.T) {
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

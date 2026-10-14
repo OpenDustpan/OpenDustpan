@@ -421,6 +421,32 @@ func newUpdateFixtureWithCutoff(
 ) updateFixture {
 	t.Helper()
 
+	return newUpdateFixtureWithAuthenticator(
+		t,
+		authz,
+		tokenAuthenticator{},
+		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff},
+	)
+}
+
+// fixtureOptions holds the settings of an update fixture beyond its policy and
+// authenticator: the checkpoint limit, the delta cutoff, and the check of the
+// access token that started an update.
+type fixtureOptions struct {
+	checker stack.TokenChecker
+	limit   int
+	cutoff  int
+}
+
+// newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
+// does, with authn as the authenticator of access tokens.
+func newUpdateFixtureWithAuthenticator(
+	t *testing.T, authz identity.Authorizer, authn identity.Authenticator, opts fixtureOptions,
+) updateFixture {
+	t.Helper()
+
+	limit, cutoff, checker := opts.limit, opts.cutoff, opts.checker
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
 	)
@@ -439,7 +465,7 @@ func newUpdateFixtureWithCutoff(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -459,6 +485,7 @@ func newUpdateFixtureWithCutoff(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
+		Tokens:             checker,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -470,7 +497,7 @@ func newUpdateFixtureWithCutoff(
 		Updates:                 updates,
 		Secrets:                 newTestSecrets(t, namespaces),
 		Namespaces:              namespaces,
-		Authenticator:           tokenAuthenticator{},
+		Authenticator:           authn,
 		Authorizer:              authz,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -2647,6 +2674,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
+		Retention: 0,
 	})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -2665,6 +2693,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Tokens:             nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
