@@ -247,11 +247,20 @@ func (q *Queries) CountEndedGrantRecords(ctx context.Context, arg CountEndedGran
 }
 
 const countGrantsOn = `-- name: CountGrantsOn :one
-SELECT COUNT(*) FROM grants WHERE target = ? AND revoked_at_ms IS NULL
+SELECT COUNT(*) FROM grants
+WHERE target = ?1 AND revoked_at_ms IS NULL
+  AND (CAST(?2 AS TEXT) = '' OR subject = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR role = CAST(?3 AS TEXT))
 `
 
-func (q *Queries) CountGrantsOn(ctx context.Context, target string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countGrantsOn, target)
+type CountGrantsOnParams struct {
+	Target  string
+	Subject string
+	Role    string
+}
+
+func (q *Queries) CountGrantsOn(ctx context.Context, arg CountGrantsOnParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countGrantsOn, arg.Target, arg.Subject, arg.Role)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -3513,16 +3522,25 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 }
 
 const listGrantsOn = `-- name: ListGrantsOn :many
-SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
-FROM grants
-WHERE target = ?1 AND revoked_at_ms IS NULL
-  AND (subject > ?2 OR (subject = ?2 AND role > ?3))
-ORDER BY subject, role
-LIMIT ?4
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.object_kind, g.namespace,
+  g.condition, g.created_at_ms, g.created_by,
+  CAST(COALESCE(NULLIF(p.display_name, ''), p.subject, pg.name, '') AS TEXT) AS holder_name,
+  CAST(COALESCE(p.kind, CASE WHEN pg.id IS NOT NULL THEN 'group' END, '') AS TEXT) AS holder_kind
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+WHERE g.target = ?1 AND g.revoked_at_ms IS NULL
+  AND (CAST(?2 AS TEXT) = '' OR g.subject = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR g.role = CAST(?3 AS TEXT))
+  AND (g.subject > ?4 OR (g.subject = ?4 AND g.role > ?5))
+ORDER BY g.subject, g.role
+LIMIT ?6
 `
 
 type ListGrantsOnParams struct {
 	Target       string
+	Subject      string
+	Role         string
 	AfterSubject string
 	AfterRole    string
 	RowLimit     int64
@@ -3541,11 +3559,19 @@ type ListGrantsOnRow struct {
 	Condition   sql.NullString
 	CreatedAtMs int64
 	CreatedBy   string
+	HolderName  string
+	HolderKind  string
 }
 
+// One page of the current grants on a target, with the name and the kind of
+// each holder: the display name (else the subject) and the kind of a
+// principal, or the name of a group and the kind "group". An empty subject
+// or role filter keeps every grant.
 func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]ListGrantsOnRow, error) {
 	rows, err := q.db.QueryContext(ctx, listGrantsOn,
 		arg.Target,
+		arg.Subject,
+		arg.Role,
 		arg.AfterSubject,
 		arg.AfterRole,
 		arg.RowLimit,
@@ -3570,6 +3596,8 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 			&i.Condition,
 			&i.CreatedAtMs,
 			&i.CreatedBy,
+			&i.HolderName,
+			&i.HolderKind,
 		); err != nil {
 			return nil, err
 		}
