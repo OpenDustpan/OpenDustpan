@@ -45,6 +45,10 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColUpdatedAtMs = "updated_at_ms"
+	pgColDeletedAtMs = "deleted_at_ms"
+	pgColSource      = "source"
+	pgColKind        = "kind"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -70,6 +74,7 @@ func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
+	tables = append(tables, pgCopyIdentityTables()...)
 
 	return tables
 }
@@ -89,7 +94,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "stacks",
 			columns: []string{
-				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
+				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, pgColUpdatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
@@ -101,7 +106,7 @@ func pgCopyStackTables() []pgCopyTable {
 		{
 			table: "updates",
 			columns: []string{
-				pgColStackID, "id", "kind", "dry_run", pgColStatus, pgColVersion, "revision",
+				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				"created_by", "restored_from", "journal_version", "journal_closed",
 			},
@@ -169,7 +174,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table: "workspaces",
 			columns: []string{
 				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
-				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, "updated_at_ms",
+				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, pgColUpdatedAtMs,
 				"allow_forced_writes", "allow_unlocked_writes",
 			},
 			orderBy: []string{"id"},
@@ -189,7 +194,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
-				"channel", "kind", "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -210,6 +215,46 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table:   "installation",
 			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
+		},
+	}
+}
+
+// pgCopyIdentityTables holds the COPY columns of the principal and group
+// tables (ADR 52).
+func pgCopyIdentityTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: "principals",
+			columns: []string{
+				"id",
+				"subject",
+				"display_name",
+				pgColKind,
+				pgColSource,
+				pgColCreatedAtMs,
+				pgColUpdatedAtMs,
+				pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "principal_groups",
+			columns: []string{
+				"id",
+				pgColName,
+				"name_key",
+				"description",
+				pgColSource,
+				pgColCreatedAtMs,
+				pgColUpdatedAtMs,
+				pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "group_members",
+			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
+			orderBy: []string{"group_id", "principal_id", "added_at_ms"},
 		},
 	}
 }

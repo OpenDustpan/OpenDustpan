@@ -15,6 +15,10 @@ const (
 	backupColStatus      = "status"
 	backupColUpdateID    = "update_id"
 	backupColVersion     = "version"
+	backupColUpdatedAtMs = "updated_at_ms"
+	backupColDeletedAtMs = "deleted_at_ms"
+	backupColSource      = "source"
+	backupColKind        = "kind"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -53,7 +57,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColName,
 				backupColVersion,
 				backupColCreatedAtMs,
-				"updated_at_ms",
+				backupColUpdatedAtMs,
 				"id",
 			},
 		},
@@ -70,7 +74,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColStackID,
 				"id",
-				"kind",
+				backupColKind,
 				"dry_run",
 				backupColStatus,
 				backupColVersion,
@@ -180,7 +184,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"locked_at_ms",
 				"current_state_version_id",
 				backupColCreatedAtMs,
-				"updated_at_ms",
+				backupColUpdatedAtMs,
 				"allow_forced_writes",
 				"allow_unlocked_writes",
 			},
@@ -227,13 +231,43 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"source_ip",
 				"user_agent",
 				"channel",
-				"kind",
+				backupColKind,
 				"outcome",
 				"request_id",
 				"prev_hash",
 				"hash",
 				"value_count",
 			},
+		},
+		{
+			table: "principals",
+			columns: []string{
+				"id",
+				"subject",
+				"display_name",
+				backupColKind,
+				backupColSource,
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
+			},
+		},
+		{
+			table: "principal_groups",
+			columns: []string{
+				"id",
+				backupColName,
+				"name_key",
+				"description",
+				backupColSource,
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
+			},
+		},
+		{
+			table:   "group_members",
+			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
 		},
 		{
 			table: "backups",

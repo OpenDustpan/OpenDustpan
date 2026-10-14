@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -84,6 +86,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		test func(t *testing.T, newStore BackupFactory)
 		name string
 	}{
+		{name: "the table list names every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
@@ -221,6 +224,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		namespace.Overrides{Forced: false, Unlocked: true})
 	backedUp := seedBackupRecord(t, s)
 	entries := seedBackupAudit(t, s, acme)
+	seedBackupPrincipals(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -239,6 +243,98 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		pending:    pending,
 		backedUp:   backedUp,
 		audit:      entries,
+	}
+}
+
+// seedBackupPrincipals writes a person, a service, a deleted principal, a
+// group, a current membership and an ended one when s keeps principals, so
+// the round trip compares the principal tables row by row, nullable end
+// times included (ADR 52). A store with no principal port skips it: the
+// fake of this package's own tests is one.
+func seedBackupPrincipals(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ps, ok := s.(principal.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	principals := []principal.Principal{
+		{
+			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "prn-alice",
+			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
+			Source: principal.SourceLocal, GroupCount: 0,
+		},
+		{
+			CreatedAt: now(), UpdatedAt: now(), ID: "prn-deploy",
+			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
+			Source: principal.SourceLocal, GroupCount: 0,
+		},
+		{
+			CreatedAt: now(), UpdatedAt: now(), ID: "prn-gone",
+			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
+			Source: principal.SourceSCIM, GroupCount: 0,
+		},
+	}
+	for i := range principals {
+		e := ServerChange(now(), "principal:"+principals[i].ID)
+		if err := ps.CreatePrincipal(ctx, principals[i], e); err != nil {
+			t.Fatalf("create principal %q: %v", principals[i].Subject, err)
+		}
+	}
+
+	g := principal.Group{
+		CreatedAt: now(), UpdatedAt: now(), ID: "grp-ops", Name: "Ops", Description: "Runs the platform",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	for _, id := range []string{"prn-alice", "prn-deploy"} {
+		m := principal.Membership{AddedAt: now().Add(time.Hour), GroupID: g.ID, PrincipalID: id}
+		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
+			t.Fatalf("add member %q: %v", id, err)
+		}
+	}
+
+	later := now().Add(2 * time.Hour)
+	removal := ServerChange(later, "group:grp-ops#member:prn-alice")
+	if err := ps.RemoveMember(ctx, g.ID, "prn-alice", removal); err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+
+	if err := ps.DeletePrincipal(ctx, "prn-gone", ServerChange(later, "principal:prn-gone")); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+}
+
+// ServerChange returns a valid audit entry of the kind change in the scope
+// @server, for the record object at the time at: the entry that a write to
+// an installation store takes.
+func ServerChange(at time.Time, object string) audit.Entry {
+	return audit.Entry{
+		At:         at,
+		Namespace:  audit.ServerScope,
+		Subject:    "admin",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "server:manage-principals",
+		Object:     object,
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  "storetest",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
 	}
 }
 
@@ -524,8 +620,31 @@ func sameBlobRef(a, b backup.BlobRef) bool {
 	return a.Key == b.Key && a.Size == b.Size && a.MD5 == b.MD5
 }
 
-// from backup.Tables. It reads the schema tables through the Inspector,
-// never through Tables itself, so the two cannot drift silently.
+// testBackupTablesCoverSchema checks that the data tables of the migrated
+// schema are exactly the tables of backup.Tables. It reads the schema tables
+// through the Inspector, never through Tables itself, so a migration that
+// adds a table fails here until its author adds the table to Tables.
+func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	schema, err := s.SchemaTables(t.Context())
+	if err != nil {
+		t.Fatalf("schema tables: %v", err)
+	}
+
+	want := backup.TablesCopy()
+	slices.Sort(want)
+
+	got := slices.Clone(schema)
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("schema tables = %q, want backup.Tables %q", got, want)
+	}
+}
+
 // testBackupColumnsCoverSchema checks that the column list of each table of
 // backup.Tables matches the live columns of the migrated schema (ADR 42,
 // decision 5). A column that a migration adds fails here until its list names it.
