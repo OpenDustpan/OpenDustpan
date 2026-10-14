@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -53,7 +54,13 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 
 	ctx := t.Context()
 	e := testEntry()
-	caller := identity.Principal{Subject: "tester", DisplayName: "", Admin: false, TokenID: ""}
+	caller := identity.Principal{
+		Subject:        "tester",
+		DisplayName:    "",
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
 
 	p, err := svc.CreatePrincipal(
 		ctx,
