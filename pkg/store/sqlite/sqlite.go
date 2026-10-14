@@ -114,12 +114,15 @@ const walGuardMaxBackoff = 5 * time.Second
 //nolint:gochecknoglobals // The guard backoff stays tunable in tests without a new setting; the hook restores it.
 var walGuardBackoffCap = walGuardMaxBackoff
 
-// walTickInfo describes one past-threshold guard tick for the test hook: when
-// the truncate finished, how long the tick took from its stat to the finish,
-// whether it succeeded, whether the tick saw a slow busy attempt, and the
-// slow and total attempt counts, and the wait the guard slept before the
-// tick, so tests check the backoff without measuring wall-clock gaps.
+// walTickInfo describes one past-threshold guard tick for the test hook: the
+// database path of the store, so a test reads only the ticks of its own store
+// while other stores tick in parallel, when the truncate finished, how long
+// the tick took from its stat to the finish, whether it succeeded, whether the
+// tick saw a slow busy attempt, and the slow and total attempt counts, and the
+// wait the guard slept before the tick, so tests check the backoff without
+// measuring wall-clock gaps.
 type walTickInfo struct {
+	path         string
 	at           time.Time
 	waited       time.Duration
 	elapsed      time.Duration
@@ -1239,6 +1242,7 @@ func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcom
 	result := s.guardCheckpoint(ctx)
 
 	recordWalTick(walTickInfo{
+		path:         s.path,
 		at:           time.Now(),
 		waited:       waited,
 		elapsed:      time.Since(now),
