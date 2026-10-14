@@ -24,6 +24,10 @@ import (
 )
 
 const (
+	// memGCHeadroomDivisor sets the peak allowance for collector lag on a
+	// grown reservation: one part in this many of the reservation.
+	memGCHeadroomDivisor = 4
+
 	memLineage          = "mem-lineage-01"
 	memHolder           = "alice"
 	memLockReason       = "memory test"
@@ -36,7 +40,6 @@ const (
 	memNumResourcesA    = 3000
 	memAttrsPerResource = 10
 	memMaxStateBytes    = 64 << 20
-	memOutputsPeakRatio = 6
 )
 
 // memStateGen streams one deterministic state document without holding it.
@@ -647,6 +650,31 @@ type memReport struct {
 	size    int64
 	total   uint64
 	peak    uint64
+	budget  int64
+}
+
+// memBudget records the bytes the upload asks to grow.
+type memBudget struct {
+	mu    sync.Mutex
+	total int64
+}
+
+// Grow records n and always accepts.
+func (b *memBudget) Grow(n int64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.total += n
+
+	return true
+}
+
+// totalBytes returns the recorded sum.
+func (b *memBudget) totalBytes() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.total
 }
 
 // finishMemCase verifies the upload, prints its line and checks its guard.
@@ -664,25 +692,26 @@ func finishMemCase(
 	const mib = 1 << 20
 
 	t.Logf(
-		"memory variant=%s entry=%s sealed=%s size=%.1fMiB total=%.1fMiB peak=%.1fMiB",
+		"memory variant=%s entry=%s sealed=%s size=%.1fMiB total=%.1fMiB peak=%.1fMiB budget=%.1fMiB",
 		report.variant,
 		report.entry,
 		report.sealed,
 		float64(report.size)/mib,
 		float64(report.total)/mib,
 		float64(report.peak)/mib,
+		float64(report.budget)/mib,
 	)
 
 	// A state whose body streams peaks under the fixed cost that a streaming
-	// upload reserves in the shared budget. The outputs document is the
-	// exception: the upload buffers it whole (and sealing buffers it again), so
-	// its peak follows its size. The ratio is measured for a 7.9 MiB document:
-	// 14.1 MiB unsealed, 27 MiB sealed, and 35 to 40 MiB sealed under -race
-	// (the peak varies with the timing of the garbage collector), so the guard
-	// is 6 times the size.
-	bound := uint64(bodygate.StreamCost)
-	if report.variant == "outputs" {
-		bound = uint64(memOutputsPeakRatio) * uint64(max(report.size, 0))
+	// upload reserves in the shared budget. An upload whose outputs document
+	// is large asks the budget for more bytes as the document grows, so its
+	// peak stays under the reservation plus the grown bytes. Under -race the
+	// heap also holds detector tracking and delayed garbage, so allow extra.
+	bound := uint64(bodygate.StreamCost) + uint64(max(report.budget, 0)) + uint64(raceHeapExtra)
+	if report.budget > 0 {
+		// The collector lets the heap grow past the live bytes before it
+		// frees the garbage of the sealing: allow a quarter more.
+		bound += bound / memGCHeadroomDivisor
 	}
 
 	if report.peak > bound {
@@ -721,8 +750,11 @@ func runMemTFECase(t *testing.T, variant, sealedName string, svc *workspace.Serv
 		t.Fatalf("begin state: %v", beginErr)
 	}
 
+	budget := &memBudget{mu: sync.Mutex{}, total: 0}
+	budgetCtx := workspace.WithBudget(ctx, budget)
+
 	used := memMeasure(t, func() (workspace.StateVersion, error) {
-		return svc.Upload(ctx, pending.Version.ID, pending.Upload, newMemStateGen(variant, measuredSerial))
+		return svc.Upload(budgetCtx, pending.Version.ID, pending.Upload, newMemStateGen(variant, measuredSerial))
 	})
 
 	if _, unlockErr := svc.Unlock(ctx, ws.ID, memHolder); unlockErr != nil {
@@ -736,6 +768,7 @@ func runMemTFECase(t *testing.T, variant, sealedName string, svc *workspace.Serv
 		size:    size,
 		total:   used.total,
 		peak:    used.peak,
+		budget:  budget.totalBytes(),
 	})
 }
 
@@ -752,8 +785,11 @@ func runMemHTTPCase(t *testing.T, variant, sealedName string, svc *workspace.Ser
 	hexSum, size, sum := memBodyMD5(t, variant, measuredSerial)
 	memCheckSize(t, variant, size)
 
+	budget := &memBudget{mu: sync.Mutex{}, total: 0}
+	budgetCtx := workspace.WithBudget(ctx, budget)
+
 	used := memMeasure(t, func() (workspace.StateVersion, error) {
-		return svc.WriteState(ctx, ws.ID,
+		return svc.WriteState(budgetCtx, ws.ID,
 			workspace.StreamInput{Holder: memHolder, LockID: memLockID, MD5: hexSum},
 			streamAuthority(noOverrides(), nil),
 			newMemStateGen(variant, measuredSerial),
@@ -767,6 +803,7 @@ func runMemHTTPCase(t *testing.T, variant, sealedName string, svc *workspace.Ser
 		size:    size,
 		total:   used.total,
 		peak:    used.peak,
+		budget:  budget.totalBytes(),
 	})
 }
 

@@ -124,21 +124,90 @@ func StreamReservation(r *http.Request) int64 {
 	return StreamCost
 }
 
+// Lease is a reservation that can grow. Release frees everything it holds, once.
+type Lease struct {
+	mu       sync.Mutex
+	gate     *Gate
+	held     int64
+	released bool
+}
+
+// NewLease acquires n bytes of g. It reports false when they do not fit.
+func NewLease(g *Gate, n int64) (*Lease, bool) {
+	if g == nil || !g.Acquire(n) {
+		return nil, false
+	}
+
+	return &Lease{mu: sync.Mutex{}, gate: g, held: n, released: false}, true
+}
+
+// Grow acquires n more bytes on the lease. It reports false, and changes
+// nothing, when n is negative, the lease is released, or n does not fit.
+func (l *Lease) Grow(n int64) bool {
+	if l == nil {
+		return false
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if n < 0 || l.released || l.gate == nil {
+		return false
+	}
+
+	if !l.gate.Acquire(n) {
+		return false
+	}
+
+	l.held += n
+
+	return true
+}
+
+// Release frees everything the lease holds, once. Later calls do nothing.
+func (l *Lease) Release() {
+	if l == nil {
+		return
+	}
+
+	l.mu.Lock()
+	held := l.held
+	released := l.released
+	l.released = true
+	gate := l.gate
+	l.mu.Unlock()
+
+	if released || gate == nil {
+		return
+	}
+
+	gate.Release(held)
+}
+
+// Held reports the bytes the lease holds, for tests and metrics.
+func (l *Lease) Held() int64 {
+	if l == nil {
+		return 0
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.held
+}
+
 // Hold reserves n bytes of the gate. It reports false when they do not fit.
 // On success the caller runs the returned release once the body is served.
 // The release func frees once; a second call does nothing.
 //
 //nolint:nonamedreturns // The names document the release-once contract: release frees the hold, ok reports the fit.
 func Hold(g *Gate, n int64) (release func(), ok bool) {
-	if !g.Acquire(n) {
+	lease, acquired := NewLease(g, n)
+	if !acquired {
 		return nil, false
 	}
 
-	var once sync.Once
-
-	return func() {
-		once.Do(func() { g.Release(n) })
-	}, true
+	return lease.Release, true
 }
 
 // SetRetryAfter sets the Retry-After header of the 503 that a body answers

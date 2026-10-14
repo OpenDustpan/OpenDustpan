@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -75,6 +76,9 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.writeConflict(ctx, w, class.detail)
 	case http.StatusUnprocessableEntity:
 		h.writeUnprocessable(ctx, w, class.detail, class.title)
+	case http.StatusServiceUnavailable:
+		bodygate.SetRetryAfter(w)
+		h.writeJSONAPIError(ctx, w, class.status, class.title, class.detail)
 	default:
 		h.writeJSONAPIError(ctx, w, class.status, class.title, class.detail)
 	}
@@ -156,6 +160,12 @@ func classify(err error) errorClass {
 		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
 	case errors.Is(err, workspace.ErrTooLarge):
 		return errorClass{status: http.StatusRequestEntityTooLarge, title: "too large", detail: err.Error()}
+	case errors.Is(err, workspace.ErrBusy):
+		return errorClass{
+			status: http.StatusServiceUnavailable,
+			title:  "service unavailable",
+			detail: "server is busy: try again in one second",
+		}
 	case errors.Is(err, errInvalidBody),
 		errors.Is(err, workspace.ErrInvalidName),
 		errors.Is(err, namespace.ErrInvalidName),
