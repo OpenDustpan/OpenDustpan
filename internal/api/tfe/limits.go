@@ -19,6 +19,20 @@ func (h *Handler) hold(w http.ResponseWriter, r *http.Request, n int64) (func(),
 	return nil, false
 }
 
+// holdLease reserves the bytes of one large body that can grow while it
+// streams. It answers 503 with Retry-After when they do not fit. On success
+// the caller releases the lease once the body is served.
+func (h *Handler) holdLease(w http.ResponseWriter, r *http.Request, n int64) (*bodygate.Lease, bool) {
+	lease, ok := bodygate.NewLease(h.gate, n)
+	if !ok {
+		h.writeBusy(w, r)
+
+		return nil, false
+	}
+
+	return lease, true
+}
+
 // writeBusy answers a large body that arrived while the gate is full.
 func (h *Handler) writeBusy(w http.ResponseWriter, r *http.Request) {
 	bodygate.SetRetryAfter(w)

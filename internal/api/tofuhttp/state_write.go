@@ -35,14 +35,16 @@ func (h *Handler) writeStateRoutes() []Route {
 func (h *Handler) postState(w http.ResponseWriter, r *http.Request, c call) {
 	ctx := r.Context()
 
-	release, ok := bodygate.Hold(h.gate, bodygate.StreamReservation(r))
+	lease, ok := bodygate.NewLease(h.gate, bodygate.StreamReservation(r))
 	if !ok {
 		h.writeBusy(w)
 
 		return
 	}
 
-	defer release()
+	defer lease.Release()
+
+	ctx = workspace.WithBudget(ctx, lease)
 
 	sum, err := contentMD5(r)
 	if err != nil {
