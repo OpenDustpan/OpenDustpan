@@ -2125,7 +2125,11 @@ func (c *countingReader) Read(p []byte) (int, error) {
 func (s *Service) storeUploadBody(
 	ctx context.Context, w Workspace, sv StateVersion, key blob.Key, content io.Reader,
 ) (uploadedBody, error) {
-	reader, stream := newMetaStream(content)
+	grow := func(n int) error {
+		return charge(ctx, int64(n))
+	}
+
+	reader, stream := newMetaStream(content, grow)
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,

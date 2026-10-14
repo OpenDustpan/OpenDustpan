@@ -255,6 +255,38 @@ func TestSetRetryAfter(t *testing.T) {
 	}
 }
 
+// TestSetRetryAfterJitter proves the jitter helper answers only 1, 2 or 3,
+// and answers each of them over many calls.
+func TestSetRetryAfterJitter(t *testing.T) {
+	t.Parallel()
+
+	const calls = 300
+
+	seen := make(map[string]bool, 3)
+
+	for range calls {
+		rec := httptest.NewRecorder()
+		bodygate.SetRetryAfterJitter(rec)
+
+		got := rec.Header().Get("Retry-After")
+
+		switch got {
+		case "1", "2", "3":
+			seen[got] = true
+		default:
+			t.Fatalf("Retry-After = %q, want 1, 2 or 3", got)
+		}
+
+		if rec.Body.Len() != 0 {
+			t.Fatalf("body holds %d bytes, want none", rec.Body.Len())
+		}
+	}
+
+	if len(seen) != 3 {
+		t.Fatalf("jitter answers %v over %d calls, want 1, 2 and 3", seen, calls)
+	}
+}
+
 // TestAcquireRejectsNegative proves a negative size never lowers the count.
 func TestAcquireRejectsNegative(t *testing.T) {
 	t.Parallel()

@@ -266,12 +266,14 @@ func (h *Handler) uploadState(
 		return
 	}
 
-	release, ok := h.hold(w, r, bodygate.StreamReservation(r))
+	release, ok := h.holdLease(w, r, bodygate.StreamReservation(r))
 	if !ok {
 		return
 	}
 
-	defer release()
+	defer release.Release()
+
+	ctx = workspace.WithBudget(ctx, release)
 
 	if _, err := h.workspaces.Upload(ctx, id, tok, r.Body); err != nil {
 		h.writeError(ctx, w, err)
