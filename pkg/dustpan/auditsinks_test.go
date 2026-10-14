@@ -56,12 +56,16 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 	lines := waitForLines(t, path, 2)
 
 	for i, want := range []audit.Entry{first, second} {
-		for _, part := range []string{
-			`"msg":"audit entry"`,
-			`"scope":"acme"`,
-			`"requestID":"` + want.RequestID + `"`,
-			`"hash":"` + want.Hash + `"`,
-		} {
+		parts := []string{`"msg":"audit entry"`, `"scope":"acme"`, `"requestID":"` + want.RequestID + `"`}
+
+		// The chain of a new installation is off once Run resolves it
+		// (ADR 64), so an entry carries a hash only when the store chained
+		// it, and the record holds the hash only then.
+		if want.Hash != "" {
+			parts = append(parts, `"hash":"`+want.Hash+`"`)
+		}
+
+		for _, part := range parts {
 			if !strings.Contains(lines[i], part) {
 				t.Fatalf("line %d %s lacks %s", i, lines[i], part)
 			}
