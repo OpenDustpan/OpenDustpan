@@ -131,7 +131,23 @@ func (s *Service) Review(ctx context.Context, obj identity.Object, req ReviewReq
 		return ReviewPage{}, err
 	}
 
-	page, rows, err := s.reviewPage(ctx, rs, obj, q, boot)
+	return s.reviewEntries(ctx, rs, reviewRead{grantAccess: grantAccess, obj: obj, q: q, boot: boot})
+}
+
+// reviewRead is one page read of an export: the object of the export, its
+// query with its scope, the count of bootstrap rows that the pages before
+// gave, and the roles that manage access.
+type reviewRead struct {
+	grantAccess map[string]bool
+	obj         identity.Object
+	q           ReviewQuery
+	boot        int
+}
+
+// reviewEntries reads the page of r and returns it with the state of each
+// unit and who can grant access.
+func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRead) (ReviewPage, error) {
+	page, rows, err := s.reviewPage(ctx, rs, r.obj, r.q, r.boot)
 	if err != nil {
 		return ReviewPage{}, err
 	}
@@ -142,7 +158,7 @@ func (s *Service) Review(ctx context.Context, obj identity.Object, req ReviewReq
 	}
 
 	for i := range rows {
-		page.Entries = append(page.Entries, reviewEntry(q, rows[i], states, grantAccess))
+		page.Entries = append(page.Entries, reviewEntry(r.q, rows[i], states, r.grantAccess))
 	}
 
 	return page, nil
