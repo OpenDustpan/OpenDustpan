@@ -1386,6 +1386,7 @@ func reviewAllowEntries() []AllowEntry {
 		"/api/server/namespaces/{namespace}/collections/{collection}/access-review",
 		"/api/server/namespaces/{namespace}/unit-access-review",
 		"/api/server/caller/access",
+		"/api/server/caller/grants",
 	}
 
 	out := make([]AllowEntry, 0, len(paths))

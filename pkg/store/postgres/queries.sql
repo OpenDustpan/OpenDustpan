@@ -1091,6 +1091,61 @@ WHERE (@all_grants::boolean
     g.created_at_ms < @to_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @from_ms::bigint
   ELSE g.created_at_ms <= @as_of_ms::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > @as_of_ms::bigint END;
 
+-- name: CallerGrants :many
+-- One page of the current grants of a caller (ADR 52): the grants of the
+-- principal, and the grants of each of its groups through its membership
+-- at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+-- follows the grants of the caller, not the grants of the installation. The
+-- IDs order with the C collation, as in SQLite.
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, @principal::text
+  UNION ALL SELECT 'group'::text, unnest(@groups::text[])
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  COALESCE(m.added_at_ms, 0)::bigint AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  COALESCE(m.principal_id, '')::text AS member_id,
+  COALESCE(mp.subject, '')::text AS member_subject,
+  COALESCE(p.subject, pg.name, '')::text AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= @as_of_ms::bigint
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint) AS member_count
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = @principal::text
+  AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= @as_of_ms::bigint
+  AND (g.created_at_ms > @after_at_ms::bigint
+    OR (g.created_at_ms = @after_at_ms::bigint
+      AND (g.id COLLATE "C" > @after_id::text
+        OR (g.id = @after_id::text
+          AND (COALESCE(m.added_at_ms, 0) > @after_member_at_ms::bigint
+            OR (COALESCE(m.added_at_ms, 0) = @after_member_at_ms::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > @after_member_id::text))))))
+ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
+LIMIT @row_limit::bigint;
+
+-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal'::text, @principal::text
+  UNION ALL SELECT 'group'::text, unnest(@groups::text[])
+)
+SELECT COUNT(*)
+FROM holders h
+JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = @principal::text
+  AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= @as_of_ms::bigint;
+
 -- name: ReviewStacksByIDs :many
 -- The stacks of the unit grants of an export, deleted ones included (ADR 47):
 -- an export shows a grant on a deleted unit, with its name at the time of

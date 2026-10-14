@@ -2253,6 +2253,17 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	principaltest.Bench(b, open(b, base))
 }
 
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	accesstest.BenchCallerGrants(b, open(b, base))
+}
+
 // BenchmarkAuthorizer measures one decision and one list-objects at the
 // scale of accesstest.Bench.
 func BenchmarkAuthorizer(b *testing.B) {
