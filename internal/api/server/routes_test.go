@@ -205,7 +205,7 @@ func newServiceBackedHandler(
 		Principals:     seedRoutePrincipals(t, st),
 		Tokens:         seedRouteTokens(t, st),
 		Access:         seedRouteAccess(t, st),
-		Audit:          nil,
+		Audit:          st,
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -372,6 +372,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
+		BootstrapAdmins: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -747,9 +748,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
 	path = strings.ReplaceAll(path, "{collection}", testCollection)
 
-	if strings.Contains(route.Path, "/unit-grants") {
-		path += "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
-	}
+	path += routeQuery(route.Path)
 
 	var body io.Reader = http.NoBody
 	if text, ok := routeBodies[route.Method+" "+route.Path]; ok {
@@ -770,6 +769,19 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	return req
+}
+
+// routeQuery returns the query that a route with the path pattern path
+// needs: the unit of a unit route, or the object of the caller access.
+func routeQuery(path string) string {
+	switch {
+	case strings.Contains(path, "/unit-grants") || strings.Contains(path, "/unit-access-review"):
+		return "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
+	case path == "/api/server/caller/access":
+		return "?object=" + testNamespace
+	default:
+		return ""
+	}
 }
 
 // routeGrantID returns the seeded grant on the object kind of a grant path,
@@ -811,6 +823,12 @@ func wantSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
 		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
 		return http.StatusAccepted
+	}
+
+	if route.Method == http.MethodGet &&
+		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/access-review" {
+		// The export of a collection waits for the collections (#478).
+		return http.StatusNotImplemented
 	}
 
 	if route.Method == http.MethodPost &&

@@ -344,6 +344,68 @@ func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams
 	return count, err
 }
 
+const countReviewGrants = `-- name: CountReviewGrants :one
+SELECT COUNT(*)
+FROM grants g
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((CAST(?1 AS TEXT) <> '' AND m.principal_id = CAST(?1 AS TEXT))
+    OR (CAST(?1 AS TEXT) = '' AND CAST(?2 AS BOOLEAN) = 1))
+  AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
+    m.added_at_ms < CAST(?4 AS INTEGER)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?5 AS INTEGER)
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= CAST(?6 AS INTEGER) AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER) END
+WHERE (CAST(?7 AS BOOLEAN) = 1
+    OR (CAST(?8 AS TEXT) <> '' AND g.namespace = CAST(?8 AS TEXT)
+      AND g.object_kind <> 'installation')
+    OR g.target = CAST(?9 AS TEXT)
+    OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+    OR (CAST(?1 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
+    g.created_at_ms < CAST(?4 AS INTEGER)
+    AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?5 AS INTEGER)
+  ELSE g.created_at_ms <= CAST(?6 AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER) END
+`
+
+type CountReviewGrantsParams struct {
+	Principal      string
+	Expand         bool
+	History        bool
+	ToMs           int64
+	FromMs         int64
+	AsOfMs         int64
+	AllGrants      bool
+	Namespace      string
+	Target         string
+	Containers     string
+	ContainerRoles string
+	Subject        string
+}
+
+func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countReviewGrants,
+		arg.Principal,
+		arg.Expand,
+		arg.History,
+		arg.ToMs,
+		arg.FromMs,
+		arg.AsOfMs,
+		arg.AllGrants,
+		arg.Namespace,
+		arg.Target,
+		arg.Containers,
+		arg.ContainerRoles,
+		arg.Subject,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRoleGrantsBelowInstallation = `-- name: CountRoleGrantsBelowInstallation :one
 SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind <> 'installation' AND revoked_at_ms IS NULL
 `
@@ -4184,6 +4246,267 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const reviewGrants = `-- name: ReviewGrants :many
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(?1 AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)) AS member_count
+FROM grants g
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND ((CAST(?2 AS TEXT) <> '' AND m.principal_id = CAST(?2 AS TEXT))
+    OR (CAST(?2 AS TEXT) = '' AND CAST(?3 AS BOOLEAN) = 1))
+  AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
+    m.added_at_ms < CAST(?5 AS INTEGER)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
+    AND m.added_at_ms < COALESCE(g.revoked_at_ms, 9223372036854775807)
+    AND COALESCE(m.removed_at_ms, 9223372036854775807) > g.created_at_ms
+  ELSE m.added_at_ms <= CAST(?1 AS INTEGER) AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER) END
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (CAST(?7 AS BOOLEAN) = 1
+    OR (CAST(?8 AS TEXT) <> '' AND g.namespace = CAST(?8 AS TEXT)
+      AND g.object_kind <> 'installation')
+    OR g.target = CAST(?9 AS TEXT)
+    OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
+      AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
+  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+    OR (CAST(?2 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
+  AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
+    g.created_at_ms < CAST(?5 AS INTEGER)
+    AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
+  ELSE g.created_at_ms <= CAST(?1 AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER) END
+  AND (g.created_at_ms > CAST(?13 AS INTEGER)
+    OR (g.created_at_ms = CAST(?13 AS INTEGER)
+      AND (g.id > CAST(?14 AS TEXT)
+        OR (g.id = CAST(?14 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?15 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?15 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?16 AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT ?17
+`
+
+type ReviewGrantsParams struct {
+	AsOfMs          int64
+	Principal       string
+	Expand          bool
+	History         bool
+	ToMs            int64
+	FromMs          int64
+	AllGrants       bool
+	Namespace       string
+	Target          string
+	Containers      string
+	ContainerRoles  string
+	Subject         string
+	AfterAtMs       int64
+	AfterID         string
+	AfterMemberAtMs int64
+	AfterMemberID   string
+	RowLimit        int64
+}
+
+type ReviewGrantsRow struct {
+	ID                string
+	Subject           string
+	SubjectKind       string
+	SubjectID         string
+	Role              string
+	Object            string
+	Target            string
+	Condition         sql.NullString
+	CreatedAtMs       int64
+	CreatedBy         string
+	RevokedAtMs       sql.NullInt64
+	RevokedBy         string
+	MemberAddedAtMs   int64
+	MemberRemovedAtMs sql.NullInt64
+	MemberID          string
+	MemberSubject     string
+	SubjectName       string
+	MemberCount       int64
+}
+
+// One page of an access-review export (ADR 52, decision 10). The join on
+// group_members reads the memberships of the groups of the grants: of one
+// principal for a subject filter, or of every member for expand. It gives
+// one row for each membership that overlaps the grant and the window (a
+// history), or that is current at as_of_ms (a snapshot). In a history, a
+// grant on a container with a custom role is in the export, a deleted role
+// included. A JSON array carries each list, so the query stays fixed.
+func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]ReviewGrantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, reviewGrants,
+		arg.AsOfMs,
+		arg.Principal,
+		arg.Expand,
+		arg.History,
+		arg.ToMs,
+		arg.FromMs,
+		arg.AllGrants,
+		arg.Namespace,
+		arg.Target,
+		arg.Containers,
+		arg.ContainerRoles,
+		arg.Subject,
+		arg.AfterAtMs,
+		arg.AfterID,
+		arg.AfterMemberAtMs,
+		arg.AfterMemberID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewGrantsRow
+	for rows.Next() {
+		var i ReviewGrantsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+			&i.RevokedAtMs,
+			&i.RevokedBy,
+			&i.MemberAddedAtMs,
+			&i.MemberRemovedAtMs,
+			&i.MemberID,
+			&i.MemberSubject,
+			&i.SubjectName,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const reviewStacksByIDs = `-- name: ReviewStacksByIDs :many
+SELECT id, namespace, project, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM stacks WHERE id IN (/*SLICE:ids*/?)
+`
+
+type ReviewStacksByIDsRow struct {
+	ID          string
+	Namespace   string
+	Project     string
+	Name        string
+	DeletedAtMs sql.NullInt64
+}
+
+// The stacks of the unit grants of an export, deleted ones included (ADR 47):
+// an export shows a grant on a deleted unit, with its name at the time of
+// the delete, so a reviewer can clean it up.
+func (q *Queries) ReviewStacksByIDs(ctx context.Context, ids []string) ([]ReviewStacksByIDsRow, error) {
+	query := reviewStacksByIDs
+	var queryParams []interface{}
+	if len(ids) > 0 {
+		for _, v := range ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewStacksByIDsRow
+	for rows.Next() {
+		var i ReviewStacksByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+			&i.DeletedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const reviewWorkspacesByIDs = `-- name: ReviewWorkspacesByIDs :many
+SELECT id, namespace, CAST(COALESCE(deleted_name, name) AS TEXT) AS name, deleted_at_ms FROM workspaces WHERE id IN (/*SLICE:ids*/?)
+`
+
+type ReviewWorkspacesByIDsRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	DeletedAtMs sql.NullInt64
+}
+
+// The workspaces of the unit grants of an export, deleted ones included.
+func (q *Queries) ReviewWorkspacesByIDs(ctx context.Context, ids []string) ([]ReviewWorkspacesByIDsRow, error) {
+	query := reviewWorkspacesByIDs
+	var queryParams []interface{}
+	if len(ids) > 0 {
+		for _, v := range ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewWorkspacesByIDsRow
+	for rows.Next() {
+		var i ReviewWorkspacesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.DeletedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const revokeAccessToken = `-- name: RevokeAccessToken :execrows
