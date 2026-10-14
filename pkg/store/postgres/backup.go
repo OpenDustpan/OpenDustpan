@@ -34,6 +34,7 @@ const pgMD5Len = 16
 const (
 	pgColArrival     = "arrival"
 	pgColCreatedAtMs = "created_at_ms"
+	pgColCreatedBy   = "created_by"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
@@ -49,6 +50,7 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
 	pgColUnitID      = "unit_id"
@@ -113,7 +115,7 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, "revision",
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
-				"created_by", "restored_from", "journal_version", "journal_closed",
+				pgColCreatedBy, "restored_from", "journal_version", "journal_closed",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -202,7 +204,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "audit_entries",
 			columns: []string{
-				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 			},
@@ -229,20 +231,14 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 	}
 }
 
-// pgCopyIdentityTables holds the COPY columns of the principal and group
-// tables (ADR 52).
+// pgCopyIdentityTables holds the COPY columns of the principal, group,
+// role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table: "principals",
 			columns: []string{
-				"id",
-				"subject",
-				"display_name",
-				pgColKind,
-				pgColSource,
-				pgColCreatedAtMs,
-				pgColUpdatedAtMs,
+				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
 			},
 			orderBy: []string{"id"},
@@ -250,13 +246,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 		{
 			table: "principal_groups",
 			columns: []string{
-				"id",
-				pgColName,
-				"name_key",
-				"description",
-				pgColSource,
-				pgColCreatedAtMs,
-				pgColUpdatedAtMs,
+				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
 			},
 			orderBy: []string{"id"},
@@ -279,7 +269,23 @@ func pgCopyIdentityTables() []pgCopyTable {
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
-				"created_by",
+				pgColCreatedBy,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "roles",
+			columns: []string{
+				"id", pgColName, "name_key", "description", "actions", pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "grants",
+			columns: []string{
+				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
+				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
 			},
 			orderBy: []string{"id"},
 		},

@@ -829,6 +829,119 @@ WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
 
+-- name: CreateRole :execrows
+INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRole :one
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: RolesByIDs :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id IN (sqlc.slice('ids')) AND deleted_at_ms IS NULL;
+
+-- name: RoleIDByNameKey :one
+SELECT id FROM roles WHERE name_key = ? AND deleted_at_ms IS NULL;
+
+-- name: ListRoles :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE deleted_at_ms IS NULL
+ORDER BY name_key;
+
+-- name: UpdateRole :execrows
+UPDATE roles SET name = ?, name_key = ?, description = ?, actions = ?, updated_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: DeleteRole :execrows
+UPDATE roles SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: CountGrantsWithRole :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND revoked_at_ms IS NULL;
+
+-- name: CreateGrant :execrows
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetGrant :one
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants WHERE id = ? AND revoked_at_ms IS NULL;
+
+-- name: ListGrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE target = sqlc.arg('target') AND revoked_at_ms IS NULL
+  AND (subject > sqlc.arg('after_subject') OR (subject = sqlc.arg('after_subject') AND role > sqlc.arg('after_role')))
+ORDER BY subject, role
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountGrantsOn :one
+SELECT COUNT(*) FROM grants WHERE target = ? AND revoked_at_ms IS NULL;
+
+-- name: RevokeGrant :execrows
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ? WHERE id = ? AND revoked_at_ms IS NULL;
+
+-- name: GrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (sqlc.slice('subjects')) AND target IN (sqlc.slice('targets')) AND revoked_at_ms IS NULL
+ORDER BY target, subject, role;
+
+-- name: GrantsWithRoles :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (sqlc.slice('subjects')) AND role IN (sqlc.slice('roles')) AND revoked_at_ms IS NULL
+ORDER BY target, subject, role;
+
+-- name: RevokeGrantsOfSubject :exec
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL;
+
+-- name: GrantsOfSubject :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL
+ORDER BY target, role;
+
+-- name: CountRoleGrantsBelowInstallation :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind <> 'installation' AND revoked_at_ms IS NULL;
+
+-- name: CountEndedGrantRecords :one
+-- The records of a new grant that have ended: its principal or group, and
+-- its custom role. The grant write checks it in its own transaction, so a
+-- delete that commits first wins.
+SELECT (SELECT COUNT(*) FROM principals p WHERE CAST(sqlc.arg('subject_kind') AS TEXT) = 'principal'
+          AND p.id = CAST(sqlc.arg('subject_id') AS TEXT) AND p.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM principal_groups g WHERE CAST(sqlc.arg('subject_kind') AS TEXT) = 'group'
+          AND g.id = CAST(sqlc.arg('subject_id') AS TEXT) AND g.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM roles r WHERE r.id = CAST(sqlc.arg('role') AS TEXT) AND r.deleted_at_ms IS NOT NULL);
+
+-- name: SubjectsOfCaller :many
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
+
+-- name: UnitStackID :one
+-- The stable ID of a Pulumi stack, for a grant on the unit (ADR 19, ADR 52).
+SELECT id FROM stacks WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
+
+-- name: UnitWorkspaceID :one
+-- The stable ID of an OpenTofu workspace, for a grant on the unit.
+SELECT id FROM workspaces WHERE namespace = ? AND name = ? AND deleted_at_ms IS NULL;
+
+-- name: UnitStacksByIDs :many
+-- A deleted stack (ADR 47) is left out: its grants give nothing until a
+-- restore brings it back.
+SELECT id, namespace, project, name FROM stacks WHERE id IN (sqlc.slice('ids')) AND deleted_at_ms IS NULL;
+
+-- name: UnitWorkspacesByIDs :many
+-- A deleted workspace (ADR 47) is left out: its grants give nothing until
+-- a restore brings it back.
+SELECT id, namespace, name FROM workspaces WHERE id IN (sqlc.slice('ids')) AND deleted_at_ms IS NULL;
+
 -- Access tokens (ADR 53).
 
 -- name: CreateAccessToken :execrows

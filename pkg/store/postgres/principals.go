@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -167,31 +168,47 @@ func (s *Store) UpdatePrincipal(ctx context.Context, p principal.Principal, e au
 	})
 }
 
-// DeletePrincipal implements principal.Store. It ends the principal and its
-// memberships in the transaction of the entry.
+// DeletePrincipal implements principal.Store. It ends the principal, its
+// memberships and its grants in the transaction of the entry.
 func (s *Store) DeletePrincipal(ctx context.Context, id string, e audit.Entry) error {
-	return s.endRecord(ctx, e,
-		func(q *db.Queries, at int64) (int64, error) {
-			return q.DeletePrincipal(ctx, db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id})
-		},
-		func(q *db.Queries, at int64) error {
-			return q.EndMembershipsOfPrincipal(ctx, db.EndMembershipsOfPrincipalParams{
-				RemovedAtMs: nullMillis(at), PrincipalID: id,
-			})
-		})
+	return s.endRecord(ctx, e, access.Subject{Kind: access.SubjectPrincipal, ID: id}, ending{
+		record:  func(q *db.Queries, at int64) (int64, error) { return endPrincipal(ctx, q, id, at) },
+		members: func(q *db.Queries, at int64) error { return endPrincipalMemberships(ctx, q, id, at) },
+	})
 }
 
-// endRecord ends one record with end and then its memberships with
-// endMembers, at the time of e and in the transaction of e. It returns
-// ErrNotFound when end ends no row.
-func (s *Store) endRecord(
-	ctx context.Context, e audit.Entry,
-	end func(q *db.Queries, at int64) (int64, error), endMembers func(q *db.Queries, at int64) error,
-) error {
+// ending ends one record and then its memberships, at the time at.
+type ending struct {
+	record  func(q *db.Queries, at int64) (int64, error)
+	members func(q *db.Queries, at int64) error
+}
+
+func endPrincipal(ctx context.Context, q *db.Queries, id string, at int64) (int64, error) {
+	return q.DeletePrincipal(ctx, db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id})
+}
+
+func endPrincipalMemberships(ctx context.Context, q *db.Queries, id string, at int64) error {
+	return q.EndMembershipsOfPrincipal(ctx, db.EndMembershipsOfPrincipalParams{
+		RemovedAtMs: nullMillis(at), PrincipalID: id,
+	})
+}
+
+func endGroup(ctx context.Context, q *db.Queries, id string, at int64) (int64, error) {
+	return q.DeleteGroup(ctx, db.DeleteGroupParams{DeletedAtMs: nullMillis(at), ID: id})
+}
+
+func endGroupMemberships(ctx context.Context, q *db.Queries, id string, at int64) error {
+	return q.EndMembershipsInGroup(ctx, db.EndMembershipsInGroupParams{RemovedAtMs: nullMillis(at), GroupID: id})
+}
+
+// endRecord ends one record with end.record, then its memberships with
+// end.members and the grants of subject, at the time of e and in the
+// transaction of e. It returns ErrNotFound when end.record ends no row.
+func (s *Store) endRecord(ctx context.Context, e audit.Entry, subject access.Subject, end ending) error {
 	at := codec.Millis(e.At)
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := end(q, at)
+		n, err := end.record(q, at)
 		if err != nil {
 			return fmt.Errorf("end record: %w", err)
 		}
@@ -200,11 +217,11 @@ func (s *Store) endRecord(
 			return principal.ErrNotFound
 		}
 
-		if err := endMembers(q, at); err != nil {
+		if err := end.members(q, at); err != nil {
 			return fmt.Errorf("end memberships: %w", err)
 		}
 
-		return nil
+		return revokeGrantsOf(ctx, q, subject, e)
 	})
 }
 
@@ -307,19 +324,13 @@ func (s *Store) UpdateGroup(ctx context.Context, g principal.Group, e audit.Entr
 	})
 }
 
-// DeleteGroup implements principal.Store. It ends the group and its
-// memberships in the transaction of the entry.
+// DeleteGroup implements principal.Store. It ends the group, its
+// memberships and its grants in the transaction of the entry.
 func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error {
-	return s.endRecord(ctx, e,
-		func(q *db.Queries, at int64) (int64, error) {
-			return q.DeleteGroup(ctx, db.DeleteGroupParams{DeletedAtMs: nullMillis(at), ID: id})
-		},
-		func(q *db.Queries, at int64) error {
-			return q.EndMembershipsInGroup(
-				ctx,
-				db.EndMembershipsInGroupParams{RemovedAtMs: nullMillis(at), GroupID: id},
-			)
-		})
+	return s.endRecord(ctx, e, access.Subject{Kind: access.SubjectGroup, ID: id}, ending{
+		record:  func(q *db.Queries, at int64) (int64, error) { return endGroup(ctx, q, id, at) },
+		members: func(q *db.Queries, at int64) error { return endGroupMemberships(ctx, q, id, at) },
+	})
 }
 
 // AddMember implements principal.Store. It checks the group and the

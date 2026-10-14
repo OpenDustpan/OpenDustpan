@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
@@ -35,6 +37,17 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestAccessConformance runs the role and grant store suite.
+func TestAccessConformance(t *testing.T) {
+	t.Parallel()
+
+	accesstest.Run(t, func(t *testing.T) access.Store {
 		t.Helper()
 
 		return open(t)
@@ -2206,4 +2219,21 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	})
 
 	principaltest.Bench(b, s)
+}
+
+// BenchmarkAuthorizer measures one decision and one list-objects at the
+// scale of accesstest.Bench.
+func BenchmarkAuthorizer(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.Bench(b, s)
 }

@@ -56,7 +56,8 @@ The project owner chose this export. It helps a reviewer check access.
 - (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
 - (research) Which built-in roles, by name and by action? The owner chose to
-  copy the role sets of competitors (ADR 52, decision 4).
+  copy the role sets of competitors (ADR 52, decision 4). The Outcome
+  records the set.
 - Which administrators can make custom roles, and can a custom role belong
   to one namespace?
 - Can a group be a member of another group?
@@ -198,5 +199,72 @@ Lead decisions under owner delegation, 2026-10-13:
 - Source. Each principal and group has a `source`: `local` today, `ldap` or
   `scim` with directory sync (ADR 55). A group whose source is not `local`
   refuses a membership change through the API with 409.
+- Containment. A grant applies to its object and to each object that the
+  object holds, along the fixed chain installation > namespace > collection >
+  unit. Groups do not nest, and roles do not hold roles.
+- Create a unit. A new unit needs `collection:create-unit` on its target
+  collection. A placement rule only routes a unit. It never authorizes.
+- Three families of actions. No action is in two families:
+  - operator: settings, backups and restores, maintenance, the instance
+    registry, and the audit log of the installation scope.
+  - administration: principals, groups, memberships, roles, grants on the
+    installation, and namespace create (`server:create-namespace`). The
+    creator of a namespace gets the `admin` role on it in the same
+    transaction.
+  - data: every action inside a namespace, `namespace:admin` and the
+    manage-access actions included.
+- Three built-in roles on the installation: `installation-operator` (the
+  operator family only), `account-administrator` (administration and data)
+  and `site-administrator` (all three families).
+- Data roles. The lead accepted this set on 2026-10-14, by the delegation of
+  the owner: `viewer`, `auditor`, `secret-viewer`, `writer`, `maintainer` and
+  `admin`. `docs/research/m4-built-in-roles.md` gives the facts behind it.
+  `pkg/access/roles.go` holds the actions of each role. A planner role waits
+  for a route that separates a plan from an apply.
+- Grant history. A revoke ends a grant and keeps its row, and the delete of
+  a custom role ends the role. A delete of a principal or a group revokes
+  its grants in the same transaction. Each grant and role change writes its
+  audit entry in the transaction of the change.
+- No escalation through a role, a membership or a revoke. The lead decided
+  these on 2026-10-14, by the delegation of the owner, after the security
+  review of the roles and grants change:
+  - A custom role holds only actions that its maker holds on the
+    installation, on create and on change. A role that a current grant gives
+    below the installation keeps data actions only.
+  - A membership change is a grant by proxy. To add or remove a member, the
+    caller must hold, on each object, every action that the current grants
+    of the group give there.
+  - A revoke, and the delete of a principal or a group, need every action
+    that the grants give on their objects. The delete of a principal also
+    ends its memberships, so the grants of its groups count too. Two admins of one namespace hold
+    the same actions there, so each can revoke the other, the grant of the
+    creator included. This is accepted.
+  - A grant on a unit follows the stable ID of the unit (ADR 19), not its
+    name. A new unit with the name of a deleted one does not get its grants.
+    A deleted unit keeps its grants, and a restore brings them back.
+  - A grant reads its subject and its custom role in the transaction of the
+    grant, so a delete that commits first wins.
+  - The TFE-compatible API answers the same 404 for an object that does not
+    exist and for an object that the caller cannot read.
+- Re-review of the roles and grants change. The lead decided these on
+  2026-10-14, by the delegation of the owner:
+  - A grant or a revoke on a namespace, a collection or a unit carries the
+    fence of its namespace. Its audit entry goes to that namespace, so the
+    auditor of the namespace sees the access changes in it. A grant on the
+    installation stays in `@server`.
+  - The routes of the Pulumi Cloud-compatible API whose object is the caller
+    need only `caller:read`. Their handlers filter each namespace, so a
+    principal that is not an administrator can log in with the Pulumi CLI.
+  - A grant below the installation gives the data actions of its role only,
+    also when a role change races a grant.
+  - A role change needs every action that it removes, on the installation.
+  - A grant on a collection needs the collection to exist. Until the
+    collections are wired (#478), a grant on a collection answers 404.
+  - The TFE-compatible API answers a failed read check with its error, not
+    with 404.
+- Decisions at scale. One decision reads the groups of the caller in one
+  query, the grants on the chain of the object in one query, and the custom
+  roles of those grants in one query. A request reads the groups and the
+  roles once. No cache lives across requests.
 
 The other questions in "Open questions" have no outcome yet.

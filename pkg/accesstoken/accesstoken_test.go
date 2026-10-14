@@ -74,7 +74,7 @@ func newFixture(t *testing.T, fresh accesstoken.Freshness) fixture {
 
 	c := &clock{now: time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC), mu: sync.Mutex{}}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Now: c.Now, NewID: nil})
+	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -371,7 +371,8 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 
 	_, personSecret := f.create(t, f.person, "laptop")
-	if err := f.principals.DeletePrincipal(ctx, caller(), f.person.ID); err != nil {
+	admin := identity.Principal{Subject: "admin", DisplayName: "", Admin: true, TokenID: ""}
+	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
 	}
 
