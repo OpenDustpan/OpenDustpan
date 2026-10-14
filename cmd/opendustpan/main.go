@@ -243,7 +243,7 @@ type serveFlags struct {
 	file     cli.ConfigFile
 	resolved []cli.Resolved
 	// passwordFlags holds the flags that carry a password in a URL, for the
-	// deprecation warning (issue 511).
+	// warning that a flag holds a password, so the password can be moved to the variable.
 	passwordFlags []*cli.Setting
 
 	// args and lookup are the command line and the environment snapshot
@@ -440,8 +440,8 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 }
 
 // warnPasswordFlags writes one WARN line for each flag that holds a URL with a
-// password. The line names the flag and the variable to use, never the value
-// (issue 511).
+// password. The line names the flag and the variable to use, and it never
+// shows the value, because a flag shows in a process list.
 func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
 	for _, s := range settings {
 		logger.LogAttrs(ctx, slog.LevelWarn,
