@@ -156,7 +156,7 @@ func TestPaging(t *testing.T) {
 	req := principal.PageRequest{Prefix: "a", Cursor: "", Limit: 2}
 
 	for range 5 {
-		page, err := svc.ListPrincipals(t.Context(), req)
+		page, err := svc.ListPrincipals(t.Context(), req, "")
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -185,9 +185,25 @@ func TestPaging(t *testing.T) {
 		{Prefix: "", Cursor: "YQA", Limit: 0}, // "a" and a NUL
 		{Prefix: "", Cursor: strings.Repeat("YW", principal.MaxCursorLength), Limit: 0},
 	} {
-		if _, err := svc.ListPrincipals(t.Context(), bad); !errors.Is(err, principal.ErrInvalid) {
+		if _, err := svc.ListPrincipals(t.Context(), bad, ""); !errors.Is(err, principal.ErrInvalid) {
 			t.Errorf("list %+v = %v, want ErrInvalid", bad, err)
 		}
+	}
+}
+
+func TestListByKind(t *testing.T) {
+	t.Parallel()
+
+	svc := newServiceOverStore(t)
+
+	everything := principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}
+	if _, err := svc.ListPrincipals(t.Context(), everything, "robot"); !errors.Is(err, principal.ErrInvalid) {
+		t.Errorf("list of the kind robot = %v, want ErrInvalid", err)
+	}
+
+	page, err := svc.ListPrincipals(t.Context(), everything, principal.KindWorkload)
+	if err != nil || len(page.Items) != 0 || page.Total != 0 {
+		t.Errorf("list of the workloads = %+v, %v; want none", page, err)
 	}
 }
 

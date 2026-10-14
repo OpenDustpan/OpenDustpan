@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -182,7 +183,48 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 		t.Fatalf("prefix ci- = %+v, want ci-deploy", prefixed)
 	}
 
+	checkPrincipalKind(ctx, t, env, fx)
 	checkPageRefusals(ctx, t, env)
+}
+
+// checkPrincipalKind filters the principals by kind, with a prefix and a
+// page.
+func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx principalFixture) {
+	t.Helper()
+
+	type page struct {
+		NextCursor string         `json:"nextCursor"`
+		Principals []e2ePrincipal `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+
+	for _, c := range []struct {
+		query string
+		want  []string
+	}{
+		{"kind=service", []string{fx.deploy.ID}},
+		{"kind=person&prefix=al&limit=1", []string{fx.alice.ID}},
+		{"kind=person&prefix=ci-", nil},
+		{"kind=workload", nil},
+	} {
+		var got page
+		principalCall(ctx, t, env, principalStep{
+			http.MethodGet, "/api/server/principals?" + c.query, "", http.StatusOK,
+		}, &got)
+
+		ids := make([]string, 0, len(got.Principals))
+		for i := range got.Principals {
+			ids = append(ids, got.Principals[i].ID)
+		}
+
+		if !slices.Equal(ids, c.want) || got.Total != int64(len(c.want)) || got.NextCursor != "" {
+			t.Fatalf("principals with %s = %+v, want %v", c.query, got, c.want)
+		}
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/principals?kind=robot", "", http.StatusBadRequest,
+	}, nil)
 }
 
 // checkPageRefusals reads pages with a bad limit, prefix or cursor: each

@@ -35,8 +35,9 @@ type RecordStore interface {
 	// subject subject, or ErrNotFound.
 	GetPrincipalBySubject(ctx context.Context, subject string) (Principal, error)
 	// ListPrincipals returns the principals that exist, ordered by subject:
-	// the rows of q, with the subject as the key.
-	ListPrincipals(ctx context.Context, q Query) ([]Principal, int64, error)
+	// the rows of q, with the subject as the key. A kind that is not empty
+	// keeps the principals of that kind, in the rows and in the total.
+	ListPrincipals(ctx context.Context, q Query, kind Kind) ([]Principal, int64, error)
 	// UpdatePrincipal replaces the display name and the update time of the
 	// principal with the ID p.ID. The subject, the kind and the creation
 	// time do not change. It returns ErrNotFound when no such principal
