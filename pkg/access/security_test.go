@@ -171,8 +171,16 @@ func TestRevokeAndDeleteNeedTheirActions(t *testing.T) {
 		t.Fatalf("delete a site administrator = %v, want ErrEscalation", deleteErr)
 	}
 
-	ops := f.group(t, "ops")
+	f.person(t, "olga")
+	ops := f.group(t, "ops", "olga")
 	f.grant(t, ops, access.RoleSiteAdministrator, identity.ServerObject())
+
+	// The delete of olga ends her membership of ops, so it takes away
+	// what ops gives.
+	deleteErr = principals.DeletePrincipal(ctx, testEntry(), acct, "prn-olga")
+	if !errors.Is(deleteErr, access.ErrEscalation) {
+		t.Fatalf("delete a member of a site-administrator group = %v, want ErrEscalation", deleteErr)
+	}
 
 	deleteErr = principals.DeleteGroup(ctx, testEntry(), acct, ops.ID)
 	if !errors.Is(deleteErr, access.ErrEscalation) {

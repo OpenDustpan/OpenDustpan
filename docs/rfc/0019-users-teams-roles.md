@@ -235,7 +235,8 @@ Lead decisions under owner delegation, 2026-10-13:
     caller must hold, on each object, every action that the current grants
     of the group give there.
   - A revoke, and the delete of a principal or a group, need every action
-    that the grants give on their objects. Two admins of one namespace hold
+    that the grants give on their objects. The delete of a principal also
+    ends its memberships, so the grants of its groups count too. Two admins of one namespace hold
     the same actions there, so each can revoke the other, the grant of the
     creator included. This is accepted.
   - A grant on a unit follows the stable ID of the unit (ADR 19), not its

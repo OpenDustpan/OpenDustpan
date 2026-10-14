@@ -523,9 +523,35 @@ func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principa
 
 // CheckPrincipalGrants implements principal.Guard: caller must hold every
 // action that the current grants of the principal give, on each of their
-// objects.
+// objects. The delete of a principal also ends its memberships, so the
+// grants of each of its current groups count too.
 func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error {
-	return s.checkSubjectGrants(ctx, caller, Subject{Kind: SubjectPrincipal, ID: principalID})
+	if caller.Admin {
+		return nil
+	}
+
+	p, err := s.directory.GetPrincipal(ctx, principalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		// Nothing to take away: the store answers the delete.
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal %q: %w", principalID, err)
+	}
+
+	subjects, err := s.authz.subjectsOf(ctx, identity.Principal{Subject: p.Subject, DisplayName: "", Admin: false})
+	if err != nil {
+		return err
+	}
+
+	for _, subject := range subjects {
+		if err := s.checkSubjectGrants(ctx, caller, subject); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // checkGrant runs the checks of Grant.
