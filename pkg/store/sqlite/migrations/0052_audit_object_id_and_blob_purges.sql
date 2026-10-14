@@ -6,9 +6,10 @@ ALTER TABLE audit_entries ADD COLUMN object_id TEXT NOT NULL DEFAULT '';
 
 -- The purged units whose blobs may still exist (ADR 47). A purge inserts a
 -- row in its fenced transaction and deletes the rows of the unit. The
--- caller then deletes the blobs of the unit, and removes the row only when
--- every blob is gone. The sweep finishes a row that stays, so no blob of a
--- purged unit outlives it for good.
+-- caller then deletes the blobs of the unit and keeps the row, because a
+-- late write can still leave a blob. Only the sweep (#530) removes the row,
+-- after it deletes the blobs again, so no blob of a purged unit outlives it
+-- for good.
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
