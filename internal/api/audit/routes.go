@@ -220,7 +220,20 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		actions := route.Actions
-		if obj.IsServer() && len(route.ServerActions) > 0 {
+
+		if obj.IsServer() {
+			// A route with no installation action refuses the installation
+			// object. It never falls back to a namespace action.
+			if len(route.ServerActions) == 0 {
+				h.writeError(
+					ctx,
+					w,
+					fmt.Errorf("%w: %s has no action for the installation", identity.ErrDenied, route.Path),
+				)
+
+				return
+			}
+
 			actions = route.ServerActions
 		}
 

@@ -11,7 +11,7 @@
 // A role is a named set of actions. Each action is in exactly one family:
 //
 //   - operator: the operation of the installation (backups, restores,
-//     maintenance, metrics),
+//     maintenance, metrics, the installation audit log),
 //   - administration: the principals, groups, roles and grants of the
 //     installation, and namespace create,
 //   - data: every action inside a namespace, its access included.
@@ -66,7 +66,7 @@ type Family string
 
 // Families of actions. No action is in two families.
 const (
-	// FamilyOperator holds the operation of the installation.
+	// FamilyOperator holds the operation of the installation, and its audit log.
 	FamilyOperator Family = "operator"
 	// FamilyAdministration holds the principals, groups, roles and grants
 	// of the installation, and namespace create.
