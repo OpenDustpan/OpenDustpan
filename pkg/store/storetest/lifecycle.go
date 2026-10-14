@@ -144,7 +144,7 @@ func testRestoreOrPurgeUnknownStack(t *testing.T, f fixture) {
 			t.Fatalf("restore %s: err = %v, want ErrNotFound", id, err)
 		}
 
-		if err := f.s.PurgeStack(t.Context(), id, f.fence, entry); !errors.Is(err, stack.ErrNotFound) {
+		if err := f.s.PurgeStack(t.Context(), id, f.fence, time.Time{}, entry); !errors.Is(err, stack.ErrNotFound) {
 			t.Fatalf("purge %s: err = %v, want ErrNotFound", id, err)
 		}
 	}
@@ -172,7 +172,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 	before := deleteFixtureStack(t, f)
 	entry := lifecycleEntry(f.ref.Namespace, "unit:purge")
 
-	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, entry); err != nil {
+	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry); err != nil {
 		t.Fatalf("purge stack: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 		t.Fatalf("restore after the purge: err = %v, want ErrNotFound", err)
 	}
 
-	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, entry); !errors.Is(err, stack.ErrNotFound) {
+	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("second purge: err = %v, want ErrNotFound", err)
 	}
 }
@@ -212,7 +212,7 @@ func testRestoreRacesPurge(t *testing.T, f fixture) {
 	})
 
 	wg.Go(func() {
-		purgeErr = f.s.PurgeStack(t.Context(), before.ID, f.fence, entry)
+		purgeErr = f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry)
 	})
 
 	wg.Wait()
@@ -253,7 +253,7 @@ func testRestoreFailedAppendChangesNothing(t *testing.T, f fixture) {
 		t.Fatal("restore with a failing audit append: err = nil, want an error")
 	}
 
-	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, entry); err == nil {
+	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry); err == nil {
 		t.Fatal("purge with a failing audit append: err = nil, want an error")
 	}
 
@@ -328,12 +328,19 @@ func testPurgeWorkspace(t *testing.T, s WorkspaceStore) {
 	entry := lifecycleEntry(ns.Name, "unit:purge")
 
 	for _, id := range []workspace.ID{"ws-unknown", live.ID} {
-		if err := s.PurgeWorkspace(t.Context(), id, ns.Fence(), entry); !errors.Is(err, workspace.ErrNotFound) {
-			t.Fatalf("purge %s: err = %v, want ErrNotFound", id, err)
+		purgeErr := s.PurgeWorkspace(
+			t.Context(),
+			id,
+			ns.Fence(),
+			time.Time{},
+			entry,
+		)
+		if !errors.Is(purgeErr, workspace.ErrNotFound) {
+			t.Fatalf("purge %s: err = %v, want ErrNotFound", id, purgeErr)
 		}
 	}
 
-	if err := s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), entry); err != nil {
+	if err := s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), time.Time{}, entry); err != nil {
 		t.Fatalf("purge workspace: %v", err)
 	}
 
@@ -563,7 +570,7 @@ func testPurgeStackRevokesItsGrants(t *testing.T, f fixture) {
 	deleteFixtureStack(t, f)
 
 	purge := lifecycleEntry(f.ref.Namespace, "unit:purge")
-	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, purge); err != nil {
+	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, purge); err != nil {
 		t.Fatalf("purge stack: %v", err)
 	}
 
@@ -616,7 +623,7 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 	deleteWorkspaceOf(t, s, ns, w)
 
 	purge := lifecycleEntry(ns.Name, "unit:purge")
-	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), purge); err != nil {
+	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), time.Time{}, purge); err != nil {
 		t.Fatalf("purge workspace: %v", err)
 	}
 
@@ -627,7 +634,7 @@ func testPurgeWorkspaceRevokesItsGrants(t *testing.T, s WorkspaceStore) {
 func blobPurgesOf(t *testing.T, purges inventory.BlobPurges, tool, unitID string) []inventory.BlobPurge {
 	t.Helper()
 
-	listed, err := purges.ListBlobPurges(t.Context(), 100)
+	listed, err := purges.ListBlobPurges(t.Context(), nil, 100)
 	if err != nil {
 		t.Fatalf("list blob purges: %v", err)
 	}
@@ -689,7 +696,7 @@ func testRestoreRacesPurgeWorkspace(t *testing.T, s WorkspaceStore) {
 	})
 
 	wg.Go(func() {
-		purgeErr = s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), entry)
+		purgeErr = s.PurgeWorkspace(t.Context(), gone.ID, ns.Fence(), time.Time{}, entry)
 	})
 
 	wg.Wait()
@@ -726,8 +733,15 @@ func testRestoreOrPurgeStackInAnotherNamespace(t *testing.T, f fixture) {
 		t.Fatalf("restore with the fence of beta: err = %v, want ErrNotFound", err)
 	}
 
-	if err := f.s.PurgeStack(t.Context(), before.ID, beta.Fence(), entry); !errors.Is(err, stack.ErrNotFound) {
-		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", err)
+	purgeErr := f.s.PurgeStack(
+		t.Context(),
+		before.ID,
+		beta.Fence(),
+		time.Time{},
+		entry,
+	)
+	if !errors.Is(purgeErr, stack.ErrNotFound) {
+		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", purgeErr)
 	}
 
 	checkDeletedStackEntries(t, f.s, f.ref.Namespace, before.ID.String())
@@ -754,8 +768,15 @@ func testRestoreOrPurgeWorkspaceInAnotherNamespace(t *testing.T, s WorkspaceStor
 		t.Fatalf("restore with the fence of beta: err = %v, want ErrNotFound", err)
 	}
 
-	if err := s.PurgeWorkspace(t.Context(), gone.ID, beta.Fence(), entry); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", err)
+	purgeErr := s.PurgeWorkspace(
+		t.Context(),
+		gone.ID,
+		beta.Fence(),
+		time.Time{},
+		entry,
+	)
+	if !errors.Is(purgeErr, workspace.ErrNotFound) {
+		t.Fatalf("purge with the fence of beta: err = %v, want ErrNotFound", purgeErr)
 	}
 
 	restore := lifecycleEntry(ns.Name, "unit:restore")
@@ -863,4 +884,201 @@ func checkExpiredPages(
 	if seen != want || want != 8 {
 		t.Fatalf("limit %d: walked %d expired units, want %d (8)", limit, seen, want)
 	}
+}
+
+// renewedRetention is the end of the retention period of a unit that a
+// restore and a new delete renewed: 30 days after purgeAt.
+func renewedRetention() time.Time {
+	return purgeAt().Add(30 * 24 * time.Hour)
+}
+
+// testSweepPurgeChecksTheRetention lists the deleted stack as the sweep
+// does, then restores it and deletes it again, so its retention period ends
+// later. A purge due by the time of the list answers ErrNotFound and keeps
+// the stack. A purge due by the new end removes it.
+func testSweepPurgeChecksTheRetention(t *testing.T, f fixture) {
+	t.Helper()
+
+	before := deleteFixtureStack(t, f)
+
+	_, restoreErr := f.s.RestoreStack(
+		t.Context(),
+		before.ID,
+		"",
+		f.fence,
+		lifecycleEntry(f.ref.Namespace, "unit:restore"),
+	)
+	if restoreErr != nil {
+		t.Fatalf("restore stack: %v", restoreErr)
+	}
+
+	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), inventory.Deletion{
+		Entry: deleteEntry(f.ref.Namespace), PurgeAfter: renewedRetention(),
+	})
+	if err != nil {
+		t.Fatalf("delete stack again: %v", err)
+	}
+
+	purge := lifecycleEntry(f.ref.Namespace, "unit:purge")
+
+	err = f.s.PurgeStack(t.Context(), before.ID, f.fence, purgeAt(), purge)
+	if !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("purge due by the old end: err = %v, want ErrNotFound", err)
+	}
+
+	deleted, err := f.s.ListDeletedUnits(t.Context(), f.ref.Namespace)
+	if err != nil || len(deleted) != 1 || deleted[0].UnitID != before.ID.String() {
+		t.Fatalf("deleted units after the refused purge = %+v, %v, want the stack", deleted, err)
+	}
+
+	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, renewedRetention(), purge); err != nil {
+		t.Fatalf("purge due by the new end: %v", err)
+	}
+}
+
+// testSweepPurgeChecksTheRetentionWorkspace is
+// testSweepPurgeChecksTheRetention for a workspace.
+func testSweepPurgeChecksTheRetentionWorkspace(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	deleteWorkspaceOf(t, s, ns, w)
+
+	_, restoreErr := s.RestoreWorkspace(
+		t.Context(),
+		w.ID,
+		"",
+		ns.Fence(),
+		lifecycleEntry(ns.Name, "unit:restore"),
+	)
+	if restoreErr != nil {
+		t.Fatalf("restore workspace: %v", restoreErr)
+	}
+
+	err := s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), inventory.Deletion{
+		Entry: workspaceDeleteEntry(ns.Name), PurgeAfter: renewedRetention(),
+	})
+	if err != nil {
+		t.Fatalf("delete workspace again: %v", err)
+	}
+
+	purge := lifecycleEntry(ns.Name, "unit:purge")
+
+	purgeErr := s.PurgeWorkspace(
+		t.Context(),
+		w.ID,
+		ns.Fence(),
+		purgeAt(),
+		purge,
+	)
+	if !errors.Is(purgeErr, workspace.ErrNotFound) {
+		t.Fatalf("purge due by the old end: err = %v, want ErrNotFound", purgeErr)
+	}
+
+	deleted, err := s.ListDeletedUnits(t.Context(), ns.Name)
+	if err != nil || len(deleted) != 1 || deleted[0].UnitID != w.ID.String() {
+		t.Fatalf("deleted units after the refused purge = %+v, %v, want the workspace", deleted, err)
+	}
+
+	if err := s.PurgeWorkspace(t.Context(), w.ID, ns.Fence(), renewedRetention(), purge); err != nil {
+		t.Fatalf("purge due by the new end: %v", err)
+	}
+}
+
+// testBlobPurgePages purges five stacks at the same time and reads their
+// blob purge records in pages of two by the cursor. Each page must equal
+// inventory.PageBlobPurges over every record, and the walk must give each
+// record once.
+func testBlobPurgePages(t *testing.T, s Store) {
+	t.Helper()
+
+	purges, ok := storeAs[inventory.BlobPurges](s)
+	if !ok {
+		t.Fatal("store does not implement inventory.BlobPurges, which the retention sweep needs")
+	}
+
+	ns := newNamespace(t, s, "acme")
+
+	for i := range 5 {
+		st := newStack(ns.Name, "web", fmt.Sprintf("s%d", i))
+		if err := s.CreateStack(t.Context(), st, ns.Fence()); err != nil {
+			t.Fatalf("create stack %s: %v", st.Ref, err)
+		}
+
+		d := inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()}
+		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
+			t.Fatalf("delete stack %s: %v", st.Ref, err)
+		}
+
+		purgeErr := s.PurgeStack(
+			t.Context(),
+			st.ID,
+			ns.Fence(),
+			time.Time{},
+			lifecycleEntry(ns.Name, "unit:purge"),
+		)
+		if purgeErr != nil {
+			t.Fatalf("purge stack %s: %v", st.Ref, purgeErr)
+		}
+	}
+
+	all, err := purges.ListBlobPurges(t.Context(), nil, 100)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("blob purge records = %d, %v, want 5", len(all), err)
+	}
+
+	checkBlobPurgePages(t, purges, all)
+}
+
+// checkBlobPurgePages walks the blob purge records in pages of two by the
+// cursor and checks each page against inventory.PageBlobPurges over all.
+func checkBlobPurgePages(t *testing.T, purges inventory.BlobPurges, all []inventory.BlobPurge) {
+	t.Helper()
+
+	var (
+		cursor *inventory.BlobPurgeCursor
+		seen   int
+	)
+
+	for pages := 0; pages <= len(all); pages++ {
+		got, err := purges.ListBlobPurges(t.Context(), cursor, 2)
+		if err != nil {
+			t.Fatalf("blob purge page %d: %v", pages, err)
+		}
+
+		want := inventory.PageBlobPurges(all, cursor, 2)
+		if !sameBlobPurges(got, want) {
+			t.Fatalf("blob purge page %d = %+v, want %+v", pages, got, want)
+		}
+
+		seen += len(got)
+
+		if len(got) < 2 {
+			break
+		}
+
+		last := got[len(got)-1]
+		cursor = &inventory.BlobPurgeCursor{PurgedAt: last.PurgedAt, Tool: last.Tool, UnitID: last.UnitID}
+	}
+
+	if seen != len(all) {
+		t.Fatalf("walked %d blob purge records, want %d", seen, len(all))
+	}
+}
+
+// sameBlobPurges reports whether two lists hold the same records in order.
+func sameBlobPurges(a, b []inventory.BlobPurge) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i].Tool != b[i].Tool || a[i].UnitID != b[i].UnitID || a[i].Namespace != b[i].Namespace ||
+			!a[i].PurgedAt.Equal(b[i].PurgedAt) {
+			return false
+		}
+	}
+
+	return true
 }

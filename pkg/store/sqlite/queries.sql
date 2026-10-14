@@ -1219,6 +1219,16 @@ FROM blob_purges
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?;
 
+-- name: ListBlobPurgesAfter :many
+-- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms > sqlc.arg(after_ms)
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id))
+ORDER BY purged_at_ms, tool, unit_id
+LIMIT sqlc.arg(page_limit);
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.

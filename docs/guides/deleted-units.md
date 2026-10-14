@@ -93,8 +93,8 @@ See [Audit log](audit-log.md).
 
 ## The retention sweep
 
-The server runs the retention sweep when it starts, and then one time each
-hour. The sweep does two things:
+The server runs the retention sweep one time each hour. The first sweep runs
+one hour after the server starts. The sweep does two things:
 
 1. It purges each deleted unit whose retention period ended, in every
    namespace that has its home in this region. Each purge runs in its own
@@ -107,15 +107,22 @@ hour. The sweep does two things:
    record is older than 24 hours, and finishes the record only when no blob
    remains.
 
-A restore and a sweep purge of the same unit can run at the same time. One
-of them wins, and the sweep counts the other unit as skipped. A failed purge
+A sweep purges a unit only when its retention period ended at the start of
+the sweep. The purge checks this again in its transaction. So a unit that you
+restore and delete again during a sweep gets its new retention period. A
+restore and a sweep purge of the same unit can run at the same time. One of
+them wins, and the sweep counts the other unit as skipped. A failed purge
 does not stop the sweep. The server logs a warning with the unit reference
 and the error kind, and the next sweep tries again.
 
+When a sweep purges units, the server logs one line with the count and the
+oldest purge time among them.
+
 `POST /api/server/deleted-units/sweep` runs one sweep now. It needs the action
 `server:maintenance` on the installation. Each purge writes its audit entry
-with you as the subject. The answer names each purged unit and counts the
-other outcomes:
+with you as the subject. While another sweep of the server runs, the route
+answers 409 at once. Try again later. The answer names each purged unit and
+counts the other outcomes:
 
 ```json
 {
@@ -129,3 +136,16 @@ other outcomes:
 
 The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
 sweep. See [Observe](observe.md).
+
+## After an upgrade or an installation restore
+
+At the start, the server logs one line with the count of deleted units whose
+retention period has already ended. The first sweep, one hour later, purges
+them. After an upgrade, these are units that you deleted before the server
+had a sweep. After an installation restore, these are units whose retention
+period ended after the backup.
+
+To keep such a unit, restore it before the first sweep. The retention setting
+does not help here: a delete records the end of the retention period of the
+unit, and a new setting applies only to later deletes. The retention setting
+has no value that turns the purge off.

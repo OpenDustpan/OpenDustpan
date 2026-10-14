@@ -39,19 +39,28 @@ func (m *memExpired) ListExpiredDeleted(
 	return inventory.PageExpired(m.entries, now, after, limit), nil
 }
 
-// sweepLifecycle is an inventory.Lifecycle that records each purge and
-// answers the error that errs holds for the unit ID.
-type sweepLifecycle struct {
-	mu      sync.Mutex
-	errs    map[string]error
-	entries []audit.Entry
+// sweepTool is an inventory.SweepTool that records each purge with its
+// due time and each blob delete, and answers the errors that errs and
+// blobErrs hold for the unit ID.
+type sweepTool struct {
+	mu       sync.Mutex
+	errs     map[string]error
+	blobErrs map[string]error
+	entries  []audit.Entry
+	dueBys   []time.Time
+	deleted  []string
 }
 
-func (l *sweepLifecycle) Restore(context.Context, namespace.Name, string, string, audit.Entry) (string, error) {
-	return "", nil
+func newSweepTool() *sweepTool {
+	return &sweepTool{
+		mu: sync.Mutex{}, errs: map[string]error{}, blobErrs: map[string]error{},
+		entries: nil, dueBys: nil, deleted: nil,
+	}
 }
 
-func (l *sweepLifecycle) Purge(_ context.Context, _ namespace.Name, unitID string, e audit.Entry) error {
+func (l *sweepTool) PurgeExpired(
+	_ context.Context, _ namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -60,19 +69,35 @@ func (l *sweepLifecycle) Purge(_ context.Context, _ namespace.Name, unitID strin
 	}
 
 	l.entries = append(l.entries, e)
+	l.dueBys = append(l.dueBys, dueBy)
 
 	return nil
 }
 
-// memRecords is an inventory.BlobPurges over a list.
+func (l *sweepTool) DeletePurgedBlobs(_ context.Context, unitID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.deleted = append(l.deleted, unitID)
+
+	return l.blobErrs[unitID]
+}
+
+// memRecords is an inventory.BlobPurges over a list, through
+// inventory.PageBlobPurges.
 type memRecords struct {
 	records   []inventory.BlobPurge
 	finished  []string
 	finishErr error
+	calls     int
 }
 
-func (m *memRecords) ListBlobPurges(_ context.Context, limit int) ([]inventory.BlobPurge, error) {
-	return m.records[:min(limit, len(m.records))], nil
+func (m *memRecords) ListBlobPurges(
+	_ context.Context, after *inventory.BlobPurgeCursor, limit int,
+) ([]inventory.BlobPurge, error) {
+	m.calls++
+
+	return inventory.PageBlobPurges(m.records, after, limit), nil
 }
 
 func (m *memRecords) FinishBlobPurge(_ context.Context, tool, unitID string) error {
@@ -85,46 +110,30 @@ func (m *memRecords) FinishBlobPurge(_ context.Context, tool, unitID string) err
 	return nil
 }
 
-// memBlobs is an inventory.PurgedBlobs that records each delete and answers
-// the error that errs holds for the unit ID.
-type memBlobs struct {
-	errs    map[string]error
-	deleted []string
-}
-
-func (m *memBlobs) DeletePurgedBlobs(_ context.Context, unitID string) error {
-	m.deleted = append(m.deleted, unitID)
-
-	return m.errs[unitID]
-}
-
 // sweepFixture holds a Sweeper over in-memory ports and the log it writes.
 type sweepFixture struct {
-	sweeper   *inventory.Sweeper
-	expired   *memExpired
-	lifecycle *sweepLifecycle
-	records   *memRecords
-	blobs     *memBlobs
-	log       *bytes.Buffer
+	sweeper *inventory.Sweeper
+	expired *memExpired
+	tool    *sweepTool
+	records *memRecords
+	log     *bytes.Buffer
 }
 
 func newSweepFixture(t *testing.T, entries []inventory.DeletedEntry, records []inventory.BlobPurge) sweepFixture {
 	t.Helper()
 
 	f := sweepFixture{
-		sweeper:   nil,
-		expired:   &memExpired{entries: entries, calls: 0},
-		lifecycle: &sweepLifecycle{mu: sync.Mutex{}, errs: map[string]error{}, entries: nil},
-		records:   &memRecords{records: records, finished: nil, finishErr: nil},
-		blobs:     &memBlobs{errs: map[string]error{}, deleted: nil},
-		log:       &bytes.Buffer{},
+		sweeper: nil,
+		expired: &memExpired{entries: entries, calls: 0},
+		tool:    newSweepTool(),
+		records: &memRecords{records: records, finished: nil, finishErr: nil, calls: 0},
+		log:     &bytes.Buffer{},
 	}
 
 	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
 		Expired:    f.expired,
 		BlobPurges: f.records,
-		Lifecycles: map[string]inventory.Lifecycle{"pulumi": f.lifecycle},
-		Blobs:      map[string]inventory.PurgedBlobs{"pulumi": f.blobs},
+		Tools:      map[string]inventory.SweepTool{"pulumi": f.tool},
 		Logger:     slog.New(slog.NewTextHandler(f.log, nil)),
 		Now:        sweepNow,
 	})
@@ -202,13 +211,13 @@ func TestSweepPurgesExpiredUnitsOnly(t *testing.T) {
 		t.Fatalf("store calls = %d, want 3 pages", f.expired.calls)
 	}
 
-	for _, e := range f.lifecycle.entries {
+	for _, e := range f.tool.entries {
 		if e.ObjectID == "stk-kept" {
 			t.Fatal("sweep purged a unit whose retention still runs")
 		}
 	}
 
-	checkFirstPurgeEntry(t, f.lifecycle.entries[0])
+	checkFirstPurgeEntry(t, f.tool.entries[0])
 }
 
 // checkFirstPurgeEntry checks the audit entry of the purge of stk-000.
@@ -230,9 +239,9 @@ func TestSweepSkipsAndCountsFailures(t *testing.T) {
 	t.Parallel()
 
 	f := newSweepFixture(t, expiredUnits(4), nil)
-	f.lifecycle.errs["stk-000"] = fmt.Errorf("purge: %w", inventory.ErrNotFound)
-	f.lifecycle.errs["stk-001"] = fmt.Errorf("fence: %w", namespace.ErrNotHome)
-	f.lifecycle.errs["stk-002"] = fmt.Errorf("purge: %w", errDriver)
+	f.tool.errs["stk-000"] = fmt.Errorf("purge: %w", inventory.ErrNotFound)
+	f.tool.errs["stk-001"] = fmt.Errorf("fence: %w", namespace.ErrNotHome)
+	f.tool.errs["stk-002"] = fmt.Errorf("purge: %w", errDriver)
 
 	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
 	if err != nil {
@@ -269,7 +278,7 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		{PurgedAt: sweepNow().Add(-time.Hour), Namespace: "acme", Tool: "pulumi", UnitID: "stk-young"},
 	}
 	f := newSweepFixture(t, nil, records)
-	f.blobs.errs["stk-stuck"] = fmt.Errorf("delete: %w", errDriver)
+	f.tool.blobErrs["stk-stuck"] = fmt.Errorf("delete: %w", errDriver)
 
 	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
 	if err != nil {
@@ -285,7 +294,7 @@ func TestSweepFinishesOnlyOldRecords(t *testing.T) {
 		t.Fatalf("finished = %v, want pulumi/stk-gone", f.records.finished)
 	}
 
-	for _, id := range f.blobs.deleted {
+	for _, id := range f.tool.deleted {
 		if id == "stk-young" {
 			t.Fatal("sweep deleted the blobs of a record inside its grace period")
 		}
@@ -356,13 +365,10 @@ func TestNewSweeperRefusesMissingPorts(t *testing.T) {
 	full := func() inventory.SweeperConfig {
 		return inventory.SweeperConfig{
 			Expired:    &memExpired{entries: nil, calls: 0},
-			BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil},
-			Lifecycles: map[string]inventory.Lifecycle{
-				"pulumi": &sweepLifecycle{mu: sync.Mutex{}, errs: nil, entries: nil},
-			},
-			Blobs:  map[string]inventory.PurgedBlobs{"pulumi": &memBlobs{errs: nil, deleted: nil}},
-			Logger: slog.New(slog.DiscardHandler),
-			Now:    nil,
+			BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil, calls: 0},
+			Tools:      map[string]inventory.SweepTool{"pulumi": newSweepTool()},
+			Logger:     slog.New(slog.DiscardHandler),
+			Now:        nil,
 		}
 	}
 
@@ -372,8 +378,7 @@ func TestNewSweeperRefusesMissingPorts(t *testing.T) {
 	}{
 		{name: "expired", drop: func(c *inventory.SweeperConfig) { c.Expired = nil }},
 		{name: "records", drop: func(c *inventory.SweeperConfig) { c.BlobPurges = nil }},
-		{name: "lifecycles", drop: func(c *inventory.SweeperConfig) { c.Lifecycles = nil }},
-		{name: "blobs", drop: func(c *inventory.SweeperConfig) { c.Blobs = nil }},
+		{name: "tools", drop: func(c *inventory.SweeperConfig) { c.Tools = nil }},
 		{name: "logger", drop: func(c *inventory.SweeperConfig) { c.Logger = nil }},
 	}
 
@@ -441,5 +446,197 @@ func TestPageExpired(t *testing.T) {
 	cursor := &inventory.ExpiredCursor{PurgeAfter: at, Tool: "pulumi", UnitID: "a"}
 	if got := ids(inventory.PageExpired(entries, sweepNow(), cursor, 1)); got != "b" {
 		t.Fatalf("expired after pulumi/a, limit 1 = %s, want b", got)
+	}
+}
+
+// TestSweepPurgesWithTheSweepTime proves that each purge carries the time
+// at the start of the sweep as its due time, so the tool can refuse a unit
+// whose retention a restore and a new delete renewed after the list.
+func TestSweepPurgesWithTheSweepTime(t *testing.T) {
+	t.Parallel()
+
+	f := newSweepFixture(t, expiredUnits(3), nil)
+
+	if _, err := f.sweeper.Sweep(t.Context(), sweepEntry()); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(f.tool.dueBys) != 3 {
+		t.Fatalf("purges = %d, want 3", len(f.tool.dueBys))
+	}
+
+	for _, due := range f.tool.dueBys {
+		if !due.Equal(sweepNow()) {
+			t.Fatalf("due time = %v, want the sweep time %v", due, sweepNow())
+		}
+	}
+}
+
+// blockingTool is a sweepTool whose first purge waits until release closes.
+type blockingTool struct {
+	*sweepTool
+
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingTool) PurgeExpired(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
+	b.once.Do(func() {
+		close(b.started)
+		<-b.release
+	})
+
+	return b.sweepTool.PurgeExpired(ctx, ns, unitID, dueBy, e)
+}
+
+// TestSweepRefusesASecondSweep proves that a sweep that starts while another
+// sweep runs returns ErrSweepRunning at once, and that the first sweep goes
+// on.
+func TestSweepRefusesASecondSweep(t *testing.T) {
+	t.Parallel()
+
+	tool := &blockingTool{
+		sweepTool: newSweepTool(), started: make(chan struct{}), release: make(chan struct{}), once: sync.Once{},
+	}
+
+	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
+		Expired:    &memExpired{entries: expiredUnits(2), calls: 0},
+		BlobPurges: &memRecords{records: nil, finished: nil, finishErr: nil, calls: 0},
+		Tools:      map[string]inventory.SweepTool{"pulumi": tool},
+		Logger:     slog.New(slog.DiscardHandler),
+		Now:        sweepNow,
+	})
+	if err != nil {
+		t.Fatalf("new sweeper: %v", err)
+	}
+
+	done := make(chan inventory.SweepResult)
+
+	go func() {
+		res, _ := sweeper.Sweep(t.Context(), sweepEntry()) //nolint:errcheck // The test checks the result.
+		done <- res
+	}()
+
+	<-tool.started
+
+	if _, err := sweeper.Sweep(t.Context(), sweepEntry()); !errors.Is(err, inventory.ErrSweepRunning) {
+		t.Fatalf("second sweep: err = %v, want ErrSweepRunning", err)
+	}
+
+	close(tool.release)
+
+	if res := <-done; len(res.Purged) != 2 {
+		t.Fatalf("first sweep purged %d units, want 2", len(res.Purged))
+	}
+}
+
+// TestSweepStopsWithoutFailures proves that the purges that the end of the
+// sweep context cuts off count as skipped, with no warning and no failure.
+func TestSweepStopsWithoutFailures(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	f := newSweepFixture(t, expiredUnits(5), nil)
+	f.tool.errs["stk-001"] = context.Canceled
+
+	stopping := &cancelTool{sweepTool: f.tool, cancel: cancel, at: "stk-001"}
+
+	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
+		Expired:    f.expired,
+		BlobPurges: f.records,
+		Tools:      map[string]inventory.SweepTool{"pulumi": stopping},
+		Logger:     slog.New(slog.NewTextHandler(f.log, nil)),
+		Now:        sweepNow,
+	})
+	if err != nil {
+		t.Fatalf("new sweeper: %v", err)
+	}
+
+	res, err := sweeper.Sweep(ctx, sweepEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(res.Purged) != 1 || res.Skipped != 4 || res.Failed != 0 {
+		t.Fatalf("stopped sweep = %d purged, %d skipped, %d failed, want 1, 4 and 0",
+			len(res.Purged), res.Skipped, res.Failed)
+	}
+
+	if strings.Contains(f.log.String(), "WARN") {
+		t.Fatalf("log = %q, want no warning for a stopped sweep", f.log.String())
+	}
+}
+
+// cancelTool cancels the sweep context when it purges the unit at, as a
+// server that stops does.
+type cancelTool struct {
+	*sweepTool
+
+	cancel context.CancelFunc
+	at     string
+}
+
+func (c *cancelTool) PurgeExpired(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
+	if unitID == c.at {
+		c.cancel()
+	}
+
+	return c.sweepTool.PurgeExpired(ctx, ns, unitID, dueBy, e)
+}
+
+// TestSweepPagesTheRecords proves that the sweep reads the blob purge
+// records page by page, so records whose delete keeps failing do not hide
+// the newer ones.
+func TestSweepPagesTheRecords(t *testing.T) {
+	t.Parallel()
+
+	old := sweepNow().Add(-inventory.BlobPurgeGrace - time.Hour)
+	records := make([]inventory.BlobPurge, 0, 250)
+
+	for i := range 250 {
+		records = append(records, inventory.BlobPurge{
+			PurgedAt: old.Add(time.Duration(i) * time.Second), Namespace: "acme", Tool: "pulumi",
+			UnitID: fmt.Sprintf("stk-%03d", i),
+		})
+	}
+
+	f := newSweepFixture(t, nil, records)
+	for i := range 150 {
+		f.tool.blobErrs[fmt.Sprintf("stk-%03d", i)] = errDriver
+	}
+
+	res, err := f.sweeper.Sweep(t.Context(), sweepEntry())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if res.FinishedBlobPurges != 100 || res.PendingBlobPurges != 150 || res.Failed != 150 || f.records.calls != 3 {
+		t.Fatalf("sweep = %d finished, %d pending, %d failed in %d reads, want 100, 150, 150 in 3",
+			res.FinishedBlobPurges, res.PendingBlobPurges, res.Failed, f.records.calls)
+	}
+}
+
+// TestSweepCountDue proves that CountDue counts every unit whose retention
+// period ended, across pages, and no unit whose retention runs.
+func TestSweepCountDue(t *testing.T) {
+	t.Parallel()
+
+	n := inventory.SweepPageSize + 3
+	f := newSweepFixture(t, expiredUnits(n), nil)
+
+	due, err := f.sweeper.CountDue(t.Context())
+	if err != nil || due != n {
+		t.Fatalf("count due = %d, %v, want %d", due, err, n)
+	}
+
+	if len(f.tool.entries) != 0 {
+		t.Fatal("CountDue purged a unit")
 	}
 }

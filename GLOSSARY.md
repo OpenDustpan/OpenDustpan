@@ -113,7 +113,7 @@ The same as a purge. Use "purge" in code and in the API, and "final delete" wher
 _Avoid_: Permanent delete
 
 **Retention sweep**:
-The server task that purges each deleted unit whose retention period ended. It runs at start and then one time each hour. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
 _Avoid_: Garbage collection, reaper
 
 **Blob purge record**:

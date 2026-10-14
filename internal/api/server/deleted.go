@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -49,6 +50,10 @@ type deletedSweepResponse struct {
 	PendingBlobPurges  int                 `json:"pendingBlobPurges"`
 }
 
+// sweepRunningMessage is the answer of the sweep route while another sweep
+// of this server runs. The route does not wait for it.
+const sweepRunningMessage = "a retention sweep is running. Try again later."
+
 // noDeletedUnitsMessage is the answer of the sweep route on a server whose
 // store keeps no deleted units.
 const noDeletedUnitsMessage = "the store of this server keeps no deleted units"
@@ -68,7 +73,8 @@ func (h *Handler) deletedUnitRoutes() []Route {
 }
 
 // sweepDeletedUnits serves POST /api/server/deleted-units/sweep: it runs the
-// retention sweep once and answers 200 with its outcome. Each purge writes
+// retention sweep once and answers 200 with its outcome, or 409 at once when
+// another sweep of this server runs. Each purge writes
 // its audit entry in its own transaction, with the caller as the subject
 // and the action unit:purge. A failed purge does not fail the request: the
 // answer counts it, and the next sweep tries again.
@@ -88,6 +94,14 @@ func (h *Handler) sweepDeletedUnits(w http.ResponseWriter, r *http.Request, p id
 	e.Outcome = audit.OutcomeSuccess
 
 	res, err := h.deletedUnits.Sweep(ctx, e)
+	if errors.Is(err, inventory.ErrSweepRunning) {
+		h.writeJSON(ctx, w, http.StatusConflict, errorResponse{
+			Code: http.StatusConflict, Message: sweepRunningMessage,
+		})
+
+		return
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 

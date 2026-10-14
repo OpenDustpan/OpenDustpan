@@ -54,8 +54,7 @@ func newDeletedSweeper(
 	sweeper, err := inventory.NewSweeper(inventory.SweeperConfig{
 		Expired:    expired,
 		BlobPurges: records,
-		Lifecycles: map[string]inventory.Lifecycle{pulumiTool: stacks, opentofuTool: workspaces},
-		Blobs:      map[string]inventory.PurgedBlobs{pulumiTool: stacks, opentofuTool: workspaces},
+		Tools:      map[string]inventory.SweepTool{pulumiTool: stacks, opentofuTool: workspaces},
 		Logger:     cfg.logger,
 		Now:        cfg.now,
 	})
@@ -77,6 +76,10 @@ func (d *deletedSweeper) Sweep(ctx context.Context, e audit.Entry) (inventory.Sw
 	d.observed.ObserveDeletedSweep(metrics.DeletedSweepSkipped, res.Skipped)
 	d.observed.ObserveDeletedSweep(metrics.DeletedSweepFinished, res.FinishedBlobPurges)
 	d.observed.ObserveDeletedSweep(metrics.DeletedSweepFailed, res.Failed)
+
+	if errors.Is(err, inventory.ErrSweepRunning) {
+		return res, fmt.Errorf("retention sweep: %w", err)
+	}
 
 	if err != nil && !errors.Is(err, context.Canceled) {
 		d.observed.ObserveDeletedSweep(metrics.DeletedSweepFailed, 1)
@@ -124,14 +127,16 @@ func scheduledSweepEntry() audit.Entry {
 	return e
 }
 
-// sweepDeleted runs the retention sweep once at the start and then once
-// each deletedSweepEvery, until ctx is done.
+// sweepDeleted runs the retention sweep once each deletedSweepEvery, until
+// ctx is done. It does not purge at the start: after an upgrade or an
+// installation restore, an operator gets one period to see and restore the
+// units that are due. At the start it logs their count.
 func (s *Server) sweepDeleted(ctx context.Context) {
 	if s.deleted == nil {
 		return
 	}
 
-	s.sweepDeletedOnce(ctx)
+	s.deleted.logDue(ctx)
 
 	ticker := time.NewTicker(deletedSweepEvery)
 	defer ticker.Stop()
@@ -157,7 +162,25 @@ func (s *Server) sweepDeletedOnce(ctx context.Context) {
 	_, _ = s.deleted.Sweep(bounded, scheduledSweepEntry())
 }
 
-// DeletePurgedBlobs implements inventory.PurgedBlobs for Pulumi stacks,
+// logDue logs one INFO line at the start of the server with the count of
+// deleted units whose retention period has ended: the first sweep, one
+// period later, purges them unless a restore takes them first.
+func (d *deletedSweeper) logDue(ctx context.Context) {
+	due, err := d.sweeper.CountDue(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			d.logger.WarnContext(ctx, "retention sweep could not count the units due",
+				slog.String("error_kind", inventory.ErrorKind(err)))
+		}
+
+		return
+	}
+
+	d.logger.InfoContext(ctx, "retention sweep starts after one period",
+		slog.Int("units_due", due), slog.Duration("first_sweep_in", deletedSweepEvery))
+}
+
+// DeletePurgedBlobs implements inventory.SweepTool for Pulumi stacks,
 // within purgeBlobTimeout.
 func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) error {
 	bounded, cancel := context.WithTimeout(ctx, purgeBlobTimeout)
@@ -170,7 +193,7 @@ func (l pulumiLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) e
 	return nil
 }
 
-// DeletePurgedBlobs implements inventory.PurgedBlobs for OpenTofu
+// DeletePurgedBlobs implements inventory.SweepTool for OpenTofu
 // workspaces, within purgeBlobTimeout.
 func (l opentofuLifecycle) DeletePurgedBlobs(ctx context.Context, unitID string) error {
 	bounded, cancel := context.WithTimeout(ctx, purgeBlobTimeout)

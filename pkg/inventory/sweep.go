@@ -25,13 +25,9 @@ import (
 // setting.
 const BlobPurgeGrace = 24 * time.Hour
 
-// SweepPageSize is the number of expired deleted units that the sweep reads
-// in one call to the store.
+// SweepPageSize is the number of expired deleted units, or of blob purge
+// records, that the sweep reads in one call to the store.
 const SweepPageSize = 100
-
-// SweepBlobPurgeLimit is the largest number of blob purge records that one
-// sweep reads.
-const SweepBlobPurgeLimit = 1000
 
 // ExpiredCursor is the position after which a page of expired deleted units
 // starts: the order key of the last entry of the page before.
@@ -51,9 +47,16 @@ type ExpiredDeleted interface {
 	ListExpiredDeleted(ctx context.Context, now time.Time, after *ExpiredCursor, limit int) ([]DeletedEntry, error)
 }
 
-// PurgedBlobs deletes the blobs of the purged units of one tool. Each tool
-// implements it with its own blob layout.
-type PurgedBlobs interface {
+// SweepTool is the part of one tool that the retention sweep needs. Each
+// tool implements it with its own model and blob layout.
+type SweepTool interface {
+	// PurgeExpired removes the deleted unit unitID of ns for good, as
+	// Lifecycle.Purge does, only when its retention period ended at or
+	// before dueBy. The tool checks the end of the retention in the purge
+	// transaction. It returns ErrNotFound if ns has no deleted unit unitID
+	// whose retention period ended by then: a restore and a new delete after
+	// the sweep read the unit gave it a new retention period.
+	PurgeExpired(ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry) error
 	// DeletePurgedBlobs deletes every blob of the purged unit unitID. It
 	// returns nil only when no blob of the unit remains.
 	DeletePurgedBlobs(ctx context.Context, unitID string) error
@@ -67,11 +70,11 @@ func (e DeletedEntry) Reference() string {
 
 // SweepResult is the outcome of one sweep. Purged holds the units that the
 // sweep purged. Failed counts the purges, the blob deletes and the record
-// finishes that failed.
-// Skipped counts the expired units that the sweep left to another
-// installation or that a restore took first. FinishedBlobPurges counts the
-// blob purge records that the sweep finished, and PendingBlobPurges the
-// records that stay.
+// finishes that failed. Skipped counts the expired units that the sweep left:
+// another installation is the home of their namespace, a restore took them
+// first, or the server stopped the sweep before their purge.
+// FinishedBlobPurges counts the blob purge records that the sweep finished,
+// and PendingBlobPurges the records that stay.
 type SweepResult struct {
 	Purged             []DeletedEntry
 	Failed             int
@@ -80,13 +83,12 @@ type SweepResult struct {
 	PendingBlobPurges  int
 }
 
-// SweeperConfig holds the ports of a Sweeper. Lifecycles and Blobs map each
-// stored tool code to its port. Now defaults to time.Now.
+// SweeperConfig holds the ports of a Sweeper. Tools maps each stored tool
+// code to its port. Now defaults to time.Now.
 type SweeperConfig struct {
 	Expired    ExpiredDeleted
 	BlobPurges BlobPurges
-	Lifecycles map[string]Lifecycle
-	Blobs      map[string]PurgedBlobs
+	Tools      map[string]SweepTool
 	Logger     *slog.Logger
 	Now        func() time.Time
 }
@@ -94,9 +96,19 @@ type SweeperConfig struct {
 // ErrMissingDependency reports a SweeperConfig without a required port.
 var ErrMissingDependency = errors.New("missing dependency")
 
-// Sweeper runs the retention sweep: the final delete of each
-// deleted unit whose retention period has ended, and the finish of the blob
-// purge records. One sweep runs at a time.
+// ErrSweepRunning reports a sweep that cannot start because another sweep
+// of this server is running. The caller can try again later.
+var ErrSweepRunning = errors.New("a retention sweep is running")
+
+// Sweeper runs the retention sweep: the final delete of each deleted unit
+// whose retention period has ended, and the finish of the blob purge
+// records. One sweep of a Sweeper runs at a time.
+//
+// The end of a retention period and the age of a record compare with the
+// clock of the server that runs the sweep (Now), not with the database clock.
+// Servers of one installation with a clock skew purge a unit earlier or later
+// by that skew. The retention period counts in hours, so a skew of seconds
+// does not matter.
 type Sweeper struct {
 	cfg SweeperConfig
 	mu  sync.Mutex
@@ -109,10 +121,8 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 		return nil, fmt.Errorf("%w: expired deleted units", ErrMissingDependency)
 	case cfg.BlobPurges == nil:
 		return nil, fmt.Errorf("%w: blob purge records", ErrMissingDependency)
-	case len(cfg.Lifecycles) == 0:
-		return nil, fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
-	case len(cfg.Blobs) == 0:
-		return nil, fmt.Errorf("%w: purged blobs", ErrMissingDependency)
+	case len(cfg.Tools) == 0:
+		return nil, fmt.Errorf("%w: sweep tools", ErrMissingDependency)
 	case cfg.Logger == nil:
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
@@ -125,19 +135,24 @@ func NewSweeper(cfg SweeperConfig) (*Sweeper, error) {
 }
 
 // Sweep runs one sweep. It purges each deleted unit whose retention period
-// has ended, through the lifecycle of its tool, with the audit entry e: the
-// sweep sets the namespace, the object and the object ID of the unit. Then it
-// deletes the blobs of each blob purge record older than BlobPurgeGrace
-// again, and finishes the record when no blob remains. A failed purge or blob
-// delete does not stop the sweep: Sweep counts it, logs a warning with its
-// error kind, and the next sweep tries again. Sweep returns an error only
+// ended at the start of the sweep, through the tool of the unit, with the
+// audit entry e: the sweep sets the namespace, the object and the object ID
+// of the unit. Then it deletes the blobs of each blob purge record older than
+// BlobPurgeGrace again, and finishes the record when no blob remains. A
+// failed purge or blob delete does not stop the sweep: Sweep counts it, logs
+// a warning with its error kind, and the next sweep tries again. When ctx
+// ends, Sweep stops and returns what it did, without an error. Sweep returns
+// ErrSweepRunning at once when another sweep runs, and another error only
 // when it cannot read the units or the records.
 func (s *Sweeper) Sweep(ctx context.Context, e audit.Entry) (SweepResult, error) {
-	s.mu.Lock()
+	res := SweepResult{Purged: []DeletedEntry{}, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0}
+
+	if !s.mu.TryLock() {
+		return res, ErrSweepRunning
+	}
 	defer s.mu.Unlock()
 
 	now := s.cfg.Now()
-	res := SweepResult{Purged: []DeletedEntry{}, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0}
 
 	if err := s.purgeExpired(ctx, now, e, &res); err != nil {
 		return res, err
@@ -150,19 +165,57 @@ func (s *Sweeper) Sweep(ctx context.Context, e audit.Entry) (SweepResult, error)
 	return res, nil
 }
 
+// CountDue returns the number of deleted units whose retention period has
+// ended now: the units that the next sweep purges, unless a restore takes
+// them first.
+func (s *Sweeper) CountDue(ctx context.Context) (int, error) {
+	now := s.cfg.Now()
+
+	var (
+		cursor *ExpiredCursor
+		count  int
+	)
+
+	for {
+		page, err := s.cfg.Expired.ListExpiredDeleted(ctx, now, cursor, SweepPageSize)
+		if err != nil {
+			return count, fmt.Errorf("list expired deleted units: %w", err)
+		}
+
+		count += len(page)
+
+		if len(page) < SweepPageSize {
+			return count, nil
+		}
+
+		last := page[len(page)-1]
+		cursor = &ExpiredCursor{PurgeAfter: last.PurgeAfter, Tool: last.Tool, UnitID: last.UnitID}
+	}
+}
+
+// stopped reports whether ctx has ended. A sweep that the server stops, or
+// that reaches its deadline, returns what it did so far.
+func stopped(ctx context.Context) bool {
+	return ctx.Err() != nil
+}
+
 // purgeExpired purges every deleted unit whose retention period ended at or
 // before now, page by page.
 func (s *Sweeper) purgeExpired(ctx context.Context, now time.Time, e audit.Entry, res *SweepResult) error {
 	var cursor *ExpiredCursor
 
-	for {
+	for !stopped(ctx) {
 		page, err := s.cfg.Expired.ListExpiredDeleted(ctx, now, cursor, SweepPageSize)
+		if stopped(ctx) {
+			return nil
+		}
+
 		if err != nil {
 			return fmt.Errorf("list expired deleted units: %w", err)
 		}
 
 		for i := range page {
-			s.purgeOne(ctx, page[i], e, res)
+			s.purgeOne(ctx, page[i], now, e, res)
 		}
 
 		if len(page) < SweepPageSize {
@@ -172,11 +225,20 @@ func (s *Sweeper) purgeExpired(ctx context.Context, now time.Time, e audit.Entry
 		last := page[len(page)-1]
 		cursor = &ExpiredCursor{PurgeAfter: last.PurgeAfter, Tool: last.Tool, UnitID: last.UnitID}
 	}
+
+	return nil
 }
 
-// purgeOne purges the deleted unit d and records the outcome in res.
-func (s *Sweeper) purgeOne(ctx context.Context, d DeletedEntry, e audit.Entry, res *SweepResult) {
-	lifecycle, ok := s.cfg.Lifecycles[d.Tool]
+// purgeOne purges the deleted unit d when its retention period ended at or
+// before now, and records the outcome in res.
+func (s *Sweeper) purgeOne(ctx context.Context, d DeletedEntry, now time.Time, e audit.Entry, res *SweepResult) {
+	if stopped(ctx) {
+		res.Skipped++
+
+		return
+	}
+
+	tool, ok := s.cfg.Tools[d.Tool]
 	if !ok {
 		res.Failed++
 		s.cfg.Logger.WarnContext(ctx, "retention sweep cannot purge a unit of an unknown tool",
@@ -189,14 +251,15 @@ func (s *Sweeper) purgeOne(ctx context.Context, d DeletedEntry, e audit.Entry, r
 	e.Object = d.Reference()
 	e.ObjectID = d.UnitID
 
-	err := lifecycle.Purge(ctx, d.Namespace, d.UnitID, e)
+	err := tool.PurgeExpired(ctx, d.Namespace, d.UnitID, now, e)
 
 	switch {
 	case err == nil:
 		res.Purged = append(res.Purged, d)
-	case errors.Is(err, ErrNotFound), errors.Is(err, namespace.ErrNotHome):
-		// A restore took the unit first, or another installation is the
-		// home of its namespace and purges it there.
+	case errors.Is(err, ErrNotFound), errors.Is(err, namespace.ErrNotHome), stopped(ctx):
+		// A restore took the unit first, a new delete gave it a new
+		// retention period, another installation is the home of its
+		// namespace, or the server stopped the sweep.
 		res.Skipped++
 	default:
 		res.Failed++
@@ -206,48 +269,78 @@ func (s *Sweeper) purgeOne(ctx context.Context, d DeletedEntry, e audit.Entry, r
 }
 
 // finishBlobPurges deletes the blobs of each record older than
-// BlobPurgeGrace again and finishes the record when no blob remains.
+// BlobPurgeGrace again and finishes the record when no blob remains. It
+// reads the records page by page, so records whose delete keeps failing do
+// not hide the newer ones.
 func (s *Sweeper) finishBlobPurges(ctx context.Context, now time.Time, res *SweepResult) error {
-	records, err := s.cfg.BlobPurges.ListBlobPurges(ctx, SweepBlobPurgeLimit)
-	if err != nil {
-		return fmt.Errorf("list blob purge records: %w", err)
-	}
+	var cursor *BlobPurgeCursor
 
-	for _, r := range records {
-		if now.Sub(r.PurgedAt) < BlobPurgeGrace {
-			res.PendingBlobPurges++
-
-			continue
+	for !stopped(ctx) {
+		records, err := s.cfg.BlobPurges.ListBlobPurges(ctx, cursor, SweepPageSize)
+		if stopped(ctx) {
+			return nil
 		}
 
-		if !s.deletePurgedBlobs(ctx, r) {
-			res.Failed++
-			res.PendingBlobPurges++
-
-			continue
+		if err != nil {
+			return fmt.Errorf("list blob purge records: %w", err)
 		}
 
-		if finishErr := s.cfg.BlobPurges.FinishBlobPurge(ctx, r.Tool, r.UnitID); finishErr != nil {
-			res.Failed++
-			res.PendingBlobPurges++
-			s.cfg.Logger.WarnContext(ctx, "retention sweep failed to finish a blob purge record",
-				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
-				slog.String("error_kind", ErrorKind(finishErr)))
-
-			continue
+		for _, r := range records {
+			s.finishOne(ctx, r, now, res)
 		}
 
-		res.FinishedBlobPurges++
+		if len(records) < SweepPageSize {
+			return nil
+		}
+
+		last := records[len(records)-1]
+		cursor = &BlobPurgeCursor{PurgedAt: last.PurgedAt, Tool: last.Tool, UnitID: last.UnitID}
 	}
 
 	return nil
 }
 
+// finishOne deletes the blobs of the record r again when it is older than
+// BlobPurgeGrace, finishes it when no blob remains, and records the outcome
+// in res.
+func (s *Sweeper) finishOne(ctx context.Context, r BlobPurge, now time.Time, res *SweepResult) {
+	if now.Sub(r.PurgedAt) < BlobPurgeGrace || stopped(ctx) {
+		res.PendingBlobPurges++
+
+		return
+	}
+
+	if !s.deletePurgedBlobs(ctx, r) {
+		res.PendingBlobPurges++
+
+		if !stopped(ctx) {
+			res.Failed++
+		}
+
+		return
+	}
+
+	if err := s.cfg.BlobPurges.FinishBlobPurge(ctx, r.Tool, r.UnitID); err != nil {
+		res.PendingBlobPurges++
+
+		if !stopped(ctx) {
+			res.Failed++
+			s.cfg.Logger.WarnContext(ctx, "retention sweep failed to finish a blob purge record",
+				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
+				slog.String("error_kind", ErrorKind(err)))
+		}
+
+		return
+	}
+
+	res.FinishedBlobPurges++
+}
+
 // deletePurgedBlobs deletes the blobs of the unit of r and reports whether
-// no blob remains. A failure logs a warning without a blob key, and the
-// record stays pending.
+// no blob remains. A failure logs a warning without a blob key, unless the
+// server stopped the sweep, and the record stays pending.
 func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
-	blobs, ok := s.cfg.Blobs[r.Tool]
+	tool, ok := s.cfg.Tools[r.Tool]
 	if !ok {
 		s.cfg.Logger.WarnContext(ctx, "retention sweep cannot delete the blobs of an unknown tool",
 			slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID), slog.String("error_kind", "unknown_tool"))
@@ -255,9 +348,12 @@ func (s *Sweeper) deletePurgedBlobs(ctx context.Context, r BlobPurge) bool {
 		return false
 	}
 
-	if err := blobs.DeletePurgedBlobs(ctx, r.UnitID); err != nil {
-		s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain after the retention sweep",
-			slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID), slog.String("error_kind", ErrorKind(err)))
+	if err := tool.DeletePurgedBlobs(ctx, r.UnitID); err != nil {
+		if !stopped(ctx) {
+			s.cfg.Logger.WarnContext(ctx, "blobs of a purged unit remain after the retention sweep",
+				slog.String("tool", r.Tool), slog.String("unit_id", r.UnitID),
+				slog.String("error_kind", ErrorKind(err)))
+		}
 
 		return false
 	}
@@ -320,6 +416,49 @@ func PageExpired(entries []DeletedEntry, now time.Time, after *ExpiredCursor, li
 		switch {
 		case !a.PurgeAfter.Equal(b.PurgeAfter):
 			return a.PurgeAfter.Compare(b.PurgeAfter)
+		case a.Tool != b.Tool:
+			return strings.Compare(a.Tool, b.Tool)
+		default:
+			return strings.Compare(a.UnitID, b.UnitID)
+		}
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out
+}
+
+// blobPurgeAfter reports whether r comes after the cursor c in the order of
+// ListBlobPurges.
+func blobPurgeAfter(r BlobPurge, c BlobPurgeCursor) bool {
+	switch {
+	case !r.PurgedAt.Equal(c.PurgedAt):
+		return r.PurgedAt.After(c.PurgedAt)
+	case r.Tool != c.Tool:
+		return r.Tool > c.Tool
+	default:
+		return r.UnitID > c.UnitID
+	}
+}
+
+// PageBlobPurges defines the result of ListBlobPurges for a list of
+// records: at most limit records after the cursor when one is set, in the
+// order of the port. Store conformance tests compare each adapter with it.
+func PageBlobPurges(records []BlobPurge, after *BlobPurgeCursor, limit int) []BlobPurge {
+	out := make([]BlobPurge, 0, len(records))
+
+	for _, r := range records {
+		if after == nil || blobPurgeAfter(r, *after) {
+			out = append(out, r)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b BlobPurge) int {
+		switch {
+		case !a.PurgedAt.Equal(b.PurgedAt):
+			return a.PurgedAt.Compare(b.PurgedAt)
 		case a.Tool != b.Tool:
 			return strings.Compare(a.Tool, b.Tool)
 		default:

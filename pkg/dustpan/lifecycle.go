@@ -98,9 +98,25 @@ func (l pulumiLifecycle) Restore(
 // (inventory.Sweeper) deletes the blobs again after inventory.BlobPurgeGrace,
 // which is longer than any such write, and only then finishes the record.
 func (l pulumiLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error {
+	return l.purgeUnit(ctx, ns, unitID, time.Time{}, e)
+}
+
+// PurgeExpired implements inventory.SweepTool: Purge, only when the
+// retention period of the stack ended at or before dueBy.
+func (l pulumiLifecycle) PurgeExpired(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
+	return l.purgeUnit(ctx, ns, unitID, dueBy, e)
+}
+
+// purgeUnit removes the deleted stack unitID with the retention check of dueBy,
+// which zero turns off, and then deletes its blobs.
+func (l pulumiLifecycle) purgeUnit(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
 	id := stack.ID(unitID)
 
-	if err := l.stacks.PurgeDeleted(ctx, ns, id, e); err != nil {
+	if err := l.stacks.PurgeExpired(ctx, ns, id, dueBy, e); err != nil {
 		return lifecycleError(err, stack.ErrNotFound, stack.ErrAlreadyExists)
 	}
 
@@ -150,9 +166,25 @@ func (l opentofuLifecycle) Restore(
 // after inventory.BlobPurgeGrace, which is longer than any such write, and
 // only then finishes the record.
 func (l opentofuLifecycle) Purge(ctx context.Context, ns namespace.Name, unitID string, e audit.Entry) error {
+	return l.purgeUnit(ctx, ns, unitID, time.Time{}, e)
+}
+
+// PurgeExpired implements inventory.SweepTool: Purge, only when the
+// retention period of the workspace ended at or before dueBy.
+func (l opentofuLifecycle) PurgeExpired(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
+	return l.purgeUnit(ctx, ns, unitID, dueBy, e)
+}
+
+// purgeUnit removes the deleted workspace unitID with the retention check of
+// dueBy, which zero turns off, and then deletes its blobs.
+func (l opentofuLifecycle) purgeUnit(
+	ctx context.Context, ns namespace.Name, unitID string, dueBy time.Time, e audit.Entry,
+) error {
 	id := workspace.ID(unitID)
 
-	if err := l.workspaces.PurgeDeleted(ctx, ns, id, e); err != nil {
+	if err := l.workspaces.PurgeExpired(ctx, ns, id, dueBy, e); err != nil {
 		return lifecycleError(err, workspace.ErrNotFound, workspace.ErrAlreadyExists)
 	}
 

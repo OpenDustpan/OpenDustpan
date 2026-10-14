@@ -148,11 +148,15 @@ func TestSweepDeletedUnitsAnswersTheOutcome(t *testing.T) {
 }
 
 // TestSweepDeletedUnitsRefusals proves the answers of the sweep route
-// without server:maintenance (403), without a sweeper (501), and when the
-// sweep cannot read the store (500, without the error text).
+// without server:maintenance (403), without a sweeper (501), when the sweep
+// cannot read the store (500, without the error text), and while another
+// sweep runs (409, at once).
 func TestSweepDeletedUnitsRefusals(t *testing.T) {
 	t.Parallel()
 
+	running := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
+		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
+	}, err: inventory.ErrSweepRunning}
 	failing := &recordingSweeper{mu: sync.Mutex{}, entries: nil, res: inventory.SweepResult{
 		Purged: nil, Failed: 0, Skipped: 0, FinishedBlobPurges: 0, PendingBlobPurges: 0,
 	}, err: errSweepRead}
@@ -176,6 +180,7 @@ func TestSweepDeletedUnitsRefusals(t *testing.T) {
 			deny:    map[identity.Action]bool{},
 			want:    http.StatusInternalServerError,
 		},
+		{name: "a sweep runs", sweeper: running, deny: map[identity.Action]bool{}, want: http.StatusConflict},
 	}
 
 	for _, tc := range cases {

@@ -217,6 +217,12 @@ func TestRetentionSweepRemovesALateBlob(t *testing.T) {
 	f.checkSweep(t, "inside the retention", sweepCounts{purged: 0, finished: 0, pending: 0})
 
 	f.clock.advance(2 * time.Hour)
+	f.sweeper.logDue(t.Context())
+
+	if !strings.Contains(f.log.String(), "units_due=2") {
+		t.Fatalf("log misses the count of units due:\n%s", f.log.String())
+	}
+
 	f.checkSweep(t, "after the retention", sweepCounts{purged: 2, finished: 0, pending: 2})
 	checkPurgeLog(t, f.log.String())
 	f.checkBlobs(t, units, 0, "after the purge")
@@ -235,7 +241,7 @@ func TestRetentionSweepRemovesALateBlob(t *testing.T) {
 	f.checkSweep(t, "after the grace period", sweepCounts{purged: 0, finished: 2, pending: 0})
 	f.checkBlobs(t, units, 0, "after the grace period")
 
-	records, err := f.store.ListBlobPurges(t.Context(), 10)
+	records, err := f.store.ListBlobPurges(t.Context(), nil, 10)
 	if err != nil || len(records) != 0 {
 		t.Fatalf("blob purge records = %+v, %v, want none", records, err)
 	}

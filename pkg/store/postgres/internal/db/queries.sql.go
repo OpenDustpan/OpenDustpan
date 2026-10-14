@@ -3437,6 +3437,55 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int32) ([]BlobPurge,
 	return items, nil
 }
 
+const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms > $1
+  OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
+  OR (purged_at_ms = $1 AND tool = $2
+    AND unit_id COLLATE "C" > $3)
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $4
+`
+
+type ListBlobPurgesAfterParams struct {
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int32
+}
+
+// The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
+	rows, err := q.db.Query(ctx, listBlobPurgesAfter,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BlobPurge
+	for rows.Next() {
+		var i BlobPurge
+		if err := rows.Scan(
+			&i.Tool,
+			&i.UnitID,
+			&i.Namespace,
+			&i.PurgedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints

@@ -71,6 +71,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a delete moves the inventory entry to the deleted units", test: testDeleteMovesInventoryEntry},
 		{name: "deleted units filter and page as inventory.PageDeleted", test: testQueryDeletedUnits},
 		{name: "expired deleted units page as inventory.PageExpired", test: testListExpiredDeleted},
+		{name: "blob purge records page as inventory.PageBlobPurges", test: testBlobPurgePages},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},

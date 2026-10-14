@@ -160,11 +160,21 @@ type BlobPurge struct {
 	UnitID    string
 }
 
+// BlobPurgeCursor is the position after which a page of blob purge records
+// starts: the order key of the last record of the page before.
+type BlobPurgeCursor struct {
+	PurgedAt time.Time
+	Tool     string
+	UnitID   string
+}
+
 // BlobPurges reads and finishes the records of purged units whose blobs may
 // still exist.
 type BlobPurges interface {
-	// ListBlobPurges returns at most limit records, the oldest first.
-	ListBlobPurges(ctx context.Context, limit int) ([]BlobPurge, error)
+	// ListBlobPurges returns at most limit records, ordered by PurgedAt,
+	// then tool, then unit ID. With a cursor, it returns only the records
+	// after the cursor in that order.
+	ListBlobPurges(ctx context.Context, after *BlobPurgeCursor, limit int) ([]BlobPurge, error)
 	// FinishBlobPurge removes the record of the unit unitID of tool. A
 	// missing record is not an error.
 	FinishBlobPurge(ctx context.Context, tool, unitID string) error
