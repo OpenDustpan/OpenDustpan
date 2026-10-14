@@ -149,10 +149,10 @@ type settings struct {
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
-	backupTarget            blob.Store
-	backupTargetName        string
 	// auditChain is the hash chain setting. See WithAuditChain.
-	auditChain audit.ChainSetting
+	auditChain       audit.ChainSetting
+	backupTarget     blob.Store
+	backupTargetName string
 }
 
 // Option configures a Server.

@@ -135,9 +135,16 @@ An entry without a hash passes the check only when the switch entries say that t
 An instance can keep the old state for 2 seconds after a switch to on.
 So the check also accepts an entry without a hash up to 2 seconds after that switch.
 So the check finds a hash that someone deleted from a chained log.
+A switch entry counts only when its hash matches its fields, so an added row without a hash cannot turn the chain off.
+The first switch entry of a new installation is the one exception: it is off and has no hash.
+Next to an entry without a hash, the times of the entries must not go back.
+When the switch entries are gone and the installation still holds the state of the chain, every scope fails the check.
 Keep the clocks of the instances synchronized.
 The check answers `entriesUnchained`: the count of entries without a hash.
 The check cannot prove that such an entry is unchanged.
+A person can delete the hashes of the entries after the last chained entry of a scope.
+That person can then move those entries into a later off window, and the check does not see it.
+Signed checkpoints (see below) cover that case.
 
 While the chain is on, the server checks the chain of every namespace and of `@server` at start and every hour.
 While the chain is off, the server does not run this check.

@@ -298,7 +298,7 @@ func walkChained(seq int64, prev string) audit.Entry {
 
 // walkOK reports whether the walk over points accepts every entry.
 func walkOK(points []audit.ChainPoint, entries ...audit.Entry) bool {
-	w := audit.NewChainWalk(points)
+	w := audit.NewChainWalk(audit.ChainTimeline{Points: points, Recorded: len(points) > 0})
 
 	for i := range entries {
 		if !w.Step(entries[i]) {
@@ -325,7 +325,7 @@ func TestChainWalk(t *testing.T) {
 		{At: walkAt(2, time.Second), On: true},
 	}
 
-	walk := audit.NewChainWalk(timeline)
+	walk := audit.NewChainWalk(audit.ChainTimeline{Points: timeline, Recorded: true})
 	for _, e := range []audit.Entry{one, two, three, four} {
 		if !walk.Step(e) {
 			t.Fatalf("entry %d does not match", e.Sequence)
@@ -446,5 +446,111 @@ func walkEntry(seq int64) audit.Entry {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   seq,
+	}
+}
+
+// walkSwitch returns the switch entry of state at seq of the server scope,
+// without a hash.
+func walkSwitch(seq int64, state audit.ChainState, at time.Time) audit.Entry {
+	e := walkEntry(seq)
+	e.Namespace, e.At = audit.ServerScope, at
+	e.Kind, e.Action, e.Object = audit.KindChange, audit.ActionSetChain, audit.ServerScope.String()
+	e.ValuePath = "/audit/chain/" + string(state)
+
+	return e
+}
+
+// walkChainedSwitch returns walkSwitch with its hash.
+func walkChainedSwitch(seq int64, state audit.ChainState, at time.Time) audit.Entry {
+	e := walkSwitch(seq, state, at)
+	e.Hash = audit.ComputeHash(e, "")
+
+	return e
+}
+
+func TestTimelineFromSwitches(t *testing.T) {
+	t.Parallel()
+
+	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
+	on := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
+	forgedOff := walkSwitch(3, audit.ChainStateOff, walkAt(2, 0))
+	badHash := walkChainedSwitch(4, audit.ChainStateOff, walkAt(3, 0))
+	badHash.Subject = "mallory"
+	early := walkChainedSwitch(5, audit.ChainStateOff, walkAt(0, time.Millisecond))
+	off := walkChainedSwitch(6, audit.ChainStateOff, walkAt(4, 0))
+
+	got := audit.TimelineFromSwitches([]audit.Entry{startOff, on, forgedOff, badHash, early, off})
+	want := []audit.ChainPoint{
+		{At: walkAt(0, 0), On: false}, {At: walkAt(1, 0), On: true}, {At: walkAt(4, 0), On: false},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("points: got %+v, want %+v", got, want)
+	}
+
+	for i := range want {
+		if !got[i].At.Equal(want[i].At) || got[i].On != want[i].On {
+			t.Fatalf("point %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A first switch entry to on without a hash is not the start of a new
+	// installation, which writes on only with a hash.
+	unhashedOn := walkSwitch(1, audit.ChainStateOn, walkAt(0, 0))
+	if got := audit.TimelineFromSwitches([]audit.Entry{unhashedOn}); len(got) != 0 {
+		t.Fatalf("an unhashed first switch to on: got %+v, want no point", got)
+	}
+}
+
+func TestChainWalkRecordWithoutSwitches(t *testing.T) {
+	t.Parallel()
+
+	walk := audit.NewChainWalk(audit.ChainTimeline{Points: nil, Recorded: true})
+	if walk.Step(walkChained(1, "")) {
+		t.Fatal("the walk accepts an entry while the switch entries of a recorded chain are gone")
+	}
+}
+
+func TestChainWalkTimeMustNotGoBack(t *testing.T) {
+	t.Parallel()
+
+	// The chain started off and went on after entry 1.
+	timeline := []audit.ChainPoint{{At: walkAt(0, 0), On: false}, {At: walkAt(1, time.Second), On: true}}
+
+	two := walkChained(2, "")
+	moved := walkEntry(3)
+	moved.At = walkAt(1, 500*time.Millisecond)
+
+	if walkOK(timeline, walkEntry(1), two, moved) {
+		t.Fatal("the walk accepts an unchained entry earlier than the entry before it")
+	}
+
+	back := walkChained(3, "")
+	back.At = walkAt(0, time.Second)
+	back.Hash = audit.ComputeHash(back, "")
+
+	if walkOK(timeline, walkEntry(1), walkEntry(2), back) {
+		t.Fatal("the walk accepts a chained entry earlier than the unchained entry before it")
+	}
+}
+
+func TestChainWalkNeedsAnOffAfterTheLastChainedEntry(t *testing.T) {
+	t.Parallel()
+
+	// The chain was off from the start. A chained entry long after the
+	// start, then an unchained one: no switch to off follows the chained
+	// entry, so the unchained entry does not fit.
+	timeline := make([]audit.ChainPoint, 0, 2)
+	timeline = append(timeline, audit.ChainPoint{At: walkAt(0, 0), On: false})
+
+	if walkOK(timeline, walkChained(1, ""), walkEntry(2)) {
+		t.Fatal("the walk accepts an unchained entry after a chained one with no switch to off between")
+	}
+
+	// With a switch to off after the chained entry, it fits.
+	timeline = append(timeline, audit.ChainPoint{At: walkAt(1, time.Second), On: false})
+
+	if !walkOK(timeline, walkChained(1, ""), walkEntry(2)) {
+		t.Fatal("the walk refuses an unchained entry after a switch to off")
 	}
 }

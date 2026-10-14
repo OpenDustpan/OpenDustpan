@@ -43,8 +43,20 @@ A review of the first build found three gaps:
    time minus the switch lag of decision 4. The state at a time is the
    state of the latest switch entry at or before that time. Before the
    first switch entry, the state is the state of that entry. A store with no
-   switch entry keeps the rule of the first build: an entry without a hash
-   matches only before the first chained entry of its scope.
+   switch entry and no recorded state keeps the rule of the first build: an
+   entry without a hash matches only before the first chained entry of its
+   scope.
+   - A switch entry counts only when its hash matches its fields. The one
+     exception is the first switch entry when it is off and has no hash,
+     because a new installation writes it so. A switch entry earlier than
+     the switch entry before it does not count.
+   - After a chained entry of a scope, an entry without a hash also needs a
+     switch to off after that chained entry, less the switch lag, or a time
+     within the switch lag after a switch to on.
+   - Next to an entry without a hash, the time of the entries must not go
+     back along the sequence.
+   - When the installation holds a recorded state and no switch entry
+     counts, every scope fails the check.
 4. **Every instance follows the recorded state within 2 seconds.** An
    instance reads the recorded state in the transaction of an append and
    keeps it for at most 2 seconds. So a change of the chain reaches every
@@ -72,3 +84,15 @@ A review of the first build found three gaps:
 - The check cannot prove that an entry without a hash is unchanged.
   Signed audit checkpoints (ADR 60 decision 18) are the anchor outside the
   database.
+- The check cannot prove a scope unchanged from inside the database when
+  the scope holds no chained entry after a switch to off. A person who removes the
+  hashes of the entries after the last chained entry of a scope can move
+  their times into an off window that started after that chained entry,
+  and the check still answers valid. Signed audit checkpoints cover this
+  case.
+- A person who can compute SHA-256 can write a switch entry with a hash
+  that matches its fields. The chain does not stop such a person (ADR 60
+  decision 17). Signed audit checkpoints do.
+- Two instances that start for the first time at the same time can both
+  write a start switch entry. The second one has no hash and does not
+  count, and it holds the same state as the first, so it does no harm.

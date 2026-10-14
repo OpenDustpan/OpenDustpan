@@ -3,6 +3,7 @@ package audittest
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -45,6 +46,10 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "hashes removed after the chain went on again are found", test: testChainStrippedAfterOn},
 		{name: "a chain turned off without a switch entry is found", test: testChainOffWithoutEntry},
 		{name: "an unchained entry within the switch lag checks as valid", test: testChainSwitchLag},
+		{name: "a forged switch to off without a hash is found", test: testChainForgedOff},
+		{name: "a forged switch to off at the tail with an early time is found", test: testChainForgedOffAtTail},
+		{name: "the time of an entry moved back after its hash is gone is found", test: testChainTimeMovedBack},
+		{name: "a chain record without switch entries is found", test: testChainSwitchesRemoved},
 		{name: "chained entries are found in any scope", test: testHasChainedEntries},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a refused switch entry records nothing", test: testRecordChainIsAtomic},
@@ -317,6 +322,83 @@ func testChainSwitchLag(t *testing.T, ts ChainTestStore) {
 	appendEntry(t, ts.Store, tl.ns.Fence(), after)
 
 	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
+}
+
+// forgeOff appends a switch entry to off without a hash at at, as a person
+// who can write to the database but does not compute hashes. The record
+// stays on with a chained log.
+func (tl *timeline) forgeOff(at time.Time) {
+	tl.t.Helper()
+
+	entry := audit.ChainEntry{Entry: switchEntry(audit.ChainStateOff, at), Chained: false}
+	rec := audit.ChainRecord{State: audit.ChainStateOn, EverChained: true}
+
+	if err := tl.s.RecordChain(tl.t.Context(), rec, []audit.ChainEntry{entry}); err != nil {
+		tl.t.Fatalf("forge a switch to off: %v", err)
+	}
+}
+
+func testChainForgedOff(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	tl.forgeOff(tl.tick())
+	tl.append(3)
+
+	// Someone adds a switch to off without a hash as the next entry of
+	// @server, then removes every hash of acme.
+	strip(t, ts, tl.ns.Name, 1, 2, 3)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+func testChainForgedOffAtTail(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(true)
+	early := tl.at.Add(time.Millisecond)
+	tl.append(3)
+
+	// The forged switch to off is the last entry of @server, with a time
+	// before every entry of acme.
+	tl.forgeOff(early)
+	strip(t, ts, tl.ns.Name, 1, 2, 3)
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
+}
+
+func testChainTimeMovedBack(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
+	off := tl.append(1)
+	tl.turn(true)
+	tl.append(2)
+
+	// Someone removes the hash of entry 3 and moves its time into the off
+	// window, before entry 2.
+	strip(t, ts, tl.ns.Name, 3)
+	ts.TamperEntry(t, tl.ns.Name, 3, "at_ms", strconv.FormatInt(off[0].At.Add(time.Second).UnixMilli(), 10))
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 3)
+}
+
+func testChainSwitchesRemoved(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.start(false)
+	tl.append(2)
+
+	// Someone hides the only switch entry. The installation still holds
+	// its chain record, so the check must not fall back to the rule for a
+	// store without a timeline.
+	ts.TamperEntry(t, audit.ServerScope, 1, "action", "server:other")
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
 }
 
 func testHasChainedEntries(t *testing.T, ts ChainTestStore) {

@@ -1112,8 +1112,9 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state, ever_chained = excluded.e
 
 -- name: ListAuditChainSwitches :many
 -- The switch entries of the audit chain in the scope @server, oldest
--- first: the timeline of the chain for the chain check.
-SELECT at_ms, value_path FROM audit_entries
+-- first: the timeline of the chain for the chain check. The whole row
+-- comes back, so the check can verify the hash of each switch entry.
+SELECT * FROM audit_entries
 WHERE namespace = '@server' AND action = 'server:set-audit-chain'
 ORDER BY sequence ASC;
 

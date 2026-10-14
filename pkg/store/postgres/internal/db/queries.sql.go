@@ -2977,28 +2977,44 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 }
 
 const listAuditChainSwitches = `-- name: ListAuditChainSwitches :many
-SELECT at_ms, value_path FROM audit_entries
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path, at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count FROM audit_entries
 WHERE namespace = '@server' AND action = 'server:set-audit-chain'
 ORDER BY sequence ASC
 `
 
-type ListAuditChainSwitchesRow struct {
-	AtMs      int64
-	ValuePath string
-}
-
 // The switch entries of the audit chain in the scope @server, oldest
-// first: the timeline of the chain for the chain check.
-func (q *Queries) ListAuditChainSwitches(ctx context.Context) ([]ListAuditChainSwitchesRow, error) {
+// first: the timeline of the chain for the chain check. The whole row
+// comes back, so the check can verify the hash of each switch entry.
+func (q *Queries) ListAuditChainSwitches(ctx context.Context) ([]AuditEntry, error) {
 	rows, err := q.db.Query(ctx, listAuditChainSwitches)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListAuditChainSwitchesRow
+	var items []AuditEntry
 	for rows.Next() {
-		var i ListAuditChainSwitchesRow
-		if err := rows.Scan(&i.AtMs, &i.ValuePath); err != nil {
+		var i AuditEntry
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Sequence,
+			&i.Subject,
+			&i.IdpSubject,
+			&i.TokenID,
+			&i.Action,
+			&i.Object,
+			&i.Version,
+			&i.ValuePath,
+			&i.AtMs,
+			&i.SourceIp,
+			&i.UserAgent,
+			&i.Channel,
+			&i.Kind,
+			&i.Outcome,
+			&i.RequestID,
+			&i.PrevHash,
+			&i.Hash,
+			&i.ValueCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

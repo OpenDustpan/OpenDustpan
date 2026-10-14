@@ -257,11 +257,21 @@ var errUnknownAuditField = errors.New("unknown audit field")
 // names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "hash", "prev_hash":
+	case "subject", "action", "object", "outcome", "kind", "hash", "prev_hash", "at_ms":
 		return field, true
 	default:
 		return "", false
 	}
+}
+
+// tamperValue answers the parameter of the tamper hook for column: at_ms
+// is a number, every other column is text.
+func tamperValue(column string) string {
+	if column == "at_ms" {
+		return "$1::text::bigint"
+	}
+
+	return "$1"
 }
 
 // auditFieldChange names one column change of the tamper hook.
@@ -291,7 +301,7 @@ func tamperAuditEntry(
 
 	_, execErr := conn.Exec(
 		ctx,
-		`UPDATE audit_entries SET `+column+` = $1 WHERE namespace = $2 AND sequence = $3`,
+		`UPDATE audit_entries SET `+column+` = `+tamperValue(column)+` WHERE namespace = $2 AND sequence = $3`,
 		change.value,
 		ns.String(),
 		seq,

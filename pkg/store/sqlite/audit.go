@@ -251,12 +251,12 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 // grows the check without a bound. A namespace with no entries checks as
 // valid.
 func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult, error) {
-	points, err := chainPoints(ctx, s.queries)
+	timeline, err := chainTimeline(ctx, s.queries)
 	if err != nil {
 		return audit.CheckResult{}, err
 	}
 
-	walk := audit.NewChainWalk(points)
+	walk := audit.NewChainWalk(timeline)
 
 	var wantSeq int64 = 1
 

@@ -34,19 +34,30 @@ import (
 // turns it off on purpose. While chained entries exist and the chain is
 // off, the server logs a warning at each start.
 
-// ChainSetting is the operator setting of the chain.
-type ChainSetting string
+// ChainSetting is the operator setting of the chain. The zero value is
+// ChainAuto.
+type ChainSetting uint8
 
 // Chain settings.
 const (
 	// ChainAuto keeps the chain on when the installation holds chained
 	// entries, and off otherwise. It is the default.
-	ChainAuto ChainSetting = "auto"
+	ChainAuto ChainSetting = iota
 	// ChainOn turns the chain on.
-	ChainOn ChainSetting = "on"
+	ChainOn
 	// ChainOff turns the chain off on purpose.
-	ChainOff ChainSetting = "off"
+	ChainOff
 )
+
+// String answers the operator value of s: auto, on or off.
+func (s ChainSetting) String() string {
+	names := [...]string{ChainAuto: "auto", ChainOn: "on", ChainOff: "off"}
+	if int(s) < len(names) {
+		return names[s]
+	}
+
+	return names[ChainAuto]
+}
 
 // ChainState is the state of the chain that the installation recorded
 // last. ChainUnknown means the installation never recorded one.
@@ -80,14 +91,17 @@ var ErrInvalidChainSetting = errors.New("invalid audit chain setting: want auto,
 // ParseChainSetting maps an operator value to a setting. An empty value is
 // ChainAuto.
 func ParseChainSetting(raw string) (ChainSetting, error) {
-	switch ChainSetting(raw) {
-	case "", ChainAuto:
+	if raw == "" {
 		return ChainAuto, nil
-	case ChainOn, ChainOff:
-		return ChainSetting(raw), nil
-	default:
-		return "", fmt.Errorf("%w: %q", ErrInvalidChainSetting, raw)
 	}
+
+	for _, setting := range []ChainSetting{ChainAuto, ChainOn, ChainOff} {
+		if raw == setting.String() {
+			return setting, nil
+		}
+	}
+
+	return ChainAuto, fmt.Errorf("%w: %q", ErrInvalidChainSetting, raw)
 }
 
 // ChainSwitchLag is the longest time an instance keeps the chain state it
@@ -353,42 +367,107 @@ func ChainPointFromPath(at time.Time, path string) (ChainPoint, bool) {
 	}
 }
 
+// ChainTimeline is what the check knows about the history of the chain:
+// the trusted switch entries of ServerScope as points, oldest first, and
+// whether the installation holds a recorded chain state. An installation
+// with a record always writes its start switch entry in the same
+// transaction (ADR 64), so a record with no point means that someone
+// removed the switch entries.
+type ChainTimeline struct {
+	Points   []ChainPoint
+	Recorded bool
+}
+
+// TimelineFromSwitches answers the points of the switch entries switches,
+// which are in order of sequence. A switch entry counts only when its hash
+// matches its fields, because a row without a hash is easy to add. The one
+// exception is the first switch entry when it is off and has no hash: a
+// new installation writes it at its first start with the chain off. A
+// point earlier than the point before it does not count either.
+func TimelineFromSwitches(switches []Entry) []ChainPoint {
+	out := make([]ChainPoint, 0, len(switches))
+
+	for i := range switches {
+		p, ok := ChainPointFromPath(switches[i].At, switches[i].ValuePath)
+		if !ok || !trustedSwitch(&switches[i], p, i == 0) {
+			continue
+		}
+
+		if n := len(out); n > 0 && p.At.UnixMilli() < out[n-1].At.UnixMilli() {
+			continue
+		}
+
+		out = append(out, p)
+	}
+
+	return out
+}
+
+// trustedSwitch reports whether the switch entry e with the point p can go
+// in the timeline: its hash matches its fields, or it is the first switch
+// entry, off and without a hash.
+func trustedSwitch(e *Entry, p ChainPoint, first bool) bool {
+	if e.Hash == "" {
+		return first && !p.On && e.PrevHash == ""
+	}
+
+	return ComputeHash(*e, e.PrevHash) == e.Hash
+}
+
 // ChainWalk checks the entries of one scope in order of sequence. The
 // stores use it in Check, so both dialects read the chain the same way.
 // The zero value is not ready: use NewChainWalk.
 type ChainWalk struct {
-	points      []ChainPoint
-	prevHash    string
-	next        int64
-	unchained   int64
-	seenChained bool
+	lastAt        time.Time
+	lastChainedAt time.Time
+	prevHash      string
+	points        []ChainPoint
+	next          int64
+	unchained     int64
+	broken        bool
+	seenChained   bool
+	lastUnchained bool
 }
 
-// NewChainWalk returns a walk that expects sequence 1 first. points is the
-// timeline of the chain, oldest first: the switch entries of ServerScope.
-func NewChainWalk(points []ChainPoint) *ChainWalk {
-	return &ChainWalk{points: points, prevHash: "", next: 1, unchained: 0, seenChained: false}
+// NewChainWalk returns a walk that expects sequence 1 first, against the
+// timeline of the chain.
+func NewChainWalk(timeline ChainTimeline) *ChainWalk {
+	return &ChainWalk{
+		lastAt:        time.Time{},
+		lastChainedAt: time.Time{},
+		prevHash:      "",
+		points:        timeline.Points,
+		next:          1,
+		unchained:     0,
+		broken:        timeline.Recorded && len(timeline.Points) == 0,
+		seenChained:   false,
+		lastUnchained: false,
+	}
 }
 
 // Step checks e and answers false at the first entry that does not match:
-// a gap in the sequence, a broken link, or a hash that does not match the
-// fields. An entry without a hash must have no previous hash, and the chain
-// must have been off at its time (see offAt). It ends the run, so the next
-// chained entry links to an empty previous hash.
+// a gap in the sequence, a broken link, a hash that does not match the
+// fields, or a timeline that someone cut. An entry without a hash must have
+// no previous hash and must fit the timeline (see unchainedFits). Next to
+// an entry without a hash, the time must not go back, because only the
+// hash protects the time of an entry. An entry without a hash ends the
+// run, so the next chained entry links to an empty previous hash.
 func (w *ChainWalk) Step(e Entry) bool {
-	if e.Sequence != w.next {
+	if w.broken || e.Sequence != w.next || w.timeGoesBack(e) {
 		return false
 	}
 
 	w.next++
+	w.lastAt = e.At
 
 	if e.Hash == "" {
-		if e.PrevHash != "" || !w.offAt(e.At) {
+		if e.PrevHash != "" || !w.unchainedFits(e.At) {
 			return false
 		}
 
 		w.unchained++
 		w.prevHash = ""
+		w.lastUnchained = true
 
 		return true
 	}
@@ -399,6 +478,8 @@ func (w *ChainWalk) Step(e Entry) bool {
 
 	w.prevHash = e.Hash
 	w.seenChained = true
+	w.lastChainedAt = e.At
+	w.lastUnchained = false
 
 	return true
 }
@@ -408,16 +489,56 @@ func (w *ChainWalk) Unchained() int64 {
 	return w.unchained
 }
 
-// offAt reports whether an entry without a hash at t matches the timeline:
-// the chain was off at t, or at t minus ChainSwitchLag, when an instance
-// could still hold the state before a switch to on. Without a timeline, an
-// entry without a hash matches only before the first chained entry of its
-// scope.
-func (w *ChainWalk) offAt(t time.Time) bool {
+// timeGoesBack reports whether e is earlier than the entry before it, when
+// e or the entry before it has no hash.
+func (w *ChainWalk) timeGoesBack(e Entry) bool {
+	if w.next == 1 || (e.Hash != "" && !w.lastUnchained) {
+		return false
+	}
+
+	return e.At.UnixMilli() < w.lastAt.UnixMilli()
+}
+
+// unchainedFits reports whether an entry without a hash at t fits the
+// timeline. The chain was off at t (see offAt). After a chained entry of
+// the scope, the chain also went off after that entry, or t is within
+// ChainSwitchLag after a switch to on. Without a timeline, an entry without
+// a hash fits only before the first chained entry of its scope.
+func (w *ChainWalk) unchainedFits(t time.Time) bool {
 	if len(w.points) == 0 {
 		return !w.seenChained
 	}
 
+	if !w.offAt(t) {
+		return false
+	}
+
+	if !w.seenChained {
+		return true
+	}
+
+	return w.onAt(t) || w.offSince(w.lastChainedAt.Add(-ChainSwitchLag))
+}
+
+// offSince reports whether the timeline holds a switch to off at t or
+// later.
+func (w *ChainWalk) offSince(t time.Time) bool {
+	ms := t.UnixMilli()
+
+	for _, p := range w.points {
+		if !p.On && p.At.UnixMilli() >= ms {
+			return true
+		}
+	}
+
+	return false
+}
+
+// offAt reports whether an entry without a hash at t matches the timeline:
+// the chain was off at t, or at t minus ChainSwitchLag, when an instance
+// could still hold the state before a switch to on. It needs at least one
+// point.
+func (w *ChainWalk) offAt(t time.Time) bool {
 	return !w.onAt(t) || !w.onAt(t.Add(-ChainSwitchLag))
 }
 

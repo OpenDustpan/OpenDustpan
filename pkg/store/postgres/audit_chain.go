@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -110,21 +109,25 @@ func readChainState(ctx context.Context, q *db.Queries) (audit.ChainState, bool,
 	return audit.ChainState(row.State), true, nil
 }
 
-// chainPoints answers the timeline of the chain from the switch entries of
-// the server scope, for the chain check.
-func chainPoints(ctx context.Context, q *db.Queries) ([]audit.ChainPoint, error) {
+// chainTimeline answers the timeline of the chain for the chain check: the
+// trusted switch entries of the server scope, and whether the installation
+// holds a recorded chain state.
+func chainTimeline(ctx context.Context, q *db.Queries) (audit.ChainTimeline, error) {
+	_, recorded, err := readChainState(ctx, q)
+	if err != nil {
+		return audit.ChainTimeline{}, err
+	}
+
 	rows, err := q.ListAuditChainSwitches(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("select audit chain switches: %w", err)
+		return audit.ChainTimeline{}, fmt.Errorf("select audit chain switches: %w", err)
 	}
 
-	out := make([]audit.ChainPoint, 0, len(rows))
+	switches := make([]audit.Entry, 0, len(rows))
 
-	for _, row := range rows {
-		if p, ok := audit.ChainPointFromPath(time.UnixMilli(row.AtMs), row.ValuePath); ok {
-			out = append(out, p)
-		}
+	for i := range rows {
+		switches = append(switches, fromAuditRow(rows[i]))
 	}
 
-	return out, nil
+	return audit.ChainTimeline{Points: audit.TimelineFromSwitches(switches), Recorded: recorded}, nil
 }
