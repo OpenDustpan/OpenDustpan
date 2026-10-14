@@ -334,6 +334,18 @@ UPDATE inventory
 SET lock_holder = $1, lock_since_ms = $2, lock_operation = $3
 WHERE namespace = $4 AND tool = $5 AND name = $6;
 
+-- name: InsertDeletedInventory :exec
+-- Records a deleted unit (ADR 47). The delete transaction removes the live
+-- entry of the unit with DeleteInventory.
+INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListDeletedInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = $1
+ORDER BY tool, name, unit_id;
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;

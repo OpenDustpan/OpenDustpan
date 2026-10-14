@@ -6,3 +6,22 @@
 -- stack. deleted_at_ms is the time of the delete, and NULL for a live stack.
 ALTER TABLE stacks ADD COLUMN deleted_at_ms INTEGER;
 ALTER TABLE stacks ADD COLUMN deleted_name TEXT;
+
+-- Deleted units in the inventory (ADR 13, ADR 47): the delete transaction
+-- moves the entry of a unit from the live inventory to this table, and a
+-- restore moves it back. The final delete removes the row. The live
+-- inventory never holds a deleted unit, so a new unit can take the name at
+-- once. The key is the tool and the unit ID, which no rename or delete
+-- changes. name is the tool's own name of the unit at the time of the
+-- delete. purge_after_ms is the end of the retention period.
+CREATE TABLE inventory_deleted (
+    namespace      TEXT    NOT NULL REFERENCES namespaces (name),
+    tool           TEXT    NOT NULL,
+    unit_id        TEXT    NOT NULL,
+    name           TEXT    NOT NULL,
+    deleted_at_ms  INTEGER NOT NULL,
+    purge_after_ms INTEGER NOT NULL,
+    PRIMARY KEY (tool, unit_id)
+) STRICT;
+
+CREATE INDEX inventory_deleted_namespace ON inventory_deleted (namespace, tool, name);

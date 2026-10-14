@@ -1387,6 +1387,34 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 	return err
 }
 
+const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
+INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertDeletedInventoryParams struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
+// Records a deleted unit (ADR 47). The delete transaction removes the live
+// entry of the unit with DeleteInventory.
+func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedInventoryParams) error {
+	_, err := q.db.ExecContext(ctx, insertDeletedInventory,
+		arg.Namespace,
+		arg.Tool,
+		arg.UnitID,
+		arg.Name,
+		arg.DeletedAtMs,
+		arg.PurgeAfterMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -1780,6 +1808,43 @@ func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([
 			return nil, err
 		}
 		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeletedInventory = `-- name: ListDeletedInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE namespace = ?
+ORDER BY tool, name, unit_id
+`
+
+func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([]InventoryDeleted, error) {
+	rows, err := q.db.QueryContext(ctx, listDeletedInventory, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

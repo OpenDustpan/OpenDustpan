@@ -15,6 +15,10 @@ const (
 	backupColStatus      = "status"
 	backupColUpdateID    = "update_id"
 	backupColVersion     = "version"
+	backupColDeletedAtMs = "deleted_at_ms"
+	backupColDeletedName = "deleted_name"
+	backupColTool        = "tool"
+	backupColUnitID      = "unit_id"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -55,8 +59,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				"updated_at_ms",
 				"id",
-				"deleted_at_ms",
-				"deleted_name",
+				backupColDeletedAtMs,
+				backupColDeletedName,
 			},
 		},
 		{
@@ -157,9 +161,9 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "inventory",
 			columns: []string{
 				backupColNamespace,
-				"tool",
+				backupColTool,
 				backupColName,
-				"unit_id",
+				backupColUnitID,
 				"display_name",
 				"last_changed_ms",
 				backupColStatus,
@@ -167,6 +171,17 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
+			},
+		},
+		{
+			table: "inventory_deleted",
+			columns: []string{
+				backupColNamespace,
+				backupColTool,
+				backupColUnitID,
+				backupColName,
+				backupColDeletedAtMs,
+				"purge_after_ms",
 			},
 		},
 		{

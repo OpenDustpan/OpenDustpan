@@ -76,6 +76,15 @@ type Inventory struct {
 	LockOperation pgtype.Text
 }
 
+type InventoryDeleted struct {
+	Namespace    string
+	Tool         string
+	UnitID       string
+	Name         string
+	DeletedAtMs  int64
+	PurgeAfterMs int64
+}
+
 type Namespace struct {
 	Name                string
 	HomeRegion          string

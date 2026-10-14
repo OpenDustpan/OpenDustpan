@@ -157,6 +157,50 @@ func publishWorkspaceInventory(
 	return nil
 }
 
+// moveStackInventoryToDeleted moves the inventory entry of the stack ref with
+// stackID to the deleted units, in the transaction of the delete (ADR 13, ADR
+// 47). The retention period ends DeletedRetention after at.
+func moveStackInventoryToDeleted(
+	ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time,
+) error {
+	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
+		Namespace:    ref.Namespace.String(),
+		Tool:         inventoryTool,
+		UnitID:       stackID,
+		Name:         stackUnitName(ref),
+		DeletedAtMs:  at.UnixMilli(),
+		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("insert deleted inventory entry: %w", err)
+	}
+
+	return removeStackInventory(ctx, q, ref)
+}
+
+// ListDeletedUnits implements inventory.DeletedReader: the deleted units of
+// one namespace, ordered by tool, then name, then unit ID.
+func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
+	rows, err := s.queries.ListDeletedInventory(ctx, ns.String())
+	if err != nil {
+		return nil, fmt.Errorf("select deleted inventory: %w", err)
+	}
+
+	out := make([]inventory.DeletedEntry, 0, len(rows))
+	for i := range rows {
+		out = append(out, inventory.DeletedEntry{
+			DeletedAt:  time.UnixMilli(rows[i].DeletedAtMs).UTC(),
+			PurgeAfter: time.UnixMilli(rows[i].PurgeAfterMs).UTC(),
+			Namespace:  namespace.Name(rows[i].Namespace),
+			Tool:       rows[i].Tool,
+			UnitID:     rows[i].UnitID,
+			Name:       rows[i].Name,
+		})
+	}
+
+	return out, nil
+}
+
 // ListUnits implements inventory.Reader: entries of one namespace, ordered by
 // tool, then name. A namespace with no units reads as an empty list.
 func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error) {

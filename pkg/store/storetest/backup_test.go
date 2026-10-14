@@ -1147,6 +1147,19 @@ func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.Che
 	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
 }
 
+// ListDeletedUnits implements inventory.DeletedReader. The fake removes a
+// deleted stack with its entry, so it never holds a deleted entry.
+func (s *fakeBackupStore) ListDeletedUnits(_ context.Context, _ namespace.Name) ([]inventory.DeletedEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	return []inventory.DeletedEntry{}, nil
+}
+
 // ListUnits implements inventory.Reader, ordered by tool then name.
 func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	s.mu.RLock()

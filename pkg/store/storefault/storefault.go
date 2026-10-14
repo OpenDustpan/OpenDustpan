@@ -100,6 +100,7 @@ type Inner interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	inventory.DeletedReader
 	maintenance.Store
 }
 
@@ -668,6 +669,16 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 	}
 
 	return s.inner.ListUnits(ctx, ns)
+}
+
+// ListDeletedUnits returns the deleted inventory entries of ns, unless a fault
+// fires first.
+func (s *Store) ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]inventory.DeletedEntry, error) {
+	if err := s.before(ctx, "ListDeletedUnits"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListDeletedUnits(ctx, ns)
 }
 
 // GetState returns the installation state, unless a fault fires first.

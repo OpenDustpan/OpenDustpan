@@ -63,3 +63,29 @@ type Reader interface {
 	// ListUnits returns the inventory entries of ns, ordered by tool, then name.
 	ListUnits(ctx context.Context, ns namespace.Name) ([]Entry, error)
 }
+
+// DeletedRetention is the time that the server keeps a deleted unit before
+// the final delete, until the retention setting exists (ADR 47, decision 2).
+const DeletedRetention = 30 * 24 * time.Hour
+
+// DeletedEntry is one deleted unit in a namespace (ADR 47). The delete of a
+// unit moves its entry from the live inventory to the deleted units, in the
+// same transaction as the tool's own write. Tool and UnitID identify it,
+// because a new unit can take its name at once. Name is the tool's own name of
+// the unit at the time of the delete. PurgeAfter is the end of its retention
+// period.
+type DeletedEntry struct {
+	DeletedAt  time.Time
+	PurgeAfter time.Time
+	Namespace  namespace.Name
+	Tool       string
+	UnitID     string
+	Name       string
+}
+
+// DeletedReader is the read port of the deleted units.
+type DeletedReader interface {
+	// ListDeletedUnits returns the deleted units of ns, ordered by tool, then
+	// name, then unit ID.
+	ListDeletedUnits(ctx context.Context, ns namespace.Name) ([]DeletedEntry, error)
+}

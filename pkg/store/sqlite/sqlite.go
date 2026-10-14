@@ -841,8 +841,9 @@ func equalDigest(digest [32]byte, column []byte) bool {
 // softDeleteStack marks the stack with stackID deleted at the time at (ADR
 // 47). It moves the name to deleted_name, so the name is free at once, and
 // keeps the updates, checkpoints, events, tags and wrapped data key until the
-// final delete. It removes the inventory entry, so the stack leaves the
-// inventory views. It returns ErrNotFound when no live stack has stackID.
+// final delete. It moves the inventory entry to the deleted units, so the
+// stack leaves the live inventory. It returns ErrNotFound when no live stack
+// has stackID.
 func softDeleteStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time) error {
 	n, err := q.SoftDeleteStack(ctx, db.SoftDeleteStackParams{
 		DeletedAtMs: sql.NullInt64{Int64: at.UnixMilli(), Valid: true},
@@ -856,7 +857,7 @@ func softDeleteStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID 
 		return stack.ErrNotFound
 	}
 
-	return removeStackInventory(ctx, q, ref)
+	return moveStackInventoryToDeleted(ctx, q, ref, stackID, at)
 }
 
 // ListStacks implements stack.Store. Tags come from one query for the whole

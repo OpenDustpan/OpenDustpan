@@ -16,6 +16,7 @@ package storetest
 import (
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,7 @@ type Store interface {
 	namespace.Store
 	stack.Store
 	inventory.Reader
+	inventory.DeletedReader
 	maintenance.Store
 }
 
@@ -65,6 +67,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a new stack with the name of a deleted stack has its own tags", test: testDeleteRemovesTags},
 		{name: "a deleted stack leaves the lists", test: testDeletedStackLeavesLists},
 		{name: "a second delete of a stack is ErrNotFound", test: testDeleteTwice},
+		{name: "a delete moves the inventory entry to the deleted units", test: testDeleteMovesInventoryEntry},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
@@ -917,6 +920,67 @@ func testDeleteTwice(t *testing.T, s Store) {
 
 	if err := s.ForceDeleteStack(t.Context(), st.Ref, ns.Fence(), deletedAt()); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("second force delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testDeleteMovesInventoryEntry deletes a stack, creates a stack with the same
+// name and deletes it too. Each delete moves the inventory entry to the
+// deleted units, keyed by the stack ID, with the name, the time of the delete
+// and the end of the retention period (ADR 13, ADR 47).
+func testDeleteMovesInventoryEntry(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	first := newStack(ns.Name, "web", "prod")
+	second := newStack(ns.Name, "web", "prod")
+
+	for _, st := range []*stack.Stack{&first, &second} {
+		if err := s.CreateStack(t.Context(), *st, ns.Fence()); err != nil {
+			t.Fatalf("create stack: %v", err)
+		}
+
+		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deletedAt()); err != nil {
+			t.Fatalf("delete stack: %v", err)
+		}
+	}
+
+	if entries := listInventory(t, s, ns.Name); len(entries) != 0 {
+		t.Fatalf("live inventory after the deletes = %+v, want none", entries)
+	}
+
+	checkDeletedStackEntries(t, s, ns.Name, first.ID.String(), second.ID.String())
+}
+
+// checkDeletedStackEntries checks that the deleted units of ns are exactly
+// the stacks web/prod with the IDs ids, each deleted at deletedAt with the
+// retention end that follows from it.
+func checkDeletedStackEntries(t *testing.T, s Store, ns namespace.Name, ids ...string) {
+	t.Helper()
+
+	deleted, err := s.ListDeletedUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list deleted units: %v", err)
+	}
+
+	got := make([]string, 0, len(deleted))
+
+	for i := range deleted {
+		e := deleted[i]
+		if e.Tool != "pulumi" || e.Name != "web/prod" || e.Namespace != ns ||
+			!e.DeletedAt.Equal(deletedAt()) || !e.PurgeAfter.Equal(deletedAt().Add(inventory.DeletedRetention)) {
+			t.Fatalf("deleted unit = %+v, want pulumi web/prod deleted at %v", e, deletedAt())
+		}
+
+		got = append(got, e.UnitID)
+	}
+
+	slices.Sort(got)
+
+	want := slices.Clone(ids)
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("deleted unit IDs = %v, want %v", got, want)
 	}
 }
 

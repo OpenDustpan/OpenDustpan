@@ -45,6 +45,10 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColDeletedAtMs = "deleted_at_ms"
+	pgColDeletedName = "deleted_name"
+	pgColTool        = "tool"
+	pgColUnitID      = "unit_id"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -90,7 +94,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "stacks",
 			columns: []string{
 				pgColNamespace, "project", pgColName, "id", pgColVersion, pgColCreatedAtMs, "updated_at_ms",
-				"deleted_at_ms", "deleted_name",
+				pgColDeletedAtMs, pgColDeletedName,
 			},
 			orderBy: []string{pgColNamespace, "project", pgColName},
 		},
@@ -152,11 +156,16 @@ func pgCopyScopeTables() []pgCopyTable {
 		{
 			table: "inventory",
 			columns: []string{
-				pgColNamespace, "tool", pgColName, "unit_id", "display_name",
+				pgColNamespace, pgColTool, pgColName, pgColUnitID, "display_name",
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
 			},
-			orderBy: []string{pgColNamespace, "tool", pgColName},
+			orderBy: []string{pgColNamespace, pgColTool, pgColName},
+		},
+		{
+			table:   "inventory_deleted",
+			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
+			orderBy: []string{pgColTool, pgColUnitID},
 		},
 	}
 }
