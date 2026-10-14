@@ -41,3 +41,14 @@ func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (iden
 
 	return p, nil
 }
+
+// AdminSubjects returns the subjects of the bootstrap administrators of
+// admins, so the access-review export shows them as the server does
+// without the member token.
+func (m memberTokens) AdminSubjects() []string {
+	if a, ok := m.admins.(interface{ AdminSubjects() []string }); ok {
+		return a.AdminSubjects()
+	}
+
+	return nil
+}

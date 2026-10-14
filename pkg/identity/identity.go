@@ -136,6 +136,19 @@ const (
 	// ActionUnitManageAccess allows granting and revoking roles on a unit.
 	// Its object is a unit.
 	ActionUnitManageAccess Action = "unit:manage-access"
+	// ActionServerReadAccess allows reading the access-review export of the
+	// whole installation: every grant (ADR 52, decision 10). Its object is
+	// ServerObject.
+	ActionServerReadAccess Action = "server:read-access"
+	// ActionNamespaceReadAccess allows reading the access-review export of a
+	// namespace. Its object is a namespace.
+	ActionNamespaceReadAccess Action = "namespace:read-access"
+	// ActionCollectionReadAccess allows reading the access-review export of
+	// a collection. Its object is a collection.
+	ActionCollectionReadAccess Action = "collection:read-access"
+	// ActionUnitReadAccess allows reading the access-review export of a unit.
+	// Its object is a unit.
+	ActionUnitReadAccess Action = "unit:read-access"
 	// ActionRoleRead allows reading the role catalog. Every signed-in
 	// principal holds it, so a person who grants a role can see its
 	// actions. Its object is ServerObject.
@@ -497,6 +510,12 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 	}, nil
 }
 
+// AdminSubjects returns the subject of the administrator of the token, so
+// an access-review export can show it: it holds every action with no grant.
+func (s *StaticToken) AdminSubjects() []string {
+	return []string{s.principal.Subject}
+}
+
 // AuthenticateToken compares token in constant time.
 func (s *StaticToken) AuthenticateToken(_ context.Context, token string) (Principal, error) {
 	if subtle.ConstantTimeCompare([]byte(token), s.token) != 1 {
@@ -559,6 +578,18 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 	return &StaticTokens{principals: principals, hashes: hashes}, nil
 }
 
+// AdminSubjects returns the subjects of the administrators of the tokens,
+// in token order, so an access-review export can show them: each holds
+// every action with no grant.
+func (s *StaticTokens) AdminSubjects() []string {
+	out := make([]string, 0, len(s.principals))
+	for _, p := range s.principals {
+		out = append(out, p.Subject)
+	}
+
+	return out
+}
+
 // AuthenticateToken compares the SHA-256 of token against every stored
 // token in constant time, without an early exit.
 func (s *StaticTokens) AuthenticateToken(_ context.Context, token string) (Principal, error) {
@@ -613,6 +644,21 @@ func (c Chain) AuthenticateToken(ctx context.Context, token string) (Principal, 
 	}
 
 	return Principal{}, last
+}
+
+// AdminSubjects returns the subjects of the bootstrap administrators of the
+// authenticators of the chain that name them, in chain order, so an
+// access-review export shows them behind the chain too.
+func (c Chain) AdminSubjects() []string {
+	var out []string
+
+	for _, a := range c {
+		if named, ok := a.(interface{ AdminSubjects() []string }); ok {
+			out = append(out, named.AdminSubjects()...)
+		}
+	}
+
+	return out
 }
 
 // SelfAllowed allows each of Actions on CallerObject to every authenticated

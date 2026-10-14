@@ -50,6 +50,10 @@ const (
 	// principal or a group of the installation, or a delete of a unit (ADR 60,
 	// decision 4).
 	KindChange Kind = "change"
+	// KindReadAccess records a read of the access-review export of an object
+	// (ADR 52, decision 13): who read the authorization map, of which
+	// object, as a snapshot or a history.
+	KindReadAccess Kind = "read-access"
 )
 
 // ServerScope is the scope of the entries of actions that are not in a
@@ -196,7 +200,8 @@ func (e Entry) validateHow() error {
 	switch {
 	case e.Channel != ChannelAPI && e.Channel != ChannelConsole:
 		return fmt.Errorf("%w: unknown channel %q", ErrInvalidEntry, e.Channel)
-	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange:
+	case e.Kind != KindToolOperation && e.Kind != KindReveal && e.Kind != KindOverride && e.Kind != KindChange &&
+		e.Kind != KindReadAccess:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidEntry, e.Kind)
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)
