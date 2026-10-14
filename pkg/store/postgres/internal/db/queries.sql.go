@@ -3244,9 +3244,11 @@ const listDeletedInventory = `-- name: ListDeletedInventory :many
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
 WHERE namespace = $1
-ORDER BY tool, name, unit_id
+ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C"
 `
 
+// Byte order (COLLATE "C"), as QueryDeletedUnits and inventory.PageDeleted
+// order, whatever the collation of the database.
 func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([]InventoryDeleted, error) {
 	rows, err := q.db.Query(ctx, listDeletedInventory, namespace)
 	if err != nil {

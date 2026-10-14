@@ -337,10 +337,12 @@ INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, pu
 VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: ListDeletedInventory :many
+-- Byte order (COLLATE "C"), as QueryDeletedUnits and inventory.PageDeleted
+-- order, whatever the collation of the database.
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
 WHERE namespace = $1
-ORDER BY tool, name, unit_id;
+ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
 -- name: DeleteInventory :exec
 DELETE FROM inventory
