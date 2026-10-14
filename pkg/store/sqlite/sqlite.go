@@ -27,7 +27,7 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
@@ -114,12 +114,15 @@ const walGuardMaxBackoff = 5 * time.Second
 //nolint:gochecknoglobals // The guard backoff stays tunable in tests without a new setting; the hook restores it.
 var walGuardBackoffCap = walGuardMaxBackoff
 
-// walTickInfo describes one past-threshold guard tick for the test hook: when
-// the truncate finished, how long the tick took from its stat to the finish,
-// whether it succeeded, whether the tick saw a slow busy attempt, and the
-// slow and total attempt counts, and the wait the guard slept before the
-// tick, so tests check the backoff without measuring wall-clock gaps.
+// walTickInfo describes one past-threshold guard tick for the test hook: the
+// database path of the store, so a test reads only the ticks of its own store
+// while other stores tick in parallel, when the truncate finished, how long
+// the tick took from its stat to the finish, whether it succeeded, whether the
+// tick saw a slow busy attempt, and the slow and total attempt counts, and the
+// wait the guard slept before the tick, so tests check the backoff without
+// measuring wall-clock gaps.
 type walTickInfo struct {
+	path         string
 	at           time.Time
 	waited       time.Duration
 	elapsed      time.Duration
@@ -689,12 +692,18 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // or finish of an update either runs before the checks or waits until the
 // delete commits.
 func (s *Store) DeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, guard stack.DeleteGuard, e audit.Entry,
+	ctx context.Context,
+	ref stack.Ref,
+	fence namespace.Fence,
+	guard stack.DeleteGuard,
+	d inventory.Deletion,
 ) error {
+	e := d.Entry
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
 			return err
@@ -708,7 +717,9 @@ func (s *Store) DeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, stackID, e.At)
+		e.ObjectID = stackID
+
+		return softDeleteStack(ctx, q, ref, stackID, d)
 	})
 }
 
@@ -717,12 +728,14 @@ func (s *Store) DeleteStack(
 // returns ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 func (s *Store) ForceDeleteStack(
-	ctx context.Context, ref stack.Ref, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, ref stack.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
+	e := d.Entry
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, ref)
 		if err != nil {
 			return err
@@ -732,7 +745,9 @@ func (s *Store) ForceDeleteStack(
 			return err
 		}
 
-		return softDeleteStack(ctx, q, ref, stackID, e.At)
+		e.ObjectID = stackID
+
+		return softDeleteStack(ctx, q, ref, stackID, d)
 	})
 }
 
@@ -845,9 +860,15 @@ func equalDigest(digest [32]byte, column []byte) bool {
 // final delete. It moves the inventory entry to the deleted units, so the
 // stack leaves the live inventory. It returns ErrNotFound when no live stack
 // has stackID.
-func softDeleteStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID string, at time.Time) error {
+func softDeleteStack(
+	ctx context.Context,
+	q *db.Queries,
+	ref stack.Ref,
+	stackID string,
+	d inventory.Deletion,
+) error {
 	n, err := q.SoftDeleteStack(ctx, db.SoftDeleteStackParams{
-		DeletedAtMs: sql.NullInt64{Int64: at.UnixMilli(), Valid: true},
+		DeletedAtMs: sql.NullInt64{Int64: d.Entry.At.UnixMilli(), Valid: true},
 		ID:          stackID,
 	})
 	if err != nil {
@@ -858,7 +879,7 @@ func softDeleteStack(ctx context.Context, q *db.Queries, ref stack.Ref, stackID 
 		return stack.ErrNotFound
 	}
 
-	return moveStackInventoryToDeleted(ctx, q, ref, stackID, at)
+	return moveStackInventoryToDeleted(ctx, q, ref, stackID, d)
 }
 
 // ListStacks implements stack.Store. Tags come from one query for the whole
@@ -1239,6 +1260,7 @@ func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcom
 	result := s.guardCheckpoint(ctx)
 
 	recordWalTick(walTickInfo{
+		path:         s.path,
 		at:           time.Now(),
 		waited:       waited,
 		elapsed:      time.Since(now),

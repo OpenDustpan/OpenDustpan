@@ -69,6 +69,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a deleted stack leaves the lists", test: testDeletedStackLeavesLists},
 		{name: "a second delete of a stack is ErrNotFound", test: testDeleteTwice},
 		{name: "a delete moves the inventory entry to the deleted units", test: testDeleteMovesInventoryEntry},
+		{name: "deleted units filter and page as inventory.PageDeleted", test: testQueryDeletedUnits},
 		{name: "update tags replaces all tags", test: testUpdateTags},
 		{name: "update tags clears all tags", test: testUpdateTagsClear},
 		{name: "update tags on missing stack is ErrNotFound", test: testUpdateTagsMissing},
@@ -127,6 +128,12 @@ func deletedAt() time.Time {
 	return now().Add(time.Hour)
 }
 
+// purgeAt returns the end of the retention that the suite passes to a
+// delete: deletedAt plus the default retention.
+func purgeAt() time.Time {
+	return deletedAt().Add(inventory.DeletedRetention)
+}
+
 // deleteEntry returns the audit entry that the suite passes to a stack
 // delete in ns: a change at deletedAt, which the store appends in the delete
 // transaction.
@@ -149,6 +156,7 @@ func deleteEntry(ns namespace.Name) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -477,16 +485,23 @@ func testStackIDAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		first.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	if _, err := s.GetStack(t.Context(), first.Ref); !errors.Is(err, stack.ErrNotFound) {
+	if _, err = s.GetStack(t.Context(), first.Ref); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
 	}
 
 	second := newStack(ns.Name, "web", "prod")
-	if err := s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
+	if err = s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
 		t.Fatalf("create stack again: %v", err)
 	}
 
@@ -515,7 +530,7 @@ func testDeleteMissingStack(t *testing.T, s Store) {
 		ghost,
 		ns.Fence(),
 		stack.EmptyGuard(),
-		deleteEntry(ns.Name),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("delete missing stack: err = %v, want ErrNotFound", err)
@@ -538,7 +553,7 @@ func testDeleteStaleFence(t *testing.T, s Store) {
 		st.Ref,
 		stale,
 		stack.EmptyGuard(),
-		deleteEntry(stale.Namespace),
+		inventory.Deletion{Entry: deleteEntry(stale.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("delete stack with stale fence: err = %v, want ErrFenced", err)
@@ -847,12 +862,19 @@ func testDeleteRemovesTags(t *testing.T, s Store) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), first.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		first.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
 	second := newStack(ns.Name, "web", "prod")
-	if err := s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
+	if err = s.CreateStack(t.Context(), second, ns.Fence()); err != nil {
 		t.Fatalf("create stack again: %v", err)
 	}
 
@@ -883,7 +905,14 @@ func testDeletedStackLeavesLists(t *testing.T, s Store) {
 		t.Fatalf("create stack %s: %v", kept.Ref, err)
 	}
 
-	if err := s.DeleteStack(t.Context(), gone.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		gone.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
@@ -937,21 +966,36 @@ func testDeleteTwice(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); !errors.Is(
-		err, stack.ErrNotFound,
+	err = s.DeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if !errors.Is(
+		err,
+		stack.ErrNotFound,
 	) {
 		t.Fatalf("second delete: err = %v, want ErrNotFound", err)
 	}
 
-	err := s.ForceDeleteStack(
+	err = s.ForceDeleteStack(
 		t.Context(),
 		st.Ref,
 		ns.Fence(),
-		deleteEntry(ns.Name),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -977,7 +1021,14 @@ func testDeleteMovesInventoryEntry(t *testing.T, s Store) {
 			t.Fatalf("create stack: %v", err)
 		}
 
-		if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+		err := s.DeleteStack(
+			t.Context(),
+			st.Ref,
+			ns.Fence(),
+			stack.EmptyGuard(),
+			inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+		)
+		if err != nil {
 			t.Fatalf("delete stack: %v", err)
 		}
 	}
@@ -1104,7 +1155,14 @@ func testInventoryAfterDelete(t *testing.T, s Store) {
 		t.Fatalf("create stack: %v", err)
 	}
 
-	if err := s.DeleteStack(t.Context(), st.Ref, ns.Fence(), stack.EmptyGuard(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteStack(
+		t.Context(),
+		st.Ref,
+		ns.Fence(),
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 

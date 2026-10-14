@@ -73,6 +73,35 @@ func (h *Handler) buildRoutes() []Route {
 			Resolve: resolveListUnits,
 			Serve:   h.listUnits,
 		},
+		{
+			Method: http.MethodGet,
+			Path:   "/api/inventory/deleted-units",
+			// The object is the namespace in the organization query value.
+			// The handler then removes every entry whose unit the caller
+			// may not read (unit:read on the reference with its ID).
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionNamespaceRead},
+			Resolve: resolveListUnits,
+			Serve:   h.listDeletedUnits,
+		},
+		{
+			Method: http.MethodPost,
+			Path:   "/api/inventory/deleted-units/{tool}/{unitID}/restore",
+			// The object is the deleted unit: its reference under the name
+			// before the delete, with its stable ID.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitRestore},
+			Resolve: h.resolveDeletedUnit,
+			Serve:   h.restoreUnit,
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/api/inventory/deleted-units/{tool}/{unitID}",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitPurge},
+			Resolve: h.resolveDeletedUnit,
+			Serve:   h.purgeUnit,
+		},
 	}
 }
 

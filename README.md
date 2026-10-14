@@ -283,6 +283,8 @@ How-to guides:
   logs.
 - [Read the audit log](docs/guides/audit-log.md): the entries of a
   namespace and the check of their chain.
+- [Deleted units](docs/guides/deleted-units.md): list, restore and purge
+  the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 

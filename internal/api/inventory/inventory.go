@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -33,33 +34,51 @@ const tokenScheme = "token "
 // The inventory API accepts it too, so one client can read every API.
 const bearerScheme = "Bearer "
 
-// Config holds the dependencies of a Handler.
+// Config holds the dependencies of a Handler. Deleted reads the deleted
+// units, and Lifecycles maps each stored tool code to the restore and purge
+// of that tool (ADR 47). ReadScope answers which deleted units a caller may
+// read, so the store pages only those. Now is the clock of the purgeWithinDays filter; nil
+// means time.Now.
 type Config struct {
 	Namespaces    *namespace.Service
 	Units         coreinventory.Reader
+	Deleted       coreinventory.DeletedReader
+	Lifecycles    map[string]coreinventory.Lifecycle
+	ReadScope     DeletedReadScope
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
+	Now           func() time.Time
 }
 
 // Handler serves the inventory API under /api/inventory/.
 type Handler struct {
 	namespaces *namespace.Service
 	units      coreinventory.Reader
+	deleted    coreinventory.DeletedReader
+	lifecycles map[string]coreinventory.Lifecycle
+	readScope  DeletedReadScope
 	authn      identity.Authenticator
 	authz      identity.Authorizer
 	logger     *slog.Logger
+	now        func() time.Time
 	mux        *patternMux
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field except Now is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Units == nil:
 		return nil, fmt.Errorf("%w: inventory reader", ErrMissingDependency)
+	case cfg.Deleted == nil:
+		return nil, fmt.Errorf("%w: deleted unit reader", ErrMissingDependency)
+	case len(cfg.Lifecycles) == 0:
+		return nil, fmt.Errorf("%w: unit lifecycles", ErrMissingDependency)
+	case cfg.ReadScope == nil:
+		return nil, fmt.Errorf("%w: deleted unit read scope", ErrMissingDependency)
 	case cfg.Authenticator == nil:
 		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
@@ -68,12 +87,21 @@ func NewHandler(cfg Config) (*Handler, error) {
 		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
 	}
 
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		units:      cfg.Units,
+		deleted:    cfg.Deleted,
+		lifecycles: cfg.Lifecycles,
+		readScope:  cfg.ReadScope,
 		authn:      cfg.Authenticator,
 		authz:      cfg.Authorizer,
 		logger:     cfg.Logger,
+		now:        now,
 		mux:        newPatternMux(),
 		routes:     nil,
 	}
@@ -276,6 +304,27 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error()
+	default:
+		return classifyChange(err)
+	}
+}
+
+// classifyChange maps the errors of the deleted-unit routes and of a fenced
+// write to an HTTP status and a message safe to show callers.
+func classifyChange(err error) (int, string) {
+	switch {
+	case errors.Is(err, errInvalidQuery), errors.Is(err, errInvalidBody):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, coreinventory.ErrInvalidName):
+		return http.StatusBadRequest, "invalid unit name: use the name rules of the tool"
+	case errors.Is(err, coreinventory.ErrNotFound):
+		return http.StatusNotFound, "deleted unit not found"
+	case errors.Is(err, coreinventory.ErrNameTaken):
+		return http.StatusConflict, "a live unit holds the name: send a new name in the restore body"
+	case errors.Is(err, namespace.ErrFenced):
+		return http.StatusConflict, "write fenced: try again"
+	case errors.Is(err, namespace.ErrNotHome):
+		return http.StatusMisdirectedRequest, "namespace is not homed in this region"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

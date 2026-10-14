@@ -54,6 +54,7 @@ type AuditEntry struct {
 	Hash       string
 	ValueCount pgtype.Int8
 	Changes    pgtype.Text
+	ObjectID   string
 }
 
 type AuditSinkCursor struct {
@@ -70,6 +71,13 @@ type Backup struct {
 	EndedAtMs   pgtype.Int8
 	Target      string
 	Error       string
+}
+
+type BlobPurge struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
 }
 
 type Checkpoint struct {
