@@ -1,0 +1,36 @@
+package e2e
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+
+	"opendustpan.org/opendustpan/pkg/identity"
+)
+
+// MemberSubject is the subject of the member token of an in-process
+// server (Env.MemberToken): a principal that is not an administrator, so a
+// step can drive a CLI with the access of its grants only. A step makes the
+// principal with this subject before it grants it anything.
+const MemberSubject = "e2e-member"
+
+// memberTokens authenticates member as MemberSubject, and every other
+// token with admins.
+type memberTokens struct {
+	admins identity.Authenticator
+	member string
+}
+
+// AuthenticateToken implements identity.Authenticator.
+func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
+	if m.member != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.member)) == 1 {
+		return identity.Principal{Subject: MemberSubject, DisplayName: MemberSubject, Admin: false}, nil
+	}
+
+	p, err := m.admins.AuthenticateToken(ctx, token)
+	if err != nil {
+		return identity.Principal{}, fmt.Errorf("authenticate: %w", err)
+	}
+
+	return p, nil
+}

@@ -165,8 +165,11 @@ type Env struct {
 	s3Endpoint string
 	token      string
 	tokenB     string
-	home       string
-	project    string
+	// memberToken signs in as MemberSubject, or is empty when the server
+	// knows only the bootstrap admin tokens.
+	memberToken string
+	home        string
+	project     string
 	// remoteProject holds the remote-backend part in its own directory.
 	remoteProject string
 	steps         []StepResult
@@ -299,10 +302,12 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 	tb := in.tb
 	tb.Helper()
 
+	member := newToken(tb)
+
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
-		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB},
+		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB, member: member},
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 	})
@@ -332,6 +337,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		s3Endpoint:    s3EndpointOf(tb),
 		token:         in.token,
 		tokenB:        in.tokenB,
+		memberToken:   member,
 		home:          filepath.Join(in.dir, "home"),
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
@@ -394,6 +400,9 @@ func newToken(tb testing.TB) string {
 type serverTokens struct {
 	tokenA string
 	tokenB string
+	// member signs in as MemberSubject: a principal that is not an
+	// administrator.
+	member string
 }
 
 // newServer opens store (a fresh SQLite file at dbPath, or an isolated
@@ -484,7 +493,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithBackupTarget(target, targetName),
 		dustpan.WithInventoryReader(st),
-		dustpan.WithAuthenticator(authn),
+		dustpan.WithAuthenticator(memberTokens{admins: authn, member: args.tokens.member}),
 		dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 		dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 	)
@@ -1014,6 +1023,14 @@ func (e *Env) TFEStatusB(ctx context.Context, method, path, body string) (int, s
 // so this overrides the default configuration.
 func (e *Env) TofuEnvB() []string {
 	return []string{"TF_CLI_CONFIG_FILE=" + filepath.Join(e.home, "tofurc-b")}
+}
+
+// MemberToken returns the token that signs in as MemberSubject, a principal
+// that is not an administrator, and reports whether the server knows it.
+// The binary server knows only the bootstrap admin tokens until sign-in and
+// access tokens exist (ADR 53).
+func (e *Env) MemberToken() (string, bool) {
+	return e.memberToken, e.memberToken != ""
 }
 
 // TokenA returns the access token of principal A, the principal the CLI

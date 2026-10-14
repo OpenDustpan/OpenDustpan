@@ -4,6 +4,8 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"path"
 	"strings"
@@ -122,6 +124,99 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}, nil)
 
 	checkSubjectDeleteRevokes(ctx, t, env, bob)
+	checkMemberSignsIn(ctx, t, env)
+}
+
+// checkMemberSignsIn gives a principal that is not an administrator a writer
+// grant on one namespace. It logs in with the Pulumi CLI and sees that
+// namespace only: the routes whose object is the caller need only
+// caller:read, and their handlers filter each namespace.
+func checkMemberSignsIn(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	token, ok := env.MemberToken()
+	if !ok {
+		t.Log("skip the member sign-in: the binary server knows only the bootstrap admin tokens (ADR 53)")
+
+		return
+	}
+
+	var member e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"` + e2e.MemberSubject + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &member)
+
+	for _, ns := range []string{"team", "hidden"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/namespaces", `{"name":"` + ns + `"}`, http.StatusCreated,
+		}, nil)
+		createStack(ctx, t, env, ns+"/web/dev")
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/team/grants",
+		`{"subject":"principal:` + member.ID + `","role":"writer"}`, http.StatusCreated,
+	}, nil)
+
+	as := []string{"PULUMI_ACCESS_TOKEN=" + token}
+
+	for _, spec := range []e2e.StepSpec{
+		step("member login", contains(env.URL), "login"),
+		step("member whoami", contains(e2e.MemberSubject), "whoami"),
+		step("member whoami lists its namespace only", onlyOrganization("team"), "whoami", "--verbose"),
+		step("member org get-default", contains("team"), "org", "get-default"),
+		step("member stack ls lists its namespace only", stacksOnlyIn("team"), "stack", "ls", "--json", "--all"),
+		failStep("member stack ls in another namespace fails", nil,
+			"stack", "ls", "--json", "--organization", "hidden"),
+	} {
+		spec.Env, spec.Redact = as, true
+		env.Step(ctx, t, spec)
+	}
+}
+
+// onlyOrganization checks that whoami --verbose names ns as the only
+// organization.
+func onlyOrganization(ns string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		for line := range strings.Lines(r.Stdout) {
+			if orgs, ok := strings.CutPrefix(strings.TrimSpace(line), "Organizations:"); ok {
+				if strings.TrimSpace(orgs) != ns {
+					return fmt.Errorf("%w: organizations %q, want %s only", errUnexpected, orgs, ns)
+				}
+
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%w: whoami printed no organizations: %q", errUnexpected, r.Stdout)
+	}
+}
+
+// stacksOnlyIn checks that stack ls --json lists at least one stack, and
+// only stacks of ns.
+func stacksOnlyIn(ns string) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		var stacks []struct {
+			Name string `json:"name"`
+		}
+
+		if err := json.Unmarshal([]byte(r.Stdout), &stacks); err != nil {
+			return fmt.Errorf("decode stack ls: %w", err)
+		}
+
+		if len(stacks) == 0 {
+			return fmt.Errorf("%w: stack ls listed no stack, want the stacks of %s", errUnexpected, ns)
+		}
+
+		for _, st := range stacks {
+			if !strings.HasPrefix(st.Name, ns+"/") {
+				return fmt.Errorf("%w: stack ls lists %q, want the stacks of %s only", errUnexpected, st.Name, ns)
+			}
+		}
+
+		return nil
+	}
 }
 
 // checkRoles reads the catalog, makes, changes and reads a custom role, and
