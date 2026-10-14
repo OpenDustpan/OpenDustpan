@@ -36,6 +36,8 @@ func seedServerEntry(t *testing.T, store *memAuditStore, subject string) {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+		Changes:    nil,
+		ObjectID:   "",
 	})
 	if err != nil {
 		t.Fatalf("seed @server audit entry: %v", err)

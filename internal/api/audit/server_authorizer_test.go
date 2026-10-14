@@ -41,6 +41,7 @@ func seedRealPrincipal(t *testing.T, st *sqlite.Store, subject, role string, obj
 	prn := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
 		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
 	}
 	if err := st.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
 		t.Fatalf("seed principal %s: %v", subject, err)
