@@ -600,6 +600,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Version:        "test",
 		Schema:         coverageSchema{},
 		Principals:     nil,
+		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
@@ -700,6 +701,7 @@ func CoverageAllowlist() []AllowEntry {
 		restoreAllowEntries(),
 		journalAllowEntries(),
 		principalAllowEntries(),
+		accessAllowEntries(),
 		tokenAllowEntries(),
 	)
 }
@@ -744,6 +746,60 @@ func principalAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: principalCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// accessCoveringTest names the test that proves the role and grant routes
+// instead of a CLI: no CLI calls them (ADR 52).
+const accessCoveringTest = "TestRolesAndGrants"
+
+// accessAllowEntries returns the operator and console routes of the roles
+// and grants of the installation. The harness steps of accessCoveringTest
+// drive each one through the real binary on each store.
+func accessAllowEntries() []AllowEntry {
+	reason := "Operator and console route (ADR 52): no CLI manages roles or grants. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		roles = "/api/server/roles"
+		role  = roles + "/{id}"
+	)
+
+	grantPaths := []string{
+		"/api/server/grants",
+		"/api/server/namespaces/{namespace}/grants",
+		"/api/server/namespaces/{namespace}/collections/{collection}/grants",
+		"/api/server/namespaces/{namespace}/unit-grants",
+	}
+
+	roleRoutes := []struct{ method, path string }{
+		{http.MethodGet, roles},
+		{http.MethodGet, role},
+		{http.MethodPost, roles},
+		{http.MethodPatch, role},
+		{http.MethodDelete, role},
+	}
+
+	const perGrantPath = 3 // a list, a grant and a revoke
+
+	routes := make([]struct{ method, path string }, 0, len(roleRoutes)+perGrantPath*len(grantPaths))
+	routes = append(routes, roleRoutes...)
+
+	for _, grants := range grantPaths {
+		routes = append(routes,
+			struct{ method, path string }{http.MethodGet, grants},
+			struct{ method, path string }{http.MethodPost, grants},
+			struct{ method, path string }{http.MethodDelete, grants + "/{id}"},
+		)
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: accessCoveringTest, Reason: reason,
 		})
 	}
 

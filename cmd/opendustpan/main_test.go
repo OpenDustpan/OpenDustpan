@@ -302,6 +302,15 @@ func serveDatabase(t *testing.T, path string) error {
 func startServer(t *testing.T, args ...string) error {
 	t.Helper()
 
+	_, err := startServerLogs(t, args...)
+
+	return err
+}
+
+// startServerLogs runs serve as startServer does and answers its logs.
+func startServerLogs(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -325,7 +334,9 @@ func startServer(t *testing.T, args ...string) error {
 			if strings.Contains(logs.String(), "listening") {
 				cancel()
 
-				return <-done
+				err := <-done
+
+				return logs.String(), err
 			}
 		case <-timeout.C:
 			t.Fatal("server did not start in time")

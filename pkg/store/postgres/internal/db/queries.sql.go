@@ -294,6 +294,52 @@ func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int6
 	return count, err
 }
 
+const countEndedGrantRecords = `-- name: CountEndedGrantRecords :one
+SELECT (SELECT COUNT(*) FROM principals p WHERE $1::text = 'principal' AND p.id = $2::text
+          AND p.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM principal_groups g WHERE $1::text = 'group' AND g.id = $2::text
+          AND g.deleted_at_ms IS NOT NULL)
+     + (SELECT COUNT(*) FROM roles r WHERE r.id = $3::text AND r.deleted_at_ms IS NOT NULL)
+`
+
+type CountEndedGrantRecordsParams struct {
+	SubjectKind string
+	SubjectID   string
+	Role        string
+}
+
+// The records of a new grant that have ended: its principal or group, and
+// its custom role. The grant write checks it in its own transaction, so a
+// delete that commits first wins.
+func (q *Queries) CountEndedGrantRecords(ctx context.Context, arg CountEndedGrantRecordsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countEndedGrantRecords, arg.SubjectKind, arg.SubjectID, arg.Role)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countGrantsOn = `-- name: CountGrantsOn :one
+SELECT COUNT(*) FROM grants WHERE target = $1 AND revoked_at_ms IS NULL
+`
+
+func (q *Queries) CountGrantsOn(ctx context.Context, target string) (int64, error) {
+	row := q.db.QueryRow(ctx, countGrantsOn, target)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countGrantsWithRole = `-- name: CountGrantsWithRole :one
+SELECT COUNT(*) FROM grants WHERE role = $1 AND revoked_at_ms IS NULL
+`
+
+func (q *Queries) CountGrantsWithRole(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRow(ctx, countGrantsWithRole, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countGroupMembers = `-- name: CountGroupMembers :one
 SELECT COUNT(*)
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -400,6 +446,17 @@ func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams
 	return count, err
 }
 
+const countRoleGrantsBelowInstallation = `-- name: CountRoleGrantsBelowInstallation :one
+SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind <> 'installation' AND revoked_at_ms IS NULL
+`
+
+func (q *Queries) CountRoleGrantsBelowInstallation(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoleGrantsBelowInstallation, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -475,6 +532,48 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.EndedAtMs,
 		arg.Target,
 		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createGrant = `-- name: CreateGrant :execrows
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT DO NOTHING
+`
+
+type CreateGrantParams struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) CreateGrant(ctx context.Context, arg CreateGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createGrant,
+		arg.ID,
+		arg.Subject,
+		arg.SubjectKind,
+		arg.SubjectID,
+		arg.Role,
+		arg.Object,
+		arg.Target,
+		arg.ObjectKind,
+		arg.Namespace,
+		arg.Condition,
+		arg.CreatedAtMs,
+		arg.CreatedBy,
 	)
 	if err != nil {
 		return 0, err
@@ -599,6 +698,38 @@ func (q *Queries) CreateRestore(ctx context.Context, arg CreateRestoreParams) (i
 		arg.StartedAtMs,
 		arg.EndedAtMs,
 		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createRole = `-- name: CreateRole :execrows
+INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreateRoleParams struct {
+	ID          string
+	Name        string
+	NameKey     string
+	Description string
+	Actions     string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) CreateRole(ctx context.Context, arg CreateRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createRole,
+		arg.ID,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.Actions,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -911,6 +1042,23 @@ type DeletePrincipalParams struct {
 
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteRole = `-- name: DeleteRole :execrows
+UPDATE roles SET deleted_at_ms = $1 WHERE id = $2 AND deleted_at_ms IS NULL
+`
+
+type DeleteRoleParams struct {
+	DeletedAtMs pgtype.Int8
+	ID          string
+}
+
+func (q *Queries) DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRole, arg.DeletedAtMs, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1471,6 +1619,46 @@ func (q *Queries) GetFailoverVersionForUpdate(ctx context.Context, name string) 
 	return failover_version, err
 }
 
+const getGrant = `-- name: GetGrant :one
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants WHERE id = $1 AND revoked_at_ms IS NULL
+`
+
+type GetGrantRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) {
+	row := q.db.QueryRow(ctx, getGrant, id)
+	var i GetGrantRow
+	err := row.Scan(
+		&i.ID,
+		&i.Subject,
+		&i.SubjectKind,
+		&i.SubjectID,
+		&i.Role,
+		&i.Object,
+		&i.Target,
+		&i.ObjectKind,
+		&i.Namespace,
+		&i.Condition,
+		&i.CreatedAtMs,
+		&i.CreatedBy,
+	)
+	return i, err
+}
+
 const getGroup = `-- name: GetGroup :one
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
@@ -1696,6 +1884,34 @@ func (q *Queries) GetRestore(ctx context.Context, id string) (Restore, error) {
 		&i.StartedAtMs,
 		&i.EndedAtMs,
 		&i.Error,
+	)
+	return i, err
+}
+
+const getRole = `-- name: GetRole :one
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = $1 AND deleted_at_ms IS NULL
+`
+
+type GetRoleRow struct {
+	ID          string
+	Name        string
+	Description string
+	Actions     string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetRole(ctx context.Context, id string) (GetRoleRow, error) {
+	row := q.db.QueryRow(ctx, getRole, id)
+	var i GetRoleRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Actions,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
 	)
 	return i, err
 }
@@ -2022,6 +2238,186 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.DeletedName,
 	)
 	return i, err
+}
+
+const grantsOfSubject = `-- name: GrantsOfSubject :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject_kind = $1 AND subject_id = $2 AND revoked_at_ms IS NULL
+ORDER BY target, role
+`
+
+type GrantsOfSubjectParams struct {
+	SubjectKind string
+	SubjectID   string
+}
+
+type GrantsOfSubjectRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) GrantsOfSubject(ctx context.Context, arg GrantsOfSubjectParams) ([]GrantsOfSubjectRow, error) {
+	rows, err := q.db.Query(ctx, grantsOfSubject, arg.SubjectKind, arg.SubjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GrantsOfSubjectRow
+	for rows.Next() {
+		var i GrantsOfSubjectRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const grantsOn = `-- name: GrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY($1::text[]) AND target = ANY($2::text[]) AND revoked_at_ms IS NULL
+ORDER BY target, subject, role
+`
+
+type GrantsOnParams struct {
+	Subjects []string
+	Targets  []string
+}
+
+type GrantsOnRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) GrantsOn(ctx context.Context, arg GrantsOnParams) ([]GrantsOnRow, error) {
+	rows, err := q.db.Query(ctx, grantsOn, arg.Subjects, arg.Targets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GrantsOnRow
+	for rows.Next() {
+		var i GrantsOnRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const grantsWithRoles = `-- name: GrantsWithRoles :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY($1::text[]) AND role = ANY($2::text[]) AND revoked_at_ms IS NULL
+ORDER BY target, subject, role
+`
+
+type GrantsWithRolesParams struct {
+	Subjects []string
+	Roles    []string
+}
+
+type GrantsWithRolesRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) GrantsWithRoles(ctx context.Context, arg GrantsWithRolesParams) ([]GrantsWithRolesRow, error) {
+	rows, err := q.db.Query(ctx, grantsWithRoles, arg.Subjects, arg.Roles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GrantsWithRolesRow
+	for rows.Next() {
+		var i GrantsWithRolesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const groupIDByNameKey = `-- name: GroupIDByNameKey :one
@@ -2747,6 +3143,75 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 	return items, nil
 }
 
+const listGrantsOn = `-- name: ListGrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE target = $1 AND revoked_at_ms IS NULL
+  AND (subject > $2 OR (subject = $2 AND role > $3))
+ORDER BY subject, role
+LIMIT $4
+`
+
+type ListGrantsOnParams struct {
+	Target       string
+	AfterSubject string
+	AfterRole    string
+	RowLimit     int32
+}
+
+type ListGrantsOnRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]ListGrantsOnRow, error) {
+	rows, err := q.db.Query(ctx, listGrantsOn,
+		arg.Target,
+		arg.AfterSubject,
+		arg.AfterRole,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGrantsOnRow
+	for rows.Next() {
+		var i ListGrantsOnRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
@@ -3137,6 +3602,48 @@ func (q *Queries) ListRestores(ctx context.Context) ([]Restore, error) {
 			&i.StartedAtMs,
 			&i.EndedAtMs,
 			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoles = `-- name: ListRoles :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE deleted_at_ms IS NULL
+ORDER BY name_key COLLATE "C"
+`
+
+type ListRolesRow struct {
+	ID          string
+	Name        string
+	Description string
+	Actions     string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) ListRoles(ctx context.Context) ([]ListRolesRow, error) {
+	rows, err := q.db.Query(ctx, listRoles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRolesRow
+	for rows.Next() {
+		var i ListRolesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Actions,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -3857,6 +4364,98 @@ func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenPa
 	return result.RowsAffected(), nil
 }
 
+const revokeGrant = `-- name: RevokeGrant :execrows
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL
+`
+
+type RevokeGrantParams struct {
+	RevokedAtMs pgtype.Int8
+	RevokedBy   string
+	ID          string
+}
+
+func (q *Queries) RevokeGrant(ctx context.Context, arg RevokeGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeGrant, arg.RevokedAtMs, arg.RevokedBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeGrantsOfSubject = `-- name: RevokeGrantsOfSubject :exec
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
+WHERE subject_kind = $3 AND subject_id = $4 AND revoked_at_ms IS NULL
+`
+
+type RevokeGrantsOfSubjectParams struct {
+	RevokedAtMs pgtype.Int8
+	RevokedBy   string
+	SubjectKind string
+	SubjectID   string
+}
+
+func (q *Queries) RevokeGrantsOfSubject(ctx context.Context, arg RevokeGrantsOfSubjectParams) error {
+	_, err := q.db.Exec(ctx, revokeGrantsOfSubject,
+		arg.RevokedAtMs,
+		arg.RevokedBy,
+		arg.SubjectKind,
+		arg.SubjectID,
+	)
+	return err
+}
+
+const roleIDByNameKey = `-- name: RoleIDByNameKey :one
+SELECT id FROM roles WHERE name_key COLLATE "C" = $1::text AND deleted_at_ms IS NULL
+`
+
+func (q *Queries) RoleIDByNameKey(ctx context.Context, nameKey string) (string, error) {
+	row := q.db.QueryRow(ctx, roleIDByNameKey, nameKey)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const rolesByIDs = `-- name: RolesByIDs :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = ANY($1::text[]) AND deleted_at_ms IS NULL
+`
+
+type RolesByIDsRow struct {
+	ID          string
+	Name        string
+	Description string
+	Actions     string
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) RolesByIDs(ctx context.Context, ids []string) ([]RolesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, rolesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RolesByIDsRow
+	for rows.Next() {
+		var i RolesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Actions,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const runningMutatingUpdates = `-- name: RunningMutatingUpdates :one
 SELECT COUNT(*)
 FROM updates
@@ -4153,6 +4752,38 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 	return result.RowsAffected(), nil
 }
 
+const subjectsOfCaller = `-- name: SubjectsOfCaller :many
+SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
+`
+
+type SubjectsOfCallerRow struct {
+	PrincipalID string
+	GroupID     string
+}
+
+func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]SubjectsOfCallerRow, error) {
+	rows, err := q.db.Query(ctx, subjectsOfCaller, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectsOfCallerRow
+	for rows.Next() {
+		var i SubjectsOfCallerRow
+		if err := rows.Scan(&i.PrincipalID, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchAccessToken = `-- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = $1::bigint
 WHERE id = $2 AND (last_used_at_ms IS NULL OR last_used_at_ms <= $3::bigint)
@@ -4183,6 +4814,111 @@ type TouchStackParams struct {
 func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	_, err := q.db.Exec(ctx, touchStack, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const unitStackID = `-- name: UnitStackID :one
+SELECT id FROM stacks WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
+`
+
+type UnitStackIDParams struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+// The stable ID of a Pulumi stack, for a grant on the unit (ADR 19, ADR 52).
+func (q *Queries) UnitStackID(ctx context.Context, arg UnitStackIDParams) (string, error) {
+	row := q.db.QueryRow(ctx, unitStackID, arg.Namespace, arg.Project, arg.Name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const unitStacksByIDs = `-- name: UnitStacksByIDs :many
+SELECT id, namespace, project, name FROM stacks WHERE id = ANY($1::text[]) AND deleted_at_ms IS NULL
+`
+
+type UnitStacksByIDsRow struct {
+	ID        string
+	Namespace string
+	Project   string
+	Name      string
+}
+
+// A deleted stack (ADR 47) is left out: its grants give nothing until a
+// restore brings it back.
+func (q *Queries) UnitStacksByIDs(ctx context.Context, ids []string) ([]UnitStacksByIDsRow, error) {
+	rows, err := q.db.Query(ctx, unitStacksByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnitStacksByIDsRow
+	for rows.Next() {
+		var i UnitStacksByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Project,
+			&i.Name,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const unitWorkspaceID = `-- name: UnitWorkspaceID :one
+SELECT id FROM workspaces WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL
+`
+
+type UnitWorkspaceIDParams struct {
+	Namespace string
+	Name      string
+}
+
+// The stable ID of an OpenTofu workspace, for a grant on the unit.
+func (q *Queries) UnitWorkspaceID(ctx context.Context, arg UnitWorkspaceIDParams) (string, error) {
+	row := q.db.QueryRow(ctx, unitWorkspaceID, arg.Namespace, arg.Name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const unitWorkspacesByIDs = `-- name: UnitWorkspacesByIDs :many
+SELECT id, namespace, name FROM workspaces WHERE id = ANY($1::text[]) AND deleted_at_ms IS NULL
+`
+
+type UnitWorkspacesByIDsRow struct {
+	ID        string
+	Namespace string
+	Name      string
+}
+
+// A deleted workspace (ADR 47) is left out: its grants give nothing until
+// a restore brings it back.
+func (q *Queries) UnitWorkspacesByIDs(ctx context.Context, ids []string) ([]UnitWorkspacesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, unitWorkspacesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnitWorkspacesByIDsRow
+	for rows.Next() {
+		var i UnitWorkspacesByIDsRow
+		if err := rows.Scan(&i.ID, &i.Namespace, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateExists = `-- name: UpdateExists :one
@@ -4273,6 +5009,35 @@ type UpdatePrincipalParams struct {
 
 func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updatePrincipal, arg.DisplayName, arg.UpdatedAtMs, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateRole = `-- name: UpdateRole :execrows
+UPDATE roles SET name = $1, name_key = $2, description = $3, actions = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL
+`
+
+type UpdateRoleParams struct {
+	Name        string
+	NameKey     string
+	Description string
+	Actions     string
+	UpdatedAtMs int64
+	ID          string
+}
+
+func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateRole,
+		arg.Name,
+		arg.NameKey,
+		arg.Description,
+		arg.Actions,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
