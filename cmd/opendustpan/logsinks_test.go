@@ -90,6 +90,8 @@ func TestAppLogRefusesBadItems(t *testing.T) {
 	}{
 		{name: "blob has no store for the application log", raw: "blob:logs"},
 		{name: "unknown kind", raw: "journald"},
+		{name: "two file sinks without names", raw: "file:/tmp/a.jsonl file:/tmp/b.jsonl"},
+		{name: "two sinks with one name", raw: "app=file:/tmp/a.jsonl app=syslog+udp://127.0.0.1:514"},
 		{name: "webhook without the log secret", raw: "webhook:https://logs.example/hook"},
 	}
 

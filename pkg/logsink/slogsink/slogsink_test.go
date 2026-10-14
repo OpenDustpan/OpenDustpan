@@ -276,6 +276,49 @@ func TestASkippedRecordCountsAsOneDrop(t *testing.T) {
 	}
 }
 
+func TestCloseThatTimesOutCountsTheUnwrittenRecords(t *testing.T) {
+	t.Parallel()
+
+	sink := newMemSink()
+	sink.block = make(chan struct{})
+
+	var drops atomic.Int64
+
+	opts := options(&drops)
+	opts.BatchSize = 1
+	h := slogsink.New(sink, opts)
+	logger := slog.New(h)
+
+	const sent = 5
+	for i := range sent {
+		logger.Info("queued", slog.Int("i", i))
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	if err := h.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close with a blocked sink: got %v, want a deadline error", err)
+	}
+
+	close(sink.block)
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for int64(len(sink.records()))+drops.Load() != sent {
+		if time.Now().After(deadline) {
+			t.Fatalf("written %d plus dropped %d, want %d", len(sink.records()), drops.Load(), sent)
+		}
+
+		timer := time.NewTimer(5 * time.Millisecond)
+		<-timer.C
+	}
+
+	if len(sink.records()) > 1 {
+		t.Fatalf("written after the close: %d records, want at most the one in flight", len(sink.records()))
+	}
+}
+
 func TestCloseFlushesAndRefusesLaterRecords(t *testing.T) {
 	t.Parallel()
 

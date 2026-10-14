@@ -18,6 +18,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/logsink"
@@ -73,6 +74,9 @@ type core struct {
 	opts   Options
 	mu     sync.RWMutex
 	closed bool
+	// abandoned is set when Close returns before the writer ended. The
+	// writer then counts the records it has not written as dropped.
+	abandoned atomic.Bool
 }
 
 // New returns a handler that writes to sink and starts its writer
@@ -97,6 +101,8 @@ func New(sink logsink.Sink, opts Options) *Handler {
 		opts:   opts,
 		mu:     sync.RWMutex{},
 		closed: false,
+
+		abandoned: atomic.Bool{},
 	}
 
 	go c.run()
@@ -187,9 +193,11 @@ func (h *Handler) WithGroup(name string) slog.Handler {
 }
 
 // Close stops the handler: it refuses new records, writes the queue to the
-// sink, and waits for the writer goroutine until ctx is done. Records that
-// it cannot write before ctx is done count as dropped. A second Close
-// returns ErrClosed.
+// sink, and waits for the writer goroutine until ctx is done. When ctx is
+// done first, Close returns its error, and the writer counts every record
+// that it has not written yet as dropped instead of writing it. A write
+// that already runs ends within WriteTimeout. A second Close returns
+// ErrClosed.
 func (h *Handler) Close(ctx context.Context) error {
 	c := h.core
 
@@ -209,6 +217,8 @@ func (h *Handler) Close(ctx context.Context) error {
 	case <-c.done:
 		return nil
 	case <-ctx.Done():
+		c.abandoned.Store(true)
+
 		return fmt.Errorf("flush log sink: %w", ctx.Err())
 	}
 }
@@ -328,6 +338,12 @@ func (c *core) run() {
 // the skipped records count as dropped.
 func (c *core) write(batch []logsink.Record) {
 	if len(batch) == 0 {
+		return
+	}
+
+	if c.abandoned.Load() {
+		c.drop(len(batch))
+
 		return
 	}
 

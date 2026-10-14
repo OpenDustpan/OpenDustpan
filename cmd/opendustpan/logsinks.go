@@ -62,6 +62,10 @@ func newAppLog(
 
 	opts := &slog.HandlerOptions{Level: level}
 
+	// seen holds the names of the sinks so far: a name labels the drop
+	// metric, so two sinks with one name would share a count.
+	seen := map[string]bool{}
+
 	for _, item := range items {
 		item = strings.TrimSpace(item)
 		if item == "" {
@@ -82,7 +86,7 @@ func newAppLog(
 		default:
 		}
 
-		h, err := out.openSinkHandler(named, level, lookup)
+		h, err := out.openSinkHandler(named, level, lookup, seen)
 		if err != nil {
 			return appLog{}, errors.Join(err, out.close(context.Background()))
 		}
@@ -105,8 +109,20 @@ func newAppLog(
 // openSinkHandler opens the sink of one item and wraps it in a queued
 // handler that counts its drops under the name of the item.
 func (a *appLog) openSinkHandler(
-	named sinkItem, level slog.Level, lookup func(string) (string, bool),
+	named sinkItem, level slog.Level, lookup func(string) (string, bool), seen map[string]bool,
 ) (*slogsink.Handler, error) {
+	name := named.name
+	if name == "" {
+		name = sinkKind(named.spec)
+	}
+
+	if seen[name] {
+		return nil, fmt.Errorf("%w: two log sinks are named %q: give each a name, for example app=file:<path>",
+			errLogSink, name)
+	}
+
+	seen[name] = true
+
 	sink, _, err := openSink(named.spec, sinkConfig{
 		setting:       errLogSink,
 		blobs:         nil,
@@ -117,11 +133,6 @@ func (a *appLog) openSinkHandler(
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	name := named.name
-	if name == "" {
-		name = sinkKind(named.spec)
 	}
 
 	h := slogsink.New(sink, slogsink.Options{
